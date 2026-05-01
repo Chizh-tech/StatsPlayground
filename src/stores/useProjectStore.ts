@@ -16,7 +16,7 @@ interface ProjectStore {
   /** 打开已有项目，返回历史/快照数据 */
   openProject: (filePath: string) => Promise<OpenProjectResult>;
   /** 保存项目（可传入文件路径用于首次保存） */
-  saveProject: (filePath?: string, history?: unknown[], snapshots?: unknown[]) => Promise<void>;
+  saveProject: (filePath?: string, history?: unknown[], snapshots?: unknown[], graphBuilders?: unknown[]) => Promise<void>;
   /** 关闭项目 */
   closeProject: () => void;
   /** 标记有未保存的修改 */
@@ -47,8 +47,8 @@ export const useProjectStore = create<ProjectStore>((set) => ({
     return result;
   },
 
-  saveProject: async (filePath?: string, history?: unknown[], snapshots?: unknown[]) => {
-    const project = await projectService.saveProject(filePath, history, snapshots);
+  saveProject: async (filePath?: string, history?: unknown[], snapshots?: unknown[], graphBuilders?: unknown[]) => {
+    const project = await projectService.saveProject(filePath, history, snapshots, graphBuilders);
     set({ project, dirty: false });
   },
 

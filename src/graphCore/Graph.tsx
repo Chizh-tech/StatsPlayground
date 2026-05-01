@@ -1,0 +1,111 @@
+/**
+ * <Graph> 组件 — Graph Core 的 React 入口
+ *
+ * 接收 GraphSpec + GraphData，渲染为一个或多个 ECharts 实例（分面）。
+ * 自动响应窗口尺寸变化与主题变化。
+ */
+
+import { useEffect, useMemo, useRef } from "react";
+import * as echarts from "echarts";
+import type { GraphSpec, GraphData } from "./types";
+import { getGraphTheme } from "./theme";
+import { buildGraph } from "./transform";
+import { useThemeStore } from "@/stores/useThemeStore";
+
+interface GraphProps {
+  spec: GraphSpec;
+  data: GraphData;
+  className?: string;
+  /** 单个面板最小宽 */
+  minPanelWidth?: number;
+  /** 单个面板最小高 */
+  minPanelHeight?: number;
+}
+
+export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240 }: GraphProps) {
+  // 订阅主题变化以触发重渲染
+  const themeMode = useThemeStore((s) => s.mode);
+
+  const built = useMemo(() => {
+    const theme = getGraphTheme();
+    return buildGraph(spec, data, theme);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spec, data, themeMode]);
+
+  return (
+    <div
+      className={`gc-graph${className ? " " + className : ""}`}
+      style={{
+        display: "grid",
+        gridTemplateColumns: `repeat(${built.cols}, minmax(${minPanelWidth}px, 1fr))`,
+        gap: 8,
+        width: "100%",
+        height: "100%",
+        overflow: "auto",
+        padding: 4,
+      }}
+    >
+      {built.panels.map((p, i) => (
+        <GraphPanel key={i} title={p.title} option={p.option} minHeight={minPanelHeight} />
+      ))}
+    </div>
+  );
+}
+
+interface GraphPanelProps {
+  title: string;
+  option: Record<string, unknown>;
+  minHeight: number;
+}
+
+function GraphPanel({ title, option, minHeight }: GraphPanelProps) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+
+  // 初始化 / 销毁
+  useEffect(() => {
+    if (!ref.current) return;
+    const inst = echarts.init(ref.current, undefined, { renderer: "canvas" });
+    chartRef.current = inst;
+    const ro = new ResizeObserver(() => inst.resize());
+    ro.observe(ref.current);
+    return () => {
+      ro.disconnect();
+      inst.dispose();
+      chartRef.current = null;
+    };
+  }, []);
+
+  // 更新选项
+  useEffect(() => {
+    chartRef.current?.setOption(option as echarts.EChartsCoreOption, true);
+  }, [option]);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        background: "var(--bg-card)",
+        border: "1px solid var(--border-main)",
+        borderRadius: 4,
+        minHeight,
+      }}
+    >
+      {title && (
+        <div
+          style={{
+            padding: "4px 10px",
+            fontSize: 12,
+            color: "var(--fg-secondary)",
+            borderBottom: "1px solid var(--border-main)",
+            background: "var(--bg-header)",
+          }}
+        >
+          {title}
+        </div>
+      )}
+      <div ref={ref} style={{ flex: 1, minHeight: 0 }} />
+    </div>
+  );
+}

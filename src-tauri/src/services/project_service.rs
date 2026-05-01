@@ -21,6 +21,9 @@ struct SpprjFile {
     history: Option<Vec<serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     snapshots: Option<Vec<serde_json::Value>>,
+    /// Generic graph builder configurations (opaque to backend).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    graph_builders: Option<Vec<serde_json::Value>>,
 }
 
 /// Result of opening a project, including restored history/snapshot data
@@ -32,6 +35,8 @@ pub struct OpenProjectResult {
     pub history: Vec<serde_json::Value>,
     #[serde(default)]
     pub snapshots: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub graph_builders: Vec<serde_json::Value>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -108,6 +113,7 @@ impl<'a> ProjectService<'a> {
             datasets: vec![],
             history: None,
             snapshots: None,
+            graph_builders: None,
         };
 
         let json = serde_json::to_string_pretty(&spprj)
@@ -223,6 +229,7 @@ impl<'a> ProjectService<'a> {
             project,
             history: spprj.history.unwrap_or_default(),
             snapshots: spprj.snapshots.unwrap_or_default(),
+            graph_builders: spprj.graph_builders.unwrap_or_default(),
         })
     }
 
@@ -232,6 +239,7 @@ impl<'a> ProjectService<'a> {
         file_path: Option<&str>,
         history_data: Option<Vec<serde_json::Value>>,
         snapshots_data: Option<Vec<serde_json::Value>>,
+        graph_builders_data: Option<Vec<serde_json::Value>>,
     ) -> Result<(), AppError> {
         let mut proj = self.state.project.write()
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -341,6 +349,7 @@ impl<'a> ProjectService<'a> {
             datasets: spprj_datasets,
             history: history_data,
             snapshots: snapshots_data,
+            graph_builders: graph_builders_data,
         };
 
         let json = serde_json::to_string_pretty(&spprj)

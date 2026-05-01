@@ -27,6 +27,17 @@ StatsPlayground/
 │   ├── stores/                         #   Zustand 全局状态管理
 │   │   ├── index.ts                    #     统一导出
 │   │   └── useDataStore.ts             #     数据集状态 (activeDatasetId, datasets, refreshDatasets)
+│   ├── graphCore/                      #   图形核心模块 (统一可视化)
+│   │   ├── index.ts                    #     统一出口
+│   │   ├── types.ts                    #     GraphSpec / Encoding / ChartElement / FieldRef
+│   │   ├── theme.ts                    #     从 CSS 变量读取主题，生成统一图形样式
+│   │   ├── transform.ts                #     GraphSpec + GraphData → ECharts option
+│   │   └── Graph.tsx                   #     <Graph> React 组件 (基于 ECharts)
+│   ├── components/
+│   │   └── graphBuilder/               #   图表构建器 (Graph Core 首个使用者)
+│   │       ├── index.ts                #     出口
+│   │       ├── GraphBuilderView.tsx    #     列调色板 + 编码槽 + 画布交互
+│   │       └── graphBuilder.css        #     图表构建器样式
 │   └── types/                          #   TypeScript 类型定义
 │       ├── index.ts                    #     统一导出
 │       ├── data.ts                     #     数据模型 (DatasetMeta, ColumnMeta, TableQueryParams, TableQueryResult)
@@ -91,6 +102,7 @@ StatsPlayground/
 | @tauri-apps/plugin-dialog | ^2.0.0 | 系统文件对话框 |
 | @tauri-apps/plugin-fs | ^2.0.0 | 文件系统访问 |
 | zustand | ^5.0.0 | 轻量状态管理 |
+| echarts | ^5 | 图形核心底层渲染引擎 |
 
 | 开发依赖 | 版本 | 用途 |
 |----------|------|------|

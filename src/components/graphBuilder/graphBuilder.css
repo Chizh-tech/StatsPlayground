@@ -1,0 +1,355 @@
+/* ========= Graph Builder ========= */
+.gb-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: var(--bg-main);
+  color: var(--fg-primary);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+/* 顶部工具条 */
+.gb-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-main);
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.gb-toolbar-left {
+  display: flex;
+  gap: 6px;
+}
+
+.gb-toolbar-spacer {
+  flex: 1;
+}
+
+.gb-tb-btn {
+  background: var(--bg-btn-secondary);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.gb-tb-btn:hover {
+  background: var(--bg-btn-secondary-hover);
+}
+
+.gb-tb-btn-primary {
+  background: var(--fg-accent);
+  color: #fff;
+  border-color: var(--fg-accent);
+}
+
+.gb-tb-btn-primary:hover {
+  background: var(--fg-accent-hover);
+}
+
+.gb-chart-types {
+  display: flex;
+  gap: 4px;
+}
+
+.gb-ct-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.gb-ct-btn:hover {
+  background: var(--bg-header);
+}
+
+.gb-ct-btn-active {
+  background: var(--bg-cell-selected);
+  border-color: var(--fg-accent);
+  color: var(--fg-primary);
+}
+
+.gb-ct-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.gb-ct-label {
+  font-size: 12px;
+}
+
+/* Body */
+.gb-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 220px 1fr 200px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 左栏 */
+.gb-left {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-main);
+  background: var(--bg-panel);
+  overflow-y: auto;
+}
+
+.gb-section {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-main);
+}
+
+.gb-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.gb-col-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.gb-col-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 3px;
+  cursor: grab;
+  font-size: 12px;
+  color: var(--fg-primary);
+  user-select: none;
+}
+
+.gb-col-item:hover {
+  background: var(--bg-cell-hover);
+}
+
+.gb-col-item:active {
+  cursor: grabbing;
+}
+
+.gb-col-icon {
+  font-size: 12px;
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.gb-col-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gb-elem-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.gb-elem-label {
+  width: 64px;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.gb-elem-val {
+  color: var(--fg-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.gb-slider {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 中栏：画布 */
+.gb-center {
+  display: grid;
+  grid-template-rows: 28px 1fr 28px;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-main);
+}
+
+.gb-canvas-row {
+  display: grid;
+  grid-template-columns: 28px 1fr 28px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.gb-canvas {
+  background: var(--bg-card);
+  border: 1px solid var(--border-main);
+  margin: 4px;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.gb-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-placeholder);
+  font-size: 13px;
+}
+
+.gb-error {
+  color: var(--fg-danger);
+}
+
+/* 右栏：编码槽列表 */
+.gb-right {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-main);
+  background: var(--bg-panel);
+  padding: 6px;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+/* 编码槽通用 */
+.gb-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--bg-header);
+  border: 1px dashed var(--border-input);
+  color: var(--fg-dim);
+  font-size: 11px;
+  user-select: none;
+  transition: background 0.12s, border-color 0.12s;
+  overflow: hidden;
+}
+
+.gb-slot-over {
+  background: var(--bg-cell-hover);
+  border-color: var(--fg-accent);
+  color: var(--fg-accent);
+}
+
+.gb-slot-filled {
+  background: var(--bg-card);
+  border-style: solid;
+  color: var(--fg-primary);
+}
+
+.gb-slot-horizontal-top,
+.gb-slot-horizontal-bottom {
+  height: 28px;
+  margin: 4px 36px;
+  border-radius: 3px;
+  flex-direction: row;
+}
+
+.gb-slot-vertical-left,
+.gb-slot-vertical-right {
+  width: 28px;
+  margin: 4px 0;
+  text-orientation: mixed;
+  flex-direction: column;
+  border-radius: 3px;
+}
+
+.gb-slot-vertical-left {
+  writing-mode: vertical-lr;
+}
+
+.gb-slot-vertical-right {
+  writing-mode: vertical-rl;
+}
+
+.gb-slot-shelf {
+  height: 36px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  flex-direction: row;
+  justify-content: flex-start;
+}
+
+.gb-slot-label {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.gb-slot-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-cell-selected);
+  color: var(--fg-primary);
+  border-radius: 10px;
+  padding: 2px 8px 2px 6px;
+  font-size: 11px;
+  max-width: 100%;
+}
+
+.gb-slot-vertical-left .gb-slot-chip,
+.gb-slot-vertical-right .gb-slot-chip {
+  /* 垂直槽内 chip 旋转回水平 */
+  writing-mode: horizontal-tb;
+}
+
+.gb-slot-vertical-left .gb-slot-label,
+.gb-slot-vertical-right .gb-slot-label {
+  writing-mode: horizontal-tb;
+}
+
+.gb-slot-chip-icon {
+  font-size: 11px;
+}
+
+.gb-slot-chip-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.gb-slot-chip-x {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.gb-slot-chip-x:hover {
+  color: var(--fg-danger);
+}

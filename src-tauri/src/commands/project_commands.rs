@@ -43,9 +43,10 @@ pub fn save_project(
     file_path: Option<String>,
     history: Option<Vec<serde_json::Value>>,
     snapshots: Option<Vec<serde_json::Value>>,
+    graph_builders: Option<Vec<serde_json::Value>>,
 ) -> Result<ProjectInfo, AppError> {
     let service = ProjectService::new(&state);
-    service.save_project(file_path.as_deref(), history, snapshots)?;
+    service.save_project(file_path.as_deref(), history, snapshots, graph_builders)?;
     // Return updated project info
     service.get_current_project()?.ok_or_else(|| AppError::InvalidParam("No project".into()))
 }
