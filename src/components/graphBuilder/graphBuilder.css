@@ -283,6 +283,8 @@
   text-orientation: mixed;
   flex-direction: column;
   border-radius: 3px;
+  /* 防止旋转后的子元素水平溢出槽位 */
+  overflow: hidden;
 }
 
 .gb-slot-vertical-left {
@@ -318,15 +320,20 @@
   max-width: 100%;
 }
 
+/* 垂直槽内：chip 沿槽位长方向排版（继承父级 writing-mode），
+   单个字符仍正向显示（text-orientation: mixed）。
+   不再把 chip 改回 horizontal-tb，避免水平方向溢出。 */
 .gb-slot-vertical-left .gb-slot-chip,
 .gb-slot-vertical-right .gb-slot-chip {
-  /* 垂直槽内 chip 旋转回水平 */
-  writing-mode: horizontal-tb;
+  max-width: none;
+  padding: 6px 2px;
 }
 
-.gb-slot-vertical-left .gb-slot-label,
-.gb-slot-vertical-right .gb-slot-label {
-  writing-mode: horizontal-tb;
+.gb-slot-vertical-left .gb-slot-chip-name,
+.gb-slot-vertical-right .gb-slot-chip-name {
+  /* 在垂直流中，max-width 实际限制的是文字流方向（即视觉上的高度），
+     收紧到 140px 以避免长字段名顶到槽位边界外。 */
+  max-width: 140px;
 }
 
 .gb-slot-chip-icon {

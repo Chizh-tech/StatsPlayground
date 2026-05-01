@@ -456,7 +456,9 @@ function Slot({ label, field, onDrop, onClear, orientation, required }: SlotProp
         onDrop(e);
       }}
     >
-      <span className="gb-slot-label">{label}{required && !field ? " *" : ""}</span>
+      {!field && (
+        <span className="gb-slot-label">{label}{required ? " *" : ""}</span>
+      )}
       {field && (
         <span className="gb-slot-chip">
           <span
