@@ -21,6 +21,23 @@ const COLUMN_TYPES = [
   { value: "TIMESTAMP", label: "时间戳" },
 ];
 
+// O(1) type→label lookup so per-column rendering doesn't do a linear scan.
+const COLUMN_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  COLUMN_TYPES.map((t) => [t.value, t.label])
+);
+const typeLabelOf = (t: string): string => COLUMN_TYPE_LABELS[t] ?? t;
+
+// Excel-style column letter (A, B, C, ... Z, AA, AB, ...)
+const colLetter = (i: number): string => {
+  let s = "";
+  let n = i;
+  while (n >= 0) {
+    s = String.fromCharCode(65 + (n % 26)) + s;
+    n = Math.floor(n / 26) - 1;
+  }
+  return s;
+};
+
 const DEFAULT_COL_WIDTH = 120;
 const ROW_HEIGHT = 27; // 26px cell height + 1px border
 const OVERSCAN = 10; // extra rows above/below viewport
@@ -201,6 +218,162 @@ const TableRow = React.memo(function TableRow({
   );
 });
 
+// ---- Memoized columns side panel list ----
+// Iterates every column (potentially hundreds) and previously re-rendered
+// on every cell click because it lived inline in DataTableView. Behind
+// React.memo + stable callback refs it bails out unless its data
+// (cols / colTypes / selectedCols) actually changes.
+interface ColsPanelListProps {
+  cols: string[];
+  colTypes: string[];
+  selectedCols: ReadonlySet<number>;
+  onItemClick: (colIdx: number, e: React.MouseEvent) => void;
+  onItemContextMenu: (e: React.MouseEvent, colIdx: number) => void;
+}
+
+const ColsPanelList = React.memo(function ColsPanelList({
+  cols, colTypes, selectedCols, onItemClick, onItemContextMenu,
+}: ColsPanelListProps) {
+  return (
+    <div className="sp-cols-panel-list">
+      {cols.map((name, ci) => {
+        const typeLabel = typeLabelOf(colTypes[ci]);
+        const isSel = selectedCols.has(ci);
+        return (
+          <div
+            key={ci}
+            className={`sp-cols-panel-item${isSel ? " sp-cols-panel-item-selected" : ""}`}
+            onClick={(e) => onItemClick(ci, e)}
+            onContextMenu={(e) => onItemContextMenu(e, ci)}
+            title={`${colLetter(ci)}  ${name}  (${typeLabel})`}
+          >
+            <span className="sp-cols-panel-item-type">{typeLabel}</span>
+            <span className="sp-cols-panel-item-name">{name || `(列 ${colLetter(ci)})`}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+// ---- Memoized Excel-like formula bar ----
+// Owns its own input state (refValue / formulaValue / dirty flags) so typing
+// in the bar does not trigger DataTableView re-renders. The parent only
+// passes the active cell + its display value + a few stable callbacks; the
+// bar re-renders only when those props change.
+interface FormulaBarProps {
+  activeCell: { row: number; col: number } | null;
+  /** Active cell's display string (empty when none). */
+  activeCellValue: string;
+  maxRow: number;
+  maxCol: number;
+  /** Jump grid focus to (row, col). */
+  onJumpToCell: (row: number, col: number) => void;
+  /** Commit a value to the active cell. Returns true on success. */
+  onWriteActiveCell: (value: string) => Promise<boolean>;
+  /** Move focus to the active cell after Enter (one row down) when possible. */
+  onMoveDownAfterCommit: () => void;
+  onError: (msg: string) => void;
+  onFocusGrid: () => void;
+}
+
+const FormulaBar = React.memo(function FormulaBar({
+  activeCell, activeCellValue, maxRow, maxCol,
+  onJumpToCell, onWriteActiveCell, onMoveDownAfterCommit, onError, onFocusGrid,
+}: FormulaBarProps) {
+  const [refValue, setRefValue] = useState("");
+  const [refDirty, setRefDirty] = useState(false);
+  const [formulaValue, setFormulaValue] = useState("");
+  const [formulaDirty, setFormulaDirty] = useState(false);
+
+  // Sync ref input with active cell when not actively typed.
+  useEffect(() => {
+    if (refDirty) return;
+    setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
+  }, [activeCell, refDirty]);
+
+  // Sync content input with active cell value when not actively typed.
+  useEffect(() => {
+    if (formulaDirty) return;
+    setFormulaValue(activeCellValue);
+  }, [activeCell, activeCellValue, formulaDirty]);
+
+  return (
+    <div className="sp-formula-bar">
+      <input
+        className="sp-formula-ref-input"
+        type="text"
+        value={refValue}
+        placeholder="A1"
+        spellCheck={false}
+        onChange={(e) => { setRefValue(e.target.value); setRefDirty(true); }}
+        onFocus={(e) => { e.currentTarget.select(); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            const m = refValue.trim().toUpperCase().match(/^([A-Z]+)(\d+)$/);
+            if (!m) {
+              onError(`无效的单元格引用："${refValue}"，应类似 "A1" 或 "AB123"`);
+              return;
+            }
+            let col = 0;
+            for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+            col -= 1;
+            const row = parseInt(m[2], 10) - 1;
+            if (col < 0 || col > maxCol || row < 0 || row > maxRow) {
+              onError(`单元格 "${refValue}" 超出范围（最大 ${colLetter(maxCol)}${maxRow + 1}）`);
+              return;
+            }
+            setRefDirty(false);
+            onJumpToCell(row, col);
+            onFocusGrid();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setRefDirty(false);
+            setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
+            onFocusGrid();
+          }
+        }}
+        onBlur={() => {
+          setRefDirty(false);
+          setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
+        }}
+        title="输入单元格引用（如 A1）跳转"
+      />
+      <input
+        className="sp-formula-input"
+        type="text"
+        value={formulaValue}
+        placeholder={activeCell ? "" : "选择一个单元格"}
+        disabled={!activeCell}
+        onChange={(e) => { setFormulaValue(e.target.value); setFormulaDirty(true); }}
+        onKeyDown={async (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            const ok = await onWriteActiveCell(formulaValue);
+            if (ok) {
+              setFormulaDirty(false);
+              onMoveDownAfterCommit();
+              onFocusGrid();
+            }
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setFormulaDirty(false);
+            setFormulaValue(activeCellValue);
+            onFocusGrid();
+          }
+        }}
+        onBlur={async () => {
+          if (formulaDirty) {
+            const ok = await onWriteActiveCell(formulaValue);
+            if (ok) setFormulaDirty(false);
+          }
+        }}
+      />
+    </div>
+  );
+});
+
 export function DataTableView({ datasetId }: DataTableViewProps) {
   const [data, setData] = useState<TableQueryResult | null>(null);
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
@@ -285,12 +458,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   const [colsPanelCollapsed, setColsPanelCollapsed] = useState(false);
   const colsPanelAnchorRef = useRef<number | null>(null);
 
-  // Excel-like formula bar
-  const [formulaValue, setFormulaValue] = useState("");
-  const [formulaDirty, setFormulaDirty] = useState(false);
-  const formulaInputRef = useRef<HTMLInputElement>(null);
-  const [refValue, setRefValue] = useState("");
-  const [refDirty, setRefDirty] = useState(false);
+  // Excel-like formula bar state lives inside <FormulaBar /> now.
 
   const { refreshDatasets, setStatusInfo } = useDataStore();
   const { markDirty } = useProjectStore();
@@ -546,18 +714,6 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       return Array.from({ length: visibleColCount }, (_, i) => prev[i] ?? DEFAULT_FORMAT);
     });
   }, [visibleColCount]);
-
-  // Excel-style column letter (A, B, C, ... Z, AA, AB, ...)
-  const colLetter = (i: number): string => {
-    let s = "";
-    let n = i;
-    while (n >= 0) {
-      s = String.fromCharCode(65 + (n % 26)) + s;
-      n = Math.floor(n / 26) - 1;
-    }
-    return s;
-  };
-
   // Filter _row_id from display — memoized (must be before early return for hooks rules)
   const rowIdIdx = data ? data.columns.indexOf("_row_id") : -1;
   const cols = useMemo(() => data ? data.columns.filter((_, i) => i !== rowIdIdx) : [], [data, rowIdIdx]);
@@ -827,26 +983,32 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setEditValue(v);
   }, []);
 
-  // Sync formula bar value with the active cell whenever the active cell or
-  // the underlying data changes (and the user is not actively typing into
-  // the formula bar). Declared before the early return so hook order stays
-  // constant across the data null → loaded transition.
-  useEffect(() => {
-    if (formulaDirty) return;
-    if (!activeCell) {
-      setFormulaValue("");
-      return;
-    }
-    const dr = displayRows[activeCell.row];
-    const v = dr ? dr[activeCell.col] : undefined;
-    setFormulaValue(v == null ? "" : String(v));
-  }, [activeCell, displayRows, formulaDirty]);
+  // Stable proxy refs for the columns side panel so React.memo on ColsPanelList
+  // can bail out across cell-click re-renders.
+  const colsPanelClickRef = useRef<(colIdx: number, e: React.MouseEvent) => void>(() => {});
+  const colsPanelCtxMenuRef = useRef<(e: React.MouseEvent, colIdx: number) => void>(() => {});
+  const stableColsPanelClick = useCallback((colIdx: number, e: React.MouseEvent) => {
+    colsPanelClickRef.current(colIdx, e);
+  }, []);
+  const stableColsPanelCtxMenu = useCallback((e: React.MouseEvent, colIdx: number) => {
+    colsPanelCtxMenuRef.current(e, colIdx);
+  }, []);
 
-  // Sync the cell-reference input with the active cell.
-  useEffect(() => {
-    if (refDirty) return;
-    setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
-  }, [activeCell, refDirty]);
+  // Stable proxy refs for the formula bar so it can be memoized.
+  const writeActiveCellRef = useRef<(value: string) => Promise<boolean>>(async () => false);
+  const jumpToCellRef = useRef<(row: number, col: number) => void>(() => {});
+  const moveDownAfterCommitRef = useRef<() => void>(() => {});
+  const stableWriteActiveCell = useCallback((v: string) => writeActiveCellRef.current(v), []);
+  const stableJumpToCell = useCallback((row: number, col: number) => {
+    jumpToCellRef.current(row, col);
+  }, []);
+  const stableMoveDownAfterCommit = useCallback(() => {
+    moveDownAfterCommitRef.current();
+  }, []);
+  const stableSetErrorMsg = useCallback((m: string) => setErrorMsg(m), []);
+  const stableFocusGrid = useCallback(() => {
+    containerRef.current?.focus();
+  }, []);
 
   if (!data) return <div className="sp-loading">加载中...</div>;
 
@@ -2178,7 +2340,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     const letter = colLetter(colIdx);
     ctx.font = "13px system-ui, -apple-system, sans-serif";
     const name = cols[colIdx] || "";
-    const typeLabel = COLUMN_TYPES.find(t => t.value === colTypes[colIdx])?.label ?? colTypes[colIdx];
+    const typeLabel = typeLabelOf(colTypes[colIdx]);
     ctx.font = "11px system-ui, -apple-system, sans-serif";
     // Header content is stacked vertically, widest element determines width
     const hdrTexts = [letter, name, typeLabel];
@@ -2241,6 +2403,39 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       else if (colRight > viewRight) wrapper.scrollLeft = colRight - wrapper.clientWidth;
     }
   };
+
+  // Wire up stable proxies for the cols-panel handlers (declared above the
+  // early return so hook order stays constant; assigned each render to pick
+  // up latest closure state).
+  colsPanelClickRef.current = handleColsPanelItemClick;
+  colsPanelCtxMenuRef.current = handleColContextMenu;
+
+  // Wire up FormulaBar proxies + derive its inputs.
+  writeActiveCellRef.current = async (v: string) => {
+    const r = await writeActiveCellValue(v);
+    return r === true;
+  };
+  jumpToCellRef.current = (row: number, col: number) => {
+    setActiveCell({ row, col });
+    setSelection({ startRow: row, startCol: col, endRow: row, endCol: col });
+    setSelectedRows(EMPTY_NUM_SET);
+    setSelectedCols(EMPTY_NUM_SET);
+  };
+  moveDownAfterCommitRef.current = () => {
+    if (!activeCell) return;
+    const maxRow = displayRows.length - 1;
+    if (activeCell.row < maxRow) {
+      setActiveCell({ row: activeCell.row + 1, col: activeCell.col });
+    }
+  };
+  const activeCellValueStr = (() => {
+    if (!activeCell) return "";
+    const dr = displayRows[activeCell.row];
+    const v = dr ? dr[activeCell.col] : undefined;
+    return v == null ? "" : String(v);
+  })();
+  const formulaMaxRow = displayRows.length - 1;
+  const formulaMaxCol = cols.length - 1;
 
   return (
     <div className={`sp-spreadsheet${isDragging ? " sp-dragging" : ""}`} onKeyDown={handleKeyDown} onPaste={handlePaste} tabIndex={0} ref={containerRef}>
@@ -2374,115 +2569,30 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 onClick={() => setColsPanelCollapsed(true)}
               >◀</button>
             </div>
-            <div className="sp-cols-panel-list">
-              {cols.map((name, ci) => {
-                const typeLabel = COLUMN_TYPES.find(t => t.value === colTypes[ci])?.label ?? colTypes[ci];
-                const isSel = selectedCols.has(ci);
-                return (
-                  <div
-                    key={ci}
-                    className={`sp-cols-panel-item${isSel ? " sp-cols-panel-item-selected" : ""}`}
-                    onClick={(e) => handleColsPanelItemClick(ci, e)}
-                    onContextMenu={(e) => handleColContextMenu(e, ci)}
-                    title={`${colLetter(ci)}  ${name}  (${typeLabel})`}
-                  >
-                    <span className="sp-cols-panel-item-type">{typeLabel}</span>
-                    <span className="sp-cols-panel-item-name">{name || `(列 ${colLetter(ci)})`}</span>
-                  </div>
-                );
-              })}
-            </div>
+            <ColsPanelList
+              cols={cols}
+              colTypes={colTypes}
+              selectedCols={selectedCols}
+              onItemClick={stableColsPanelClick}
+              onItemContextMenu={stableColsPanelCtxMenu}
+            />
           </div>
         )}
 
         {/* Right side: formula bar + grid (stacked vertically) */}
         <div className="sp-table-right">
           {/* Excel-like formula bar: editable cell ref + content editor */}
-          <div className="sp-formula-bar">
-            <input
-              className="sp-formula-ref-input"
-              type="text"
-              value={refValue}
-              placeholder="A1"
-              spellCheck={false}
-              onChange={(e) => { setRefValue(e.target.value); setRefDirty(true); }}
-              onFocus={(e) => { e.currentTarget.select(); }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  const m = refValue.trim().toUpperCase().match(/^([A-Z]+)(\d+)$/);
-                  if (!m) {
-                    setErrorMsg(`无效的单元格引用："${refValue}"，应类似 "A1" 或 "AB123"`);
-                    return;
-                  }
-                  let col = 0;
-                  for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
-                  col -= 1;
-                  const row = parseInt(m[2], 10) - 1;
-                  const maxRow = displayRows.length - 1;
-                  const maxCol = cols.length - 1;
-                  if (col < 0 || col > maxCol || row < 0 || row > maxRow) {
-                    setErrorMsg(`单元格 "${refValue}" 超出范围（最大 ${colLetter(maxCol)}${maxRow + 1}）`);
-                    return;
-                  }
-                  setActiveCell({ row, col });
-                  setSelection({ startRow: row, startCol: col, endRow: row, endCol: col });
-                  setSelectedRows(EMPTY_NUM_SET);
-                  setSelectedCols(EMPTY_NUM_SET);
-                  setRefDirty(false);
-                  containerRef.current?.focus();
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  setRefDirty(false);
-                  setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
-                  containerRef.current?.focus();
-                }
-              }}
-              onBlur={() => {
-                setRefDirty(false);
-                setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
-              }}
-              title="输入单元格引用（如 A1）跳转"
-            />
-            <input
-              ref={formulaInputRef}
-              className="sp-formula-input"
-              type="text"
-              value={formulaValue}
-              placeholder={activeCell ? "" : "选择一个单元格"}
-              disabled={!activeCell}
-              onChange={(e) => { setFormulaValue(e.target.value); setFormulaDirty(true); }}
-              onKeyDown={async (e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  const ok = await writeActiveCellValue(formulaValue);
-                  if (ok) {
-                    setFormulaDirty(false);
-                    if (activeCell) {
-                      const maxRow = displayRows.length - 1;
-                      if (activeCell.row < maxRow) {
-                        setActiveCell({ row: activeCell.row + 1, col: activeCell.col });
-                      }
-                    }
-                    containerRef.current?.focus();
-                  }
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  setFormulaDirty(false);
-                  const dr = activeCell ? displayRows[activeCell.row] : undefined;
-                  const v = dr && activeCell ? dr[activeCell.col] : undefined;
-                  setFormulaValue(v == null ? "" : String(v));
-                  containerRef.current?.focus();
-                }
-              }}
-              onBlur={async () => {
-                if (formulaDirty) {
-                  const ok = await writeActiveCellValue(formulaValue);
-                  if (ok) setFormulaDirty(false);
-                }
-              }}
-            />
-          </div>
+          <FormulaBar
+            activeCell={activeCell}
+            activeCellValue={activeCellValueStr}
+            maxRow={formulaMaxRow}
+            maxCol={formulaMaxCol}
+            onJumpToCell={stableJumpToCell}
+            onWriteActiveCell={stableWriteActiveCell}
+            onMoveDownAfterCommit={stableMoveDownAfterCommit}
+            onError={stableSetErrorMsg}
+            onFocusGrid={stableFocusGrid}
+          />
 
           {/* Spreadsheet table */}
           <div className="sp-grid-wrapper" ref={tableRef} onScroll={onGridScroll}>
@@ -2524,7 +2634,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                     <div className="sp-col-hdr-content">
                       <span className="sp-col-letter">{colLetter(ci)}</span>
                       <span className="sp-col-name">{col}</span>
-                      <span className="sp-col-type">{COLUMN_TYPES.find(t => t.value === colTypes[ci])?.label ?? colTypes[ci]}</span>
+                      <span className="sp-col-type">{typeLabelOf(colTypes[ci])}</span>
                       <span
                         className={`sp-filter-icon${columnFilters.has(ci) ? " sp-filter-active" : ""}`}
                         title="筛选"
@@ -3076,7 +3186,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                       }}
                     />
                     <span className="sp-batch-col-name">{cols[ci]}</span>
-                    <span className="sp-batch-col-type">{COLUMN_TYPES.find(t => t.value === colTypes[ci])?.label ?? colTypes[ci]}</span>
+                    <span className="sp-batch-col-type">{typeLabelOf(colTypes[ci])}</span>
                   </label>
                 ))}
               </div>
