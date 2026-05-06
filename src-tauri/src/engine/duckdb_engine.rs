@@ -1,4 +1,5 @@
-use duckdb::{Connection, params};
+use duckdb::{Connection, params, params_from_iter};
+use duckdb::types::Value;
 
 use crate::error::AppError;
 use crate::models::table::{DatasetMeta, TableQueryResult};
@@ -914,6 +915,12 @@ impl DuckDbEngine {
     /// Creates missing columns/rows as needed, updates cells.
     /// If `header_names` is provided, renames target columns to those names.
     /// For existing empty columns, changes type to detected type.
+    ///
+    /// Performance: wraps everything in a single transaction, allocates new rows
+    /// in bulk, and applies all cell updates via a single `UPDATE ... FROM`
+    /// against a temporary patch table. This avoids the O(rows * cols) per-cell
+    /// UPDATE pattern, which is catastrophic on a column-store like DuckDB
+    /// (each per-cell UPDATE rewrites the entire column block).
     pub fn paste_at_position(
         &self,
         dataset_id: &str,
@@ -925,6 +932,41 @@ impl DuckDbEngine {
     ) -> Result<(), AppError> {
         let table_name = format!("dataset_{}", dataset_id.replace('-', "_"));
 
+        // Wrap the entire operation in a transaction so we get a single commit
+        // (instead of one auto-commit per statement) and atomic rollback on error.
+        self.conn.execute_batch("BEGIN TRANSACTION;")?;
+        let result = self.paste_at_position_inner(
+            dataset_id,
+            &table_name,
+            start_row,
+            start_col,
+            rows,
+            header_names,
+            new_col_types,
+        );
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT;")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                let _ = self.conn.execute("DROP TABLE IF EXISTS _paste_patch", []);
+                Err(e)
+            }
+        }
+    }
+
+    fn paste_at_position_inner(
+        &self,
+        dataset_id: &str,
+        table_name: &str,
+        start_row: usize,
+        start_col: usize,
+        rows: &[Vec<String>],
+        header_names: Option<&[String]>,
+        new_col_types: &[String],
+    ) -> Result<(), AppError> {
         // 1. Get existing columns
         let mut stmt = self.conn.prepare(
             "SELECT col_name, col_type FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index"
@@ -932,16 +974,21 @@ impl DuckDbEngine {
         let existing_cols: Vec<(String, String)> = stmt
             .query_map(params![dataset_id], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
 
         let num_paste_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+        let num_paste_rows = rows.len();
         let mut all_col_names: Vec<String> = existing_cols.iter().map(|(n, _)| n.clone()).collect();
 
-        // 2. Determine target column names; create new columns if needed
-        let mut paste_col_names: Vec<String> = Vec::new();
+        // 2. Determine target column names; create new columns if needed.
+        //    Track resolved per-column type so the batch UPDATE can cast correctly.
+        let mut paste_col_names: Vec<String> = Vec::with_capacity(num_paste_cols);
+        let mut paste_col_types: Vec<String> = Vec::with_capacity(num_paste_cols);
         for c in 0..num_paste_cols {
             let target_idx = start_col + c;
             if target_idx < existing_cols.len() {
                 paste_col_names.push(existing_cols[target_idx].0.clone());
+                paste_col_types.push(existing_cols[target_idx].1.clone());
             } else {
                 let col_type = new_col_types.get(c).map(|s| s.as_str()).unwrap_or("VARCHAR");
                 let col_name = if let Some(names) = header_names {
@@ -957,6 +1004,7 @@ impl DuckDbEngine {
                 self.add_column(dataset_id, &col_name, col_type)?;
                 all_col_names.push(col_name.clone());
                 paste_col_names.push(col_name);
+                paste_col_types.push(col_type.to_string());
             }
         }
 
@@ -967,15 +1015,15 @@ impl DuckDbEngine {
                 let (ref col_name, ref existing_type) = existing_cols[target_idx];
                 let detected_type = new_col_types.get(c).map(|s| s.as_str()).unwrap_or("VARCHAR");
                 if existing_type != detected_type {
-                    // Check if column has any non-null data
                     let has_data: i64 = self.conn.query_row(
                         &format!("SELECT COUNT(*) FROM \"{}\" WHERE \"{}\" IS NOT NULL", table_name, col_name),
                         [],
                         |row| row.get(0),
                     )?;
                     if has_data == 0 {
-                        // Safe to change type
-                        let _ = self.change_column_type(dataset_id, col_name, detected_type);
+                        if self.change_column_type(dataset_id, col_name, detected_type).is_ok() {
+                            paste_col_types[c] = detected_type.to_string();
+                        }
                     }
                 }
             }
@@ -1003,26 +1051,106 @@ impl DuckDbEngine {
         let existing_row_ids: Vec<i64> = row_stmt
             .query_map([], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
+        drop(row_stmt);
 
-        // 6. Paste each row
-        for (r, row_data) in rows.iter().enumerate() {
-            let target_row_idx = start_row + r;
-            let row_id: i64;
-
-            if target_row_idx < existing_row_ids.len() {
-                row_id = existing_row_ids[target_row_idx];
-            } else {
-                row_id = self.add_row(dataset_id)?;
-            }
-
-            for (c, value) in row_data.iter().enumerate() {
-                if c < paste_col_names.len() && !value.is_empty() {
-                    self.update_cell(dataset_id, row_id, &paste_col_names[c], value)?;
-                }
+        // 5b. Bulk-allocate new rows (avoids per-row MAX/COUNT/UPDATE overhead).
+        let mut all_row_ids = existing_row_ids;
+        let total_target_rows = start_row + num_paste_rows;
+        if total_target_rows > all_row_ids.len() {
+            let need = total_target_rows - all_row_ids.len();
+            let max_id: Option<i64> = self.conn.query_row(
+                &format!("SELECT MAX(\"_row_id\") FROM \"{}\"", table_name),
+                [],
+                |row| row.get(0),
+            ).unwrap_or(None);
+            let start_new = max_id.unwrap_or(0) + 1;
+            let insert_sql = format!("INSERT INTO \"{}\" (\"_row_id\") VALUES ($1)", table_name);
+            let mut ins = self.conn.prepare(&insert_sql)?;
+            for i in 0..need as i64 {
+                let new_id = start_new + i;
+                ins.execute(params![new_id])?;
+                all_row_ids.push(new_id);
             }
         }
 
-        // 7. Update metadata counts
+        // 6. Build a temporary patch table and apply all cell updates with a
+        //    single multi-column `UPDATE ... FROM`. Each target column is
+        //    rewritten exactly once instead of once per pasted row.
+        if num_paste_cols > 0 && num_paste_rows > 0 {
+            // Defensive cleanup in case a previous error left it behind.
+            let _ = self.conn.execute("DROP TABLE IF EXISTS _paste_patch", []);
+
+            let mut create_cols = String::from("\"_row_id\" BIGINT");
+            for c in 0..num_paste_cols {
+                create_cols.push_str(&format!(", \"c{}\" VARCHAR", c));
+            }
+            self.conn.execute(
+                &format!("CREATE TEMP TABLE _paste_patch ({})", create_cols),
+                [],
+            )?;
+
+            // Prepared multi-row INSERT (param list: _row_id, c0, c1, ...).
+            let mut col_list = String::from("\"_row_id\"");
+            let mut placeholders = String::from("$1");
+            for c in 0..num_paste_cols {
+                col_list.push_str(&format!(", \"c{}\"", c));
+                placeholders.push_str(&format!(", ${}", c + 2));
+            }
+            let insert_sql = format!(
+                "INSERT INTO _paste_patch ({}) VALUES ({})",
+                col_list, placeholders
+            );
+            let mut ins = self.conn.prepare(&insert_sql)?;
+
+            for (r, row_data) in rows.iter().enumerate() {
+                let target_row_idx = start_row + r;
+                if target_row_idx >= all_row_ids.len() {
+                    break;
+                }
+                let row_id = all_row_ids[target_row_idx];
+
+                let mut vals: Vec<Value> = Vec::with_capacity(num_paste_cols + 1);
+                vals.push(Value::BigInt(row_id));
+                for c in 0..num_paste_cols {
+                    let v = row_data.get(c).map(|s| s.as_str()).unwrap_or("");
+                    if v.is_empty() {
+                        vals.push(Value::Null);
+                    } else {
+                        vals.push(Value::Text(v.to_string()));
+                    }
+                }
+                ins.execute(params_from_iter(vals.iter()))?;
+            }
+
+            // Single UPDATE that touches every paste column at once.
+            // COALESCE preserves the previous behavior of skipping empty
+            // (NULL in the patch) cells. TRY_CAST keeps the existing column
+            // type and simply leaves the original value when a value cannot be
+            // cast, mirroring the old "skip on empty" semantics.
+            let mut set_clauses: Vec<String> = Vec::with_capacity(num_paste_cols);
+            for c in 0..num_paste_cols {
+                let col_name = &paste_col_names[c];
+                let col_type = &paste_col_types[c];
+                set_clauses.push(format!(
+                    "\"{cn}\" = COALESCE(TRY_CAST(p.\"c{c}\" AS {ct}), \"{tbl}\".\"{cn}\")",
+                    cn = col_name,
+                    c = c,
+                    ct = col_type,
+                    tbl = table_name,
+                ));
+            }
+            let update_sql = format!(
+                "UPDATE \"{tbl}\" SET {set} FROM _paste_patch p \
+                 WHERE \"{tbl}\".\"_row_id\" = p.\"_row_id\"",
+                tbl = table_name,
+                set = set_clauses.join(", "),
+            );
+            self.conn.execute(&update_sql, [])?;
+
+            self.conn.execute("DROP TABLE _paste_patch", [])?;
+        }
+
+        // 7. Update metadata counts (once at the end)
         let row_count: i64 = self.conn.query_row(
             &format!("SELECT COUNT(*) FROM \"{}\"", table_name),
             [],
