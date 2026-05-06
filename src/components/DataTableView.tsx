@@ -1848,7 +1848,9 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     isDraggingRowRef.current = true;
     didDragRowRef.current = false;
     setIsDragging(true);
-    const anchorRow = rowIdx;
+    // Same fix as column header: shift+click should drag from the existing
+    // anchor, not the just-clicked row.
+    const anchorRow = (e.shiftKey && rowAnchorRef.current != null) ? rowAnchorRef.current : rowIdx;
     document.body.style.userSelect = "none";
 
     const onMouseMove = (ev: MouseEvent) => {
@@ -1867,16 +1869,17 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       if (!target) return;
       const td = target.closest("td.sp-row-hdr") as HTMLElement | null;
       if (!td) return;
-      const txt = td.textContent;
-      if (txt) {
-        const ri = parseInt(txt, 10) - 1;
-        if (!isNaN(ri)) {
-          const start = Math.min(anchorRow, ri);
-          const end = Math.max(anchorRow, ri);
-          const newSet = new Set<number>();
-          for (let i = start; i <= end; i++) newSet.add(i);
-          setSelectedRows(newSet);
-        }
+      // Read absolute row index from data attribute, not from textContent —
+      // more robust against virtualization spacers / non-numeric content.
+      const riStr = td.dataset.rowHdr;
+      if (riStr == null) return;
+      const ri = Number(riStr);
+      if (Number.isFinite(ri)) {
+        const start = Math.min(anchorRow, ri);
+        const end = Math.max(anchorRow, ri);
+        const newSet = new Set<number>();
+        for (let i = start; i <= end; i++) newSet.add(i);
+        setSelectedRows(newSet);
       }
     };
 
@@ -1932,7 +1935,11 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     isDraggingColRef.current = true;
     didDragColRef.current = false;
     setIsDragging(true);
-    const anchorCol = colIdx;
+    // For shift+click, drag should extend the existing selection from the
+    // previous anchor — not from the just-clicked column. Otherwise a tiny
+    // mouse jitter between mousedown and mouseup converts the shift-click
+    // into a single-column selection (drag path overrides handleColSelect).
+    const anchorCol = (e.shiftKey && colAnchorRef.current != null) ? colAnchorRef.current : colIdx;
     document.body.style.userSelect = "none";
 
     const onMouseMove = (ev: MouseEvent) => {
@@ -1951,12 +1958,14 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       if (!target) return;
       const th = target.closest("th.sp-col-hdr") as HTMLElement | null;
       if (!th) return;
-      // Find column index from sibling position
-      const row = th.parentElement;
-      if (!row) return;
-      const ths = Array.from(row.querySelectorAll("th.sp-col-hdr"));
-      const ci = ths.indexOf(th);
-      if (ci >= 0) {
+      // Read absolute column index from data attribute. Using sibling position
+      // (indexOf) is wrong under column virtualization because off-screen
+      // columns are not in the DOM, so the visible-only index doesn't match
+      // the real column number.
+      const ciStr = th.dataset.colHdr;
+      if (ciStr == null) return;
+      const ci = Number(ciStr);
+      if (Number.isFinite(ci) && ci >= 0) {
         const start = Math.min(anchorCol, ci);
         const end = Math.max(anchorCol, ci);
         const newSet = new Set<number>();
