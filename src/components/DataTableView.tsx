@@ -813,6 +813,10 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   // hook count stays constant across the data null → loaded transition.
   const commitEditRef = useRef<(dir: "none" | "down" | "right" | "left") => Promise<void> | void>(() => {});
   const cancelEditRef = useRef<() => void>(() => {});
+  // When Escape cancels editing, the input unmounts and fires blur which would
+  // otherwise commit the (already-discarded) value. This flag tells the next
+  // commitEdit call to no-op exactly once.
+  const suppressNextCommitRef = useRef(false);
   const stableCommitEdit = useCallback((dir: "none" | "down" | "right" | "left") => {
     return commitEditRef.current(dir);
   }, []);
@@ -1143,6 +1147,10 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   };
 
   const commitEdit = async (direction: "none" | "down" | "right" | "left" = "none") => {
+    if (suppressNextCommitRef.current) {
+      suppressNextCommitRef.current = false;
+      return;
+    }
     if (!editCell) return;
     const { row: editRow, col: editCol } = editCell;
     const colType = colTypes[editCol];
@@ -1206,6 +1214,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   };
 
   const cancelEdit = () => {
+    // Mark so the imminent input blur (caused by unmount) won't commit.
+    suppressNextCommitRef.current = true;
     setEditCell(null);
     tabAnchorColRef.current = null;
     containerRef.current?.focus();
