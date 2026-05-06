@@ -556,7 +556,7 @@
   position: relative;
 }
 
-/* ========= Spreadsheet table area: left columns panel + grid ========= */
+/* ========= Spreadsheet table area: left columns panel + (formula bar + grid) ========= */
 .sp-table-area {
   flex: 1;
   display: flex;
@@ -565,24 +565,37 @@
   overflow: hidden;
 }
 
+.sp-table-right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* ========= Formula bar (Excel-like) ========= */
 .sp-formula-bar {
   display: flex;
-  align-items: stretch;
-  height: 26px;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-main);
   font-size: 12px;
   flex: 0 0 auto;
+  box-sizing: border-box;
 }
 
 .sp-formula-ref-input {
   min-width: 90px;
   width: 110px;
+  height: 22px;
   padding: 0 8px;
-  background: var(--bg-header);
-  border: none;
-  border-right: 1px solid var(--border-main);
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
   outline: none;
   color: var(--fg-primary);
   font-weight: 600;
@@ -592,12 +605,14 @@
 }
 
 .sp-formula-ref-input:focus {
-  background: var(--bg-input);
+  border-color: var(--border-input-focus);
 }
 
 .sp-formula-input {
   flex: 1;
-  border: none;
+  height: 22px;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
   outline: none;
   padding: 0 8px;
   font-size: 13px;
@@ -606,8 +621,13 @@
   font-family: inherit;
 }
 
+.sp-formula-input:focus {
+  border-color: var(--border-input-focus);
+}
+
 .sp-formula-input:disabled {
-  background: var(--bg-panel);
+  background: transparent;
+  border-color: transparent;
   color: var(--fg-placeholder);
 }
 

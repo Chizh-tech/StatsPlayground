@@ -2339,97 +2339,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
         </div>
       )}
 
-      {/* Excel-like formula bar: editable cell ref + content editor */}
-      <div className="sp-formula-bar">
-        <input
-          className="sp-formula-ref-input"
-          type="text"
-          value={refValue}
-          placeholder="A1"
-          spellCheck={false}
-          onChange={(e) => { setRefValue(e.target.value); setRefDirty(true); }}
-          onFocus={(e) => { e.currentTarget.select(); }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              const m = refValue.trim().toUpperCase().match(/^([A-Z]+)(\d+)$/);
-              if (!m) {
-                setErrorMsg(`无效的单元格引用："${refValue}"，应类似 "A1" 或 "AB123"`);
-                return;
-              }
-              // Parse column letters → 0-based index
-              let col = 0;
-              for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
-              col -= 1;
-              const row = parseInt(m[2], 10) - 1;
-              const maxRow = displayRows.length - 1;
-              const maxCol = cols.length - 1;
-              if (col < 0 || col > maxCol || row < 0 || row > maxRow) {
-                setErrorMsg(`单元格 "${refValue}" 超出范围（最大 ${colLetter(maxCol)}${maxRow + 1}）`);
-                return;
-              }
-              setActiveCell({ row, col });
-              setSelection({ startRow: row, startCol: col, endRow: row, endCol: col });
-              setSelectedRows(EMPTY_NUM_SET);
-              setSelectedCols(EMPTY_NUM_SET);
-              setRefDirty(false);
-              containerRef.current?.focus();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              setRefDirty(false);
-              setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
-              containerRef.current?.focus();
-            }
-          }}
-          onBlur={() => {
-            // Revert to current active cell on blur without committing
-            setRefDirty(false);
-            setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
-          }}
-          title="输入单元格引用（如 A1）跳转"
-        />
-        <input
-          ref={formulaInputRef}
-          className="sp-formula-input"
-          type="text"
-          value={formulaValue}
-          placeholder={activeCell ? "" : "选择一个单元格"}
-          disabled={!activeCell}
-          onChange={(e) => { setFormulaValue(e.target.value); setFormulaDirty(true); }}
-          onKeyDown={async (e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              const ok = await writeActiveCellValue(formulaValue);
-              if (ok) {
-                setFormulaDirty(false);
-                // Move down like Excel
-                if (activeCell) {
-                  const maxRow = displayRows.length - 1;
-                  if (activeCell.row < maxRow) {
-                    setActiveCell({ row: activeCell.row + 1, col: activeCell.col });
-                  }
-                }
-                containerRef.current?.focus();
-              }
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              setFormulaDirty(false);
-              const dr = activeCell ? displayRows[activeCell.row] : undefined;
-              const v = dr && activeCell ? dr[activeCell.col] : undefined;
-              setFormulaValue(v == null ? "" : String(v));
-              containerRef.current?.focus();
-            }
-          }}
-          onBlur={async () => {
-            if (formulaDirty) {
-              const ok = await writeActiveCellValue(formulaValue);
-              if (ok) setFormulaDirty(false);
-            }
-          }}
-        />
-      </div>
-
-      {/* Spreadsheet table area: left columns panel + grid */}
+      {/* Spreadsheet table area: left columns panel + (formula bar + grid) */}
       <div className="sp-table-area">
         {/* Left "Columns" panel */}
         {colsPanelCollapsed ? (
@@ -2475,8 +2385,97 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           </div>
         )}
 
-        {/* Spreadsheet table */}
-        <div className="sp-grid-wrapper" ref={tableRef} onScroll={onGridScroll}>
+        {/* Right side: formula bar + grid (stacked vertically) */}
+        <div className="sp-table-right">
+          {/* Excel-like formula bar: editable cell ref + content editor */}
+          <div className="sp-formula-bar">
+            <input
+              className="sp-formula-ref-input"
+              type="text"
+              value={refValue}
+              placeholder="A1"
+              spellCheck={false}
+              onChange={(e) => { setRefValue(e.target.value); setRefDirty(true); }}
+              onFocus={(e) => { e.currentTarget.select(); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  const m = refValue.trim().toUpperCase().match(/^([A-Z]+)(\d+)$/);
+                  if (!m) {
+                    setErrorMsg(`无效的单元格引用："${refValue}"，应类似 "A1" 或 "AB123"`);
+                    return;
+                  }
+                  let col = 0;
+                  for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+                  col -= 1;
+                  const row = parseInt(m[2], 10) - 1;
+                  const maxRow = displayRows.length - 1;
+                  const maxCol = cols.length - 1;
+                  if (col < 0 || col > maxCol || row < 0 || row > maxRow) {
+                    setErrorMsg(`单元格 "${refValue}" 超出范围（最大 ${colLetter(maxCol)}${maxRow + 1}）`);
+                    return;
+                  }
+                  setActiveCell({ row, col });
+                  setSelection({ startRow: row, startCol: col, endRow: row, endCol: col });
+                  setSelectedRows(EMPTY_NUM_SET);
+                  setSelectedCols(EMPTY_NUM_SET);
+                  setRefDirty(false);
+                  containerRef.current?.focus();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setRefDirty(false);
+                  setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
+                  containerRef.current?.focus();
+                }
+              }}
+              onBlur={() => {
+                setRefDirty(false);
+                setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
+              }}
+              title="输入单元格引用（如 A1）跳转"
+            />
+            <input
+              ref={formulaInputRef}
+              className="sp-formula-input"
+              type="text"
+              value={formulaValue}
+              placeholder={activeCell ? "" : "选择一个单元格"}
+              disabled={!activeCell}
+              onChange={(e) => { setFormulaValue(e.target.value); setFormulaDirty(true); }}
+              onKeyDown={async (e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  const ok = await writeActiveCellValue(formulaValue);
+                  if (ok) {
+                    setFormulaDirty(false);
+                    if (activeCell) {
+                      const maxRow = displayRows.length - 1;
+                      if (activeCell.row < maxRow) {
+                        setActiveCell({ row: activeCell.row + 1, col: activeCell.col });
+                      }
+                    }
+                    containerRef.current?.focus();
+                  }
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setFormulaDirty(false);
+                  const dr = activeCell ? displayRows[activeCell.row] : undefined;
+                  const v = dr && activeCell ? dr[activeCell.col] : undefined;
+                  setFormulaValue(v == null ? "" : String(v));
+                  containerRef.current?.focus();
+                }
+              }}
+              onBlur={async () => {
+                if (formulaDirty) {
+                  const ok = await writeActiveCellValue(formulaValue);
+                  if (ok) setFormulaDirty(false);
+                }
+              }}
+            />
+          </div>
+
+          {/* Spreadsheet table */}
+          <div className="sp-grid-wrapper" ref={tableRef} onScroll={onGridScroll}>
         <table className="sp-grid" style={{ width: ROW_HDR_WIDTH + totalColsWidth + ADD_COL_WIDTH }}>
           <colgroup>
             <col style={{ width: ROW_HDR_WIDTH }} />
@@ -2665,6 +2664,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
             </tr>
           </tbody>
         </table>
+        </div>
         </div>
       </div>
 
