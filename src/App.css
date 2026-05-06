@@ -398,6 +398,14 @@
   flex-shrink: 0;
 }
 
+.gb-source-tag {
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+
 .ds-delete {
   opacity: 0;
   transition: opacity 0.15s;
@@ -434,6 +442,51 @@
   text-align: center;
   color: var(--fg-placeholder);
   font-size: 14px;
+}
+
+/* ========= Main View Tabs (Table / Graph Builder) ========= */
+.main-view-tabs {
+  display: flex;
+  height: 30px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-main);
+  padding: 0 6px;
+  gap: 2px;
+  align-items: end;
+  flex-shrink: 0;
+}
+
+.main-view-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+  padding: 4px 14px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  height: 26px;
+}
+
+.main-view-tab:hover {
+  background: var(--bg-header);
+  color: var(--fg-primary);
+}
+
+.main-view-tab-active {
+  background: var(--bg-main);
+  border-color: var(--border-main);
+  color: var(--fg-primary);
+  position: relative;
+  top: 1px;
+}
+
+.main-view-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ========= Spreadsheet (Excel-like) ========= */

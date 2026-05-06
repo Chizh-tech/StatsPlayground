@@ -10,4 +10,5 @@ export interface OpenProjectResult {
   project: ProjectInfo;
   history: unknown[];
   snapshots: unknown[];
+  graphBuilders: unknown[];
 }

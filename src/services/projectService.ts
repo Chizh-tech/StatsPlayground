@@ -11,11 +11,12 @@ export const projectService = {
   openProject: (filePath: string) =>
     invoke<OpenProjectResult>("open_project", { filePath }),
 
-  saveProject: (filePath?: string, history?: unknown[], snapshots?: unknown[]) =>
+  saveProject: (filePath?: string, history?: unknown[], snapshots?: unknown[], graphBuilders?: unknown[]) =>
     invoke<ProjectInfo>("save_project", {
       filePath: filePath ?? null,
       history: history ?? null,
       snapshots: snapshots ?? null,
+      graphBuilders: graphBuilders ?? null,
     }),
 
   getCurrentProject: () => invoke<ProjectInfo | null>("get_current_project"),

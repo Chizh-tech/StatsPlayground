@@ -8,6 +8,10 @@ import { DataTableView } from "./DataTableView";
 import { HistoryPanel, type SnapshotMenuData } from "./HistoryPanel";
 import { PreferencesDialog } from "./PreferencesDialog";
 import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
+import { GraphBuilderView } from "./graphBuilder";
+import "./graphBuilder/graphBuilder.css";
+import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
+import type { GraphBuilderItem } from "@/types/graphBuilder";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { modKey } from "@/utils/platform";
@@ -86,7 +90,18 @@ export function Workspace() {
   const { datasets, activeDatasetId, setActiveDataset, refreshDatasets, statusInfo } = useDataStore();
   const { openProject } = useProjectStore();
   const { record: recordHistory, createSnapshot, restoreSnapshot, deleteSnapshot, reset: resetHistory } = useHistoryStore();
+  const graphBuilders = useGraphBuilderStore((s) => s.items);
+  const addGraphBuilder = useGraphBuilderStore((s) => s.addItem);
+  const renameGraphBuilder = useGraphBuilderStore((s) => s.renameItem);
+  const deleteGraphBuilder = useGraphBuilderStore((s) => s.deleteItem);
+  const deleteGraphBuildersByDataset = useGraphBuilderStore((s) => s.deleteByDataset);
+  const resetGraphBuilders = useGraphBuilderStore((s) => s.reset);
+  const loadGraphBuildersFromProject = useGraphBuilderStore((s) => s.loadFromProject);
+  const gbCounter = useGraphBuilderStore((s) => s.counter);
+  const bumpGbCounter = useGraphBuilderStore((s) => s.bumpCounter);
   const [activeTab, setActiveTab] = useState<"files" | "history">("files");
+  /** 当前选中项的类型与 ID。代替原有的 viewMode 机制。 */
+  const [activeGraphBuilderId, setActiveGraphBuilderId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [showPrefs, setShowPrefs] = useState(false);
@@ -197,6 +212,7 @@ export function Workspace() {
     const meta = await dataService.createTable(name, [], []);
     await refreshDatasets();
     markDirty();
+    setActiveGraphBuilderId(null);
     setActiveDataset(meta.id);
     recordAction(`新建数据表 "${name}"`);
     // Enter rename mode
@@ -204,10 +220,58 @@ export function Workspace() {
     setRenameValue(name);
   };
 
+  /** 新建一个图表构建器项，绑定到当前选中数据表 */
+  const handleCreateGraphBuilder = () => {
+    if (!activeDatasetId) {
+      alert("请先选择一个数据表作为数据源");
+      return;
+    }
+    const ds = datasets.find((d) => d.id === activeDatasetId);
+    if (!ds) return;
+    const nextNum = gbCounter + 1;
+    bumpGbCounter(nextNum);
+    const id =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `gb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const name = `图表${nextNum}`;
+    const item: GraphBuilderItem = {
+      id,
+      name,
+      sourceDatasetId: ds.id,
+      encoding: {},
+      elements: [{ kind: "points", enabled: true }],
+      smootherLambda: 0.4,
+      createdAt: new Date().toISOString(),
+    };
+    addGraphBuilder(item);
+    setActiveDataset(null);
+    setActiveGraphBuilderId(id);
+    markDirty();
+    recordAction(`新建图表 "${name}" (数据源: ${ds.name})`);
+    setRenamingId(id);
+    setRenameValue(name);
+  };
+
   const handleRenameSubmit = async (id: string) => {
     const trimmed = renameValue.trim();
+    if (!trimmed) {
+      setRenamingId(null);
+      return;
+    }
+    // 是图表项还是数据表？
+    const gb = useGraphBuilderStore.getState().items.find((it) => it.id === id);
+    if (gb) {
+      if (trimmed !== gb.name) {
+        renameGraphBuilder(id, trimmed);
+        markDirty();
+        recordAction(`重命名图表 "${gb.name}" → "${trimmed}"`);
+      }
+      setRenamingId(null);
+      return;
+    }
     const oldName = datasets.find((d) => d.id === id)?.name;
-    if (trimmed && trimmed !== oldName) {
+    if (trimmed !== oldName) {
       await dataService.renameDataset(id, trimmed);
       await refreshDatasets();
       markDirty();
@@ -216,10 +280,26 @@ export function Workspace() {
     setRenamingId(null);
   };
 
+  const handleDeleteGraphBuilder = (id: string) => {
+    const it = useGraphBuilderStore.getState().items.find((x) => x.id === id);
+    deleteGraphBuilder(id);
+    if (activeGraphBuilderId === id) setActiveGraphBuilderId(null);
+    markDirty();
+    if (it) recordAction(`删除图表 "${it.name}"`);
+  };
+
   const handleDeleteDataset = async (id: string) => {
     const name = datasets.find((d) => d.id === id)?.name ?? id;
     await dataService.deleteDataset(id);
     if (activeDatasetId === id) setActiveDataset(null);
+    // 联动删除引用此数据表的图表
+    deleteGraphBuildersByDataset(id);
+    if (activeGraphBuilderId) {
+      const stillExists = useGraphBuilderStore
+        .getState()
+        .items.find((it) => it.id === activeGraphBuilderId);
+      if (!stillExists) setActiveGraphBuilderId(null);
+    }
     await refreshDatasets();
     markDirty();
     recordAction(`删除数据表 "${name}"`);
@@ -311,6 +391,7 @@ export function Workspace() {
 
   const handleSave = async () => {
     const { snapshots } = useHistoryStore.getState();
+    const gbItems = useGraphBuilderStore.getState().items;
     // History is session-only (not persisted); only snapshots are saved
     if (!project?.filePath) {
       const filePath = await save({
@@ -319,9 +400,9 @@ export function Workspace() {
         filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
       });
       if (!filePath) return; // User cancelled
-      await saveProject(filePath, [], snapshots);
+      await saveProject(filePath, [], snapshots, gbItems);
     } else {
-      await saveProject(undefined, [], snapshots);
+      await saveProject(undefined, [], snapshots, gbItems);
     }
     setSaveToast(true);
     setTimeout(() => setSaveToast(false), 1500);
@@ -330,7 +411,9 @@ export function Workspace() {
 
   const handleCloseProject = async () => {
     setActiveDataset(null);
+    setActiveGraphBuilderId(null);
     resetHistory();
+    resetGraphBuilders();
     await initProject();
     await refreshDatasets();
     tableCounter.current = 0;
@@ -344,7 +427,9 @@ export function Workspace() {
     });
     if (selected) {
       setActiveDataset(null);
+      setActiveGraphBuilderId(null);
       resetHistory();
+      resetGraphBuilders();
       setBusyMessage("正在打开项目…");
       const unlisten = await listen<{
         datasetIndex: number;
@@ -367,6 +452,10 @@ export function Workspace() {
             [],
             result.snapshots as NamedSnapshot[],
           );
+        }
+        // Restore graph builders
+        if (result.graphBuilders && result.graphBuilders.length > 0) {
+          loadGraphBuildersFromProject(result.graphBuilders as GraphBuilderItem[]);
         }
       } finally {
         unlisten();
@@ -398,6 +487,9 @@ export function Workspace() {
               <div className="menu-sep" />
               <div className="menu-item" onClick={handleExportSqlite}>导出为 SQLite</div>
               <div className="menu-item" onClick={handleExportCsvZip}>导出为 CSV (ZIP)</div>
+            </MenuDropdown>
+            <MenuDropdown label="图表">
+              <div className="menu-item" onClick={handleCreateGraphBuilder}>新建图表构建器</div>
             </MenuDropdown>
             <MenuDropdown label="操作">
               <div className="menu-item" onClick={() => setTableOp("summary")}>汇总</div>
@@ -486,48 +578,99 @@ export function Workspace() {
                 <h3>目录</h3>
               </div>
               <div className="dataset-list">
-                {datasets.length === 0 ? (
+                {datasets.length === 0 && graphBuilders.length === 0 ? (
                   <div className="empty-hint">暂无内容</div>
                 ) : (
-                  datasets.map((ds) => (
-                    <div
-                  key={ds.id}
-                  className={`dataset-item ${activeDatasetId === ds.id ? "active" : ""}`}
-                  onClick={() => setActiveDataset(ds.id)}
-                  onDoubleClick={() => {
-                    setRenamingId(ds.id);
-                    setRenameValue(ds.name);
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setDsMenu({ x: e.clientX, y: e.clientY, id: ds.id });
-                  }}
-                >
-                  <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
-                    <path d="M480 96C515.3 96 544 124.7 544 160L544 480C544 515.3 515.3 544 480 544L160 544L153.5 543.7C121.2 540.4 96 513.1 96 480L96 160C96 124.7 124.7 96 160 96L480 96zM160 384L160 480L288 480L288 384L160 384zM352 384L352 480L480 480L480 384L352 384zM160 320L288 320L288 224L160 224L160 320zM352 320L480 320L480 224L352 224L352 320z"/>
-                  </svg>
-                  {renamingId === ds.id ? (
-                    <input
-                      ref={renameInputRef}
-                      className="ds-rename-input"
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onBlur={() => handleRenameSubmit(ds.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleRenameSubmit(ds.id);
-                        if (e.key === "Escape") setRenamingId(null);
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                      autoFocus
-                    />
-                  ) : (
-                    <span className="ds-name">{ds.name}</span>
-                  )}
-                  <span className="ds-info">{ds.rowCount}×{ds.colCount}</span>
-                </div>
-              ))
-            )}
-          </div>
+                  <>
+                    {datasets.map((ds) => (
+                      <div
+                        key={ds.id}
+                        className={`dataset-item ${activeDatasetId === ds.id ? "active" : ""}`}
+                        onClick={() => {
+                          setActiveGraphBuilderId(null);
+                          setActiveDataset(ds.id);
+                        }}
+                        onDoubleClick={() => {
+                          setRenamingId(ds.id);
+                          setRenameValue(ds.name);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setDsMenu({ x: e.clientX, y: e.clientY, id: ds.id });
+                        }}
+                      >
+                        <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
+                          <path d="M480 96C515.3 96 544 124.7 544 160L544 480C544 515.3 515.3 544 480 544L160 544L153.5 543.7C121.2 540.4 96 513.1 96 480L96 160C96 124.7 124.7 96 160 96L480 96zM160 384L160 480L288 480L288 384L160 384zM352 384L352 480L480 480L480 384L352 384zM160 320L288 320L288 224L160 224L160 320zM352 320L480 320L480 224L352 224L352 320z"/>
+                        </svg>
+                        {renamingId === ds.id ? (
+                          <input
+                            ref={renameInputRef}
+                            className="ds-rename-input"
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onBlur={() => handleRenameSubmit(ds.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleRenameSubmit(ds.id);
+                              if (e.key === "Escape") setRenamingId(null);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            autoFocus
+                          />
+                        ) : (
+                          <span className="ds-name">{ds.name}</span>
+                        )}
+                        <span className="ds-info">{ds.rowCount}×{ds.colCount}</span>
+                      </div>
+                    ))}
+                    {graphBuilders.map((gb) => {
+                      const sourceDs = datasets.find((d) => d.id === gb.sourceDatasetId);
+                      return (
+                        <div
+                          key={gb.id}
+                          className={`dataset-item ${activeGraphBuilderId === gb.id ? "active" : ""}`}
+                          onClick={() => {
+                            setActiveDataset(null);
+                            setActiveGraphBuilderId(gb.id);
+                          }}
+                          onDoubleClick={() => {
+                            setRenamingId(gb.id);
+                            setRenameValue(gb.name);
+                          }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setDsMenu({ x: e.clientX, y: e.clientY, id: gb.id });
+                          }}
+                          title={sourceDs ? `数据源: ${sourceDs.name}` : "数据源已删除"}
+                        >
+                          <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
+                            <path d="M96 96C113.7 96 128 110.3 128 128L128 480C128 488.8 135.2 496 144 496L544 496C561.7 496 576 510.3 576 528C576 545.7 561.7 560 544 560L144 560C99.8 560 64 524.2 64 480L64 128C64 110.3 78.3 96 96 96zM216 392C202.7 392 192 381.3 192 368C192 354.7 202.7 344 216 344L264 344C277.3 344 288 354.7 288 368L288 416C288 429.3 277.3 440 264 440C250.7 440 240 429.3 240 416L240 408L216 408L216 392zM320 200C320 186.7 330.7 176 344 176C357.3 176 368 186.7 368 200L368 416C368 429.3 357.3 440 344 440C330.7 440 320 429.3 320 416L320 200zM416 280C416 266.7 426.7 256 440 256C453.3 256 464 266.7 464 280L464 416C464 429.3 453.3 440 440 440C426.7 440 416 429.3 416 416L416 280zM512 320C525.3 320 536 330.7 536 344L536 416C536 429.3 525.3 440 512 440C498.7 440 488 429.3 488 416L488 344C488 330.7 498.7 320 512 320zM240 248C240 234.7 250.7 224 264 224C277.3 224 288 234.7 288 248L288 296C288 309.3 277.3 320 264 320C250.7 320 240 309.3 240 296L240 248z"/>
+                          </svg>
+                          {renamingId === gb.id ? (
+                            <input
+                              ref={renameInputRef}
+                              className="ds-rename-input"
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onBlur={() => handleRenameSubmit(gb.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleRenameSubmit(gb.id);
+                                if (e.key === "Escape") setRenamingId(null);
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              autoFocus
+                            />
+                          ) : (
+                            <span className="ds-name">{gb.name}</span>
+                          )}
+                          <span className="ds-info gb-source-tag">
+                            {sourceDs ? sourceDs.name : "—"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+              </div>
             </>
           ) : (
             <HistoryPanel
@@ -540,7 +683,15 @@ export function Workspace() {
 
         {/* Right: Main Content */}
         <div className="main-area">
-          {activeDatasetId ? (
+          {activeGraphBuilderId ? (
+            (() => {
+              const item = graphBuilders.find((g) => g.id === activeGraphBuilderId);
+              if (!item) return <div className="main-content"><div className="workspace-empty"><p>图表已不存在</p></div></div>;
+              const ds = datasets.find((d) => d.id === item.sourceDatasetId);
+              if (!ds) return <div className="main-content"><div className="workspace-empty"><p>数据源已删除</p></div></div>;
+              return <GraphBuilderView item={item} dataset={ds} />;
+            })()
+          ) : activeDatasetId ? (
             <DataTableView key={tableKey} datasetId={activeDatasetId} />
           ) : (
             <div className="main-content">
@@ -647,17 +798,28 @@ export function Workspace() {
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="sp-ctx-item" onClick={() => {
-            const ds = datasets.find((d) => d.id === dsMenu.id);
-            if (ds) {
-              setRenamingId(ds.id);
-              setRenameValue(ds.name);
-              setActiveDataset(ds.id);
+            const gb = graphBuilders.find((g) => g.id === dsMenu.id);
+            if (gb) {
+              setRenamingId(gb.id);
+              setRenameValue(gb.name);
+              setActiveDataset(null);
+              setActiveGraphBuilderId(gb.id);
+            } else {
+              const ds = datasets.find((d) => d.id === dsMenu.id);
+              if (ds) {
+                setRenamingId(ds.id);
+                setRenameValue(ds.name);
+                setActiveGraphBuilderId(null);
+                setActiveDataset(ds.id);
+              }
             }
             setDsMenu(null);
           }}>重命名</div>
           <div className="sp-ctx-sep" />
           <div className="sp-ctx-item sp-ctx-danger" onClick={() => {
-            handleDeleteDataset(dsMenu.id);
+            const isGb = graphBuilders.some((g) => g.id === dsMenu.id);
+            if (isGb) handleDeleteGraphBuilder(dsMenu.id);
+            else handleDeleteDataset(dsMenu.id);
             setDsMenu(null);
           }}>删除</div>
         </div>
