@@ -748,7 +748,7 @@
 }
 
 .sp-corner-active {
-  background: var(--bg-header-active) !important;
+  background-color: var(--bg-header-active) !important;
 }
 
 /* Column headers */
@@ -771,11 +771,11 @@
 }
 
 .sp-col-active {
-  background: var(--bg-header-active) !important;
+  background-color: var(--bg-header-active) !important;
 }
 
 .sp-col-selected {
-  background: var(--bg-header-selected) !important;
+  background-color: var(--bg-header-selected) !important;
 }
 
 /* Column resize handle */
@@ -873,12 +873,12 @@
 }
 
 .sp-row-active {
-  background: var(--bg-header-active) !important;
+  background-color: var(--bg-header-active) !important;
   color: var(--fg-accent);
 }
 
 .sp-row-selected-hdr {
-  background: var(--bg-header-selected) !important;
+  background-color: var(--bg-header-selected) !important;
   color: var(--fg-secondary);
 }
 
@@ -920,15 +920,15 @@
 .sp-cell-active {
   box-shadow: inset 0 0 0 2px var(--fg-accent);
   z-index: 1;
-  background: var(--bg-cell-active) !important;
+  background-color: var(--bg-cell-active) !important;
 }
 
 .sp-cell-selected {
-  background: var(--bg-cell-selected) !important;
+  background-color: var(--bg-cell-selected) !important;
 }
 
 .sp-cell-selected.sp-cell-active {
-  background: var(--bg-cell-active) !important;
+  background-color: var(--bg-cell-active) !important;
 }
 
 .sp-cell-editing {
@@ -959,17 +959,17 @@
 
 /* Selected row */
 .sp-row-selected td {
-  background: var(--bg-row-selected) !important;
+  background-color: var(--bg-row-selected) !important;
 }
 
 .sp-row-selected .sp-row-hdr {
-  background: var(--fg-accent) !important;
+  background-color: var(--fg-accent) !important;
   color: #fff !important;
 }
 
 /* Selected column cells */
 .sp-col-selected-cell {
-  background: var(--bg-row-selected) !important;
+  background-color: var(--bg-row-selected) !important;
 }
 
 /* "+ " cell at end of row (placeholder) */
