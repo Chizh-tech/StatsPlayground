@@ -556,6 +556,157 @@
   position: relative;
 }
 
+/* ========= Spreadsheet table area: left columns panel + grid ========= */
+.sp-table-area {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ========= Formula bar (Excel-like) ========= */
+.sp-formula-bar {
+  display: flex;
+  align-items: stretch;
+  height: 26px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-main);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
+.sp-formula-ref-input {
+  min-width: 90px;
+  width: 110px;
+  padding: 0 8px;
+  background: var(--bg-header);
+  border: none;
+  border-right: 1px solid var(--border-main);
+  outline: none;
+  color: var(--fg-primary);
+  font-weight: 600;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: center;
+}
+
+.sp-formula-ref-input:focus {
+  background: var(--bg-input);
+}
+
+.sp-formula-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 0 8px;
+  font-size: 13px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font-family: inherit;
+}
+
+.sp-formula-input:disabled {
+  background: var(--bg-panel);
+  color: var(--fg-placeholder);
+}
+
+.sp-cols-panel {
+  width: 200px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border-main);
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sp-cols-panel-collapsed {
+  width: 18px;
+  min-width: 18px;
+  align-items: center;
+  padding-top: 4px;
+}
+
+.sp-cols-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 4px 8px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  border-bottom: 1px solid var(--border-main);
+  background: var(--bg-header);
+}
+
+.sp-cols-panel-title {
+  font-weight: 600;
+}
+
+.sp-cols-panel-toggle {
+  background: transparent;
+  border: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.sp-cols-panel-toggle:hover {
+  background: var(--bg-header-hover);
+  color: var(--fg-primary);
+}
+
+.sp-cols-panel-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 0;
+}
+
+.sp-cols-panel-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sp-cols-panel-item:hover {
+  background: var(--bg-header-hover);
+}
+
+.sp-cols-panel-item-selected,
+.sp-cols-panel-item-selected:hover {
+  background: var(--bg-cell-selected);
+  color: var(--fg-primary);
+}
+
+.sp-cols-panel-item-type {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: var(--bg-header);
+  color: var(--fg-secondary);
+  border: 1px solid var(--border-main);
+  min-width: 28px;
+  text-align: center;
+}
+
+.sp-cols-panel-item-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* The spreadsheet grid */
 .sp-grid {
   border-collapse: collapse;

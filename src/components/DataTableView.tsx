@@ -281,6 +281,17 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   const [filterRangeMax, setFilterRangeMax] = useState("");
   const filterLastClickRef = useRef<number>(-1);
 
+  // Left "Columns" panel (collapsible)
+  const [colsPanelCollapsed, setColsPanelCollapsed] = useState(false);
+  const colsPanelAnchorRef = useRef<number | null>(null);
+
+  // Excel-like formula bar
+  const [formulaValue, setFormulaValue] = useState("");
+  const [formulaDirty, setFormulaDirty] = useState(false);
+  const formulaInputRef = useRef<HTMLInputElement>(null);
+  const [refValue, setRefValue] = useState("");
+  const [refDirty, setRefDirty] = useState(false);
+
   const { refreshDatasets, setStatusInfo } = useDataStore();
   const { markDirty } = useProjectStore();
   const { record: recordHistory, undo: historyUndo, redo: historyRedo, pendingRestore, clearPendingRestore } = useHistoryStore();
@@ -812,6 +823,27 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setEditValue(v);
   }, []);
 
+  // Sync formula bar value with the active cell whenever the active cell or
+  // the underlying data changes (and the user is not actively typing into
+  // the formula bar). Declared before the early return so hook order stays
+  // constant across the data null → loaded transition.
+  useEffect(() => {
+    if (formulaDirty) return;
+    if (!activeCell) {
+      setFormulaValue("");
+      return;
+    }
+    const dr = displayRows[activeCell.row];
+    const v = dr ? dr[activeCell.col] : undefined;
+    setFormulaValue(v == null ? "" : String(v));
+  }, [activeCell, displayRows, formulaDirty]);
+
+  // Sync the cell-reference input with the active cell.
+  useEffect(() => {
+    if (refDirty) return;
+    setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
+  }, [activeCell, refDirty]);
+
   if (!data) return <div className="sp-loading">加载中...</div>;
 
   const getRowId = (row: unknown[]): number =>
@@ -1184,6 +1216,40 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   commitEditRef.current = commitEdit;
   cancelEditRef.current = cancelEdit;
 
+  // ---- Write a value to the active cell from the formula bar ----
+  const writeActiveCellValue = async (value: string) => {
+    if (!activeCell) return;
+    const { row: editRow, col: editCol } = activeCell;
+    const colType = colTypes[editCol];
+    const err = validateCellValue(value, colType);
+    if (err) {
+      setErrorMsg(err);
+      return false;
+    }
+    const dataIdx = toDataIdx(editRow);
+    const rawRow = data.rows[dataIdx] as unknown[];
+    const rowId = getRowId(rawRow);
+    const colName = cols[editCol];
+    // Optimistic update
+    const newData = { ...data, rows: [...data.rows] };
+    const newRow = [...rawRow];
+    const rawColIdx = editCol >= rowIdIdx ? editCol + 1 : editCol;
+    newRow[rawColIdx] = value === "" ? null : value;
+    newData.rows[dataIdx] = newRow;
+    setData(newData);
+    dataRef.current = newData;
+    try {
+      await dataService.updateCell(datasetId, rowId, colName, value);
+    } catch (e) {
+      setErrorMsg(String(e));
+      await load();
+      return false;
+    }
+    markDirty();
+    recordAction("编辑单元格");
+    return true;
+  };
+
   // ---- Clear cells (Delete key) ----
   const clearCells = async (cells: { row: number; col: number }[]) => {
     // Optimistic UI update
@@ -1425,6 +1491,10 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
 
   const handlePaste = async (e: React.ClipboardEvent) => {
     if (editCell) return;
+    // Don't hijack paste inside formula bar / other inputs.
+    const tgt = e.target as HTMLElement | null;
+    const tag = tgt?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tgt?.isContentEditable) return;
     const text = e.clipboardData.getData("text/plain");
     if (!text.trim()) return;
     e.preventDefault();
@@ -1484,6 +1554,18 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
 
   // ---- Keyboard navigation ----
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Don't intercept keys typed inside an input/textarea (e.g. the formula
+    // bar's cell-ref input or the content input). Without this guard, every
+    // letter / arrow / Enter would also drive the spreadsheet selection.
+    const tgt = e.target as HTMLElement | null;
+    const tag = tgt?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tgt?.isContentEditable) {
+      // Allow our existing in-cell editor (.sp-cell-input) to keep using
+      // this handler for Tab/Enter/Escape navigation — that one is wired
+      // through props, so commit/cancel logic lives there. The formula bar
+      // and other inputs handle their own keys.
+      if (!tgt?.classList.contains("sp-cell-input")) return;
+    }
     const isMeta = e.ctrlKey || e.metaKey;
 
     // Cmd/Ctrl+Z: undo
@@ -2113,6 +2195,43 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     recordAction("自动调整列宽");
   };
 
+  // ---- Columns panel item click: select column(s) and scroll into view ----
+  const handleColsPanelItemClick = (colIdx: number, e: React.MouseEvent) => {
+    if (hasMenuOpen() || suppressSelectionRef.current) return;
+    setCornerSelected(false);
+    const newSet = new Set(selectedCols);
+    if (e.ctrlKey || e.metaKey) {
+      if (newSet.has(colIdx)) newSet.delete(colIdx);
+      else newSet.add(colIdx);
+      colsPanelAnchorRef.current = colIdx;
+      colAnchorRef.current = colIdx;
+    } else if (e.shiftKey && colsPanelAnchorRef.current != null) {
+      const start = Math.min(colsPanelAnchorRef.current, colIdx);
+      const end = Math.max(colsPanelAnchorRef.current, colIdx);
+      newSet.clear();
+      for (let i = start; i <= end; i++) newSet.add(i);
+    } else {
+      newSet.clear();
+      newSet.add(colIdx);
+      colsPanelAnchorRef.current = colIdx;
+      colAnchorRef.current = colIdx;
+    }
+    setSelectedCols(newSet);
+    setSelectedRows(EMPTY_NUM_SET);
+    setSelection(null);
+    setActiveCell(null);
+    // Scroll the column into view in the grid
+    const wrapper = tableRef.current;
+    if (wrapper && colOffsets[colIdx] != null) {
+      const colLeft = ROW_HDR_WIDTH + colOffsets[colIdx];
+      const colRight = colLeft + (colWidths[colIdx] ?? DEFAULT_COL_WIDTH);
+      const viewLeft = wrapper.scrollLeft + ROW_HDR_WIDTH;
+      const viewRight = wrapper.scrollLeft + wrapper.clientWidth;
+      if (colLeft < viewLeft) wrapper.scrollLeft = colLeft - ROW_HDR_WIDTH;
+      else if (colRight > viewRight) wrapper.scrollLeft = colRight - wrapper.clientWidth;
+    }
+  };
+
   return (
     <div className={`sp-spreadsheet${isDragging ? " sp-dragging" : ""}`} onKeyDown={handleKeyDown} onPaste={handlePaste} tabIndex={0} ref={containerRef}>
 
@@ -2220,8 +2339,144 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
         </div>
       )}
 
-      {/* Spreadsheet table */}
-      <div className="sp-grid-wrapper" ref={tableRef} onScroll={onGridScroll}>
+      {/* Excel-like formula bar: editable cell ref + content editor */}
+      <div className="sp-formula-bar">
+        <input
+          className="sp-formula-ref-input"
+          type="text"
+          value={refValue}
+          placeholder="A1"
+          spellCheck={false}
+          onChange={(e) => { setRefValue(e.target.value); setRefDirty(true); }}
+          onFocus={(e) => { e.currentTarget.select(); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              const m = refValue.trim().toUpperCase().match(/^([A-Z]+)(\d+)$/);
+              if (!m) {
+                setErrorMsg(`无效的单元格引用："${refValue}"，应类似 "A1" 或 "AB123"`);
+                return;
+              }
+              // Parse column letters → 0-based index
+              let col = 0;
+              for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+              col -= 1;
+              const row = parseInt(m[2], 10) - 1;
+              const maxRow = displayRows.length - 1;
+              const maxCol = cols.length - 1;
+              if (col < 0 || col > maxCol || row < 0 || row > maxRow) {
+                setErrorMsg(`单元格 "${refValue}" 超出范围（最大 ${colLetter(maxCol)}${maxRow + 1}）`);
+                return;
+              }
+              setActiveCell({ row, col });
+              setSelection({ startRow: row, startCol: col, endRow: row, endCol: col });
+              setSelectedRows(EMPTY_NUM_SET);
+              setSelectedCols(EMPTY_NUM_SET);
+              setRefDirty(false);
+              containerRef.current?.focus();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              setRefDirty(false);
+              setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
+              containerRef.current?.focus();
+            }
+          }}
+          onBlur={() => {
+            // Revert to current active cell on blur without committing
+            setRefDirty(false);
+            setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
+          }}
+          title="输入单元格引用（如 A1）跳转"
+        />
+        <input
+          ref={formulaInputRef}
+          className="sp-formula-input"
+          type="text"
+          value={formulaValue}
+          placeholder={activeCell ? "" : "选择一个单元格"}
+          disabled={!activeCell}
+          onChange={(e) => { setFormulaValue(e.target.value); setFormulaDirty(true); }}
+          onKeyDown={async (e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              const ok = await writeActiveCellValue(formulaValue);
+              if (ok) {
+                setFormulaDirty(false);
+                // Move down like Excel
+                if (activeCell) {
+                  const maxRow = displayRows.length - 1;
+                  if (activeCell.row < maxRow) {
+                    setActiveCell({ row: activeCell.row + 1, col: activeCell.col });
+                  }
+                }
+                containerRef.current?.focus();
+              }
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              setFormulaDirty(false);
+              const dr = activeCell ? displayRows[activeCell.row] : undefined;
+              const v = dr && activeCell ? dr[activeCell.col] : undefined;
+              setFormulaValue(v == null ? "" : String(v));
+              containerRef.current?.focus();
+            }
+          }}
+          onBlur={async () => {
+            if (formulaDirty) {
+              const ok = await writeActiveCellValue(formulaValue);
+              if (ok) setFormulaDirty(false);
+            }
+          }}
+        />
+      </div>
+
+      {/* Spreadsheet table area: left columns panel + grid */}
+      <div className="sp-table-area">
+        {/* Left "Columns" panel */}
+        {colsPanelCollapsed ? (
+          <div className="sp-cols-panel sp-cols-panel-collapsed">
+            <button
+              type="button"
+              className="sp-cols-panel-toggle"
+              title="展开列面板"
+              onClick={() => setColsPanelCollapsed(false)}
+            >▶</button>
+          </div>
+        ) : (
+          <div className="sp-cols-panel">
+            <div className="sp-cols-panel-header">
+              <span className="sp-cols-panel-title">
+                列 ({cols.length}{selectedCols.size > 0 ? `/${selectedCols.size}` : ""})
+              </span>
+              <button
+                type="button"
+                className="sp-cols-panel-toggle"
+                title="折叠列面板"
+                onClick={() => setColsPanelCollapsed(true)}
+              >◀</button>
+            </div>
+            <div className="sp-cols-panel-list">
+              {cols.map((name, ci) => {
+                const typeLabel = COLUMN_TYPES.find(t => t.value === colTypes[ci])?.label ?? colTypes[ci];
+                const isSel = selectedCols.has(ci);
+                return (
+                  <div
+                    key={ci}
+                    className={`sp-cols-panel-item${isSel ? " sp-cols-panel-item-selected" : ""}`}
+                    onClick={(e) => handleColsPanelItemClick(ci, e)}
+                    onContextMenu={(e) => handleColContextMenu(e, ci)}
+                    title={`${colLetter(ci)}  ${name}  (${typeLabel})`}
+                  >
+                    <span className="sp-cols-panel-item-type">{typeLabel}</span>
+                    <span className="sp-cols-panel-item-name">{name || `(列 ${colLetter(ci)})`}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Spreadsheet table */}
+        <div className="sp-grid-wrapper" ref={tableRef} onScroll={onGridScroll}>
         <table className="sp-grid" style={{ width: ROW_HDR_WIDTH + totalColsWidth + ADD_COL_WIDTH }}>
           <colgroup>
             <col style={{ width: ROW_HDR_WIDTH }} />
@@ -2410,6 +2665,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Error toast */}
