@@ -24,6 +24,13 @@ const COLUMN_TYPES = [
 const DEFAULT_COL_WIDTH = 120;
 const ROW_HEIGHT = 27; // 26px cell height + 1px border
 const OVERSCAN = 10; // extra rows above/below viewport
+const COLUMN_OVERSCAN = 4; // extra columns left/right of viewport
+const ROW_HDR_WIDTH = 46;
+const ADD_COL_WIDTH = 40;
+
+// Shared empty Set so resetting "selected rows/cols" to empty doesn't
+// allocate a new reference every time and trigger downstream re-renders.
+const EMPTY_NUM_SET: ReadonlySet<number> = new Set<number>();
 
 type FormatKind = "asis" | "fixed" | "percent" | "scientific" | "currency";
 
@@ -92,88 +99,103 @@ function normalizeRange(r: CellRange) {
   };
 }
 
-function inRange(row: number, col: number, range: CellRange | null): boolean {
-  if (!range) return false;
-  const { r1, c1, r2, c2 } = normalizeRange(range);
-  return row >= r1 && row <= r2 && col >= c1 && col <= c2;
-}
-
 // ---- Memoized row component ----
+// Props are designed to be reference-stable when nothing in this row
+// actually changed, so React.memo can skip re-renders.
 interface TableRowProps {
   ri: number;
   displayRow: unknown[];
   colFormats: ColumnFormat[];
   isRowSelected: boolean;
   isRowActive: boolean;
-  isRowSelectedHdr: boolean;
-  activeCol: number | null;
-  selectedCols: Set<number>;
-  editRow: number | null;
-  editCol: number | null;
+  /** Active column index, or -1 if active cell is not in this row. */
+  activeCol: number;
+  selectedCols: ReadonlySet<number>;
+  /** Column being edited in this row, or -1 if not editing this row. */
+  editingCol: number;
   editValue: string;
   editInputRef: React.RefObject<HTMLInputElement | null>;
-  selection: CellRange | null;
+  /** Selection clamped to this row: -1/-1 if row is outside the selection. */
+  selStartCol: number;
+  selEndCol: number;
+  // Column virtualization window
+  visStart: number;
+  visEnd: number;
+  leftSpacerW: number;
+  rightSpacerW: number;
   onEditValueChange: (v: string) => void;
   onCommitEdit: (dir: "none" | "down" | "right" | "left") => void;
   onCancelEdit: () => void;
 }
 
 const TableRow = React.memo(function TableRow({
-  ri, displayRow, colFormats, isRowSelected, isRowActive, isRowSelectedHdr,
-  activeCol, selectedCols, editRow, editCol, editValue, editInputRef,
-  selection, onEditValueChange, onCommitEdit, onCancelEdit,
+  ri, displayRow, colFormats, isRowSelected, isRowActive,
+  activeCol, selectedCols, editingCol, editValue, editInputRef,
+  selStartCol, selEndCol,
+  visStart, visEnd, leftSpacerW, rightSpacerW,
+  onEditValueChange, onCommitEdit, onCancelEdit,
 }: TableRowProps) {
-  const isEditing = editRow === ri;
+  const totalCols = displayRow.length;
+  const renderEnd = Math.min(visEnd, totalCols);
+  const cells: React.ReactNode[] = [];
+  for (let ci = visStart; ci < renderEnd; ci++) {
+    const cell = displayRow[ci];
+    const isColSelected = selectedCols.has(ci);
+    const isCellActive = activeCol === ci && isRowActive && !isRowSelected && !isColSelected;
+    const isCellEditing = editingCol === ci;
+    const isCellSelected = selStartCol >= 0 && ci >= selStartCol && ci <= selEndCol;
+    cells.push(
+      <td
+        key={ci}
+        data-row={ri}
+        data-col={ci}
+        className={`sp-cell${isCellActive ? " sp-cell-active" : ""}${isCellEditing ? " sp-cell-editing" : ""}${isCellSelected ? " sp-cell-selected" : ""}${isColSelected ? " sp-col-selected-cell" : ""}`}
+      >
+        <span className={cell == null ? "sp-null" : "sp-val"} style={isCellEditing ? { visibility: "hidden" } : undefined}>
+          {formatCellValue(cell, colFormats[ci] ?? DEFAULT_FORMAT)}
+        </span>
+        {isCellEditing && (
+          <input
+            ref={editInputRef}
+            className="sp-cell-input"
+            value={editValue}
+            onChange={(e) => onEditValueChange(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onBlur={() => onCommitEdit("none")}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onCommitEdit("down");
+              } else if (e.key === "Escape") {
+                onCancelEdit();
+              } else if (e.key === "Tab") {
+                e.preventDefault();
+                onCommitEdit(e.shiftKey ? "left" : "right");
+              }
+              e.stopPropagation();
+            }}
+          />
+        )}
+      </td>
+    );
+  }
   return (
     <tr className={isRowSelected ? "sp-row-selected" : ""}>
       <td
-        className={`sp-row-hdr${isRowActive ? " sp-row-active" : ""}${isRowSelectedHdr ? " sp-row-selected-hdr" : ""}`}
+        className={`sp-row-hdr${isRowActive ? " sp-row-active" : ""}${isRowSelected ? " sp-row-selected-hdr" : ""}`}
         data-row-hdr={ri}
       >
         {ri + 1}
       </td>
-      {displayRow.map((cell, ci) => {
-        const isColSelected = selectedCols.has(ci);
-        const isCellActive = activeCol === ci && isRowActive && !isRowSelected && !isColSelected;
-        const isCellEditing = isEditing && editCol === ci;
-        const isCellSelected = inRange(ri, ci, selection);
-        return (
-          <td
-            key={ci}
-            data-row={ri}
-            data-col={ci}
-            className={`sp-cell${isCellActive ? " sp-cell-active" : ""}${isCellEditing ? " sp-cell-editing" : ""}${isCellSelected ? " sp-cell-selected" : ""}${isColSelected ? " sp-col-selected-cell" : ""}`}
-          >
-            <span className={cell == null ? "sp-null" : "sp-val"} style={isCellEditing ? { visibility: "hidden" } : undefined}>
-              {formatCellValue(cell, colFormats[ci] ?? DEFAULT_FORMAT)}
-            </span>
-            {isCellEditing && (
-              <input
-                ref={editInputRef}
-                className="sp-cell-input"
-                value={editValue}
-                onChange={(e) => onEditValueChange(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onDoubleClick={(e) => e.stopPropagation()}
-                onBlur={() => onCommitEdit("none")}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    onCommitEdit("down");
-                  } else if (e.key === "Escape") {
-                    onCancelEdit();
-                  } else if (e.key === "Tab") {
-                    e.preventDefault();
-                    onCommitEdit(e.shiftKey ? "left" : "right");
-                  }
-                  e.stopPropagation();
-                }}
-              />
-            )}
-          </td>
-        );
-      })}
+      {leftSpacerW > 0 && (
+        <td className="sp-col-spacer" style={{ width: leftSpacerW, padding: 0, border: "none" }} aria-hidden="true" />
+      )}
+      {cells}
+      {rightSpacerW > 0 && (
+        <td className="sp-col-spacer" style={{ width: rightSpacerW, padding: 0, border: "none" }} aria-hidden="true" />
+      )}
       <td className="sp-add-col-cell" />
     </tr>
   );
@@ -184,8 +206,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
   const [editCell, setEditCell] = useState<{ row: number; col: number } | null>(null);
   const [editValue, setEditValue] = useState("");
-  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
-  const [selectedCols, setSelectedCols] = useState<Set<number>>(new Set());
+  const [selectedRows, setSelectedRows] = useState<ReadonlySet<number>>(EMPTY_NUM_SET);
+  const [selectedCols, setSelectedCols] = useState<ReadonlySet<number>>(EMPTY_NUM_SET);
   const [colMenu, setColMenu] = useState<{ colIdx: number; x: number; y: number } | null>(null);
   const [rowMenu, setRowMenu] = useState<{ rowIdx: number; x: number; y: number } | null>(null);
   const [showAddCol, setShowAddCol] = useState(false);
@@ -212,6 +234,20 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   const [selection, setSelection] = useState<CellRange | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
+  const [scrollLeft, setScrollLeft] = useState(0);
+  // rAF coalesce scroll updates: one state commit per animation frame instead
+  // of one per scroll event (which can fire 60–120Hz on smooth wheels and was
+  // a major source of full-table re-renders).
+  const scrollRafRef = useRef<number | null>(null);
+  const onGridScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (scrollRafRef.current != null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      setScrollTop(el.scrollTop);
+      setScrollLeft(el.scrollLeft);
+    });
+  }, []);
   const editInputRef = useRef<HTMLInputElement>(null);
   const addColInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -343,8 +379,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     });
     setActiveCell(null);
     setEditCell(null);
-    setSelectedRows(new Set());
-    setSelectedCols(new Set());
+    setSelectedRows(EMPTY_NUM_SET);
+    setSelectedCols(EMPTY_NUM_SET);
     setSelection(null);
     setColMenu(null);
     setRowMenu(null);
@@ -390,7 +426,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       .catch((e) => setErrorMsg(String(e)));
   }, [pendingRestore, datasetId, clearPendingRestore, syncDisplayProps, refreshAndMarkDirty]);
 
-  // Auto-scroll to keep activeCell visible (virtual scrolling)
+  // Auto-scroll to keep activeCell visible (virtual scrolling) — both axes.
   useEffect(() => {
     if (!activeCell || !tableRef.current) return;
     const wrapper = tableRef.current;
@@ -404,9 +440,19 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     } else if (rowBottom > viewBottom) {
       wrapper.scrollTop = rowBottom - wrapper.clientHeight;
     }
+    // Horizontal: ensure activeCell column is visible (skip the sticky row hdr).
+    const colLeft = ROW_HDR_WIDTH + (colOffsets[activeCell.col] ?? 0);
+    const colRight = ROW_HDR_WIDTH + (colOffsets[activeCell.col + 1] ?? colLeft);
+    const viewLeft = wrapper.scrollLeft;
+    const viewRight = viewLeft + wrapper.clientWidth;
+    if (colLeft < viewLeft + ROW_HDR_WIDTH) {
+      wrapper.scrollLeft = colLeft - ROW_HDR_WIDTH;
+    } else if (colRight > viewRight - ADD_COL_WIDTH) {
+      wrapper.scrollLeft = colRight - wrapper.clientWidth + ADD_COL_WIDTH;
+    }
   }, [activeCell]);
 
-  // Auto-scroll to keep the selection's moving end visible
+  // Auto-scroll to keep the selection's moving end visible (both axes).
   useEffect(() => {
     if (!selection || !tableRef.current) return;
     const wrapper = tableRef.current;
@@ -419,6 +465,15 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       wrapper.scrollTop = rowTop - headerH;
     } else if (rowBottom > viewBottom) {
       wrapper.scrollTop = rowBottom - wrapper.clientHeight;
+    }
+    const colLeft = ROW_HDR_WIDTH + (colOffsets[selection.endCol] ?? 0);
+    const colRight = ROW_HDR_WIDTH + (colOffsets[selection.endCol + 1] ?? colLeft);
+    const viewLeft = wrapper.scrollLeft;
+    const viewRight = viewLeft + wrapper.clientWidth;
+    if (colLeft < viewLeft + ROW_HDR_WIDTH) {
+      wrapper.scrollLeft = colLeft - ROW_HDR_WIDTH;
+    } else if (colRight > viewRight - ADD_COL_WIDTH) {
+      wrapper.scrollLeft = colRight - wrapper.clientWidth + ADD_COL_WIDTH;
     }
   }, [selection]);
 
@@ -670,7 +725,32 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   }, [activeCell, selection]);
 
   // Virtual scrolling: compute visible row range
-  const wrapperHeight = tableRef.current?.clientHeight ?? 600;
+  // wrapperSize is kept in state via ResizeObserver so virtualization recomputes
+  // on container resize (instead of relying on a stale tableRef.current read).
+  const [wrapperSize, setWrapperSize] = useState<{ width: number; height: number }>({ width: 1200, height: 600 });
+  // Re-run when `data` flips from null → loaded, since the wrapper element with
+  // ref={tableRef} is not mounted until then. Without this dep the observer
+  // would attach to a null ref on first render and never observe the real
+  // wrapper, leaving wrapperSize stuck at its initial 1200×600 and causing
+  // the table to appear smaller than the window when maximized.
+  useEffect(() => {
+    const el = tableRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    // Seed with current size so virtualization is correct before the first
+    // ResizeObserver callback fires.
+    const initRect = el.getBoundingClientRect();
+    setWrapperSize((prev) => (prev.width === initRect.width && prev.height === initRect.height ? prev : { width: initRect.width, height: initRect.height }));
+    const obs = new ResizeObserver((entries) => {
+      for (const ent of entries) {
+        const r = ent.contentRect;
+        setWrapperSize((prev) => (prev.width === r.width && prev.height === r.height ? prev : { width: r.width, height: r.height }));
+      }
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [data]);
+  const wrapperHeight = wrapperSize.height;
+  const wrapperWidth = wrapperSize.width;
   const headerHeight = 48; // approximate sticky header height
   const visibleAreaHeight = wrapperHeight - headerHeight;
   const totalRowCount = displayRows.length;
@@ -680,6 +760,57 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     const endIdx = Math.min(totalRowCount, startIdx + visibleCount);
     return { startIdx, endIdx };
   }, [scrollTop, totalRowCount, visibleAreaHeight, headerHeight]);
+
+  // Column virtualization: cumulative widths and visible column range.
+  const colOffsets = useMemo(() => {
+    const arr = new Array<number>(cols.length + 1);
+    arr[0] = 0;
+    for (let i = 0; i < cols.length; i++) {
+      arr[i + 1] = arr[i] + (colWidths[i] ?? DEFAULT_COL_WIDTH);
+    }
+    return arr;
+  }, [cols.length, colWidths]);
+  const totalColsWidth = colOffsets[cols.length] ?? 0;
+  const colVirtRange = useMemo(() => {
+    const totalCols = cols.length;
+    if (totalCols === 0) return { startIdx: 0, endIdx: 0, leftSpacerW: 0, rightSpacerW: 0 };
+    const viewportLeft = Math.max(0, scrollLeft - ROW_HDR_WIDTH);
+    const viewportRight = viewportLeft + Math.max(0, wrapperWidth - ROW_HDR_WIDTH - ADD_COL_WIDTH);
+    let startIdx = 0;
+    while (startIdx < totalCols && colOffsets[startIdx + 1] <= viewportLeft) startIdx++;
+    startIdx = Math.max(0, startIdx - COLUMN_OVERSCAN);
+    let endIdx = startIdx;
+    while (endIdx < totalCols && colOffsets[endIdx] < viewportRight) endIdx++;
+    endIdx = Math.min(totalCols, endIdx + COLUMN_OVERSCAN);
+    const leftSpacerW = colOffsets[startIdx];
+    const rightSpacerW = totalColsWidth - colOffsets[endIdx];
+    return { startIdx, endIdx, leftSpacerW, rightSpacerW };
+  }, [scrollLeft, wrapperWidth, colOffsets, totalColsWidth, cols.length]);
+  // Build the visible column index list once (used by colgroup + thead).
+  const visibleColIdxs = useMemo(() => {
+    const arr: number[] = [];
+    for (let i = colVirtRange.startIdx; i < colVirtRange.endIdx; i++) arr.push(i);
+    return arr;
+  }, [colVirtRange.startIdx, colVirtRange.endIdx]);
+  // Normalized selection range (memoized once per selection change).
+  const selRangeNorm = useMemo(() => selection ? normalizeRange(selection) : null, [selection]);
+
+  // Stable callback identities for memoized TableRow children — proxy to the
+  // latest closures via refs so the props passed to <TableRow> never change
+  // their reference between renders, allowing React.memo to skip rows that
+  // haven't actually changed. Declared BEFORE the early return below so the
+  // hook count stays constant across the data null → loaded transition.
+  const commitEditRef = useRef<(dir: "none" | "down" | "right" | "left") => Promise<void> | void>(() => {});
+  const cancelEditRef = useRef<() => void>(() => {});
+  const stableCommitEdit = useCallback((dir: "none" | "down" | "right" | "left") => {
+    return commitEditRef.current(dir);
+  }, []);
+  const stableCancelEdit = useCallback(() => {
+    cancelEditRef.current();
+  }, []);
+  const stableSetEditValue = useCallback((v: string) => {
+    setEditValue(v);
+  }, []);
 
   if (!data) return <div className="sp-loading">加载中...</div>;
 
@@ -733,7 +864,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       const row = data.rows[toDataIdx(rowIdx)] as unknown[];
       if (row) await dataService.deleteRow(datasetId, getRowId(row));
     }
-    setSelectedRows(new Set());
+    setSelectedRows(EMPTY_NUM_SET);
     setRowMenu(null);
     await load();
     await refreshAndMarkDirty();
@@ -814,7 +945,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     for (const ci of selectedCols) {
       await dataService.deleteColumn(datasetId, cols[ci]);
     }
-    setSelectedCols(new Set());
+    setSelectedCols(EMPTY_NUM_SET);
     setColMenu(null);
     await load();
     await refreshAndMarkDirty();
@@ -934,8 +1065,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       setSelection(null);
     }
     setEditCell(null);
-    setSelectedRows(new Set());
-    setSelectedCols(new Set());
+    setSelectedRows(EMPTY_NUM_SET);
+    setSelectedCols(EMPTY_NUM_SET);
     setColMenu(null);
     setRowMenu(null);
     setCornerSelected(false);
@@ -1047,6 +1178,11 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     tabAnchorColRef.current = null;
     containerRef.current?.focus();
   };
+
+  // Wire up the stable proxy refs (declared before the early return so
+  // hook order stays consistent across data null → loaded transitions).
+  commitEditRef.current = commitEdit;
+  cancelEditRef.current = cancelEdit;
 
   // ---- Clear cells (Delete key) ----
   const clearCells = async (cells: { row: number; col: number }[]) => {
@@ -1330,8 +1466,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     // Don't set activeCell — paste defaults to (0,0) when null
     setActiveCell(null);
     setSelection(null);
-    setSelectedRows(new Set());
-    setSelectedCols(new Set());
+    setSelectedRows(EMPTY_NUM_SET);
+    setSelectedCols(EMPTY_NUM_SET);
     setCornerSelected(true);
   };
 
@@ -1379,8 +1515,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           endRow: displayRows.length - 1,
           endCol: cols.length - 1,
         });
-        setSelectedRows(new Set());
-        setSelectedCols(new Set());
+        setSelectedRows(EMPTY_NUM_SET);
+        setSelectedCols(EMPTY_NUM_SET);
         setCornerSelected(false);
         return;
       }
@@ -1616,31 +1752,51 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setActiveCell({ row, col });
     setSelection({ startRow: row, startCol: col, endRow: row, endCol: col });
     setEditCell(null);
-    setSelectedRows(new Set());
-    setSelectedCols(new Set());
+    setSelectedRows(EMPTY_NUM_SET);
+    setSelectedCols(EMPTY_NUM_SET);
 
     document.body.style.userSelect = "none";
 
+    // Skip-same-cell + rAF coalescing: every mousemove that lands on the same
+    // td as last frame is a no-op, and at most one setSelection runs per
+    // animation frame. Without this, dragging a few hundred pixels can fire
+    // hundreds of setState calls/sec and re-render every visible cell.
+    let lastDragR = row;
+    let lastDragC = col;
+    let pendingDragRaf = 0;
     const onMouseMove = (ev: MouseEvent) => {
       if (!isDraggingRef.current) return;
       didDragRef.current = true;
       startAutoScroll(ev);
-      // Find which cell the mouse is over
       const target = document.elementFromPoint(ev.clientX, ev.clientY);
       if (!target) return;
-      const td = target.closest("td.sp-cell") as HTMLElement | null;
+      const td = (target as Element).closest("td.sp-cell") as HTMLElement | null;
       if (!td) return;
       const ri = td.dataset.row;
       const ci = td.dataset.col;
-      if (ri != null && ci != null) {
-        setSelection((prev) => prev ? { ...prev, endRow: Number(ri), endCol: Number(ci) } : null);
-      }
+      if (ri == null || ci == null) return;
+      const nr = Number(ri);
+      const nc = Number(ci);
+      if (nr === lastDragR && nc === lastDragC) return; // same cell — skip
+      lastDragR = nr;
+      lastDragC = nc;
+      if (pendingDragRaf) return; // already scheduled this frame
+      pendingDragRaf = requestAnimationFrame(() => {
+        pendingDragRaf = 0;
+        setSelection((prev) => prev ? { ...prev, endRow: lastDragR, endCol: lastDragC } : null);
+      });
     };
 
     const onMouseUp = () => {
       isDraggingRef.current = false;
       setIsDragging(false);
       stopAutoScroll();
+      if (pendingDragRaf) {
+        cancelAnimationFrame(pendingDragRaf);
+        pendingDragRaf = 0;
+        // Flush the last pending update so final selection is correct.
+        setSelection((prev) => prev ? { ...prev, endRow: lastDragR, endCol: lastDragC } : null);
+      }
       document.body.style.userSelect = "";
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
@@ -1679,7 +1835,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       rowAnchorRef.current = rowIdx;
     }
     setSelectedRows(newSet);
-    setSelectedCols(new Set());
+    setSelectedCols(EMPTY_NUM_SET);
     setSelection(null);
     setActiveCell(null);
   };
@@ -1702,7 +1858,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
         // Initialize selection on first move if no modifier
         if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
           setSelectedRows(new Set([rowIdx]));
-          setSelectedCols(new Set());
+          setSelectedCols(EMPTY_NUM_SET);
           setSelection(null);
         }
       }
@@ -1763,7 +1919,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       colAnchorRef.current = colIdx;
     }
     setSelectedCols(newSet);
-    setSelectedRows(new Set());
+    setSelectedRows(EMPTY_NUM_SET);
     setSelection(null);
     setActiveCell(null);
   };
@@ -1786,7 +1942,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
         // Initialize selection on first move if no modifier
         if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
           setSelectedCols(new Set([colIdx]));
-          setSelectedRows(new Set());
+          setSelectedRows(EMPTY_NUM_SET);
           setSelection(null);
         }
       }
@@ -2056,14 +2212,16 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       )}
 
       {/* Spreadsheet table */}
-      <div className="sp-grid-wrapper" ref={tableRef} onScroll={(e) => setScrollTop((e.target as HTMLElement).scrollTop)}>
-        <table className="sp-grid" style={{ width: 46 + cols.reduce((s, _, ci) => s + (colWidths[ci] ?? DEFAULT_COL_WIDTH), 0) + 40 }}>
+      <div className="sp-grid-wrapper" ref={tableRef} onScroll={onGridScroll}>
+        <table className="sp-grid" style={{ width: ROW_HDR_WIDTH + totalColsWidth + ADD_COL_WIDTH }}>
           <colgroup>
-            <col style={{ width: 46 }} />
-            {cols.map((_, ci) => (
+            <col style={{ width: ROW_HDR_WIDTH }} />
+            {colVirtRange.leftSpacerW > 0 && <col style={{ width: colVirtRange.leftSpacerW }} />}
+            {visibleColIdxs.map((ci) => (
               <col key={ci} style={{ width: colWidths[ci] ?? DEFAULT_COL_WIDTH }} />
             ))}
-            <col style={{ width: 40 }} />
+            {colVirtRange.rightSpacerW > 0 && <col style={{ width: colVirtRange.rightSpacerW }} />}
+            <col style={{ width: ADD_COL_WIDTH }} />
           </colgroup>
           <thead>
             <tr>
@@ -2074,42 +2232,51 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 onContextMenu={handleCornerContextMenu}
                 style={{ cursor: "pointer" }}
               />
-              {/* Column headers — event delegation via data-col-hdr */}
-              {cols.map((col, ci) => (
-                <th
-                  key={ci}
-                  data-col-hdr={ci}
-                  className={`sp-col-hdr${activeColRange.has(ci) ? " sp-col-active" : ""}${selectedCols.has(ci) ? " sp-col-selected" : ""}`}
-                  onClick={(e) => handleColSelect(ci, e)}
-                  onMouseDown={(e) => handleColHeaderMouseDown(ci, e)}
-                  onDoubleClick={() => handleStartRenameCol(ci)}
-                  onContextMenu={(e) => handleColContextMenu(e, ci)}
-                >
-                  <div className="sp-col-hdr-content">
-                    <span className="sp-col-letter">{colLetter(ci)}</span>
-                    <span className="sp-col-name">{col}</span>
-                    <span className="sp-col-type">{COLUMN_TYPES.find(t => t.value === colTypes[ci])?.label ?? colTypes[ci]}</span>
-                    <span
-                      className={`sp-filter-icon${columnFilters.has(ci) ? " sp-filter-active" : ""}`}
-                      title="筛选"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const rect = (e.target as HTMLElement).getBoundingClientRect();
-                        setFilterPopover(prev => prev?.colIdx === ci ? null : { colIdx: ci, anchorRect: rect });
-                      }}
-                    >
-                      ▼
-                    </span>
-                  </div>
-                  {/* Resize handle */}
-                  <div
-                    className="sp-resize-handle"
-                    onMouseDown={(e) => handleResizeStart(e, ci)}
-                    onClick={(e) => e.stopPropagation()}
-                    onDoubleClick={(e) => handleResizeDoubleClick(e, ci)}
-                  />
-                </th>
-              ))}
+              {colVirtRange.leftSpacerW > 0 && (
+                <th className="sp-col-spacer-hdr" aria-hidden="true" style={{ background: "var(--bg-header)", borderBottom: "2px solid var(--border-header-bottom)" }} />
+              )}
+              {/* Column headers — event delegation via data-col-hdr (only visible cols) */}
+              {visibleColIdxs.map((ci) => {
+                const col = cols[ci];
+                return (
+                  <th
+                    key={ci}
+                    data-col-hdr={ci}
+                    className={`sp-col-hdr${activeColRange.has(ci) ? " sp-col-active" : ""}${selectedCols.has(ci) ? " sp-col-selected" : ""}`}
+                    onClick={(e) => handleColSelect(ci, e)}
+                    onMouseDown={(e) => handleColHeaderMouseDown(ci, e)}
+                    onDoubleClick={() => handleStartRenameCol(ci)}
+                    onContextMenu={(e) => handleColContextMenu(e, ci)}
+                  >
+                    <div className="sp-col-hdr-content">
+                      <span className="sp-col-letter">{colLetter(ci)}</span>
+                      <span className="sp-col-name">{col}</span>
+                      <span className="sp-col-type">{COLUMN_TYPES.find(t => t.value === colTypes[ci])?.label ?? colTypes[ci]}</span>
+                      <span
+                        className={`sp-filter-icon${columnFilters.has(ci) ? " sp-filter-active" : ""}`}
+                        title="筛选"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const rect = (e.target as HTMLElement).getBoundingClientRect();
+                          setFilterPopover(prev => prev?.colIdx === ci ? null : { colIdx: ci, anchorRect: rect });
+                        }}
+                      >
+                        ▼
+                      </span>
+                    </div>
+                    {/* Resize handle */}
+                    <div
+                      className="sp-resize-handle"
+                      onMouseDown={(e) => handleResizeStart(e, ci)}
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => handleResizeDoubleClick(e, ci)}
+                    />
+                  </th>
+                );
+              })}
+              {colVirtRange.rightSpacerW > 0 && (
+                <th className="sp-col-spacer-hdr" aria-hidden="true" style={{ background: "var(--bg-header)", borderBottom: "2px solid var(--border-header-bottom)" }} />
+              )}
               {/* "+" column at end */}
               <th className="sp-add-col-hdr" onClick={handleAddColumnQuick} title="添加列">
                 +
@@ -2163,40 +2330,53 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           >
             {/* Top spacer for virtual scroll */}
             {virtualRange.startIdx > 0 && (
-              <tr style={{ height: virtualRange.startIdx * ROW_HEIGHT }} aria-hidden="true">
-                <td colSpan={cols.length + 2} style={{ padding: 0, border: "none" }} />
+              <tr aria-hidden="true">
+                <td colSpan={9999} style={{ padding: 0, border: "none", height: virtualRange.startIdx * ROW_HEIGHT }} />
               </tr>
             )}
             {displayRows.length > 0 && (
               displayRows.slice(virtualRange.startIdx, virtualRange.endIdx).map((displayRow, idx) => {
                 const ri = virtualRange.startIdx + idx;
+                const isRowSelected = selectedRows.has(ri);
+                const isRowActive = activeRowRange.has(ri);
+                const activeCol = activeCell?.row === ri ? activeCell.col : -1;
+                const editingCol = editCell?.row === ri ? editCell.col : -1;
+                let selStartCol = -1;
+                let selEndCol = -1;
+                if (selRangeNorm && ri >= selRangeNorm.r1 && ri <= selRangeNorm.r2) {
+                  selStartCol = selRangeNorm.c1;
+                  selEndCol = selRangeNorm.c2;
+                }
                 return (
                   <TableRow
                     key={ri}
                     ri={ri}
                     displayRow={displayRow}
                     colFormats={colFormats}
-                    isRowSelected={selectedRows.has(ri)}
-                    isRowActive={activeRowRange.has(ri)}
-                    isRowSelectedHdr={selectedRows.has(ri)}
-                    activeCol={activeCell?.row === ri ? activeCell.col : null}
+                    isRowSelected={isRowSelected}
+                    isRowActive={isRowActive}
+                    activeCol={activeCol}
                     selectedCols={selectedCols}
-                    editRow={editCell?.row ?? null}
-                    editCol={editCell?.col ?? null}
+                    editingCol={editingCol}
                     editValue={editValue}
                     editInputRef={editInputRef}
-                    selection={selection}
-                    onEditValueChange={setEditValue}
-                    onCommitEdit={commitEdit}
-                    onCancelEdit={cancelEdit}
+                    selStartCol={selStartCol}
+                    selEndCol={selEndCol}
+                    visStart={colVirtRange.startIdx}
+                    visEnd={colVirtRange.endIdx}
+                    leftSpacerW={colVirtRange.leftSpacerW}
+                    rightSpacerW={colVirtRange.rightSpacerW}
+                    onEditValueChange={stableSetEditValue}
+                    onCommitEdit={stableCommitEdit}
+                    onCancelEdit={stableCancelEdit}
                   />
                 );
               })
             )}
             {/* Bottom spacer for virtual scroll */}
             {virtualRange.endIdx < totalRowCount && (
-              <tr style={{ height: (totalRowCount - virtualRange.endIdx) * ROW_HEIGHT }} aria-hidden="true">
-                <td colSpan={cols.length + 2} style={{ padding: 0, border: "none" }} />
+              <tr aria-hidden="true">
+                <td colSpan={9999} style={{ padding: 0, border: "none", height: (totalRowCount - virtualRange.endIdx) * ROW_HEIGHT }} />
               </tr>
             )}
             {/* "Add row" bottom row */}
@@ -2208,9 +2388,15 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
               >
                 +
               </td>
-              {cols.map((_, ci) => (
+              {colVirtRange.leftSpacerW > 0 && (
+                <td className="sp-col-spacer" style={{ padding: 0, border: "none" }} aria-hidden="true" />
+              )}
+              {visibleColIdxs.map((ci) => (
                 <td key={ci} className="sp-add-row-cell" />
               ))}
+              {colVirtRange.rightSpacerW > 0 && (
+                <td className="sp-col-spacer" style={{ padding: 0, border: "none" }} aria-hidden="true" />
+              )}
               <td className="sp-add-corner" />
             </tr>
           </tbody>
