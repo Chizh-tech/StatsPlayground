@@ -197,6 +197,19 @@ export function Workspace() {
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
+  // Cmd/Ctrl+N: new data table
+  const handleCreateTableRef = useRef<(() => Promise<void>) | null>(null);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        handleCreateTableRef.current?.();
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
+
   // Sync counter with existing datasets on load
   useEffect(() => {
     const maxNum = datasets.reduce((max, ds) => {
@@ -219,6 +232,7 @@ export function Workspace() {
     setRenamingId(meta.id);
     setRenameValue(name);
   };
+  handleCreateTableRef.current = handleCreateTable;
 
   /** 新建一个图表构建器项，绑定到当前选中数据表 */
   const handleCreateGraphBuilder = () => {
@@ -480,7 +494,7 @@ export function Workspace() {
               <div className="menu-item" onClick={handleCloseProject}>关闭项目</div>
             </MenuDropdown>
             <MenuDropdown label="表格">
-              <div className="menu-item" onClick={handleCreateTable}>新建数据表</div>
+              <div className="menu-item" onClick={handleCreateTable}>新建数据表<span className="menu-shortcut">{modKey}N</span></div>
               <div className="menu-sep" />
               <div className="menu-item" onClick={handleImportCsv}>导入 CSV</div>
               <div className="menu-item" onClick={handleImportSqlite}>导入 SQLite</div>
