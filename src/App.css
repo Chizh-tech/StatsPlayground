@@ -687,6 +687,7 @@
   background: var(--bg-header);
   border-right: 1px solid var(--border-header);
   border-bottom: 1px solid var(--border-header-h);
+  background-clip: padding-box;
   text-align: center;
   font-size: 11px;
   color: var(--fg-hint);
@@ -720,6 +721,11 @@
   cursor: cell;
   overflow: hidden;
   background: var(--bg-main);
+  /* Prevent cell background from painting over the shared 1px border under
+     `border-collapse: collapse`. Without this, scrolling a virtualized
+     spreadsheet leaves random horizontal/vertical grid lines un-painted
+     until the cell is re-rendered (e.g. after a click). */
+  background-clip: padding-box;
   user-select: none;
   -webkit-user-select: none;
 }
