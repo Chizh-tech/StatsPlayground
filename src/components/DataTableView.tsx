@@ -1786,8 +1786,47 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       dataRows = parsed;
     }
 
-    const startRow = activeCell?.row ?? 0;
-    const startCol = activeCell?.col ?? 0;
+    // Excel-style tiling: when the user has a multi-cell target selection AND
+    // the selection is an integer multiple of the source clipboard, repeat the
+    // source over the selection. Common case: copy 1 row, select N rows wide,
+    // paste fills all N rows. Falls back to top-left paste otherwise.
+    let startRow: number;
+    let startCol: number;
+    if (selection) {
+      const selR0 = Math.min(selection.startRow, selection.endRow);
+      const selR1 = Math.max(selection.startRow, selection.endRow);
+      const selC0 = Math.min(selection.startCol, selection.endCol);
+      const selC1 = Math.max(selection.startCol, selection.endCol);
+      const selRows = selR1 - selR0 + 1;
+      const selCols = selC1 - selC0 + 1;
+      const srcRows = dataRows.length;
+      const srcCols = dataRows.reduce((m, r) => Math.max(m, r.length), 0);
+      const isMultiCell = selRows > 1 || selCols > 1;
+      const rowsFit = srcRows > 0 && selRows % srcRows === 0;
+      const colsFit = srcCols > 0 && selCols % srcCols === 0;
+      // Header rows are not tiled — they must be written exactly once.
+      if (isMultiCell && rowsFit && colsFit && !headerNames) {
+        const repR = selRows / srcRows;
+        const repC = selCols / srcCols;
+        if (repR > 1 || repC > 1) {
+          const tiled: string[][] = [];
+          for (let r = 0; r < selRows; r++) {
+            const src = dataRows[r % srcRows];
+            const row: string[] = new Array(selCols);
+            for (let c = 0; c < selCols; c++) {
+              row[c] = src[c % srcCols] ?? "";
+            }
+            tiled.push(row);
+          }
+          dataRows = tiled;
+        }
+      }
+      startRow = selR0;
+      startCol = selC0;
+    } else {
+      startRow = activeCell?.row ?? 0;
+      startCol = activeCell?.col ?? 0;
+    }
     const numPasteCols = dataRows.reduce((max, r) => Math.max(max, r.length), 0);
     const numPasteRows = dataRows.length;
 
