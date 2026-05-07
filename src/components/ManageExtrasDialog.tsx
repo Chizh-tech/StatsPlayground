@@ -76,7 +76,7 @@ function uniqueName(name: string, existing: string[]): string {
  *
  * Step 1 — select which columns and which extra kinds to include in the
  *          batch table. Defaults: all columns checked; kinds = union of
- *          kinds already present on any column (or all kinds if none).
+ *          kinds already present on any column (none if no column has extras).
  * Step 2 — editable grid: rows = selected columns, columns = expanded
  *          fields of the selected kinds. Edits stage locally; "应用" writes
  *          back via onApply, "重新载入" discards local edits.
@@ -98,7 +98,7 @@ export function ManageExtrasDialog({
         if (e[k] !== undefined) present.add(k);
       }
     }
-    return present.size > 0 ? present : new Set(EXTRA_KINDS);
+    return present.size > 0 ? present : new Set<ExtraKind>();
   }, [colExtras]);
 
   const [step, setStep] = useState<1 | 2>(1);
