@@ -860,6 +860,12 @@
 .sp-extras-picker-item:hover {
   background: var(--bg-cell-hover);
 }
+.sp-extras-picker-item-anchor {
+  /* Persistent highlight for the most recently clicked row, so users keep a
+     visual reference for where the next shift-range will start from. */
+  background: var(--bg-cell-hover);
+  box-shadow: inset 2px 0 0 var(--fg-accent);
+}
 .sp-extras-picker-item-name {
   flex: 1 1 auto;
   overflow: hidden;

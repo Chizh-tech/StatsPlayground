@@ -406,6 +406,10 @@ function Step1({
   // Anchor for shift-range selection. Reset when the user plain-clicks (no
   // modifier), so the next shift-click defines a fresh range from there.
   const lastClickedRef = useRef<number | null>(null);
+  // Tracked in state too so we can render the anchor with a persistent
+  // highlight — without this, users lose the visual reference as soon as the
+  // mouse moves off the row, making shift-range hard to predict.
+  const [anchor, setAnchor] = useState<number | null>(null);
 
   /**
    * Click handler for column rows.
@@ -435,6 +439,7 @@ function Step1({
       if (next.has(i)) next.delete(i); else next.add(i);
       lastClickedRef.current = i;
     }
+    setAnchor(i);
     setCheckedCols(next);
   };
 
@@ -459,7 +464,7 @@ function Step1({
           {cols.map((name, i) => (
             <label
               key={i}
-              className="sp-extras-picker-item"
+              className={`sp-extras-picker-item${anchor === i ? " sp-extras-picker-item-anchor" : ""}`}
               onClick={(e) => handleColClick(i, e)}
             >
               <input
