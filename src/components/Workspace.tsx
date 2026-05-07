@@ -4,6 +4,7 @@ import { useDataStore } from "@/stores/useDataStore";
 import { useHistoryStore } from "@/stores/useHistoryStore";
 import { dataService } from "@/services/dataService";
 import { ioService } from "@/services/ioService";
+import { projectService } from "@/services/projectService";
 import { DataTableView } from "./DataTableView";
 import { HistoryPanel, type SnapshotMenuData } from "./HistoryPanel";
 import { PreferencesDialog } from "./PreferencesDialog";
@@ -403,6 +404,87 @@ export function Workspace() {
     }
   };
 
+  // ---- Single-table / single-graph share ----------------------------------
+  // .sptb / .spgh let users break individual tables and graphs out of the
+  // project so they can be shared or re-imported elsewhere.
+
+  const handleExportTableSptb = async () => {
+    const ds = datasets.find((d) => d.id === activeDatasetId);
+    if (!ds) {
+      alert("请先选择一个数据表");
+      return;
+    }
+    const filePath = await save({
+      title: "导出当前表为 .sptb",
+      defaultPath: `${ds.name}.sptb`,
+      filters: [{ name: "StatsPlayground Table", extensions: ["sptb"] }],
+    });
+    if (!filePath) return;
+    try {
+      await projectService.exportTable(ds.id, filePath as string);
+    } catch (e) {
+      alert("导出表失败: " + String(e));
+    }
+  };
+
+  const handleImportTableSptb = async () => {
+    const selected = await open({
+      title: "导入 .sptb 表文件",
+      filters: [{ name: "StatsPlayground Table", extensions: ["sptb"] }],
+      multiple: false,
+    });
+    if (!selected) return;
+    try {
+      const newId = await projectService.importTable(selected as string);
+      await refreshDatasets();
+      setActiveDataset(newId);
+    } catch (e) {
+      alert("导入表失败: " + String(e));
+    }
+  };
+
+  const handleExportGraphSpgh = async () => {
+    const gb = graphBuilders.find((g) => g.id === activeGraphBuilderId);
+    if (!gb) {
+      alert("请先选择一个图表构建器");
+      return;
+    }
+    const filePath = await save({
+      title: "导出当前图表为 .spgh",
+      defaultPath: `${gb.name}.spgh`,
+      filters: [{ name: "StatsPlayground Graph", extensions: ["spgh"] }],
+    });
+    if (!filePath) return;
+    try {
+      await projectService.exportGraph(gb, filePath as string);
+    } catch (e) {
+      alert("导出图表失败: " + String(e));
+    }
+  };
+
+  const handleImportGraphSpgh = async () => {
+    const selected = await open({
+      title: "导入 .spgh 图表文件",
+      filters: [{ name: "StatsPlayground Graph", extensions: ["spgh"] }],
+      multiple: false,
+    });
+    if (!selected) return;
+    try {
+      const raw = await projectService.importGraph(selected as string);
+      const item = raw as GraphBuilderItem;
+      // Avoid id collision with anything already loaded.
+      const existingIds = new Set(graphBuilders.map((g) => g.id));
+      let id = item.id;
+      if (!id || existingIds.has(id)) {
+        id = `gb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      }
+      addGraphBuilder({ ...item, id });
+      setActiveGraphBuilderId(id);
+    } catch (e) {
+      alert("导入图表失败: " + String(e));
+    }
+  };
+
   const handleSave = async () => {
     const { snapshots } = useHistoryStore.getState();
     const gbItems = useGraphBuilderStore.getState().items;
@@ -502,6 +584,9 @@ export function Workspace() {
               <div className="menu-item" onClick={handleExportSqlite}>导出为 SQLite</div>
               <div className="menu-item" onClick={handleExportCsvZip}>导出为 CSV (ZIP)</div>
               <div className="menu-sep" />
+              <div className="menu-item" onClick={handleExportTableSptb}>导出当前表为 .sptb</div>
+              <div className="menu-item" onClick={handleImportTableSptb}>导入 .sptb 表文件</div>
+              <div className="menu-sep" />
               <div
                 className="menu-item"
                 onClick={() => window.dispatchEvent(new CustomEvent("sp:open-manage-extras"))}
@@ -509,6 +594,9 @@ export function Workspace() {
             </MenuDropdown>
             <MenuDropdown label="图表">
               <div className="menu-item" onClick={handleCreateGraphBuilder}>新建图表构建器</div>
+              <div className="menu-sep" />
+              <div className="menu-item" onClick={handleExportGraphSpgh}>导出当前图表为 .spgh</div>
+              <div className="menu-item" onClick={handleImportGraphSpgh}>导入 .spgh 图表文件</div>
             </MenuDropdown>
             <MenuDropdown label="操作">
               <div className="menu-item" onClick={() => setTableOp("summary")}>汇总</div>

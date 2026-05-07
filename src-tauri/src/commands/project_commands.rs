@@ -56,3 +56,48 @@ pub fn get_current_project(state: State<'_, AppState>) -> Result<Option<ProjectI
     let service = ProjectService::new(&state);
     service.get_current_project()
 }
+
+// ----------------------------------------------------------------------------
+// Single-table / single-graph share commands.
+// .sptb = standalone table file (one dataset), .spgh = standalone graph file.
+// ----------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn export_table(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    file_path: String,
+) -> Result<(), AppError> {
+    let service = ProjectService::new(&state);
+    service.export_table(&dataset_id, &file_path)
+}
+
+/// Returns the new dataset id assigned to the imported table.
+#[tauri::command]
+pub fn import_table(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<String, AppError> {
+    let service = ProjectService::new(&state);
+    service.import_table(&file_path)
+}
+
+#[tauri::command]
+pub fn export_graph(
+    state: State<'_, AppState>,
+    graph: serde_json::Value,
+    file_path: String,
+) -> Result<(), AppError> {
+    let service = ProjectService::new(&state);
+    service.export_graph(graph, &file_path)
+}
+
+/// Returns the imported graph builder body (opaque JSON, frontend shape).
+#[tauri::command]
+pub fn import_graph(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<serde_json::Value, AppError> {
+    let service = ProjectService::new(&state);
+    service.import_graph(&file_path)
+}
