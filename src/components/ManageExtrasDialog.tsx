@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { EXTRA_DEFS, EXTRA_KINDS, type ExtraKind } from "@/types/columnExtras";
 import { useDataStore } from "@/stores/useDataStore";
 import { dataService } from "@/services/dataService";
@@ -403,11 +403,41 @@ interface Step1Props {
 function Step1({
   cols, checkedCols, setCheckedCols, checkedKinds, setCheckedKinds,
 }: Step1Props) {
-  const toggleCol = (i: number) => {
+  // Anchor for shift-range selection. Reset when the user plain-clicks (no
+  // modifier), so the next shift-click defines a fresh range from there.
+  const lastClickedRef = useRef<number | null>(null);
+
+  /**
+   * Click handler for column rows.
+   * - Plain click: toggle just this row, set anchor.
+   * - Ctrl/Cmd click: same as plain click but is conceptually "additive" (we
+   *   already preserve other rows, so behavior matches Excel/file-explorer
+   *   ctrl-click toggle), update anchor.
+   * - Shift click: set [anchor, i] to the same checked state as the anchor
+   *   row. If no anchor yet, fall back to plain toggle.
+   */
+  const handleColClick = (i: number, e: React.MouseEvent) => {
+    // We drive everything from the row click; suppress the synthetic checkbox
+    // event so it doesn't double-toggle.
+    e.preventDefault();
     const next = new Set(checkedCols);
-    if (next.has(i)) next.delete(i); else next.add(i);
+    if (e.shiftKey && lastClickedRef.current !== null) {
+      const anchor = lastClickedRef.current;
+      const lo = Math.min(anchor, i);
+      const hi = Math.max(anchor, i);
+      // Make the entire range match the anchor's checked state. If the anchor
+      // was checked, fill checked; otherwise clear.
+      const fill = checkedCols.has(anchor);
+      for (let j = lo; j <= hi; j++) {
+        if (fill) next.add(j); else next.delete(j);
+      }
+    } else {
+      if (next.has(i)) next.delete(i); else next.add(i);
+      lastClickedRef.current = i;
+    }
     setCheckedCols(next);
   };
+
   const toggleKind = (k: ExtraKind) => {
     const next = new Set(checkedKinds);
     if (next.has(k)) next.delete(k); else next.add(k);
@@ -418,7 +448,7 @@ function Step1({
     <div style={{ display: "flex", gap: 12 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="sp-dialog-label" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span>列（{checkedCols.size}/{cols.length}）</span>
+          <span>列（{checkedCols.size}/{cols.length}） · Shift 连选 / Ctrl 跳选</span>
           <button
             className="sp-dialog-btn"
             style={{ padding: "0 6px", fontSize: 11 }}
@@ -427,11 +457,16 @@ function Step1({
         </div>
         <div className="sp-extras-picker-list">
           {cols.map((name, i) => (
-            <label key={i} className="sp-extras-picker-item">
+            <label
+              key={i}
+              className="sp-extras-picker-item"
+              onClick={(e) => handleColClick(i, e)}
+            >
               <input
                 type="checkbox"
                 checked={checkedCols.has(i)}
-                onChange={() => toggleCol(i)}
+                readOnly
+                tabIndex={-1}
               />
               <span className="sp-extras-picker-item-name">{name || `(列 ${i + 1})`}</span>
             </label>
