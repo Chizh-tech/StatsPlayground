@@ -944,6 +944,51 @@
   box-shadow: inset 0 0 0 2px var(--fg-accent);
 }
 
+/* "管理附加属性" step 2: import/export toolbar */
+.sp-extras-batch-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sp-extras-batch-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sp-extras-batch-select {
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  min-width: 180px;
+}
+.sp-extras-batch-status {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+.sp-extras-batch-status-info {
+  background: var(--bg-info, rgba(80, 150, 255, 0.1));
+  border-color: var(--border-input);
+  color: var(--fg-primary);
+}
+.sp-extras-batch-status-warn {
+  background: rgba(220, 160, 0, 0.12);
+  border-color: rgba(220, 160, 0, 0.4);
+  color: var(--fg-primary);
+}
+.sp-extras-batch-status-error {
+  background: rgba(220, 60, 60, 0.12);
+  border-color: rgba(220, 60, 60, 0.5);
+  color: var(--fg-primary);
+}
+
 /* The spreadsheet grid */
 .sp-grid {
   border-collapse: collapse;

@@ -3434,6 +3434,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
         <ManageExtrasDialog
           cols={cols}
           colExtras={colExtras}
+          sourceDatasetName={useDataStore.getState().datasets.find((d) => d.id === datasetId)?.name}
           onApply={handleApplyManageExtras}
           onClose={() => setShowManageExtras(false)}
         />
