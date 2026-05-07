@@ -225,7 +225,7 @@ export function Workspace() {
 
   const handleCreateTable = async () => {
     tableCounter.current += 1;
-    const name = t("default.tableName", { n: tableCounter.current });
+    const name = `Table${tableCounter.current}`;
     const meta = await dataService.createTable(name, [], []);
     await refreshDatasets();
     markDirty();
@@ -252,7 +252,7 @@ export function Workspace() {
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
         : `gb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const name = t("default.graphName", { n: nextNum });
+    const name = `Graph${nextNum}`;
     const item: GraphBuilderItem = {
       id,
       name,
@@ -495,7 +495,7 @@ export function Workspace() {
     if (!project?.filePath) {
       const filePath = await save({
         title: t("welcome.saveProjectDialog"),
-        defaultPath: t("default.projectFile"),
+        defaultPath: "Untitled Project.spprj",
         filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
       });
       if (!filePath) return; // User cancelled
@@ -619,7 +619,7 @@ export function Workspace() {
         </div>
         <div className="menu-spacer" />
         <button
-          className="menu-bar-snapshot"
+          className={`menu-bar-snapshot${dirty ? " menu-bar-snapshot-dirty" : ""}`}
           onClick={async () => {
             setBusyMessage(t("workspace.creatingSnapshot"));
             const unlisten = await listen<{

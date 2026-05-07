@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type MutableRefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useHistoryStore } from "@/stores/useHistoryStore";
+import { useProjectStore } from "@/stores/useProjectStore";
 import { useLocaleStore } from "@/stores/useLocaleStore";
 import { bcp47For } from "@/i18n";
 import { listen } from "@tauri-apps/api/event";
@@ -22,6 +23,7 @@ export function HistoryPanel({
 }) {
   const { t } = useTranslation();
   const locale = useLocaleStore((s) => s.locale);
+  const dirty = useProjectStore((s) => s.dirty);
   const {
     history,
     snapshots,
@@ -190,7 +192,7 @@ export function HistoryPanel({
         <div className="history-section-header">
           <h3>{t("history.snapshot")}</h3>
           <button
-            className="snapshot-add-btn"
+            className={`snapshot-add-btn${dirty ? " snapshot-add-btn-dirty" : ""}`}
             onClick={handleCreateSnapshot}
             title={t("history.createSnapshot")}
           >

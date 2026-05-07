@@ -114,16 +114,12 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     try {
       const snapshot = await historyService.captureProjectSnapshot();
       const ts = nowISO();
+      const d = new Date(ts);
+      const pad = (n: number) => n.toString().padStart(2, "0");
+      const defaultName = `Snapshot ${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
       const entry: NamedSnapshot = {
         id: nextId(),
-        name:
-          name ||
-          `快照 ${new Date(ts).toLocaleString("zh-CN", {
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-          })}`,
+        name: name || defaultName,
         timestamp: ts,
         snapshot,
       };
