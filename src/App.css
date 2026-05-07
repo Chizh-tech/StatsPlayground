@@ -757,8 +757,12 @@
   width: 46px;
   min-width: 46px;
   background: var(--bg-header);
-  border-right: 1px solid var(--border-header);
-  border-bottom: 2px solid var(--border-header-bottom);
+  background-clip: padding-box;
+  /* inset box-shadow instead of border-right/bottom — same reason as .sp-cell:
+     border-collapse: collapse drops shared 1px borders during scroll. */
+  box-shadow:
+    inset -1px 0 0 var(--border-header),
+    inset 0 -2px 0 var(--border-header-bottom);
 }
 
 .sp-corner-active {
@@ -771,8 +775,10 @@
   top: 0;
   z-index: 2;
   background: var(--bg-header);
-  border-right: 1px solid var(--border-header-h);
-  border-bottom: 2px solid var(--border-header-bottom);
+  background-clip: padding-box;
+  box-shadow:
+    inset -1px 0 0 var(--border-header-h),
+    inset 0 -2px 0 var(--border-header-bottom);
   padding: 0;
   cursor: default;
   user-select: none;
@@ -870,9 +876,10 @@
   width: 46px;
   min-width: 46px;
   background: var(--bg-header);
-  border-right: 1px solid var(--border-header);
-  border-bottom: 1px solid var(--border-header-h);
   background-clip: padding-box;
+  box-shadow:
+    inset -1px 0 0 var(--border-header),
+    inset 0 -1px 0 var(--border-header-h);
   text-align: center;
   font-size: 11px;
   color: var(--fg-hint);
