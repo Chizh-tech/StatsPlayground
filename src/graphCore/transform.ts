@@ -113,6 +113,164 @@ function boxStats(values: number[]): [number, number, number, number, number] | 
   return [v[0], q(0.25), q(0.5), q(0.75), v[v.length - 1]];
 }
 
+// ---- Aggregate / interval helpers (used by per-element options) -----------
+
+function getOpt<T>(opts: Record<string, unknown> | undefined, key: string, def: T): T {
+  const v = opts?.[key];
+  return v === undefined ? def : (v as T);
+}
+
+function _mean(xs: number[]): number {
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN;
+}
+function _median(xs: number[]): number {
+  if (!xs.length) return NaN;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+function _sum(xs: number[]): number {
+  return xs.reduce((a, b) => a + b, 0);
+}
+function _stddev(xs: number[]): number {
+  if (xs.length < 2) return 0;
+  const m = _mean(xs);
+  const v = xs.reduce((a, b) => a + (b - m) * (b - m), 0) / (xs.length - 1);
+  return Math.sqrt(v);
+}
+function _stderr(xs: number[]): number {
+  return xs.length < 2 ? 0 : _stddev(xs) / Math.sqrt(xs.length);
+}
+function aggregateY(ys: number[], stat: string): number {
+  switch (stat) {
+    case "median": return _median(ys);
+    case "sum": return _sum(ys);
+    case "mean": return _mean(ys);
+    default: return _mean(ys);
+  }
+}
+function intervalHalf(ys: number[], kind: string): number {
+  if (!ys.length || ys.length < 2) return 0;
+  switch (kind) {
+    case "stdDev": return _stddev(ys);
+    case "ci95": return 1.96 * _stderr(ys);
+    case "stdErr":
+    case "auto":
+      return _stderr(ys);
+    default: return 0;
+  }
+}
+
+/** Build (x, y[, lo, hi]) per X group. Used by points/line summary modes. */
+function aggregatePoints(
+  rowIdxs: number[],
+  data: GraphData,
+  xIdx: number,
+  yIdx: number,
+  xIsCategory: boolean,
+  summaryStat: string,
+  errorInterval: string,
+): Array<{ x: unknown; y: number; lo: number; hi: number }> {
+  const map = new Map<string, { xv: unknown; ys: number[] }>();
+  for (const i of rowIdxs) {
+    const xv = data.rows[i][xIdx];
+    const yv = toNum(data.rows[i][yIdx]);
+    if (!Number.isFinite(yv)) continue;
+    const key = xIsCategory ? toStr(xv) : String(toNum(xv));
+    const cur = map.get(key);
+    if (cur) cur.ys.push(yv);
+    else map.set(key, { xv, ys: [yv] });
+  }
+  const out = Array.from(map.values()).map(({ xv, ys }) => {
+    const y = aggregateY(ys, summaryStat);
+    const half = errorInterval === "none" ? 0 : intervalHalf(ys, errorInterval);
+    return { x: xv, y, lo: y - half, hi: y + half };
+  });
+  if (!xIsCategory) {
+    out.sort((a, b) => toNum(a.x) - toNum(b.x));
+  }
+  return out;
+}
+
+/** Render error bars / band as additional ECharts series. */
+function buildIntervalSeries(
+  agg: Array<{ x: unknown; y: number; lo: number; hi: number }>,
+  xIsCategory: boolean,
+  intervalStyle: string,
+  color: string,
+  seriesName: string,
+): any[] {
+  const hasInterval = agg.some((p) => p.hi !== p.lo);
+  if (!hasInterval) return [];
+  const xv = (p: { x: unknown }) => (xIsCategory ? toStr(p.x) : toNum(p.x));
+  if (intervalStyle === "band") {
+    // Low line + transparent stack to high; areaStyle fills between.
+    return [
+      {
+        type: "line",
+        name: `${seriesName} _lo`,
+        stack: `band-${seriesName}`,
+        data: agg.map((p) => [xv(p), p.lo]),
+        lineStyle: { opacity: 0 },
+        symbol: "none",
+        silent: true,
+        z: 1,
+        legendHoverLink: false,
+      },
+      {
+        type: "line",
+        name: `${seriesName} _hi`,
+        stack: `band-${seriesName}`,
+        data: agg.map((p) => [xv(p), p.hi - p.lo]),
+        lineStyle: { opacity: 0 },
+        symbol: "none",
+        areaStyle: { color, opacity: 0.18 },
+        silent: true,
+        z: 1,
+        legendHoverLink: false,
+      },
+    ];
+  }
+  // Default: error bars via custom series
+  return [
+    {
+      type: "custom",
+      name: `${seriesName} CI`,
+      renderItem(_params: any, api: any) {
+        const x = api.coord([api.value(0), api.value(1)])[0];
+        const yLo = api.coord([api.value(0), api.value(2)])[1];
+        const yHi = api.coord([api.value(0), api.value(3)])[1];
+        const cap = 4;
+        return {
+          type: "group",
+          children: [
+            {
+              type: "line",
+              shape: { x1: x, y1: yLo, x2: x, y2: yHi },
+              style: { stroke: color, lineWidth: 1.5 },
+            },
+            {
+              type: "line",
+              shape: { x1: x - cap, y1: yLo, x2: x + cap, y2: yLo },
+              style: { stroke: color, lineWidth: 1.5 },
+            },
+            {
+              type: "line",
+              shape: { x1: x - cap, y1: yHi, x2: x + cap, y2: yHi },
+              style: { stroke: color, lineWidth: 1.5 },
+            },
+          ],
+        };
+      },
+      encode: { x: 0, y: [2, 3] },
+      data: agg.map((p) => [xv(p), p.y, p.lo, p.hi]),
+      z: 3,
+      silent: true,
+      legendHoverLink: false,
+    },
+  ];
+}
+
 /** 构建一个简单的「分面」标题（当前在标题中拼接，未实现真正网格分面） */
 function facetTitle(facetKey: string, encoding: GraphSpec["encoding"]): string {
   const parts: string[] = [];
@@ -194,20 +352,90 @@ function buildSingleOption(
   // —— 箱线图：X 分类，Y 连续 ——
   if (enabledElements.some((e) => e.kind === "boxplot")) {
     if (yIdx >= 0) {
+      const boxEl = enabledElements.find((e) => e.kind === "boxplot")!;
+      const opts = boxEl.options;
+      const showOutliers = getOpt<boolean>(opts, "outliers", true);
+      const boxType = getOpt<string>(opts, "boxType", "outlier"); // outlier | quantile
+      const showFiveNum = getOpt<boolean>(opts, "fiveNumberSummary", false);
+      const widthProp = Math.max(0, Math.min(1, getOpt<number>(opts, "widthProportion", 0)));
+
       // 按 X 分类（若无则全部）
       const xGroups = groupBy(data, xField);
       const cats = Array.from(xGroups.keys());
-      const boxData = cats.map((cat) => {
+      const boxData: Array<[number, number, number, number, number]> = [];
+      const outlierPts: Array<[string, number]> = [];
+      const labels: Array<{ x: string; y: number; text: string }> = [];
+
+      cats.forEach((cat) => {
         const idxs = xGroups.get(cat)!;
-        const ys = idxs.map((i) => toNum(data.rows[i][yIdx]));
-        return boxStats(ys) ?? [0, 0, 0, 0, 0];
+        const ys = idxs.map((i) => toNum(data.rows[i][yIdx])).filter(Number.isFinite);
+        if (ys.length === 0) {
+          boxData.push([0, 0, 0, 0, 0]);
+          return;
+        }
+        const stats = boxStats(ys)!;
+        const [absMin, q1, med, q3, absMax] = stats;
+        const iqr = q3 - q1;
+        let lower = absMin;
+        let upper = absMax;
+        if (boxType === "outlier") {
+          const lo = q1 - 1.5 * iqr;
+          const hi = q3 + 1.5 * iqr;
+          const inRange = ys.filter((v) => v >= lo && v <= hi);
+          if (inRange.length > 0) {
+            lower = Math.min(...inRange);
+            upper = Math.max(...inRange);
+          }
+          if (showOutliers) {
+            for (const v of ys) {
+              if (v < lo || v > hi) outlierPts.push([cat, v]);
+            }
+          }
+        }
+        boxData.push([lower, q1, med, q3, upper]);
+        if (showFiveNum) {
+          labels.push({ x: cat, y: med, text: `${med.toFixed(2)}` });
+          labels.push({ x: cat, y: q1, text: `Q1 ${q1.toFixed(2)}` });
+          labels.push({ x: cat, y: q3, text: `Q3 ${q3.toFixed(2)}` });
+        }
       });
+
+      // widthProportion: map 0..1 → boxWidth max in px; min stays 4
+      const maxBoxPx = 12 + widthProp * 60;
       series.push({
         type: "boxplot",
         name: yField?.name,
         data: boxData,
+        boxWidth: [4, maxBoxPx],
         itemStyle: { color: theme.categorical[0], borderColor: theme.fgSecondary },
       });
+      if (outlierPts.length > 0) {
+        series.push({
+          type: "scatter",
+          name: "Outliers",
+          data: outlierPts,
+          symbolSize: 5,
+          itemStyle: { color: theme.fgSecondary, opacity: 0.85 },
+          z: 3,
+        });
+      }
+      if (labels.length > 0) {
+        series.push({
+          type: "scatter",
+          name: "5-Number",
+          data: labels.map((l) => [l.x, l.y]),
+          symbolSize: 0.1,
+          label: {
+            show: true,
+            position: "right",
+            color: theme.fgSecondary,
+            fontSize: 10,
+            formatter: (params: any) => labels[params.dataIndex]?.text ?? "",
+          },
+          silent: true,
+          z: 4,
+        });
+      }
       return {
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
@@ -355,7 +583,34 @@ function buildElementSeries(
 
   switch (el.kind) {
     case "points": {
-      // 自适应符号大小
+      const opts = el.options;
+      const summaryStat = getOpt<string>(opts, "summaryStat", "none");
+      const errorInterval = getOpt<string>(opts, "errorInterval", "auto");
+      const intervalStyle = getOpt<string>(opts, "intervalStyle", "errorBar");
+
+      // Aggregated mode: collapse repeated X values to a single summary point
+      // (mean/median/sum) plus optional error interval.
+      if (summaryStat !== "none" && xIdx >= 0) {
+        const agg = aggregatePoints(
+          rowIdxs, data, xIdx, yIdx, xIsCategory, summaryStat, errorInterval,
+        );
+        const out: any[] = [
+          {
+            type: "scatter",
+            name: seriesName,
+            symbolSize: 9,
+            itemStyle: { color, opacity: 0.95 },
+            data: agg.map((p) =>
+              xIsCategory ? [toStr(p.x), p.y] : [toNum(p.x), p.y],
+            ),
+            z: 4,
+          },
+        ];
+        out.push(...buildIntervalSeries(agg, xIsCategory, intervalStyle, color, seriesName));
+        return out;
+      }
+
+      // Raw scatter (no aggregation). Optional size encoding.
       let sizes: number[] | null = null;
       if (sizeIdx >= 0) {
         const ss = points.map((p) => p.size ?? NaN).filter(Number.isFinite);
@@ -381,25 +636,68 @@ function buildElementSeries(
       ];
     }
     case "line": {
-      // 按 X 排序连接
-      const sorted = [...points].sort((a, b) => {
-        const ax = xIsCategory ? toStr(a.x) : toNum(a.x);
-        const bx = xIsCategory ? toStr(b.x) : toNum(b.x);
-        return ax < bx ? -1 : ax > bx ? 1 : 0;
-      });
-      return [
-        {
-          type: "line",
-          name: seriesName,
-          showSymbol: false,
-          smooth: false,
-          lineStyle: { color, width: 2 },
-          itemStyle: { color },
-          data: sorted.map((p) =>
-            xIsCategory ? [toStr(p.x), p.y] : [toNum(p.x), p.y],
-          ),
-        },
-      ];
+      const opts = el.options;
+      const rowOrder = getOpt<boolean>(opts, "rowOrder", false);
+      const connection = getOpt<string>(opts, "connection", "line"); // line | step | spline
+      const summaryStat = getOpt<string>(opts, "summaryStat", "mean");
+      const fill = getOpt<string>(opts, "fill", "none"); // none | toZero | between
+      const errorInterval = getOpt<string>(opts, "errorInterval", "auto");
+      const intervalStyle = getOpt<string>(opts, "intervalStyle", "errorBar");
+      const missingValues = getOpt<string>(opts, "missingValues", "connect");
+
+      const isStep = connection === "step" ? "middle" : false;
+      const isSpline = connection === "spline";
+      const connectNulls = missingValues === "connect";
+
+      // If a non-"none" summary stat is selected, aggregate points per X
+      // (this matches JMP-style "Mean line"). Otherwise just plot raw.
+      const useAgg = summaryStat !== "none" && xIdx >= 0;
+      let lineData: Array<[unknown, number]>;
+      let intervalSeries: any[] = [];
+      if (useAgg) {
+        const agg = aggregatePoints(
+          rowIdxs, data, xIdx, yIdx, xIsCategory, summaryStat, errorInterval,
+        );
+        lineData = agg.map((p) => [
+          xIsCategory ? toStr(p.x) : toNum(p.x),
+          p.y,
+        ]);
+        intervalSeries = buildIntervalSeries(agg, xIsCategory, intervalStyle, color, seriesName);
+      } else {
+        const arr = rowOrder
+          ? points
+          : [...points].sort((a, b) => {
+              const ax = xIsCategory ? toStr(a.x) : toNum(a.x);
+              const bx = xIsCategory ? toStr(b.x) : toNum(b.x);
+              return ax < bx ? -1 : ax > bx ? 1 : 0;
+            });
+        lineData = arr.map((p) => [
+          xIsCategory ? toStr(p.x) : toNum(p.x),
+          p.y,
+        ]);
+      }
+
+      const lineSeries: any = {
+        type: "line",
+        name: seriesName,
+        showSymbol: false,
+        smooth: isSpline,
+        step: isStep,
+        connectNulls,
+        lineStyle: { color, width: 2 },
+        itemStyle: { color },
+        data: lineData,
+        z: 2,
+      };
+      if (fill === "toZero") {
+        lineSeries.areaStyle = { color, opacity: 0.18 };
+      }
+      // "between" fill is meaningful only with an interval band; if user
+      // selected "between" but interval is none, fall back to no fill.
+      if (fill === "between" && intervalSeries.length === 0) {
+        // no-op
+      }
+      return [lineSeries, ...intervalSeries];
     }
     case "bar": {
       // 按 X 分组求均值
