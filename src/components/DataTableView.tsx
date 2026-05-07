@@ -1532,13 +1532,15 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   };
 
   // ---- Copy selected cells to clipboard as TSV ----
-  const handleCopy = () => {
+  const handleCopy = (withHeader: boolean = false) => {
     if (!data) return;
     let rows: string[][] = [];
+    let headerCols: number[] | null = null;
 
     if (selectedRows.size > 0) {
       // Copy selected rows (all columns)
       const sortedRows = Array.from(selectedRows).sort((a, b) => a - b);
+      headerCols = cols.map((_, i) => i);
       for (const ri of sortedRows) {
         const dr = displayRows[ri];
         rows.push(dr.map((v) => (v == null ? "" : String(v))));
@@ -1546,6 +1548,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     } else if (selectedCols.size > 0) {
       // Copy selected columns (all rows)
       const sortedCols = Array.from(selectedCols).sort((a, b) => a - b);
+      headerCols = sortedCols;
       for (let ri = 0; ri < displayRows.length; ri++) {
         const dr = displayRows[ri];
         rows.push(sortedCols.map((ci) => (dr[ci] == null ? "" : String(dr[ci]))));
@@ -1553,6 +1556,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     } else if (selection) {
       // Copy selection range
       const { r1, c1, r2, c2 } = normalizeRange(selection);
+      headerCols = [];
+      for (let c = c1; c <= c2; c++) headerCols.push(c);
       for (let r = r1; r <= r2; r++) {
         const dr = displayRows[r];
         const row: string[] = [];
@@ -1564,10 +1569,15 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     } else if (activeCell) {
       // Copy single cell
       const dr = displayRows[activeCell.row];
+      headerCols = [activeCell.col];
       rows.push([dr[activeCell.col] == null ? "" : String(dr[activeCell.col])]);
     }
 
     if (rows.length === 0) return;
+    if (withHeader && headerCols) {
+      const headerRow = headerCols.map((ci) => cols[ci] ?? "");
+      rows.unshift(headerRow);
+    }
     const tsv = rows.map((r) => r.join("\t")).join("\n");
     navigator.clipboard.writeText(tsv).catch(() => {
       setErrorMsg("无法写入剪贴板");
@@ -2856,6 +2866,9 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
         >
           <div className="sp-ctx-item" onClick={() => { handleCopy(); setCellMenu(null); }}>
             复制<span className="sp-ctx-shortcut">{modKey}C</span>
+          </div>
+          <div className="sp-ctx-item" onClick={() => { handleCopy(true); setCellMenu(null); }}>
+            复制（带表头）
           </div>
           <div className="sp-ctx-item" onClick={() => handleContextMenuPaste(false)}>
             粘贴<span className="sp-ctx-shortcut">{modKey}V</span>
