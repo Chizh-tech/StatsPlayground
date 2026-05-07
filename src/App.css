@@ -781,7 +781,7 @@
 }
 
 .sp-col-hdr:hover {
-  background: var(--bg-header-hover);
+  background-color: var(--bg-header-hover);
 }
 
 .sp-col-active {
@@ -883,7 +883,7 @@
 }
 
 .sp-row-hdr:hover {
-  background: var(--bg-header-hover);
+  background-color: var(--bg-header-hover);
 }
 
 .sp-row-active {
@@ -898,18 +898,21 @@
 
 /* Cells */
 .sp-cell {
-  border-right: 1px solid var(--border-cell);
-  border-bottom: 1px solid var(--border-cell);
+  /* Use inset box-shadow for the right/bottom grid lines instead of CSS
+     borders. With `border-collapse: collapse`, cell borders are shared and
+     get rounded to sub-pixel boundaries during virtualized scroll, which
+     occasionally drops 1px segments. box-shadow is painted at the cell's
+     own pixel grid and does not participate in border-collapse arithmetic,
+     so the grid lines stay reliable. */
+  box-shadow:
+    inset -1px 0 0 var(--border-cell),
+    inset 0 -1px 0 var(--border-cell);
   padding: 0;
   height: 26px;
   position: relative;
   cursor: cell;
   overflow: hidden;
   background: var(--bg-main);
-  /* Prevent cell background from painting over the shared 1px border under
-     `border-collapse: collapse`. Without this, scrolling a virtualized
-     spreadsheet leaves random horizontal/vertical grid lines un-painted
-     until the cell is re-rendered (e.g. after a click). */
   background-clip: padding-box;
   user-select: none;
   -webkit-user-select: none;
