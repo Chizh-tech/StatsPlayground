@@ -38,7 +38,7 @@ impl<'a> ProjectService<'a> {
 
         let now = chrono_now();
         let project = ProjectInfo {
-            name: "未命名项目".to_string(),
+            name: "Untitled Project".to_string(),
             file_path: String::new(),
             created_at: now,
         };
