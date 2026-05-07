@@ -456,6 +456,9 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
 
   // Left "Columns" panel (collapsible)
   const [colsPanelCollapsed, setColsPanelCollapsed] = useState(false);
+  // Width of the left columns panel; user-resizable via the splitter on its
+  // right edge. Clamped between 120 and 600 px.
+  const [colsPanelWidth, setColsPanelWidth] = useState(200);
   const colsPanelAnchorRef = useRef<number | null>(null);
 
   // Excel-like formula bar state lives inside <FormulaBar /> now.
@@ -2567,7 +2570,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
             >▶</button>
           </div>
         ) : (
-          <div className="sp-cols-panel">
+          <>
+          <div className="sp-cols-panel" style={{ width: colsPanelWidth, minWidth: colsPanelWidth }}>
             <div className="sp-cols-panel-header">
               <span className="sp-cols-panel-title">
                 列 ({cols.length}{selectedCols.size > 0 ? `/${selectedCols.size}` : ""})
@@ -2587,6 +2591,32 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
               onItemContextMenu={stableColsPanelCtxMenu}
             />
           </div>
+          {/* Splitter: drag to resize the columns panel width. */}
+          <div
+            className="sp-cols-panel-splitter"
+            title="拖动调整列面板宽度"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const startX = e.clientX;
+              const startW = colsPanelWidth;
+              const onMove = (ev: MouseEvent) => {
+                const next = Math.max(120, Math.min(600, startW + (ev.clientX - startX)));
+                setColsPanelWidth(next);
+              };
+              const onUp = () => {
+                document.removeEventListener("mousemove", onMove);
+                document.removeEventListener("mouseup", onUp);
+                document.body.style.cursor = "";
+                document.body.style.userSelect = "";
+              };
+              document.addEventListener("mousemove", onMove);
+              document.addEventListener("mouseup", onUp);
+              document.body.style.cursor = "col-resize";
+              document.body.style.userSelect = "none";
+            }}
+            onDoubleClick={() => setColsPanelWidth(200)}
+          />
+          </>
         )}
 
         {/* Right side: formula bar + grid (stacked vertically) */}

@@ -637,10 +637,23 @@
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
-  border-right: 1px solid var(--border-main);
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* Vertical splitter between cols panel and table area. */
+.sp-cols-panel-splitter {
+  flex: 0 0 auto;
+  width: 4px;
+  cursor: col-resize;
+  background: var(--border-main);
+  transition: background 0.1s;
+}
+
+.sp-cols-panel-splitter:hover,
+.sp-cols-panel-splitter:active {
+  background: var(--fg-accent);
 }
 
 .sp-cols-panel-collapsed {
@@ -648,6 +661,7 @@
   min-width: 18px;
   align-items: center;
   padding-top: 4px;
+  border-right: 1px solid var(--border-main);
 }
 
 .sp-cols-panel-header {
