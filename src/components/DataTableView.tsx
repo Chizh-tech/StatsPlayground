@@ -639,28 +639,29 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       // Load saved display props
       try {
         const props = await dataService.getColumnDisplayProps(datasetId);
-        if (props.length > 0) {
-          const visCount = result.columns.filter(c => c !== "_row_id").length;
-          const widths = Array.from({ length: visCount }, (_, i) => {
-            const p = props.find(dp => dp.colIndex === i);
-            return p?.width ?? DEFAULT_COL_WIDTH;
-          });
-          setColWidths(widths);
-          colWidthsRef.current = widths;
-          const formats = Array.from({ length: visCount }, (_, i) => {
-            const p = props.find(dp => dp.colIndex === i);
-            return p?.format ? { kind: p.format.kind as FormatKind, decimals: p.format.decimals, currency: p.format.currency } : DEFAULT_FORMAT;
-          });
-          setColFormats(formats);
-          colFormatsRef.current = formats;
-          const extras = Array.from({ length: visCount }, (_, i) => {
-            const p = props.find(dp => dp.colIndex === i);
-            const e = p?.extras;
-            return e && Object.keys(e).length > 0 ? (e as Record<string, unknown>) : null;
-          });
-          setColExtras(extras);
-          colExtrasRef.current = extras;
-        }
+        const visCount = result.columns.filter(c => c !== "_row_id").length;
+        // Always rebuild the per-column arrays (even when props is empty), so
+        // switching to a dataset with no saved props clears any state that
+        // may have leaked from a previously-viewed dataset.
+        const widths = Array.from({ length: visCount }, (_, i) => {
+          const p = props.find(dp => dp.colIndex === i);
+          return p?.width ?? DEFAULT_COL_WIDTH;
+        });
+        setColWidths(widths);
+        colWidthsRef.current = widths;
+        const formats = Array.from({ length: visCount }, (_, i) => {
+          const p = props.find(dp => dp.colIndex === i);
+          return p?.format ? { kind: p.format.kind as FormatKind, decimals: p.format.decimals, currency: p.format.currency } : DEFAULT_FORMAT;
+        });
+        setColFormats(formats);
+        colFormatsRef.current = formats;
+        const extras = Array.from({ length: visCount }, (_, i) => {
+          const p = props.find(dp => dp.colIndex === i);
+          const e = p?.extras;
+          return e && Object.keys(e).length > 0 ? (e as Record<string, unknown>) : null;
+        });
+        setColExtras(extras);
+        colExtrasRef.current = extras;
       } catch { /* ignore display prop load errors */ }
     } catch (e) {
       console.error("Failed to load table:", e);
