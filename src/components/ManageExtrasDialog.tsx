@@ -1,5 +1,7 @@
 import { useMemo, useRef, useState } from "react";
-import { EXTRA_DEFS, EXTRA_KINDS, type ExtraKind } from "@/types/columnExtras";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+import { EXTRA_DEFS, EXTRA_KINDS, extraKindLabel, extraFieldLabel, type ExtraKind } from "@/types/columnExtras";
 import { useDataStore } from "@/stores/useDataStore";
 import { dataService } from "@/services/dataService";
 
@@ -28,16 +30,17 @@ interface FlatField {
 }
 
 /** Build the flat list of grid sub-columns from selected kinds. */
-function flattenFields(kinds: ExtraKind[]): FlatField[] {
+function flattenFields(kinds: ExtraKind[], t: TFunction): FlatField[] {
   const out: FlatField[] = [];
   for (const k of kinds) {
     const def = EXTRA_DEFS[k];
     const single = def.fields.length === 1;
+    const kindLabel = extraKindLabel(k, t);
     for (const f of def.fields) {
       out.push({
         kind: k,
         fieldKey: f.key,
-        header: single ? def.label : `${def.label} / ${f.label}`,
+        header: single ? kindLabel : `${kindLabel} / ${extraFieldLabel(k, f.key, t)}`,
         type: f.type,
       });
     }
@@ -48,13 +51,14 @@ function flattenFields(kinds: ExtraKind[]): FlatField[] {
 /** Reverse lookup: header text → (kind, fieldKey, type). Built across ALL
  *  registered kinds so that import can recognize headers regardless of which
  *  kinds the user currently has selected. */
-function buildHeaderIndex(): Map<string, FlatField> {
+function buildHeaderIndex(t: TFunction): Map<string, FlatField> {
   const idx = new Map<string, FlatField>();
   for (const k of EXTRA_KINDS) {
     const def = EXTRA_DEFS[k];
     const single = def.fields.length === 1;
+    const kindLabel = extraKindLabel(k, t);
     for (const f of def.fields) {
-      const header = single ? def.label : `${def.label} / ${f.label}`;
+      const header = single ? kindLabel : `${kindLabel} / ${extraFieldLabel(k, f.key, t)}`;
       idx.set(header, { kind: k, fieldKey: f.key, header, type: f.type });
     }
   }
@@ -84,6 +88,7 @@ function uniqueName(name: string, existing: string[]): string {
 export function ManageExtrasDialog({
   cols, colExtras, sourceDatasetName, onApply, onClose,
 }: ManageExtrasDialogProps) {
+  const { t } = useTranslation();
   // Datasets list — used by export (avoid name collision) and by import (picker).
   const datasets = useDataStore((s) => s.datasets);
   const refreshDatasets = useDataStore((s) => s.refreshDatasets);
@@ -124,7 +129,7 @@ export function ManageExtrasDialog({
     () => EXTRA_KINDS.filter((k) => checkedKinds.has(k)),
     [checkedKinds],
   );
-  const flatFields = useMemo(() => flattenFields(selectedKinds), [selectedKinds]);
+  const flatFields = useMemo(() => flattenFields(selectedKinds, t), [selectedKinds, t]);
 
   const enterStep2 = () => {
     if (selectedColIndices.length === 0 || selectedKinds.length === 0) return;
@@ -179,17 +184,19 @@ export function ManageExtrasDialog({
    *  reimport via "从属性表导入". */
   const handleExport = async () => {
     if (selectedColIndices.length === 0 || flatFields.length === 0) return;
-    const baseName = sourceDatasetName ? `${sourceDatasetName}_附加属性` : "附加属性表";
-    const proposed = window.prompt("导出到属性表 — 表名", uniqueName(baseName, datasets.map((d) => d.name)));
+    const baseName = sourceDatasetName
+      ? t("extras.exportBaseName", { name: sourceDatasetName })
+      : t("extras.exportBaseNameDefault");
+    const proposed = window.prompt(t("extras.exportPromptTitle"), uniqueName(baseName, datasets.map((d) => d.name)));
     if (!proposed) return;
     const name = proposed.trim();
     if (!name) return;
     if (datasets.some((d) => d.name === name)) {
-      setStatusMsg({ text: `已存在同名数据表 "${name}"`, tone: "error" });
+      setStatusMsg({ text: t("extras.exportNameTaken", { name }), tone: "error" });
       return;
     }
     try {
-      const colNames = ["列名", ...flatFields.map((f) => f.header)];
+      const colNames = [t("extras.columnNameHeader"), ...flatFields.map((f) => f.header)];
       const colTypes = ["VARCHAR", ...flatFields.map((f) => (f.type === "number" ? "DOUBLE" : "VARCHAR"))];
       const rows: string[][] = selectedColIndices.map((ci) => [
         cols[ci],
@@ -197,13 +204,13 @@ export function ManageExtrasDialog({
       ]);
       await dataService.createTable(name, colNames, colTypes);
       const meta = (await dataService.listDatasets()).find((d) => d.name === name);
-      if (!meta) throw new Error("创建后找不到新表");
+      if (!meta) throw new Error(t("extras.createdMissing"));
       // Bulk insert via paste — startRow=0 / startCol=0 / no header row.
       await dataService.pasteAtPosition(meta.id, 0, 0, rows, null, colTypes);
       await refreshDatasets();
-      setStatusMsg({ text: `已导出到 "${name}"(${rows.length} 行)。可在数据集列表中编辑。`, tone: "info" });
+      setStatusMsg({ text: t("extras.exportSuccess", { name, rows: rows.length }), tone: "info" });
     } catch (e) {
-      setStatusMsg({ text: `导出失败:${String(e)}`, tone: "error" });
+      setStatusMsg({ text: t("extras.exportFailed", { err: String(e) }), tone: "error" });
     }
   };
 
@@ -213,7 +220,7 @@ export function ManageExtrasDialog({
    *  Unmatched columns / rows are summarized in statusMsg. */
   const handleImport = async () => {
     if (!importPickId) {
-      setStatusMsg({ text: "请先在下拉框中选择一个属性表。", tone: "warn" });
+      setStatusMsg({ text: t("extras.importPickFirst"), tone: "warn" });
       return;
     }
     try {
@@ -225,7 +232,7 @@ export function ManageExtrasDialog({
       const allCols = result.columns;
       const visibleCols = allCols.filter((c) => c !== "_row_id");
       if (visibleCols.length < 2) {
-        setStatusMsg({ text: "所选表至少需要 2 列(列名 + 至少一个属性字段)。", tone: "error" });
+        setStatusMsg({ text: t("extras.importTooFewCols"), tone: "error" });
         return;
       }
       const colIndexInRows = (name: string) => allCols.indexOf(name);
@@ -233,7 +240,7 @@ export function ManageExtrasDialog({
       const keyColIdx = colIndexInRows(keyColName);
 
       // Map each subsequent header → FlatField via the global header index.
-      const headerIdx = buildHeaderIndex();
+      const headerIdx = buildHeaderIndex(t);
       const fieldMappings: Array<{ rowColIdx: number; field: FlatField } | null> =
         visibleCols.slice(1).map((h) => {
           const f = headerIdx.get(h);
@@ -267,7 +274,7 @@ export function ManageExtrasDialog({
         // Only apply if this col is in the current selectedColIndices set;
         // otherwise the user opted not to manage it this round.
         if (!checkedCols.has(ci)) {
-          skippedRowKeys.push(`${key}(未勾选)`);
+          skippedRowKeys.push(t("extras.skippedUnchecked", { name: key }));
           continue;
         }
         const colE: Record<string, unknown> = { ...(next.get(ci) ?? {}) };
@@ -293,12 +300,20 @@ export function ManageExtrasDialog({
       }
       setStaged(next);
       if (kindsSeen.size > checkedKinds.size) setCheckedKinds(kindsSeen);
-      const parts = [`已导入 ${matchedRows} 列`];
-      if (skippedRowKeys.length > 0) parts.push(`跳过 ${skippedRowKeys.length} 行(${skippedRowKeys.slice(0, 3).join(", ")}${skippedRowKeys.length > 3 ? "…" : ""})`);
-      if (unknownHeaders.length > 0) parts.push(`忽略未识别列:${unknownHeaders.join(", ")}`);
-      setStatusMsg({ text: parts.join(";"), tone: skippedRowKeys.length || unknownHeaders.length ? "warn" : "info" });
+      const parts = [t("extras.importDoneRows", { n: matchedRows })];
+      if (skippedRowKeys.length > 0) {
+        parts.push(t("extras.importSkippedRows", {
+          n: skippedRowKeys.length,
+          names: skippedRowKeys.slice(0, 3).join(", "),
+          more: skippedRowKeys.length > 3 ? "…" : "",
+        }));
+      }
+      if (unknownHeaders.length > 0) {
+        parts.push(t("extras.importIgnoredCols", { names: unknownHeaders.join(", ") }));
+      }
+      setStatusMsg({ text: parts.join("; "), tone: skippedRowKeys.length || unknownHeaders.length ? "warn" : "info" });
     } catch (e) {
-      setStatusMsg({ text: `导入失败:${String(e)}`, tone: "error" });
+      setStatusMsg({ text: t("extras.importFailed", { err: String(e) }), tone: "error" });
     }
   };
 
@@ -343,7 +358,7 @@ export function ManageExtrasDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sp-dialog-title">
-          管理附加属性 {step === 1 ? "— 选择列与属性" : `— 批量编辑（${selectedColIndices.length} 列）`}
+          {t("extras.manageTitle")} {step === 1 ? t("extras.manageStep1") : t("extras.manageStep2", { n: selectedColIndices.length })}
         </div>
         <div className="sp-dialog-body">
           {step === 1 ? (
@@ -371,18 +386,18 @@ export function ManageExtrasDialog({
           )}
         </div>
         <div className="sp-dialog-actions">
-          <button className="sp-dialog-btn" onClick={onClose}>取消</button>
+          <button className="sp-dialog-btn" onClick={onClose}>{t("common.cancel")}</button>
           {step === 1 ? (
             <button
               className="sp-dialog-btn sp-dialog-btn-primary"
               onClick={enterStep2}
               disabled={selectedColIndices.length === 0 || selectedKinds.length === 0}
-            >下一步</button>
+            >{t("extras.next")}</button>
           ) : (
             <>
-              <button className="sp-dialog-btn" onClick={() => setStep(1)}>← 返回</button>
-              <button className="sp-dialog-btn" onClick={reload}>重新载入</button>
-              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={apply}>应用到列</button>
+              <button className="sp-dialog-btn" onClick={() => setStep(1)}>{t("common.back")}</button>
+              <button className="sp-dialog-btn" onClick={reload}>{t("extras.reload")}</button>
+              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={apply}>{t("extras.applyToCols")}</button>
             </>
           )}
         </div>
@@ -403,6 +418,7 @@ interface Step1Props {
 function Step1({
   cols, checkedCols, setCheckedCols, checkedKinds, setCheckedKinds,
 }: Step1Props) {
+  const { t } = useTranslation();
   // Anchor for shift-range selection. Reset when the user plain-clicks (no
   // modifier), so the next shift-click defines a fresh range from there.
   const lastClickedRef = useRef<number | null>(null);
@@ -453,12 +469,12 @@ function Step1({
     <div style={{ display: "flex", gap: 12 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="sp-dialog-label" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span>列（{checkedCols.size}/{cols.length}） · Shift 连选 / Ctrl 跳选</span>
+          <span>{t("extras.columnsHeader", { sel: checkedCols.size, total: cols.length })}</span>
           <button
             className="sp-dialog-btn"
             style={{ padding: "0 6px", fontSize: 11 }}
             onClick={() => setCheckedCols(allColsChecked ? new Set() : new Set(cols.map((_, i) => i)))}
-          >{allColsChecked ? "全不选" : "全选"}</button>
+          >{allColsChecked ? t("common.selectNone") : t("common.selectAll")}</button>
         </div>
         <div className="sp-extras-picker-list">
           {cols.map((name, i) => (
@@ -473,13 +489,13 @@ function Step1({
                 readOnly
                 tabIndex={-1}
               />
-              <span className="sp-extras-picker-item-name">{name || `(列 ${i + 1})`}</span>
+              <span className="sp-extras-picker-item-name">{name || t("dataTable.colsPanelItemFallback", { letter: i + 1 })}</span>
             </label>
           ))}
         </div>
       </div>
       <div style={{ flex: "0 0 200px" }}>
-        <div className="sp-dialog-label">附加属性</div>
+        <div className="sp-dialog-label">{t("extras.kindsHeader")}</div>
         <div className="sp-extras-picker-list">
           {EXTRA_KINDS.map((k) => (
             <label key={k} className="sp-extras-picker-item">
@@ -488,7 +504,7 @@ function Step1({
                 checked={checkedKinds.has(k)}
                 onChange={() => toggleKind(k)}
               />
-              <span className="sp-extras-picker-item-name">{EXTRA_DEFS[k].label}</span>
+              <span className="sp-extras-picker-item-name">{extraKindLabel(k, t)}</span>
             </label>
           ))}
         </div>
@@ -516,6 +532,7 @@ function Step2({
   cols, selectedColIndices, flatFields, getCellValue, setCellValue,
   datasets, importPickId, setImportPickId, onExport, onImport, statusMsg,
 }: Step2Props) {
+  const { t } = useTranslation();
   return (
     <div className="sp-extras-batch-wrapper">
       <div className="sp-extras-batch-toolbar">
@@ -525,7 +542,7 @@ function Step2({
             value={importPickId}
             onChange={(e) => setImportPickId(e.target.value)}
           >
-            <option value="">— 选择属性表 —</option>
+            <option value="">{t("extras.selectPropTable")}</option>
             {datasets.map((d) => (
               <option key={d.id} value={d.id}>{d.name}</option>
             ))}
@@ -534,15 +551,15 @@ function Step2({
             className="sp-dialog-btn"
             onClick={onImport}
             disabled={!importPickId}
-            title="按列名匹配回填到下面的批量编辑表"
-          >从属性表导入</button>
+            title={t("extras.importTitleHint")}
+          >{t("extras.importFrom")}</button>
         </div>
         <div className="sp-extras-batch-toolbar-group">
           <button
             className="sp-dialog-btn"
             onClick={onExport}
-            title="把下面的批量表生成为一个普通数据表，可独立编辑"
-          >导出到属性表</button>
+            title={t("extras.exportTitleHint")}
+          >{t("extras.exportTo")}</button>
         </div>
       </div>
       {statusMsg && (
@@ -551,13 +568,13 @@ function Step2({
         </div>
       )}
       <div className="sp-extras-batch-hint">
-        提示：可直接在下方编辑；也可以「导出到属性表」由你随意编辑后再「从属性表导入」。完成后点「应用到列」写回。
+        {t("extras.hint")}
       </div>
       <div className="sp-extras-batch-scroll">
         <table className="sp-extras-batch-table">
           <thead>
             <tr>
-              <th className="sp-extras-batch-th-name">列名</th>
+              <th className="sp-extras-batch-th-name">{t("extras.columnNameHeader")}</th>
               {flatFields.map((f, i) => (
                 <th key={i} className="sp-extras-batch-th">{f.header}</th>
               ))}

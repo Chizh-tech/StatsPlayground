@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect, useCallback, type MutableRefObject } from "react";
+import { useTranslation } from "react-i18next";
 import { useHistoryStore } from "@/stores/useHistoryStore";
+import { useLocaleStore } from "@/stores/useLocaleStore";
+import { bcp47For } from "@/i18n";
 import { listen } from "@tauri-apps/api/event";
 
 export interface SnapshotMenuData {
@@ -17,6 +20,8 @@ export function HistoryPanel({
   onSnapshotMenu: (menu: SnapshotMenuData) => void;
   snapRenameRef: MutableRefObject<((id: string) => void) | null>;
 }) {
+  const { t } = useTranslation();
+  const locale = useLocaleStore((s) => s.locale);
   const {
     history,
     snapshots,
@@ -93,7 +98,7 @@ export function HistoryPanel({
   };
 
   const handleCreateSnapshot = async () => {
-    setBusyMessage("正在创建快照…");
+    setBusyMessage(t("workspace.creatingSnapshot"));
     const unlisten = await listen<{
       datasetIndex: number;
       datasetTotal: number;
@@ -101,7 +106,7 @@ export function HistoryPanel({
     }>("snapshot-progress", (event) => {
       const { datasetIndex, datasetTotal, datasetName } = event.payload;
       if (datasetTotal > 0 && datasetIndex < datasetTotal) {
-        setBusyMessage(`正在创建快照… 数据表 ${datasetIndex + 1}/${datasetTotal}: ${datasetName}`);
+        setBusyMessage(`${t("workspace.creatingSnapshot")} ${t("workspace.importProgressTable", { i: datasetIndex + 1, total: datasetTotal, name: datasetName })}`);
       }
     });
     try {
@@ -121,7 +126,7 @@ export function HistoryPanel({
   const formatTime = (iso: string): string => {
     try {
       const d = new Date(iso);
-      return d.toLocaleString("zh-CN", {
+      return d.toLocaleString(bcp47For(locale), {
         month: "2-digit",
         day: "2-digit",
         hour: "2-digit",
@@ -138,12 +143,12 @@ export function HistoryPanel({
       {/* History section */}
       <div className="history-section" style={{ flex: `0 0 ${historyPct}%` }}>
         <div className="history-section-header">
-          <h3>历史记录</h3>
+          <h3>{t("history.title")}</h3>
           <span className="history-count">{history.filter(e => e.description !== "__init__").length}</span>
         </div>
         <div className="history-list">
           {history.filter(e => e.description !== "__init__").length === 0 ? (
-            <div className="empty-hint">暂无历史记录</div>
+            <div className="empty-hint">{t("history.empty")}</div>
           ) : (
             history.filter(e => e.description !== "__init__").map((entry) => {
               const idx = history.indexOf(entry);
@@ -183,18 +188,18 @@ export function HistoryPanel({
       {/* Snapshot section */}
       <div className="snapshot-section" style={{ flex: `0 0 ${100 - historyPct}%` }}>
         <div className="history-section-header">
-          <h3>快照</h3>
+          <h3>{t("history.snapshot")}</h3>
           <button
             className="snapshot-add-btn"
             onClick={handleCreateSnapshot}
-            title="创建快照"
+            title={t("history.createSnapshot")}
           >
             +
           </button>
         </div>
         <div className="snapshot-list">
           {snapshots.length === 0 ? (
-            <div className="empty-hint">暂无快照</div>
+            <div className="empty-hint">{t("history.snapshotEmpty")}</div>
           ) : (
             snapshots.map((snap) => (
               <div

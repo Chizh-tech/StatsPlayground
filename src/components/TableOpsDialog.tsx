@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { dataService } from "@/services/dataService";
 import type { DatasetMeta } from "@/types/data";
 
@@ -90,12 +92,13 @@ function DatasetSelect({
   label: string;
   exclude?: string;
 }) {
+  const { t } = useTranslation();
   const filtered = exclude ? datasets.filter(d => d.id !== exclude) : datasets;
   return (
     <div className="sp-dialog-field">
       <label className="sp-dialog-label">{label}</label>
       <select className="sp-dialog-select" value={value} onChange={e => onChange(e.target.value)}>
-        <option value="">— 选择数据表 —</option>
+        <option value="">{t("tableOp.selectTablePlaceholder")}</option>
         {filtered.map(d => (
           <option key={d.id} value={d.id}>{d.name} ({d.rowCount}×{d.colCount})</option>
         ))}
@@ -107,6 +110,7 @@ function DatasetSelect({
 // ─── Main Component ───
 
 export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreated, onUpdated }: Props) {
+  const { t } = useTranslation();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -141,8 +145,15 @@ export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreat
   };
 
   const title: Record<TableOpType, string> = {
-    summary: "汇总", subset: "子集", sort: "排序", stack: "堆叠",
-    split: "拆分", transpose: "转置", join: "连接", update: "更新", concatenate: "合并",
+    summary: t("tableOp.summary"),
+    subset: t("tableOp.subset"),
+    sort: t("tableOp.sort"),
+    stack: t("tableOp.stack"),
+    split: t("tableOp.split"),
+    transpose: t("tableOp.transpose"),
+    join: t("tableOp.join"),
+    update: t("tableOp.update"),
+    concatenate: t("tableOp.concatenate"),
   };
 
   return (
@@ -152,24 +163,24 @@ export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreat
         <div className="sp-dialog-body">
           {/* Source dataset selector (for most ops) */}
           {op !== "join" && op !== "update" && op !== "concatenate" && (
-            <DatasetSelect datasets={datasets} value={sourceId} onChange={setSourceId} label="源数据表" />
+            <DatasetSelect datasets={datasets} value={sourceId} onChange={setSourceId} label={t("tableOp.sourceTable")} />
           )}
 
           {/* Per-op UI */}
-          {op === "sort" && <SortForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} />}
-          {op === "subset" && <SubsetForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} />}
-          {op === "summary" && <SummaryForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} />}
-          {op === "transpose" && <TransposeForm sourceId={sourceId} sourceName={sourceName} exec={exec} busy={busy} />}
-          {op === "stack" && <StackForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} />}
-          {op === "split" && <SplitForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} />}
-          {op === "join" && <JoinForm datasets={datasets} activeId={activeDatasetId} exec={exec} busy={busy} />}
-          {op === "update" && <UpdateForm datasets={datasets} activeId={activeDatasetId} exec={exec} busy={busy} />}
-          {op === "concatenate" && <ConcatenateForm datasets={datasets} activeId={activeDatasetId} exec={exec} busy={busy} />}
+          {op === "sort" && <SortForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
+          {op === "subset" && <SubsetForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
+          {op === "summary" && <SummaryForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
+          {op === "transpose" && <TransposeForm sourceId={sourceId} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
+          {op === "stack" && <StackForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
+          {op === "split" && <SplitForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
+          {op === "join" && <JoinForm datasets={datasets} activeId={activeDatasetId} exec={exec} busy={busy} t={t} />}
+          {op === "update" && <UpdateForm datasets={datasets} activeId={activeDatasetId} exec={exec} busy={busy} t={t} />}
+          {op === "concatenate" && <ConcatenateForm datasets={datasets} activeId={activeDatasetId} exec={exec} busy={busy} t={t} />}
 
           {error && <div className="sp-dialog-error">{error}</div>}
         </div>
         <div className="sp-dialog-actions">
-          <button className="sp-dialog-btn" onClick={onClose} disabled={busy}>取消</button>
+          <button className="sp-dialog-btn" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
         </div>
       </div>
     </div>
@@ -178,9 +189,9 @@ export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreat
 
 // ─── Sort ───
 
-function SortForm({ sourceId, cols, sourceName, exec, busy }: {
+function SortForm({ sourceId, cols, sourceName, exec, busy, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
 }) {
   const [sortCol, setSortCol] = useState("");
   const [sortOrder, setSortOrder] = useState("asc");
@@ -190,24 +201,24 @@ function SortForm({ sourceId, cols, sourceName, exec, busy }: {
   return (
     <>
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">排序列</label>
+        <label className="sp-dialog-label">{t("tableOp.sortColumn")}</label>
         <select className="sp-dialog-select" value={sortCol} onChange={e => setSortCol(e.target.value)}>
           {cols.map(([n]) => <option key={n} value={n}>{n}</option>)}
         </select>
       </div>
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">排序方式</label>
+        <label className="sp-dialog-label">{t("tableOp.sortOrder")}</label>
         <select className="sp-dialog-select" value={sortOrder} onChange={e => setSortOrder(e.target.value)}>
-          <option value="asc">升序</option>
-          <option value="desc">降序</option>
+          <option value="asc">{t("tableOp.sortAsc")}</option>
+          <option value="desc">{t("tableOp.sortDesc")}</option>
         </select>
       </div>
       <div className="sp-dialog-actions">
         <button
           className="sp-dialog-btn sp-dialog-btn-primary"
           disabled={busy || !sourceId || !sortCol}
-          onClick={() => exec(() => dataService.sortTable(sourceId, [sortCol], [sortOrder], `${sourceName} - 排序`))}
-        >确定</button>
+          onClick={() => exec(() => dataService.sortTable(sourceId, [sortCol], [sortOrder], t("tableOp.resultSuffix.sort", { name: sourceName })))}
+        >{t("common.confirm")}</button>
       </div>
     </>
   );
@@ -215,9 +226,9 @@ function SortForm({ sourceId, cols, sourceName, exec, busy }: {
 
 // ─── Subset ───
 
-function SubsetForm({ sourceId, cols, sourceName, exec, busy }: {
+function SubsetForm({ sourceId, cols, sourceName, exec, busy, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
 }) {
   const [selectedCols, setSelectedCols] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
@@ -227,18 +238,18 @@ function SubsetForm({ sourceId, cols, sourceName, exec, busy }: {
 
   return (
     <>
-      <ColCheckList cols={cols} selected={selectedCols} onChange={setSelectedCols} label="选择列" />
+      <ColCheckList cols={cols} selected={selectedCols} onChange={setSelectedCols} label={t("tableOp.subsetColumns")} />
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">行筛选 (SQL WHERE, 可选)</label>
+        <label className="sp-dialog-label">{t("tableOp.subsetWhere")}</label>
         <input className="sp-dialog-input" value={filter} onChange={e => setFilter(e.target.value)}
-          placeholder='例如: age > 18 AND name IS NOT NULL' />
+          placeholder={t("tableOp.subsetWherePlaceholder")} />
       </div>
       <div className="sp-dialog-actions">
         <button
           className="sp-dialog-btn sp-dialog-btn-primary"
           disabled={busy || !sourceId || selectedCols.size === 0}
-          onClick={() => exec(() => dataService.subsetTable(sourceId, [...selectedCols], filter || null, `${sourceName} - 子集`))}
-        >确定</button>
+          onClick={() => exec(() => dataService.subsetTable(sourceId, [...selectedCols], filter || null, t("tableOp.resultSuffix.subset", { name: sourceName })))}
+        >{t("common.confirm")}</button>
       </div>
     </>
   );
@@ -246,30 +257,30 @@ function SubsetForm({ sourceId, cols, sourceName, exec, busy }: {
 
 // ─── Summary ───
 
-function SummaryForm({ sourceId, cols, sourceName, exec, busy }: {
+function SummaryForm({ sourceId, cols, sourceName, exec, busy, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
 }) {
   const [statCols, setStatCols] = useState<Set<string>>(new Set());
   const [groupCols, setGroupCols] = useState<Set<string>>(new Set());
   const [stats, setStats] = useState<Set<string>>(new Set(["n", "mean", "std", "min", "max"]));
 
   const allStats = [
-    { key: "n", label: "计数 (N)" },
-    { key: "mean", label: "均值 (Mean)" },
-    { key: "std", label: "标准差 (Std)" },
-    { key: "min", label: "最小值 (Min)" },
-    { key: "max", label: "最大值 (Max)" },
-    { key: "sum", label: "求和 (Sum)" },
-    { key: "median", label: "中位数 (Median)" },
+    { key: "n", label: t("tableOp.stat_count") },
+    { key: "mean", label: t("tableOp.stat_mean") },
+    { key: "std", label: t("tableOp.stat_std") },
+    { key: "min", label: t("tableOp.stat_min") },
+    { key: "max", label: t("tableOp.stat_max") },
+    { key: "sum", label: t("tableOp.stat_sum") },
+    { key: "median", label: t("tableOp.stat_median") },
   ];
 
   return (
     <>
-      <ColCheckList cols={cols} selected={statCols} onChange={setStatCols} label="统计列" />
-      <ColCheckList cols={cols} selected={groupCols} onChange={setGroupCols} label="分组列 (可选)" />
+      <ColCheckList cols={cols} selected={statCols} onChange={setStatCols} label={t("tableOp.summaryColumns")} />
+      <ColCheckList cols={cols} selected={groupCols} onChange={setGroupCols} label={t("tableOp.summaryGroupBy")} />
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">统计量</label>
+        <label className="sp-dialog-label">{t("tableOp.summaryStats")}</label>
         <div className="sp-col-checklist">
           {allStats.map(s => (
             <label key={s.key} className="sp-col-check-item">
@@ -288,8 +299,8 @@ function SummaryForm({ sourceId, cols, sourceName, exec, busy }: {
         <button
           className="sp-dialog-btn sp-dialog-btn-primary"
           disabled={busy || !sourceId || statCols.size === 0 || stats.size === 0}
-          onClick={() => exec(() => dataService.summaryTable(sourceId, [...statCols], [...groupCols], [...stats], `${sourceName} - 汇总`))}
-        >确定</button>
+          onClick={() => exec(() => dataService.summaryTable(sourceId, [...statCols], [...groupCols], [...stats], t("tableOp.resultSuffix.summary", { name: sourceName })))}
+        >{t("common.confirm")}</button>
       </div>
     </>
   );
@@ -297,40 +308,40 @@ function SummaryForm({ sourceId, cols, sourceName, exec, busy }: {
 
 // ─── Transpose ───
 
-function TransposeForm({ sourceId, sourceName, exec, busy }: {
+function TransposeForm({ sourceId, sourceName, exec, busy, t }: {
   sourceId: string; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
 }) {
   return (
     <div className="sp-dialog-actions">
       <button
         className="sp-dialog-btn sp-dialog-btn-primary"
         disabled={busy || !sourceId}
-        onClick={() => exec(() => dataService.transposeTable(sourceId, `${sourceName} - 转置`))}
-      >确定</button>
+        onClick={() => exec(() => dataService.transposeTable(sourceId, t("tableOp.resultSuffix.transpose", { name: sourceName })))}
+      >{t("common.confirm")}</button>
     </div>
   );
 }
 
 // ─── Stack ───
 
-function StackForm({ sourceId, cols, sourceName, exec, busy }: {
+function StackForm({ sourceId, cols, sourceName, exec, busy, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
 }) {
   const [stackCols, setStackCols] = useState<Set<string>>(new Set());
   const [idCols, setIdCols] = useState<Set<string>>(new Set());
 
   return (
     <>
-      <ColCheckList cols={cols} selected={stackCols} onChange={setStackCols} label="堆叠列 (值列)" />
-      <ColCheckList cols={cols} selected={idCols} onChange={setIdCols} label="标识列 (保持不变)" />
+      <ColCheckList cols={cols} selected={stackCols} onChange={setStackCols} label={t("tableOp.stackValueCols")} />
+      <ColCheckList cols={cols} selected={idCols} onChange={setIdCols} label={t("tableOp.stackIdCols")} />
       <div className="sp-dialog-actions">
         <button
           className="sp-dialog-btn sp-dialog-btn-primary"
           disabled={busy || !sourceId || stackCols.size === 0}
-          onClick={() => exec(() => dataService.stackTable(sourceId, [...stackCols], [...idCols], `${sourceName} - 堆叠`))}
-        >确定</button>
+          onClick={() => exec(() => dataService.stackTable(sourceId, [...stackCols], [...idCols], t("tableOp.resultSuffix.stack", { name: sourceName })))}
+        >{t("common.confirm")}</button>
       </div>
     </>
   );
@@ -338,9 +349,9 @@ function StackForm({ sourceId, cols, sourceName, exec, busy }: {
 
 // ─── Split ───
 
-function SplitForm({ sourceId, cols, sourceName, exec, busy }: {
+function SplitForm({ sourceId, cols, sourceName, exec, busy, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
 }) {
   const [splitCol, setSplitCol] = useState("");
   const [valueCol, setValueCol] = useState("");
@@ -356,24 +367,24 @@ function SplitForm({ sourceId, cols, sourceName, exec, busy }: {
   return (
     <>
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">拆分列 (值作为新列名)</label>
+        <label className="sp-dialog-label">{t("tableOp.splitKeyCol")}</label>
         <select className="sp-dialog-select" value={splitCol} onChange={e => setSplitCol(e.target.value)}>
           {cols.map(([n]) => <option key={n} value={n}>{n}</option>)}
         </select>
       </div>
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">值列 (填充新列)</label>
+        <label className="sp-dialog-label">{t("tableOp.splitValueCol")}</label>
         <select className="sp-dialog-select" value={valueCol} onChange={e => setValueCol(e.target.value)}>
           {cols.map(([n]) => <option key={n} value={n}>{n}</option>)}
         </select>
       </div>
-      <ColCheckList cols={cols.filter(([n]) => n !== splitCol && n !== valueCol)} selected={idCols} onChange={setIdCols} label="分组列 (可选)" />
+      <ColCheckList cols={cols.filter(([n]) => n !== splitCol && n !== valueCol)} selected={idCols} onChange={setIdCols} label={t("tableOp.splitGroupCols")} />
       <div className="sp-dialog-actions">
         <button
           className="sp-dialog-btn sp-dialog-btn-primary"
           disabled={busy || !sourceId || !splitCol || !valueCol || splitCol === valueCol}
-          onClick={() => exec(() => dataService.splitTable(sourceId, splitCol, valueCol, [...idCols], `${sourceName} - 拆分`))}
-        >确定</button>
+          onClick={() => exec(() => dataService.splitTable(sourceId, splitCol, valueCol, [...idCols], t("tableOp.resultSuffix.split", { name: sourceName })))}
+        >{t("common.confirm")}</button>
       </div>
     </>
   );
@@ -381,9 +392,9 @@ function SplitForm({ sourceId, cols, sourceName, exec, busy }: {
 
 // ─── Join ───
 
-function JoinForm({ datasets, activeId, exec, busy }: {
+function JoinForm({ datasets, activeId, exec, busy, t }: {
   datasets: DatasetMeta[]; activeId: string | null;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
 }) {
   const [leftId, setLeftId] = useState(activeId ?? "");
   const [rightId, setRightId] = useState("");
@@ -409,25 +420,25 @@ function JoinForm({ datasets, activeId, exec, busy }: {
 
   return (
     <>
-      <DatasetSelect datasets={datasets} value={leftId} onChange={setLeftId} label="左表" />
-      <DatasetSelect datasets={datasets} value={rightId} onChange={setRightId} label="右表" exclude={leftId} />
+      <DatasetSelect datasets={datasets} value={leftId} onChange={setLeftId} label={t("tableOp.joinLeftTable")} />
+      <DatasetSelect datasets={datasets} value={rightId} onChange={setRightId} label={t("tableOp.joinRightTable")} exclude={leftId} />
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">连接类型</label>
+        <label className="sp-dialog-label">{t("tableOp.joinType")}</label>
         <select className="sp-dialog-select" value={joinType} onChange={e => setJoinType(e.target.value)}>
-          <option value="inner">内连接 (Inner)</option>
-          <option value="left">左连接 (Left)</option>
-          <option value="right">右连接 (Right)</option>
-          <option value="full">全连接 (Full)</option>
+          <option value="inner">{t("tableOp.joinInner")}</option>
+          <option value="left">{t("tableOp.joinLeft")}</option>
+          <option value="right">{t("tableOp.joinRight")}</option>
+          <option value="full">{t("tableOp.joinFull")}</option>
         </select>
       </div>
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">左表匹配列</label>
+        <label className="sp-dialog-label">{t("tableOp.joinLeftCol")}</label>
         <select className="sp-dialog-select" value={leftKey} onChange={e => setLeftKey(e.target.value)}>
           {leftCols.map(([n]) => <option key={n} value={n}>{n}</option>)}
         </select>
       </div>
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">右表匹配列</label>
+        <label className="sp-dialog-label">{t("tableOp.joinRightCol")}</label>
         <select className="sp-dialog-select" value={rightKey} onChange={e => setRightKey(e.target.value)}>
           {rightCols.map(([n]) => <option key={n} value={n}>{n}</option>)}
         </select>
@@ -436,8 +447,8 @@ function JoinForm({ datasets, activeId, exec, busy }: {
         <button
           className="sp-dialog-btn sp-dialog-btn-primary"
           disabled={busy || !leftId || !rightId || !leftKey || !rightKey}
-          onClick={() => exec(() => dataService.joinTables(leftId, rightId, joinType, leftKey, rightKey, `${leftName} + ${rightName}`))}
-        >确定</button>
+          onClick={() => exec(() => dataService.joinTables(leftId, rightId, joinType, leftKey, rightKey, t("tableOp.resultSuffix.join", { left: leftName, right: rightName })))}
+        >{t("common.confirm")}</button>
       </div>
     </>
   );
@@ -445,9 +456,9 @@ function JoinForm({ datasets, activeId, exec, busy }: {
 
 // ─── Update ───
 
-function UpdateForm({ datasets, activeId, exec, busy }: {
+function UpdateForm({ datasets, activeId, exec, busy, t }: {
   datasets: DatasetMeta[]; activeId: string | null;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
 }) {
   const [leftId, setLeftId] = useState(activeId ?? "");
   const [rightId, setRightId] = useState("");
@@ -473,23 +484,23 @@ function UpdateForm({ datasets, activeId, exec, busy }: {
 
   return (
     <>
-      <DatasetSelect datasets={datasets} value={leftId} onChange={setLeftId} label="目标表 (被更新)" />
-      <DatasetSelect datasets={datasets} value={rightId} onChange={setRightId} label="源表 (提供数据)" exclude={leftId} />
+      <DatasetSelect datasets={datasets} value={leftId} onChange={setLeftId} label={t("tableOp.updateTarget")} />
+      <DatasetSelect datasets={datasets} value={rightId} onChange={setRightId} label={t("tableOp.updateSource")} exclude={leftId} />
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">匹配列</label>
+        <label className="sp-dialog-label">{t("tableOp.updateMatchCol")}</label>
         <select className="sp-dialog-select" value={matchCol} onChange={e => setMatchCol(e.target.value)}>
           {leftCols.map(([n]) => <option key={n} value={n}>{n}</option>)}
         </select>
       </div>
       {commonCols.length > 0 && (
-        <ColCheckList cols={commonCols} selected={updateCols} onChange={setUpdateCols} label="更新列" />
+        <ColCheckList cols={commonCols} selected={updateCols} onChange={setUpdateCols} label={t("tableOp.updateCols")} />
       )}
       <div className="sp-dialog-actions">
         <button
           className="sp-dialog-btn sp-dialog-btn-primary"
           disabled={busy || !leftId || !rightId || !matchCol || updateCols.size === 0}
           onClick={() => exec(() => dataService.updateTable(leftId, rightId, matchCol, [...updateCols]))}
-        >确定</button>
+        >{t("common.confirm")}</button>
       </div>
     </>
   );
@@ -497,9 +508,9 @@ function UpdateForm({ datasets, activeId, exec, busy }: {
 
 // ─── Concatenate ───
 
-function ConcatenateForm({ datasets, activeId, exec, busy }: {
+function ConcatenateForm({ datasets, activeId, exec, busy, t }: {
   datasets: DatasetMeta[]; activeId: string | null;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set(activeId ? [activeId] : []));
 
@@ -508,7 +519,7 @@ function ConcatenateForm({ datasets, activeId, exec, busy }: {
   return (
     <>
       <div className="sp-dialog-field">
-        <label className="sp-dialog-label">选择要合并的数据表</label>
+        <label className="sp-dialog-label">{t("tableOp.concatPickTables")}</label>
         <div className="sp-col-checklist">
           {dsItems.map(([id, label]) => (
             <label key={id} className="sp-col-check-item">
@@ -530,8 +541,8 @@ function ConcatenateForm({ datasets, activeId, exec, busy }: {
         <button
           className="sp-dialog-btn sp-dialog-btn-primary"
           disabled={busy || selected.size < 2}
-          onClick={() => exec(() => dataService.concatenateTables([...selected], "合并结果"))}
-        >确定</button>
+          onClick={() => exec(() => dataService.concatenateTables([...selected], t("tableOp.concatResult")))}
+        >{t("common.confirm")}</button>
       </div>
     </>
   );

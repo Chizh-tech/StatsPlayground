@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
 import { Graph, inferFieldType, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
@@ -49,17 +50,16 @@ const SHELF_SLOTS: SlotDef[] = [
 
 interface ChartTypeDef {
   kind: ElementKind;
-  label: string;
   icon: string; // 简单文字/符号图标（暂用 SVG path 太重）
 }
 
-const CHART_TYPES: ChartTypeDef[] = [
-  { kind: "points", label: "散点", icon: "●" },
-  { kind: "line", label: "折线", icon: "╱" },
-  { kind: "bar", label: "柱状", icon: "▮" },
-  { kind: "histogram", label: "直方图", icon: "▦" },
-  { kind: "boxplot", label: "箱线图", icon: "⊟" },
-  { kind: "smoother", label: "平滑", icon: "～" },
+const CHART_TYPE_DEFS: ChartTypeDef[] = [
+  { kind: "points", icon: "●" },
+  { kind: "line", icon: "╱" },
+  { kind: "bar", icon: "▮" },
+  { kind: "histogram", icon: "▦" },
+  { kind: "boxplot", icon: "⊟" },
+  { kind: "smoother", icon: "～" },
 ];
 
 /** 数据类型对应的小图标 */
@@ -85,6 +85,7 @@ function fieldTypeColor(t: FieldType): string {
 const DRAG_MIME = "text/plain";
 
 export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
+  const { t } = useTranslation();
   const updateItem = useGraphBuilderStore((s) => s.updateItem);
   const markDirty = useProjectStore((s) => s.markDirty);
 
@@ -248,21 +249,24 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       {/* 顶部工具条：图形类型 */}
       <div className="gb-toolbar">
         <div className="gb-toolbar-left">
-          <button className="gb-tb-btn" onClick={startOver}>重新开始</button>
+          <button className="gb-tb-btn" onClick={startOver}>{t("graph.startOver")}</button>
         </div>
         <div className="gb-toolbar-spacer" />
         <div className="gb-chart-types">
-          {CHART_TYPES.map((ct) => (
-            <button
-              key={ct.kind}
-              className={`gb-ct-btn${activeKinds.has(ct.kind) ? " gb-ct-btn-active" : ""}`}
-              onClick={() => toggleElement(ct.kind)}
-              title={ct.label}
-            >
-              <span className="gb-ct-icon">{ct.icon}</span>
-              <span className="gb-ct-label">{ct.label}</span>
-            </button>
-          ))}
+          {CHART_TYPE_DEFS.map((ct) => {
+            const label = t(`graph.type.${ct.kind}`);
+            return (
+              <button
+                key={ct.kind}
+                className={`gb-ct-btn${activeKinds.has(ct.kind) ? " gb-ct-btn-active" : ""}`}
+                onClick={() => toggleElement(ct.kind)}
+                title={label}
+              >
+                <span className="gb-ct-icon">{ct.icon}</span>
+                <span className="gb-ct-label">{label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -270,7 +274,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         {/* 左栏 */}
         <div className="gb-left">
           <div className="gb-section">
-            <div className="gb-section-title">{dataset.name} · {columns.length} 列</div>
+            <div className="gb-section-title">{t("graph.datasetHeader", { name: dataset.name, n: columns.length })}</div>
             <div className="gb-col-list">
               {columns.map((c) => (
                 <div
@@ -294,13 +298,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
           {activeKinds.has("points") && (
             <div className="gb-section">
-              <div className="gb-section-title">散点</div>
+              <div className="gb-section-title">{t("graph.scatterSection")}</div>
               <div className="gb-elem-row">
-                <span className="gb-elem-label">尺寸编码</span>
+                <span className="gb-elem-label">{t("graph.sizeEnc")}</span>
                 <span className="gb-elem-val">{encoding.size?.name ?? "—"}</span>
               </div>
               <div className="gb-elem-row">
-                <span className="gb-elem-label">颜色编码</span>
+                <span className="gb-elem-label">{t("graph.colorEnc")}</span>
                 <span className="gb-elem-val">{encoding.color?.name ?? "—"}</span>
               </div>
             </div>
@@ -308,7 +312,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
           {hasSmoother && (
             <div className="gb-section">
-              <div className="gb-section-title">平滑器</div>
+              <div className="gb-section-title">{t("graph.smootherSection")}</div>
               <div className="gb-elem-row">
                 <span className="gb-elem-label">Lambda</span>
                 <input
@@ -374,13 +378,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               }}
             >
               {loading ? (
-                <div className="gb-empty">正在加载数据…</div>
+                <div className="gb-empty">{t("graph.loading")}</div>
               ) : error ? (
                 <div className="gb-empty gb-error">{error}</div>
               ) : !data ? (
-                <div className="gb-empty">无数据</div>
+                <div className="gb-empty">{t("graph.noData")}</div>
               ) : !encoding.x && !encoding.y && !activeKinds.has("histogram") ? (
-                <div className="gb-empty">将列拖至坐标槽以开始作图</div>
+                <div className="gb-empty">{t("graph.dragHint")}</div>
               ) : (
                 <Graph spec={spec} data={data} />
               )}
@@ -437,6 +441,7 @@ interface SlotProps {
 }
 
 function Slot({ label, field, onDrop, onClear, orientation, required }: SlotProps) {
+  const { t } = useTranslation();
   const [over, setOver] = useState(false);
   return (
     <div
@@ -474,7 +479,7 @@ function Slot({ label, field, onDrop, onClear, orientation, required }: SlotProp
               e.stopPropagation();
               onClear();
             }}
-            title="移除"
+            title={t("graph.removeSlot")}
           >
             ×
           </button>

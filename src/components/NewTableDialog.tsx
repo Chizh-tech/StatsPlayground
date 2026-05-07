@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface NewTableDialogProps {
   open: boolean;
@@ -9,6 +10,7 @@ interface NewTableDialogProps {
 const COLUMN_TYPES = ["VARCHAR", "INTEGER", "DOUBLE", "BOOLEAN", "DATE", "TIMESTAMP"];
 
 export function NewTableDialog({ open, onClose, onCreate }: NewTableDialogProps) {
+  const { t } = useTranslation();
   const [tableName, setTableName] = useState("");
   const [columns, setColumns] = useState([{ name: "", type: "VARCHAR" }]);
 
@@ -46,20 +48,20 @@ export function NewTableDialog({ open, onClose, onCreate }: NewTableDialogProps)
   return (
     <div className="dialog-overlay" onClick={onClose}>
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
-        <h3>新建数据表</h3>
+        <h3>{t("newTable.title")}</h3>
         <div className="dialog-field">
-          <label>表名</label>
+          <label>{t("newTable.tableName")}</label>
           <input
             type="text"
             value={tableName}
             onChange={(e) => setTableName(e.target.value)}
-            placeholder="例如：实验数据"
+            placeholder={t("newTable.tableNamePlaceholder")}
             autoFocus
           />
         </div>
 
         <div className="dialog-field">
-          <label>列定义</label>
+          <label>{t("newTable.columns")}</label>
           <div className="column-list">
             {columns.map((col, i) => (
               <div key={i} className="column-row">
@@ -67,25 +69,25 @@ export function NewTableDialog({ open, onClose, onCreate }: NewTableDialogProps)
                   type="text"
                   value={col.name}
                   onChange={(e) => updateColumn(i, "name", e.target.value)}
-                  placeholder="列名"
+                  placeholder={t("newTable.columnName")}
                 />
                 <select value={col.type} onChange={(e) => updateColumn(i, "type", e.target.value)}>
-                  {COLUMN_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
+                  {COLUMN_TYPES.map((tp) => (
+                    <option key={tp} value={tp}>{tp}</option>
                   ))}
                 </select>
-                <button className="btn-icon" onClick={() => removeColumn(i)} title="删除列">×</button>
+                <button className="btn-icon" onClick={() => removeColumn(i)} title={t("newTable.removeColumn")}>×</button>
               </div>
             ))}
           </div>
-          <button className="btn-text" onClick={addColumn}>+ 添加列</button>
+          <button className="btn-text" onClick={addColumn}>{t("newTable.addColumn")}</button>
         </div>
 
         <div className="dialog-actions">
           <button className="btn-primary" onClick={handleSubmit} disabled={!tableName.trim()}>
-            创建
+            {t("common.create")}
           </button>
-          <button className="btn-text" onClick={onClose}>取消</button>
+          <button className="btn-text" onClick={onClose}>{t("common.cancel")}</button>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useDataStore } from "@/stores/useDataStore";
 import { useHistoryStore } from "@/stores/useHistoryStore";
@@ -87,6 +88,7 @@ function MenuDropdown({ label, children, openMenu, setOpenMenu }: {
 }
 
 export function Workspace() {
+  const { t } = useTranslation();
   const { project, saveProject, closeProject, initProject, dirty, markDirty } = useProjectStore();
   const { datasets, activeDatasetId, setActiveDataset, refreshDatasets, statusInfo } = useDataStore();
   const { openProject } = useProjectStore();
@@ -211,10 +213,11 @@ export function Workspace() {
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
-  // Sync counter with existing datasets on load
+  // Sync counter with existing datasets on load. Detects names produced by
+  // any locale's default tableName template by stripping the templated suffix.
   useEffect(() => {
     const maxNum = datasets.reduce((max, ds) => {
-      const match = ds.name.match(/^数据表(\d+)$/);
+      const match = ds.name.match(/(\d+)$/);
       return match ? Math.max(max, parseInt(match[1], 10)) : max;
     }, 0);
     if (maxNum > tableCounter.current) tableCounter.current = maxNum;
@@ -222,13 +225,13 @@ export function Workspace() {
 
   const handleCreateTable = async () => {
     tableCounter.current += 1;
-    const name = `数据表${tableCounter.current}`;
+    const name = t("default.tableName", { n: tableCounter.current });
     const meta = await dataService.createTable(name, [], []);
     await refreshDatasets();
     markDirty();
     setActiveGraphBuilderId(null);
     setActiveDataset(meta.id);
-    recordAction(`新建数据表 "${name}"`);
+    recordAction(t("history.newTable", { name }));
     // Enter rename mode
     setRenamingId(meta.id);
     setRenameValue(name);
@@ -238,7 +241,7 @@ export function Workspace() {
   /** 新建一个图表构建器项，绑定到当前选中数据表 */
   const handleCreateGraphBuilder = () => {
     if (!activeDatasetId) {
-      alert("请先选择一个数据表作为数据源");
+      alert(t("alert.selectDatasetFirst"));
       return;
     }
     const ds = datasets.find((d) => d.id === activeDatasetId);
@@ -249,7 +252,7 @@ export function Workspace() {
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
         : `gb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const name = `图表${nextNum}`;
+    const name = t("default.graphName", { n: nextNum });
     const item: GraphBuilderItem = {
       id,
       name,
@@ -263,7 +266,7 @@ export function Workspace() {
     setActiveDataset(null);
     setActiveGraphBuilderId(id);
     markDirty();
-    recordAction(`新建图表 "${name}" (数据源: ${ds.name})`);
+    recordAction(t("history.newGraph", { name, source: ds.name }));
     setRenamingId(id);
     setRenameValue(name);
   };
@@ -280,7 +283,7 @@ export function Workspace() {
       if (trimmed !== gb.name) {
         renameGraphBuilder(id, trimmed);
         markDirty();
-        recordAction(`重命名图表 "${gb.name}" → "${trimmed}"`);
+        recordAction(t("history.renameGraph", { old: gb.name, new: trimmed }));
       }
       setRenamingId(null);
       return;
@@ -290,7 +293,7 @@ export function Workspace() {
       await dataService.renameDataset(id, trimmed);
       await refreshDatasets();
       markDirty();
-      recordAction(`重命名数据表 "${oldName}" → "${trimmed}"`);
+      recordAction(t("history.renameTable", { old: oldName ?? "", new: trimmed }));
     }
     setRenamingId(null);
   };
@@ -300,7 +303,7 @@ export function Workspace() {
     deleteGraphBuilder(id);
     if (activeGraphBuilderId === id) setActiveGraphBuilderId(null);
     markDirty();
-    if (it) recordAction(`删除图表 "${it.name}"`);
+    if (it) recordAction(t("history.deleteGraph", { name: it.name }));
   };
 
   const handleDeleteDataset = async (id: string) => {
@@ -317,12 +320,12 @@ export function Workspace() {
     }
     await refreshDatasets();
     markDirty();
-    recordAction(`删除数据表 "${name}"`);
+    recordAction(t("history.deleteTable", { name }));
   };
 
   const handleImportCsv = async () => {
     const selected = await open({
-      title: "导入 CSV 文件",
+      title: t("menu.importCsv"),
       filters: [{ name: "CSV", extensions: ["csv"] }],
       multiple: false,
     });
@@ -331,13 +334,13 @@ export function Workspace() {
       await refreshDatasets();
       markDirty();
       const fileName = (selected as string).split(/[\\/]/).pop() ?? "CSV";
-      recordAction(`导入 CSV "${fileName}"`);
+      recordAction(t("history.importCsv", { file: fileName }));
     }
   };
 
   const handleImportSqlite = async () => {
     const selected = await open({
-      title: "导入 SQLite 数据库",
+      title: t("menu.importSqlite"),
       filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
       multiple: false,
     });
@@ -359,14 +362,14 @@ export function Workspace() {
         });
       });
       try {
-        setImportProgress({ tableName: "准备中...", tableIndex: 0, tableTotal: 0, rowsDone: 0, rowsTotal: 0 });
+        setImportProgress({ tableName: t("common.preparing"), tableIndex: 0, tableTotal: 0, rowsDone: 0, rowsTotal: 0 });
         await ioService.importSqlite(selected as string);
         await refreshDatasets();
         markDirty();
         const fileName = (selected as string).split(/[\\\\/]/).pop() ?? "SQLite";
-        recordAction(`导入 SQLite "${fileName}"`);
+        recordAction(t("history.importSqlite", { file: fileName }));
       } catch (e) {
-        alert("导入 SQLite 失败: " + String(e));
+        alert(t("alert.importSqliteFailed") + String(e));
       } finally {
         unlisten();
         setImportProgress(null);
@@ -376,7 +379,7 @@ export function Workspace() {
 
   const handleExportSqlite = async () => {
     const filePath = await save({
-      title: "导出为 SQLite 数据库",
+      title: t("menu.exportSqlite"),
       defaultPath: `${project?.name ?? "export"}.db`,
       filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
     });
@@ -384,14 +387,14 @@ export function Workspace() {
       try {
         await ioService.exportSqlite(filePath);
       } catch (e) {
-        alert("导出 SQLite 失败: " + String(e));
+        alert(t("alert.exportSqliteFailed") + String(e));
       }
     }
   };
 
   const handleExportCsvZip = async () => {
     const filePath = await save({
-      title: "导出为 CSV (ZIP)",
+      title: t("menu.exportCsv"),
       defaultPath: `${project?.name ?? "export"}.zip`,
       filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
     });
@@ -399,7 +402,7 @@ export function Workspace() {
       try {
         await ioService.exportCsvZip(filePath);
       } catch (e) {
-        alert("导出 CSV 失败: " + String(e));
+        alert(t("alert.exportCsvFailed") + String(e));
       }
     }
   };
@@ -411,11 +414,11 @@ export function Workspace() {
   const handleExportTableSptb = async () => {
     const ds = datasets.find((d) => d.id === activeDatasetId);
     if (!ds) {
-      alert("请先选择一个数据表");
+      alert(t("alert.selectTableFirst"));
       return;
     }
     const filePath = await save({
-      title: "导出当前表为 .sptb",
+      title: t("menu.exportSptb"),
       defaultPath: `${ds.name}.sptb`,
       filters: [{ name: "StatsPlayground Table", extensions: ["sptb"] }],
     });
@@ -423,13 +426,13 @@ export function Workspace() {
     try {
       await projectService.exportTable(ds.id, filePath as string);
     } catch (e) {
-      alert("导出表失败: " + String(e));
+      alert(t("alert.exportTableFailed") + String(e));
     }
   };
 
   const handleImportTableSptb = async () => {
     const selected = await open({
-      title: "导入 .sptb 表文件",
+      title: t("menu.importSptb"),
       filters: [{ name: "StatsPlayground Table", extensions: ["sptb"] }],
       multiple: false,
     });
@@ -439,18 +442,18 @@ export function Workspace() {
       await refreshDatasets();
       setActiveDataset(newId);
     } catch (e) {
-      alert("导入表失败: " + String(e));
+      alert(t("alert.importTableFailed") + String(e));
     }
   };
 
   const handleExportGraphSpgh = async () => {
     const gb = graphBuilders.find((g) => g.id === activeGraphBuilderId);
     if (!gb) {
-      alert("请先选择一个图表构建器");
+      alert(t("alert.selectGraphFirst"));
       return;
     }
     const filePath = await save({
-      title: "导出当前图表为 .spgh",
+      title: t("menu.exportSpgh"),
       defaultPath: `${gb.name}.spgh`,
       filters: [{ name: "StatsPlayground Graph", extensions: ["spgh"] }],
     });
@@ -458,13 +461,13 @@ export function Workspace() {
     try {
       await projectService.exportGraph(gb, filePath as string);
     } catch (e) {
-      alert("导出图表失败: " + String(e));
+      alert(t("alert.exportGraphFailed") + String(e));
     }
   };
 
   const handleImportGraphSpgh = async () => {
     const selected = await open({
-      title: "导入 .spgh 图表文件",
+      title: t("menu.importSpgh"),
       filters: [{ name: "StatsPlayground Graph", extensions: ["spgh"] }],
       multiple: false,
     });
@@ -481,7 +484,7 @@ export function Workspace() {
       addGraphBuilder({ ...item, id });
       setActiveGraphBuilderId(id);
     } catch (e) {
-      alert("导入图表失败: " + String(e));
+      alert(t("alert.importGraphFailed") + String(e));
     }
   };
 
@@ -491,8 +494,8 @@ export function Workspace() {
     // History is session-only (not persisted); only snapshots are saved
     if (!project?.filePath) {
       const filePath = await save({
-        title: "保存项目文件",
-        defaultPath: "未命名项目.spprj",
+        title: t("welcome.saveProjectDialog"),
+        defaultPath: t("default.projectFile"),
         filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
       });
       if (!filePath) return; // User cancelled
@@ -517,7 +520,7 @@ export function Workspace() {
 
   const handleOpenAnother = async () => {
     const selected = await open({
-      title: "打开项目",
+      title: t("welcome.openProjectDialog"),
       filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
       multiple: false,
     });
@@ -526,7 +529,7 @@ export function Workspace() {
       setActiveGraphBuilderId(null);
       resetHistory();
       resetGraphBuilders();
-      setBusyMessage("正在打开项目…");
+      setBusyMessage(t("workspace.openingProject"));
       const unlisten = await listen<{
         datasetIndex: number;
         datasetTotal: number;
@@ -534,7 +537,7 @@ export function Workspace() {
       }>("open-project-progress", (event) => {
         const { datasetIndex, datasetTotal, datasetName } = event.payload;
         if (datasetTotal > 0 && datasetIndex < datasetTotal) {
-          setBusyMessage(`正在打开项目… 数据表 ${datasetIndex + 1}/${datasetTotal}: ${datasetName}`);
+          setBusyMessage(`${t("workspace.openingProject")} ${t("workspace.importProgressTable", { i: datasetIndex + 1, total: datasetTotal, name: datasetName })}`);
         }
       });
       try {
@@ -567,50 +570,50 @@ export function Workspace() {
         <span className="menu-bar-title">StatsPlayground</span>
         <div className="menu-bar-menus">
           <MenuBar>
-            <MenuDropdown label="文件">
-              <div className="menu-item" onClick={handleSave}>保存<span className="menu-shortcut">{modKey}S</span></div>
+            <MenuDropdown label={t("menu.file")}>
+              <div className="menu-item" onClick={handleSave}>{t("menu.save")}<span className="menu-shortcut">{modKey}S</span></div>
               <div className="menu-sep" />
-              <div className="menu-item" onClick={() => setShowPrefs(true)}>首选项<span className="menu-shortcut">{modKey},</span></div>
+              <div className="menu-item" onClick={() => setShowPrefs(true)}>{t("menu.preferences")}<span className="menu-shortcut">{modKey},</span></div>
               <div className="menu-sep" />
-              <div className="menu-item" onClick={handleOpenAnother}>打开项目<span className="menu-shortcut">{modKey}O</span></div>
-              <div className="menu-item" onClick={handleCloseProject}>关闭项目</div>
+              <div className="menu-item" onClick={handleOpenAnother}>{t("menu.openProject")}<span className="menu-shortcut">{modKey}O</span></div>
+              <div className="menu-item" onClick={handleCloseProject}>{t("menu.closeProject")}</div>
             </MenuDropdown>
-            <MenuDropdown label="表格">
-              <div className="menu-item" onClick={handleCreateTable}>新建数据表<span className="menu-shortcut">{modKey}N</span></div>
+            <MenuDropdown label={t("menu.table")}>
+              <div className="menu-item" onClick={handleCreateTable}>{t("menu.newTable")}<span className="menu-shortcut">{modKey}N</span></div>
               <div className="menu-sep" />
-              <div className="menu-item" onClick={handleImportCsv}>导入 CSV</div>
-              <div className="menu-item" onClick={handleImportSqlite}>导入 SQLite</div>
+              <div className="menu-item" onClick={handleImportCsv}>{t("menu.importCsv")}</div>
+              <div className="menu-item" onClick={handleImportSqlite}>{t("menu.importSqlite")}</div>
               <div className="menu-sep" />
-              <div className="menu-item" onClick={handleExportSqlite}>导出为 SQLite</div>
-              <div className="menu-item" onClick={handleExportCsvZip}>导出为 CSV (ZIP)</div>
+              <div className="menu-item" onClick={handleExportSqlite}>{t("menu.exportSqlite")}</div>
+              <div className="menu-item" onClick={handleExportCsvZip}>{t("menu.exportCsv")}</div>
               <div className="menu-sep" />
-              <div className="menu-item" onClick={handleExportTableSptb}>导出当前表为 .sptb</div>
-              <div className="menu-item" onClick={handleImportTableSptb}>导入 .sptb 表文件</div>
+              <div className="menu-item" onClick={handleExportTableSptb}>{t("menu.exportSptb")}</div>
+              <div className="menu-item" onClick={handleImportTableSptb}>{t("menu.importSptb")}</div>
               <div className="menu-sep" />
               <div
                 className="menu-item"
                 onClick={() => window.dispatchEvent(new CustomEvent("sp:open-manage-extras"))}
-              >管理附加属性</div>
+              >{t("menu.manageExtras")}</div>
             </MenuDropdown>
-            <MenuDropdown label="图表">
-              <div className="menu-item" onClick={handleCreateGraphBuilder}>新建图表构建器</div>
+            <MenuDropdown label={t("menu.graph")}>
+              <div className="menu-item" onClick={handleCreateGraphBuilder}>{t("menu.newGraph")}</div>
               <div className="menu-sep" />
-              <div className="menu-item" onClick={handleExportGraphSpgh}>导出当前图表为 .spgh</div>
-              <div className="menu-item" onClick={handleImportGraphSpgh}>导入 .spgh 图表文件</div>
+              <div className="menu-item" onClick={handleExportGraphSpgh}>{t("menu.exportSpgh")}</div>
+              <div className="menu-item" onClick={handleImportGraphSpgh}>{t("menu.importSpgh")}</div>
             </MenuDropdown>
-            <MenuDropdown label="操作">
-              <div className="menu-item" onClick={() => setTableOp("summary")}>汇总</div>
+            <MenuDropdown label={t("menu.ops")}>
+              <div className="menu-item" onClick={() => setTableOp("summary")}>{t("menu.opSummary")}</div>
               <div className="menu-sep" />
-              <div className="menu-item" onClick={() => setTableOp("subset")}>子集</div>
-              <div className="menu-item" onClick={() => setTableOp("sort")}>排序</div>
+              <div className="menu-item" onClick={() => setTableOp("subset")}>{t("menu.opSubset")}</div>
+              <div className="menu-item" onClick={() => setTableOp("sort")}>{t("menu.opSort")}</div>
               <div className="menu-sep" />
-              <div className="menu-item" onClick={() => setTableOp("stack")}>堆叠</div>
-              <div className="menu-item" onClick={() => setTableOp("split")}>拆分</div>
-              <div className="menu-item" onClick={() => setTableOp("transpose")}>转置</div>
+              <div className="menu-item" onClick={() => setTableOp("stack")}>{t("menu.opStack")}</div>
+              <div className="menu-item" onClick={() => setTableOp("split")}>{t("menu.opSplit")}</div>
+              <div className="menu-item" onClick={() => setTableOp("transpose")}>{t("menu.opTranspose")}</div>
               <div className="menu-sep" />
-              <div className="menu-item" onClick={() => setTableOp("join")}>连接</div>
-              <div className="menu-item" onClick={() => setTableOp("update")}>更新</div>
-              <div className="menu-item" onClick={() => setTableOp("concatenate")}>合并</div>
+              <div className="menu-item" onClick={() => setTableOp("join")}>{t("menu.opJoin")}</div>
+              <div className="menu-item" onClick={() => setTableOp("update")}>{t("menu.opUpdate")}</div>
+              <div className="menu-item" onClick={() => setTableOp("concatenate")}>{t("menu.opConcatenate")}</div>
             </MenuDropdown>
           </MenuBar>
         </div>
@@ -618,7 +621,7 @@ export function Workspace() {
         <button
           className="menu-bar-snapshot"
           onClick={async () => {
-            setBusyMessage("正在创建快照…");
+            setBusyMessage(t("workspace.creatingSnapshot"));
             const unlisten = await listen<{
               datasetIndex: number;
               datasetTotal: number;
@@ -626,7 +629,7 @@ export function Workspace() {
             }>("snapshot-progress", (event) => {
               const { datasetIndex, datasetTotal, datasetName } = event.payload;
               if (datasetTotal > 0 && datasetIndex < datasetTotal) {
-                setBusyMessage(`正在创建快照… 数据表 ${datasetIndex + 1}/${datasetTotal}: ${datasetName}`);
+                setBusyMessage(`${t("workspace.creatingSnapshot")} ${t("workspace.importProgressTable", { i: datasetIndex + 1, total: datasetTotal, name: datasetName })}`);
               }
             });
             try {
@@ -636,7 +639,7 @@ export function Workspace() {
               setBusyMessage(null);
             }
           }}
-          title="创建快照"
+          title={t("workspace.createSnapshotTitle")}
         >
           <svg width="18" height="18" viewBox="0 0 640 640" fill="currentColor">
             <path d="M257.1 96C238.4 96 220.9 105.4 210.5 120.9L184.5 160L128 160C92.7 160 64 188.7 64 224L64 480C64 515.3 92.7 544 128 544L512 544C547.3 544 576 515.3 576 480L576 224C576 188.7 547.3 160 512 160L455.5 160L429.5 120.9C419.1 105.4 401.6 96 382.9 96L257.1 96zM250.4 147.6C251.9 145.4 254.4 144 257.1 144L382.8 144C385.5 144 388 145.3 389.5 147.6L422.7 197.4C427.2 204.1 434.6 208.1 442.7 208.1L512 208.1C520.8 208.1 528 215.3 528 224.1L528 480.1C528 488.9 520.8 496.1 512 496.1L128 496C119.2 496 112 488.8 112 480L112 224C112 215.2 119.2 208 128 208L197.3 208C205.3 208 212.8 204 217.3 197.3L250.5 147.5zM320 448C381.9 448 432 397.9 432 336C432 274.1 381.9 224 320 224C258.1 224 208 274.1 208 336C208 397.9 258.1 448 320 448zM256 336C256 300.7 284.7 272 320 272C355.3 272 384 300.7 384 336C384 371.3 355.3 400 320 400C284.7 400 256 371.3 256 336z"/>
@@ -645,7 +648,7 @@ export function Workspace() {
         <button
           className={`menu-bar-save${dirty ? " menu-bar-save-dirty" : ""}`}
           onClick={handleSave}
-          title={`保存 (${modKey}S)`}
+          title={t("common.saveWith", { key: modKey })}
         >
           <svg width="20" height="20" viewBox="0 0 640 640" fill="currentColor">
             <path d="M160 144C151.2 144 144 151.2 144 160L144 480C144 488.8 151.2 496 160 496L480 496C488.8 496 496 488.8 496 480L496 237.3C496 233.1 494.3 229 491.3 226L416 150.6L416 240C416 257.7 401.7 272 384 272L224 272C206.3 272 192 257.7 192 240L192 144L160 144zM240 144L240 224L368 224L368 144L240 144zM96 160C96 124.7 124.7 96 160 96L402.7 96C419.7 96 436 102.7 448 114.7L525.3 192C537.3 204 544 220.3 544 237.3L544 480C544 515.3 515.3 544 480 544L160 544C124.7 544 96 515.3 96 480L96 160zM256 384C256 348.7 284.7 320 320 320C355.3 320 384 348.7 384 384C384 419.3 355.3 448 320 448C284.7 448 256 419.3 256 384z"/>
@@ -660,7 +663,7 @@ export function Workspace() {
           <button
             className={`activity-btn${activeTab === "files" ? " activity-btn-active" : ""}`}
             onClick={() => setActiveTab("files")}
-            title="目录"
+            title={t("workspace.directory")}
           >
             <svg width="22" height="22" viewBox="0 0 640 640" fill="currentColor">
               <path d="M104 112C90.7 112 80 122.7 80 136L80 184C80 197.3 90.7 208 104 208L152 208C165.3 208 176 197.3 176 184L176 136C176 122.7 165.3 112 152 112L104 112zM256 128C238.3 128 224 142.3 224 160C224 177.7 238.3 192 256 192L544 192C561.7 192 576 177.7 576 160C576 142.3 561.7 128 544 128L256 128zM256 288C238.3 288 224 302.3 224 320C224 337.7 238.3 352 256 352L544 352C561.7 352 576 337.7 576 320C576 302.3 561.7 288 544 288L256 288zM256 448C238.3 448 224 462.3 224 480C224 497.7 238.3 512 256 512L544 512C561.7 512 576 497.7 576 480C576 462.3 561.7 448 544 448L256 448zM80 296L80 344C80 357.3 90.7 368 104 368L152 368C165.3 368 176 357.3 176 344L176 296C176 282.7 165.3 272 152 272L104 272C90.7 272 80 282.7 80 296zM104 432C90.7 432 80 442.7 80 456L80 504C80 517.3 90.7 528 104 528L152 528C165.3 528 176 517.3 176 504L176 456C176 442.7 165.3 432 152 432L104 432z"/>
@@ -669,7 +672,7 @@ export function Workspace() {
           <button
             className={`activity-btn${activeTab === "history" ? " activity-btn-active" : ""}`}
             onClick={() => setActiveTab("history")}
-            title="历史与快照"
+            title={`${t("history.title")} & ${t("history.snapshot")}`}
           >
             <svg width="22" height="22" viewBox="0 0 640 640" fill="currentColor">
               <path d="M320 128C426 128 512 214 512 320C512 426 426 512 320 512C254.8 512 197.1 479.5 162.4 429.7C152.3 415.2 132.3 411.7 117.8 421.8C103.3 431.9 99.8 451.9 109.9 466.4C156.1 532.6 233 576 320 576C461.4 576 576 461.4 576 320C576 178.6 461.4 64 320 64C234.3 64 158.5 106.1 112 170.7L112 144C112 126.3 97.7 112 80 112C62.3 112 48 126.3 48 144L48 256C48 273.7 62.3 288 80 288L104.6 288C105.1 288 105.6 288 106.1 288L192.1 288C209.8 288 224.1 273.7 224.1 256C224.1 238.3 209.8 224 192.1 224L153.8 224C186.9 166.6 249 128 320 128zM344 216C344 202.7 333.3 192 320 192C306.7 192 296 202.7 296 216L296 320C296 326.4 298.5 332.5 303 337L375 409C384.4 418.4 399.6 418.4 408.9 409C418.2 399.6 418.3 384.4 408.9 375.1L343.9 310.1L343.9 216z"/>
@@ -682,11 +685,11 @@ export function Workspace() {
           {activeTab === "files" ? (
             <>
               <div className="panel-header">
-                <h3>目录</h3>
+                <h3>{t("workspace.directory")}</h3>
               </div>
               <div className="dataset-list">
                 {datasets.length === 0 && graphBuilders.length === 0 ? (
-                  <div className="empty-hint">暂无内容</div>
+                  <div className="empty-hint">{t("common.noContent")}</div>
                 ) : (
                   <>
                     {datasets.map((ds) => (
@@ -747,7 +750,7 @@ export function Workspace() {
                             e.preventDefault();
                             setDsMenu({ x: e.clientX, y: e.clientY, id: gb.id });
                           }}
-                          title={sourceDs ? `数据源: ${sourceDs.name}` : "数据源已删除"}
+                          title={sourceDs ? t("workspace.datasourceLabel", { name: sourceDs.name }) : t("workspace.datasourceDeleted")}
                         >
                           <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
                             <path d="M96 96C113.7 96 128 110.3 128 128L128 480C128 488.8 135.2 496 144 496L544 496C561.7 496 576 510.3 576 528C576 545.7 561.7 560 544 560L144 560C99.8 560 64 524.2 64 480L64 128C64 110.3 78.3 96 96 96zM216 392C202.7 392 192 381.3 192 368C192 354.7 202.7 344 216 344L264 344C277.3 344 288 354.7 288 368L288 416C288 429.3 277.3 440 264 440C250.7 440 240 429.3 240 416L240 408L216 408L216 392zM320 200C320 186.7 330.7 176 344 176C357.3 176 368 186.7 368 200L368 416C368 429.3 357.3 440 344 440C330.7 440 320 429.3 320 416L320 200zM416 280C416 266.7 426.7 256 440 256C453.3 256 464 266.7 464 280L464 416C464 429.3 453.3 440 440 440C426.7 440 416 429.3 416 416L416 280zM512 320C525.3 320 536 330.7 536 344L536 416C536 429.3 525.3 440 512 440C498.7 440 488 429.3 488 416L488 344C488 330.7 498.7 320 512 320zM240 248C240 234.7 250.7 224 264 224C277.3 224 288 234.7 288 248L288 296C288 309.3 277.3 320 264 320C250.7 320 240 309.3 240 296L240 248z"/>
@@ -770,7 +773,7 @@ export function Workspace() {
                             <span className="ds-name">{gb.name}</span>
                           )}
                           <span className="ds-info gb-source-tag">
-                            {sourceDs ? sourceDs.name : "—"}
+                            {sourceDs ? sourceDs.name : t("workspace.datasourceMissing")}
                           </span>
                         </div>
                       );
@@ -793,9 +796,9 @@ export function Workspace() {
           {activeGraphBuilderId ? (
             (() => {
               const item = graphBuilders.find((g) => g.id === activeGraphBuilderId);
-              if (!item) return <div className="main-content"><div className="workspace-empty"><p>图表已不存在</p></div></div>;
+              if (!item) return <div className="main-content"><div className="workspace-empty"><p>{t("workspace.graphMissing")}</p></div></div>;
               const ds = datasets.find((d) => d.id === item.sourceDatasetId);
-              if (!ds) return <div className="main-content"><div className="workspace-empty"><p>数据源已删除</p></div></div>;
+              if (!ds) return <div className="main-content"><div className="workspace-empty"><p>{t("workspace.datasourceDeleted")}</p></div></div>;
               return <GraphBuilderView item={item} dataset={ds} />;
             })()
           ) : activeDatasetId ? (
@@ -803,7 +806,7 @@ export function Workspace() {
           ) : (
             <div className="main-content">
               <div className="workspace-empty">
-                <p>选择左侧数据表，或创建新表开始工作</p>
+                <p>{t("workspace.selectOrCreate")}</p>
               </div>
             </div>
           )}
@@ -813,19 +816,19 @@ export function Workspace() {
       {/* Status Bar */}
       <div className="status-bar">
         <span>{project?.name}</span>
-        <span>{datasets.length} 个数据表</span>
+        <span>{t("workspace.datasetCount", { n: datasets.length })}</span>
         <span className="status-spacer" />
         {statusInfo?.selectionStats && (
           <span className="status-stats">
             {statusInfo.selectionStats.avg != null && (
               <>
-                <span>平均值: {formatStat(statusInfo.selectionStats.avg)}</span>
-                <span>最小值: {formatStat(statusInfo.selectionStats.min!)}</span>
-                <span>最大值: {formatStat(statusInfo.selectionStats.max!)}</span>
-                <span>求和: {formatStat(statusInfo.selectionStats.sum!)}</span>
+                <span>{t("workspace.statMean")}{formatStat(statusInfo.selectionStats.avg)}</span>
+                <span>{t("workspace.statMin")}{formatStat(statusInfo.selectionStats.min!)}</span>
+                <span>{t("workspace.statMax")}{formatStat(statusInfo.selectionStats.max!)}</span>
+                <span>{t("workspace.statSum")}{formatStat(statusInfo.selectionStats.sum!)}</span>
               </>
             )}
-            <span>计数: {statusInfo.selectionStats.count}</span>
+            <span>{t("workspace.statCount")}{statusInfo.selectionStats.count}</span>
           </span>
         )}
         {(statusInfo?.selectionLabel || statusInfo?.cellLabel) && (
@@ -858,10 +861,10 @@ export function Workspace() {
       {importProgress && (
         <div className="sp-dialog-overlay">
           <div className="sp-dialog" style={{ minWidth: 360, padding: "20px 24px" }}>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>正在导入 SQLite 数据库…</div>
+            <div style={{ fontWeight: 600, marginBottom: 12 }}>{t("workspace.importingSqlite")}</div>
             <div style={{ fontSize: 13, marginBottom: 8, color: "var(--fg-secondary, #888)" }}>
               {importProgress.tableTotal > 0
-                ? `表 ${importProgress.tableIndex + 1}/${importProgress.tableTotal}: ${importProgress.tableName}`
+                ? t("workspace.importProgressTable", { i: importProgress.tableIndex + 1, total: importProgress.tableTotal, name: importProgress.tableName })
                 : importProgress.tableName}
             </div>
             {importProgress.rowsTotal > 0 && (
@@ -873,7 +876,7 @@ export function Workspace() {
                   />
                 </div>
                 <div style={{ fontSize: 12, marginTop: 4, color: "var(--fg-secondary, #888)" }}>
-                  {importProgress.rowsDone.toLocaleString()} / {importProgress.rowsTotal.toLocaleString()} 行
+                  {importProgress.rowsDone.toLocaleString()} / {importProgress.rowsTotal.toLocaleString()} {t("workspace.importProgressRows")}
                 </div>
               </>
             )}
@@ -921,14 +924,14 @@ export function Workspace() {
               }
             }
             setDsMenu(null);
-          }}>重命名</div>
+          }}>{t("common.rename")}</div>
           <div className="sp-ctx-sep" />
           <div className="sp-ctx-item sp-ctx-danger" onClick={() => {
             const isGb = graphBuilders.some((g) => g.id === dsMenu.id);
             if (isGb) handleDeleteGraphBuilder(dsMenu.id);
             else handleDeleteDataset(dsMenu.id);
             setDsMenu(null);
-          }}>删除</div>
+          }}>{t("common.delete")}</div>
         </div>
       )}
 
@@ -941,11 +944,11 @@ export function Workspace() {
           <div className="sp-ctx-item" onClick={() => {
             snapRenameRef.current?.(snapMenu.id);
             setSnapMenu(null);
-          }}>重命名</div>
+          }}>{t("common.rename")}</div>
           <div className="sp-ctx-item" onClick={async () => {
             const id = snapMenu.id;
             setSnapMenu(null);
-            setBusyMessage("正在恢复快照…");
+            setBusyMessage(t("workspace.restoringSnapshot"));
             const unlisten = await listen<{
               datasetIndex: number;
               datasetTotal: number;
@@ -953,7 +956,7 @@ export function Workspace() {
             }>("restore-progress", (event) => {
               const { datasetIndex, datasetTotal, datasetName } = event.payload;
               if (datasetTotal > 0 && datasetIndex < datasetTotal) {
-                setBusyMessage(`正在恢复快照… 数据表 ${datasetIndex + 1}/${datasetTotal}: ${datasetName}`);
+                setBusyMessage(`${t("workspace.restoringSnapshot")} ${t("workspace.importProgressTable", { i: datasetIndex + 1, total: datasetTotal, name: datasetName })}`);
               }
             });
             try {
@@ -963,35 +966,35 @@ export function Workspace() {
               unlisten();
               setBusyMessage(null);
             }
-          }}>恢复</div>
+          }}>{t("common.restore")}</div>
           <div className="sp-ctx-sep" />
           {confirmDeleteSnapId === snapMenu.id ? (
             <div className="snapshot-ctx-confirm" onMouseDown={(e) => e.stopPropagation()}>
-              <span className="snapshot-ctx-confirm-text">确认删除？</span>
+              <span className="snapshot-ctx-confirm-text">{t("common.confirmDelete")}</span>
               <div className="snapshot-ctx-confirm-btns">
                 <button className="snapshot-ctx-confirm-yes" onClick={(e) => {
                   e.stopPropagation();
                   deleteSnapshot(confirmDeleteSnapId);
                   setConfirmDeleteSnapId(null);
                   setSnapMenu(null);
-                }}>确认</button>
+                }}>{t("common.confirm")}</button>
                 <button className="snapshot-ctx-confirm-no" onClick={(e) => {
                   e.stopPropagation();
                   setConfirmDeleteSnapId(null);
-                }}>取消</button>
+                }}>{t("common.cancel")}</button>
               </div>
             </div>
           ) : (
             <div className="sp-ctx-item sp-ctx-danger" onClick={(e) => {
               e.stopPropagation();
               setConfirmDeleteSnapId(snapMenu.id);
-            }}>删除</div>
+            }}>{t("common.delete")}</div>
           )}
         </div>
       )}
 
       {saveToast && (
-        <div className="save-toast">✓ 已保存</div>
+        <div className="save-toast">{t("common.saved")}</div>
       )}
 
     </div>

@@ -1,8 +1,10 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { save } from "@tauri-apps/plugin-dialog";
 
 export function WelcomePage() {
+  const { t } = useTranslation();
   const { createProject, openProject, loading } = useProjectStore();
   const [projectName, setProjectName] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -10,7 +12,7 @@ export function WelcomePage() {
   const handleCreate = async () => {
     if (!projectName.trim()) return;
     const filePath = await save({
-      title: "保存项目文件",
+      title: t("welcome.saveProjectDialog"),
       defaultPath: `${projectName}.spprj`,
       filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
     });
@@ -21,7 +23,7 @@ export function WelcomePage() {
   const handleOpen = async () => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({
-      title: "打开项目",
+      title: t("welcome.openProjectDialog"),
       filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
       multiple: false,
     });
@@ -34,23 +36,23 @@ export function WelcomePage() {
     <div className="welcome-page">
       <div className="welcome-card">
         <h1>StatsPlayground</h1>
-        <p className="subtitle">轻量级 · 跨平台 · 开源数据分析工具</p>
+        <p className="subtitle">{t("welcome.subtitle")}</p>
         <div className="version-tag">v0.1.0</div>
 
         {!showCreate ? (
           <div className="welcome-actions">
             <button className="btn-primary" onClick={() => setShowCreate(true)}>
-              新建项目
+              {t("welcome.newProject")}
             </button>
             <button className="btn-secondary" onClick={handleOpen} disabled={loading}>
-              打开项目
+              {t("welcome.openProject")}
             </button>
           </div>
         ) : (
           <div className="create-form">
             <input
               type="text"
-              placeholder="项目名称"
+              placeholder={t("welcome.projectName")}
               value={projectName}
               onChange={(e) => setProjectName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
@@ -58,10 +60,10 @@ export function WelcomePage() {
             />
             <div className="create-actions">
               <button className="btn-primary" onClick={handleCreate} disabled={loading || !projectName.trim()}>
-                {loading ? "创建中..." : "创建"}
+                {loading ? t("common.creating") : t("common.create")}
               </button>
               <button className="btn-text" onClick={() => setShowCreate(false)}>
-                取消
+                {t("common.cancel")}
               </button>
             </div>
           </div>

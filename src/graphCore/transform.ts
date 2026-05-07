@@ -8,6 +8,7 @@
 
 import type { GraphSpec, GraphData, ChartElement, FieldRef } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
+import i18n from "@/i18n";
 
 type EChartsOption = Record<string, unknown>;
 
@@ -159,7 +160,7 @@ function buildSingleOption(
       const { centers, counts, width } = histogramBins(xs, 20);
       series.push({
         type: "bar",
-        name: xField?.name || "频次",
+        name: xField?.name || i18n.t("graph.frequency"),
         data: centers.map((c, i) => [c, counts[i]]),
         barWidth: "99%",
         itemStyle: { color: theme.categorical[0] },
@@ -178,7 +179,7 @@ function buildSingleOption(
         },
         yAxis: {
           type: "value",
-          name: "频次",
+          name: i18n.t("graph.frequency"),
           nameLocation: "middle",
           nameGap: 40,
           ...axis,

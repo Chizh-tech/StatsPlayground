@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { dataService } from "@/services/dataService";
 import type { TableQueryResult, ColumnDisplayProps } from "@/types/data";
-import { EXTRA_DEFS, EXTRA_KINDS, type ExtraKind, summarizeExtraKinds } from "@/types/columnExtras";
+import { EXTRA_DEFS, EXTRA_KINDS, type ExtraKind, summarizeExtraKinds, extraKindLabel, extraFieldLabel } from "@/types/columnExtras";
 import { ManageExtrasDialog } from "./ManageExtrasDialog";
 import { useDataStore } from "@/stores/useDataStore";
 import { useProjectStore } from "@/stores/useProjectStore";
@@ -13,21 +15,9 @@ interface DataTableViewProps {
   datasetId: string;
 }
 
-const COLUMN_TYPES = [
-  { value: "VARCHAR", label: "文本" },
-  { value: "INTEGER", label: "整数" },
-  { value: "BIGINT", label: "长整数" },
-  { value: "DOUBLE", label: "小数" },
-  { value: "BOOLEAN", label: "布尔" },
-  { value: "DATE", label: "日期" },
-  { value: "TIMESTAMP", label: "时间戳" },
-];
-
-// O(1) type→label lookup so per-column rendering doesn't do a linear scan.
-const COLUMN_TYPE_LABELS: Record<string, string> = Object.fromEntries(
-  COLUMN_TYPES.map((t) => [t.value, t.label])
-);
-const typeLabelOf = (t: string): string => COLUMN_TYPE_LABELS[t] ?? t;
+const COLUMN_TYPE_VALUES = ["VARCHAR", "INTEGER", "BIGINT", "DOUBLE", "BOOLEAN", "DATE", "TIMESTAMP"] as const;
+const typeLabel = (t: TFunction, v: string): string => t(`dataTable.type.${v}`, { defaultValue: v });
+const typeLabelOf = (t: TFunction) => (v: string): string => typeLabel(t, v);
 
 // Excel-style column letter (A, B, C, ... Z, AA, AB, ...)
 const colLetter = (i: number): string => {
@@ -59,13 +49,7 @@ interface ColumnFormat {
   currency?: string;
 }
 
-const FORMAT_OPTIONS: { value: FormatKind; label: string }[] = [
-  { value: "asis", label: "原样" },
-  { value: "fixed", label: "固定位数" },
-  { value: "percent", label: "百分比" },
-  { value: "scientific", label: "科学计数" },
-  { value: "currency", label: "货币" },
-];
+const FORMAT_KINDS: FormatKind[] = ["asis", "fixed", "percent", "scientific", "currency"];
 
 const CURRENCY_OPTIONS = [
   { value: "CNY", label: "CNY ¥", symbol: "¥" },
@@ -231,6 +215,7 @@ interface ExtrasEditorProps {
 }
 
 const ExtrasEditor = React.memo(function ExtrasEditor({ extras, onChange }: ExtrasEditorProps) {
+  const { t } = useTranslation();
   const activeKinds = EXTRA_KINDS.filter((k) => extras[k] !== undefined);
   const remainingKinds = EXTRA_KINDS.filter((k) => extras[k] === undefined);
 
@@ -260,7 +245,7 @@ const ExtrasEditor = React.memo(function ExtrasEditor({ extras, onChange }: Extr
   return (
     <div className="sp-extras-editor">
       <div className="sp-extras-header">
-        <span className="sp-extras-title">附加属性</span>
+        <span className="sp-extras-title">{t("extras.title")}</span>
         {remainingKinds.length > 0 && (
           <select
             className="sp-extras-add-select"
@@ -271,15 +256,15 @@ const ExtrasEditor = React.memo(function ExtrasEditor({ extras, onChange }: Extr
               e.currentTarget.value = "";
             }}
           >
-            <option value="">+ 添加附加属性…</option>
+            <option value="">{t("extras.addPlaceholder")}</option>
             {remainingKinds.map((k) => (
-              <option key={k} value={k}>{EXTRA_DEFS[k].label}</option>
+              <option key={k} value={k}>{extraKindLabel(k, t)}</option>
             ))}
           </select>
         )}
       </div>
       {activeKinds.length === 0 ? (
-        <div className="sp-extras-empty">尚未添加任何附加属性</div>
+        <div className="sp-extras-empty">{t("extras.empty")}</div>
       ) : (
         activeKinds.map((kind) => {
           const def = EXTRA_DEFS[kind];
@@ -287,11 +272,11 @@ const ExtrasEditor = React.memo(function ExtrasEditor({ extras, onChange }: Extr
           return (
             <div key={kind} className="sp-extras-card">
               <div className="sp-extras-card-header">
-                <span className="sp-extras-card-title">{def.label}</span>
+                <span className="sp-extras-card-title">{extraKindLabel(kind, t)}</span>
                 <button
                   type="button"
                   className="sp-extras-card-remove"
-                  title="移除该附加属性"
+                  title={t("extras.removeOne")}
                   onClick={() => removeKind(kind)}
                 >×</button>
               </div>
@@ -301,7 +286,7 @@ const ExtrasEditor = React.memo(function ExtrasEditor({ extras, onChange }: Extr
                   const strVal = raw == null ? "" : String(raw);
                   return (
                     <div key={f.key} className="sp-extras-field-row">
-                      <label className="sp-extras-field-label">{f.label}</label>
+                      <label className="sp-extras-field-label">{extraFieldLabel(kind, f.key, t)}</label>
                       {f.type === "longtext" ? (
                         <textarea
                           className="sp-dialog-input sp-extras-field-input"
@@ -347,13 +332,15 @@ interface ColsPanelListProps {
 const ColsPanelList = React.memo(function ColsPanelList({
   cols, colTypes, selectedCols, colExtras, onItemClick, onItemContextMenu,
 }: ColsPanelListProps) {
+  const { t } = useTranslation();
+  const labelOf = typeLabelOf(t);
   return (
     <div className="sp-cols-panel-list">
       {cols.map((name, ci) => {
-        const typeLabel = typeLabelOf(colTypes[ci]);
+        const tLabel = labelOf(colTypes[ci]);
         const isSel = selectedCols.has(ci);
         const extras = colExtras[ci];
-        const extraSummary = extras ? summarizeExtraKinds(extras) : "";
+        const extraSummary = extras ? summarizeExtraKinds(extras, t) : "";
         const extraCount = extras ? Object.keys(extras).length : 0;
         return (
           <div
@@ -361,12 +348,12 @@ const ColsPanelList = React.memo(function ColsPanelList({
             className={`sp-cols-panel-item${isSel ? " sp-cols-panel-item-selected" : ""}`}
             onClick={(e) => onItemClick(ci, e)}
             onContextMenu={(e) => onItemContextMenu(e, ci)}
-            title={`${colLetter(ci)}  ${name}  (${typeLabel})${extraSummary ? `\n附加属性: ${extraSummary}` : ""}`}
+            title={`${colLetter(ci)}  ${name}  (${tLabel})${extraSummary ? "\n" + t("dataTable.colsPanelExtraTooltip", { summary: extraSummary }) : ""}`}
           >
-            <span className="sp-cols-panel-item-type">{typeLabel}</span>
-            <span className="sp-cols-panel-item-name">{name || `(列 ${colLetter(ci)})`}</span>
+            <span className="sp-cols-panel-item-type">{tLabel}</span>
+            <span className="sp-cols-panel-item-name">{name || t("dataTable.colsPanelItemFallback", { letter: colLetter(ci) })}</span>
             {extraCount > 0 && (
-              <span className="sp-cols-panel-item-extras" title={`附加属性: ${extraSummary}`}>
+              <span className="sp-cols-panel-item-extras" title={t("dataTable.colsPanelExtraTooltip", { summary: extraSummary })}>
                 📎{extraCount}
               </span>
             )}
@@ -402,6 +389,7 @@ const FormulaBar = React.memo(function FormulaBar({
   activeCell, activeCellValue, maxRow, maxCol,
   onJumpToCell, onWriteActiveCell, onMoveDownAfterCommit, onError, onFocusGrid,
 }: FormulaBarProps) {
+  const { t } = useTranslation();
   const [refValue, setRefValue] = useState("");
   const [refDirty, setRefDirty] = useState(false);
   const [formulaValue, setFormulaValue] = useState("");
@@ -434,7 +422,7 @@ const FormulaBar = React.memo(function FormulaBar({
             e.preventDefault();
             const m = refValue.trim().toUpperCase().match(/^([A-Z]+)(\d+)$/);
             if (!m) {
-              onError(`无效的单元格引用："${refValue}"，应类似 "A1" 或 "AB123"`);
+              onError(t("dataTable.invalidCellRef", { ref: refValue }));
               return;
             }
             let col = 0;
@@ -442,7 +430,7 @@ const FormulaBar = React.memo(function FormulaBar({
             col -= 1;
             const row = parseInt(m[2], 10) - 1;
             if (col < 0 || col > maxCol || row < 0 || row > maxRow) {
-              onError(`单元格 "${refValue}" 超出范围（最大 ${colLetter(maxCol)}${maxRow + 1}）`);
+              onError(t("dataTable.outOfRangeCellRef", { ref: refValue, max: `${colLetter(maxCol)}${maxRow + 1}` }));
               return;
             }
             setRefDirty(false);
@@ -459,13 +447,13 @@ const FormulaBar = React.memo(function FormulaBar({
           setRefDirty(false);
           setRefValue(activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "");
         }}
-        title="输入单元格引用（如 A1）跳转"
+        title={t("dataTable.cellRefTitle")}
       />
       <input
         className="sp-formula-input"
         type="text"
         value={formulaValue}
-        placeholder={activeCell ? "" : "选择一个单元格"}
+        placeholder={activeCell ? "" : t("dataTable.selectCellPlaceholder")}
         disabled={!activeCell}
         onChange={(e) => { setFormulaValue(e.target.value); setFormulaDirty(true); }}
         onKeyDown={async (e) => {
@@ -496,6 +484,8 @@ const FormulaBar = React.memo(function FormulaBar({
 });
 
 export function DataTableView({ datasetId }: DataTableViewProps) {
+  const { t } = useTranslation();
+  const labelOf = useMemo(() => typeLabelOf(t), [t]);
   const [data, setData] = useState<TableQueryResult | null>(null);
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
   const [editCell, setEditCell] = useState<{ row: number; col: number } | null>(null);
@@ -1033,10 +1023,12 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setStatusInfo({
       cellLabel: activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "",
       selectionLabel: selLabel,
-      dimensions: columnFilters.size > 0 ? `${displayRows.length} / ${data.totalRows} 行 × ${visibleColCount} 列` : `${data.totalRows} 行 × ${visibleColCount} 列`,
+      dimensions: columnFilters.size > 0
+        ? t("dataTable.dimensionsFiltered", { shown: displayRows.length, total: data.totalRows, cols: visibleColCount })
+        : t("dataTable.dimensions", { rows: data.totalRows, cols: visibleColCount }),
       selectionStats,
     });
-  }, [activeCell, selection, selectedRows, selectedCols, data, displayRows, cols, visibleColCount, setStatusInfo, columnFilters]);
+  }, [activeCell, selection, selectedRows, selectedCols, data, displayRows, cols, visibleColCount, setStatusInfo, columnFilters, t]);
 
   // Precompute active row/col ranges for className computation
   const activeRowRange = useMemo(() => {
@@ -1178,7 +1170,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     containerRef.current?.focus();
   }, []);
 
-  if (!data) return <div className="sp-loading">加载中...</div>;
+  if (!data) return <div className="sp-loading">{t("dataTable.loading")}</div>;
 
   const getRowId = (row: unknown[]): number =>
     rowIdIdx >= 0 ? (row[rowIdIdx] as number) : 0;
@@ -1190,8 +1182,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   const generateColName = (existingNames: string[]): string => {
     const nameSet = new Set(existingNames);
     let i = 1;
-    while (nameSet.has(`列${i}`)) i++;
-    return `列${i}`;
+    while (nameSet.has(t("dataTable.colNameFallback", { n: i }))) i++;
+    return t("dataTable.colNameFallback", { n: i });
   };
 
   // ---- Undo / Redo (unified with history store) ----
@@ -1208,7 +1200,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     await dataService.addRow(datasetId);
     await load();
     await refreshAndMarkDirty();
-    recordAction("添加行");
+    recordAction(t("history.addRow"));
   };
 
   const handleInsertMultiRows = async () => {
@@ -1221,7 +1213,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setInsertRowCount("5");
     await load();
     await refreshAndMarkDirty();
-    recordAction("批量添加行");
+    recordAction(t("history.addRowsBatch"));
   };
 
   const handleDeleteRows = async () => {
@@ -1234,7 +1226,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setRowMenu(null);
     await load();
     await refreshAndMarkDirty();
-    recordAction("删除行");
+    recordAction(t("history.deleteRow"));
   };
 
   const handleDeleteSingleRow = async (rowIdx: number) => {
@@ -1243,7 +1235,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setRowMenu(null);
     await load();
     await refreshAndMarkDirty();
-    recordAction("删除行");
+    recordAction(t("history.deleteRow"));
   };
 
   const handleInsertRowAbove = async () => {
@@ -1251,7 +1243,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setRowMenu(null);
     await load();
     await refreshAndMarkDirty();
-    recordAction("插入行");
+    recordAction(t("history.insertRow"));
   };
 
   // ---- Column operations ----
@@ -1260,7 +1252,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     await dataService.addColumn(datasetId, name, "VARCHAR");
     await load();
     await refreshAndMarkDirty();
-    recordAction("添加列");
+    recordAction(t("history.addColumn"));
   };
 
   const handleAddColumn = async () => {
@@ -1272,7 +1264,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setNewColType("VARCHAR");
     await load();
     await refreshAndMarkDirty();
-    recordAction(`添加列 "${name}"`);
+    recordAction(t("history.addColumnNamed", { name }));
   };
 
   const handleInsertMultiCols = async () => {
@@ -1289,7 +1281,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setInsertColType("VARCHAR");
     await load();
     await refreshAndMarkDirty();
-    recordAction("批量添加列");
+    recordAction(t("history.addColumnsBatch"));
   };
 
   const handleDeleteColumn = async (colName: string) => {
@@ -1298,13 +1290,13 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setColMenu(null);
     await load();
     await refreshAndMarkDirty();
-    recordAction(`删除列 "${colName}"`);
+    recordAction(t("history.deleteColumnNamed", { name: colName }));
   };
 
   const handleDeleteSelectedCols = async () => {
     if (selectedCols.size === 0) return;
     if (cols.length - selectedCols.size < 1) {
-      setErrorMsg("不能删除所有列，至少保留一列");
+      setErrorMsg(t("dataTable.cantDeleteAllCols"));
       setColMenu(null);
       return;
     }
@@ -1315,7 +1307,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setColMenu(null);
     await load();
     await refreshAndMarkDirty();
-    recordAction("删除列");
+    recordAction(t("history.deleteColumn"));
   };
 
   const handleStartRenameCol = (colIdx: number) => {
@@ -1368,20 +1360,20 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       await load();
       await refreshAndMarkDirty();
       setBatchColProps(null);
-      recordAction("修改列属性");
+      recordAction(t("history.modifyColumnProps"));
     } catch (e) {
       setErrorMsg(String(e));
     }
   };
 
-  /** Apply the result of "管理附加属性" batch dialog. Replaces the entire
+  /** Apply the result of the manage-extras batch dialog. Replaces the entire
    *  per-column extras array, syncs to backend, marks dirty, records history. */
   const handleApplyManageExtras = (next: Array<Record<string, unknown> | null>) => {
     setColExtras(next);
     colExtrasRef.current = next;
     syncDisplayProps(colWidthsRef.current, colFormatsRef.current);
     markDirty();
-    recordAction("批量修改附加属性");
+    recordAction(t("history.modifyExtrasBatch"));
   };
 
   const handleRenameColumn = async () => {
@@ -1421,7 +1413,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
         await refreshAndMarkDirty();
       }
       setRenameCol(null);
-      recordAction("修改列属性");
+      recordAction(t("history.modifyColumnProps"));
     } catch (e) {
       setErrorMsg(String(e));
     }
@@ -1469,24 +1461,24 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     if (value === "") return null; // Empty is always ok (NULL)
     switch (colType) {
       case "INTEGER": {
-        if (!/^-?\d+$/.test(value.trim())) return `"${value}" 不是有效的整数`;
+        if (!/^-?\d+$/.test(value.trim())) return t("dataTable.validInteger", { value });
         return null;
       }
       case "DOUBLE": {
-        if (isNaN(Number(value.trim())) || value.trim() === "") return `"${value}" 不是有效的数字`;
+        if (isNaN(Number(value.trim())) || value.trim() === "") return t("dataTable.validNumber", { value });
         return null;
       }
       case "BOOLEAN": {
         const v = value.trim().toLowerCase();
-        if (!["true", "false", "1", "0", "yes", "no"].includes(v)) return `"${value}" 不是有效的布尔值（可输入 true/false/1/0）`;
+        if (!["true", "false", "1", "0", "yes", "no"].includes(v)) return t("dataTable.validBoolean", { value });
         return null;
       }
       case "DATE": {
-        if (isNaN(Date.parse(value.trim()))) return `"${value}" 不是有效的日期格式`;
+        if (isNaN(Date.parse(value.trim()))) return t("dataTable.validDate", { value });
         return null;
       }
       case "TIMESTAMP": {
-        if (isNaN(Date.parse(value.trim()))) return `"${value}" 不是有效的时间戳格式`;
+        if (isNaN(Date.parse(value.trim()))) return t("dataTable.validTimestamp", { value });
         return null;
       }
       default:
@@ -1531,7 +1523,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       return;
     }
     markDirty();
-    recordAction("编辑单元格");
+    recordAction(t("history.editCell"));
 
     const maxRow = displayRows.length - 1;
     const maxCol = cols.length - 1;
@@ -1604,7 +1596,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       return false;
     }
     markDirty();
-    recordAction("编辑单元格");
+    recordAction(t("history.editCell"));
     return true;
   };
 
@@ -1635,7 +1627,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       return;
     }
     markDirty();
-    recordAction("清除单元格内容");
+    recordAction(t("history.clearCells"));
   };
 
   // ---- Helper: find boundary of continuous data (Excel Ctrl+Arrow behavior) ----
@@ -1766,7 +1758,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     }
     const tsv = rows.map((r) => r.join("\t")).join("\n");
     navigator.clipboard.writeText(tsv).catch(() => {
-      setErrorMsg("无法写入剪贴板");
+      setErrorMsg(t("dataTable.clipboardWriteFail"));
     });
   };
 
@@ -1853,7 +1845,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           // Allow INTEGER into DOUBLE
           if (existingType === "DOUBLE" && detectedType === "INTEGER") continue;
           setErrorMsg(
-            `列 ${colLetter(targetCol)}（${cols[targetCol]}）的类型为 ${existingType}，与粘贴数据的类型 ${detectedType} 不兼容`
+            t("dataTable.pasteTypeIncompatible", { letter: colLetter(targetCol), name: cols[targetCol], existing: existingType, detected: detectedType })
           );
           return;
         }
@@ -1880,7 +1872,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     }
 
     if (hasConflicts) {
-      const confirmed = window.confirm("粘贴区域存在已有数据，是否覆盖？");
+      const confirmed = window.confirm(t("dataTable.pasteOverwriteConfirm"));
       if (!confirmed) return;
     }
 
@@ -1890,7 +1882,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       );
       await load();
       await refreshAndMarkDirty();
-      recordAction("粘贴数据");
+      recordAction(t("history.pasteData"));
     } catch (err) {
       setErrorMsg(String(err));
     }
@@ -1935,7 +1927,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       if (!text.trim()) return;
       await doPaste(text, withHeader);
     } catch {
-      setErrorMsg("无法读取剪贴板");
+      setErrorMsg(t("dataTable.clipboardReadFail"));
     }
   };
 
@@ -2056,7 +2048,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       navigator.clipboard.readText().then((text) => {
         if (text.trim()) doPaste(text, true);
       }).catch(() => {
-        setErrorMsg("无法读取剪贴板");
+        setErrorMsg(t("dataTable.clipboardReadFail"));
       });
       return;
     }
@@ -2547,7 +2539,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
         markDirty();
         return next;
       });
-      recordAction("调整列宽");
+      recordAction(t("history.resizeColumn"));
     };
 
     document.body.style.cursor = "col-resize";
@@ -2575,7 +2567,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     const letter = colLetter(colIdx);
     ctx.font = "13px system-ui, -apple-system, sans-serif";
     const name = cols[colIdx] || "";
-    const typeLabel = typeLabelOf(colTypes[colIdx]);
+    const typeLabel = labelOf(colTypes[colIdx]);
     ctx.font = "11px system-ui, -apple-system, sans-serif";
     // Header content is stacked vertically, widest element determines width
     const hdrTexts = [letter, name, typeLabel];
@@ -2599,7 +2591,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     colWidthsRef.current = newWidths;
     syncDisplayProps(newWidths, colFormatsRef.current);
     markDirty();
-    recordAction("自动调整列宽");
+    recordAction(t("history.autoFitColumn"));
   };
 
   // ---- Columns panel item click: select column(s) and scroll into view ----
@@ -2681,16 +2673,16 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           <input
             ref={addColInputRef}
             className="sp-input"
-            placeholder="列名"
+            placeholder={t("dataTable.colNamePlaceholder")}
             value={newColName}
             onChange={(e) => setNewColName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleAddColumn(); if (e.key === "Escape") setShowAddCol(false); }}
           />
           <select className="sp-select" value={newColType} onChange={(e) => setNewColType(e.target.value)}>
-            {COLUMN_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+            {COLUMN_TYPE_VALUES.map((v) => <option key={v} value={v}>{labelOf(v)}</option>)}
           </select>
-          <button className="sp-tb-btn sp-btn-accent" onClick={handleAddColumn}>添加</button>
-          <button className="sp-tb-btn" onClick={() => setShowAddCol(false)}>取消</button>
+          <button className="sp-tb-btn sp-btn-accent" onClick={handleAddColumn}>{t("common.add")}</button>
+          <button className="sp-tb-btn" onClick={() => setShowAddCol(false)}>{t("common.cancel")}</button>
         </div>
       )}
 
@@ -2698,9 +2690,9 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       {renameCol && (
         <div className="sp-dialog-overlay">
           <div className="sp-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="sp-dialog-title">列属性</div>
+            <div className="sp-dialog-title">{t("dataTable.colPropsTitle")}</div>
             <div className="sp-dialog-body">
-              <label className="sp-dialog-label">列名称</label>
+              <label className="sp-dialog-label">{t("dataTable.colPropsName")}</label>
               <input
                 ref={renameInputRef}
                 className="sp-dialog-input"
@@ -2708,11 +2700,11 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 onChange={(e) => setRenameValue(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") handleRenameColumn(); if (e.key === "Escape") setRenameCol(null); }}
               />
-              <label className="sp-dialog-label">列类型</label>
+              <label className="sp-dialog-label">{t("dataTable.colPropsType")}</label>
               <select className="sp-dialog-select" value={renameType} onChange={(e) => setRenameType(e.target.value)}>
-                {COLUMN_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                {COLUMN_TYPE_VALUES.map((v) => <option key={v} value={v}>{labelOf(v)}</option>)}
               </select>
-              <label className="sp-dialog-label">显示格式</label>
+              <label className="sp-dialog-label">{t("dataTable.colPropsFormat")}</label>
               <select className="sp-dialog-select" value={renameFormat.kind} onChange={(e) => {
                 const kind = e.target.value as FormatKind;
                 setRenameFormat(kind === "currency"
@@ -2721,11 +2713,11 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                     ? { kind, decimals: 2 }
                     : { kind });
               }}>
-                {FORMAT_OPTIONS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                {FORMAT_KINDS.map((k) => <option key={k} value={k}>{t(`dataTable.format.${k}`)}</option>)}
               </select>
               {(renameFormat.kind === "fixed" || renameFormat.kind === "percent") && (
                 <div style={{ marginTop: 6 }}>
-                  <label className="sp-dialog-label">小数位数</label>
+                  <label className="sp-dialog-label">{t("dataTable.colPropsDigits")}</label>
                   <input
                     className="sp-dialog-input"
                     type="number"
@@ -2739,13 +2731,13 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
               {renameFormat.kind === "currency" && (
                 <>
                   <div style={{ marginTop: 6 }}>
-                    <label className="sp-dialog-label">货币类型</label>
+                    <label className="sp-dialog-label">{t("dataTable.colPropsCurrency")}</label>
                     <select className="sp-dialog-select" value={renameFormat.currency ?? "CNY"} onChange={(e) => setRenameFormat((prev) => ({ ...prev, currency: e.target.value }))}>
                       {CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                     </select>
                   </div>
                   <div style={{ marginTop: 6 }}>
-                    <label className="sp-dialog-label">小数位数</label>
+                    <label className="sp-dialog-label">{t("dataTable.colPropsDigits")}</label>
                     <input
                       className="sp-dialog-input"
                       type="number"
@@ -2757,7 +2749,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                   </div>
                 </>
               )}
-              <label className="sp-dialog-label">列宽度</label>
+              <label className="sp-dialog-label">{t("dataTable.colPropsWidth")}</label>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <input
                   className="sp-dialog-input"
@@ -2768,13 +2760,13 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                   onChange={(e) => setRenameWidth(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleRenameColumn(); if (e.key === "Escape") setRenameCol(null); }}
                 />
-                <button className="sp-dialog-btn" onClick={() => setRenameWidth(String(autoFitColumn(renameCol.colIdx)))}>自动</button>
+                <button className="sp-dialog-btn" onClick={() => setRenameWidth(String(autoFitColumn(renameCol.colIdx)))}>{t("common.auto")}</button>
               </div>
               <ExtrasEditor extras={renameExtras} onChange={setRenameExtras} />
             </div>
             <div className="sp-dialog-actions">
-              <button className="sp-dialog-btn" onClick={() => setRenameCol(null)}>取消</button>
-              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={handleRenameColumn}>确定</button>
+              <button className="sp-dialog-btn" onClick={() => setRenameCol(null)}>{t("common.cancel")}</button>
+              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={handleRenameColumn}>{t("common.confirm")}</button>
             </div>
           </div>
         </div>
@@ -2788,7 +2780,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
             <button
               type="button"
               className="sp-cols-panel-toggle"
-              title="展开列面板"
+              title={t("dataTable.expandColPanel")}
               onClick={() => setColsPanelCollapsed(false)}
             >▶</button>
           </div>
@@ -2797,12 +2789,12 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           <div className="sp-cols-panel" style={{ width: colsPanelWidth, minWidth: colsPanelWidth }}>
             <div className="sp-cols-panel-header">
               <span className="sp-cols-panel-title">
-                列 ({cols.length}{selectedCols.size > 0 ? `/${selectedCols.size}` : ""})
+                {t("dataTable.colsPanelHeader", { total: cols.length, sel: selectedCols.size > 0 ? t("dataTable.colsPanelSelSuffix", { n: selectedCols.size }) : "" })}
               </span>
               <button
                 type="button"
                 className="sp-cols-panel-toggle"
-                title="折叠列面板"
+                title={t("dataTable.collapseColPanel")}
                 onClick={() => setColsPanelCollapsed(true)}
               >◀</button>
             </div>
@@ -2818,7 +2810,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           {/* Splitter: drag to resize the columns panel width. */}
           <div
             className="sp-cols-panel-splitter"
-            title="拖动调整列面板宽度"
+            title={t("dataTable.resizeColPanel")}
             onMouseDown={(e) => {
               e.preventDefault();
               const startX = e.clientX;
@@ -2898,10 +2890,10 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                     <div className="sp-col-hdr-content">
                       <span className="sp-col-letter">{colLetter(ci)}</span>
                       <span className="sp-col-name">{col}</span>
-                      <span className="sp-col-type">{typeLabelOf(colTypes[ci])}</span>
+                      <span className="sp-col-type">{labelOf(colTypes[ci])}</span>
                       <span
                         className={`sp-filter-icon${columnFilters.has(ci) ? " sp-filter-active" : ""}`}
-                        title="筛选"
+                        title={t("dataTable.filter")}
                         onClick={(e) => {
                           e.stopPropagation();
                           const rect = (e.target as HTMLElement).getBoundingClientRect();
@@ -2925,7 +2917,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 <th className="sp-col-spacer-hdr" aria-hidden="true" style={{ background: "var(--bg-header)", borderBottom: "2px solid var(--border-header-bottom)" }} />
               )}
               {/* "+" column at end */}
-              <th className="sp-add-col-hdr" onClick={handleAddColumnQuick} title="添加列">
+              <th className="sp-add-col-hdr" onClick={handleAddColumnQuick} title={t("dataTable.addColTitle")}>
                 +
               </th>
             </tr>
@@ -3031,7 +3023,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
               <td
                 className="sp-add-row-hdr"
                 onClick={handleAddRow}
-                title="添加行"
+                title={t("dataTable.addRowTitle")}
               >
                 +
               </td>
@@ -3071,39 +3063,39 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           {selectedCols.size > 1 ? (
             <>
               <div className="sp-ctx-item" onClick={handleStartBatchColProps}>
-                列属性（{selectedCols.size} 列）
+                {t("dataTable.ctxColPropsBatch", { n: selectedCols.size })}
               </div>
               <div className="sp-ctx-item" onClick={() => { handleAddColumnQuick(); setColMenu(null); }}>
-                插入列
+                {t("dataTable.ctxInsertCol")}
               </div>
               <div className="sp-ctx-item" onClick={() => { setShowInsertMultiCols(true); setColMenu(null); }}>
-                插入多列...
+                {t("dataTable.ctxInsertMultiCols")}
               </div>
               <div className="sp-ctx-sep" />
               <div
                 className={`sp-ctx-item sp-ctx-danger ${cols.length - selectedCols.size < 1 ? "sp-ctx-disabled" : ""}`}
                 onClick={handleDeleteSelectedCols}
               >
-                删除选中的 {selectedCols.size} 列
+                {t("dataTable.ctxDeleteSelectedCols", { n: selectedCols.size })}
               </div>
             </>
           ) : (
             <>
               <div className="sp-ctx-item" onClick={() => handleStartRenameCol(colMenu.colIdx)}>
-                列属性
+                {t("dataTable.ctxColProps")}
               </div>
               <div className="sp-ctx-item" onClick={() => { handleAddColumnQuick(); setColMenu(null); }}>
-                插入列
+                {t("dataTable.ctxInsertCol")}
               </div>
               <div className="sp-ctx-item" onClick={() => { setShowInsertMultiCols(true); setColMenu(null); }}>
-                插入多列...
+                {t("dataTable.ctxInsertMultiCols")}
               </div>
               <div className="sp-ctx-sep" />
               <div
                 className={`sp-ctx-item sp-ctx-danger ${cols.length <= 1 ? "sp-ctx-disabled" : ""}`}
                 onClick={() => cols.length > 1 && handleDeleteColumn(cols[colMenu.colIdx])}
               >
-                删除列 "{cols[colMenu.colIdx]}"
+                {t("dataTable.ctxDeleteCol", { name: cols[colMenu.colIdx] })}
               </div>
             </>
           )}
@@ -3119,16 +3111,16 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           onClick={(e) => e.stopPropagation()}
         >
           <div className="sp-ctx-item" onClick={() => { handleCopy(); setCellMenu(null); }}>
-            复制<span className="sp-ctx-shortcut">{modKey}C</span>
+            {t("dataTable.ctxCopy")}<span className="sp-ctx-shortcut">{modKey}C</span>
           </div>
           <div className="sp-ctx-item" onClick={() => { handleCopy(true); setCellMenu(null); }}>
-            复制（带表头）
+            {t("dataTable.ctxCopyHeader")}
           </div>
           <div className="sp-ctx-item" onClick={() => handleContextMenuPaste(false)}>
-            粘贴<span className="sp-ctx-shortcut">{modKey}V</span>
+            {t("dataTable.ctxPaste")}<span className="sp-ctx-shortcut">{modKey}V</span>
           </div>
           <div className="sp-ctx-item" onClick={() => handleContextMenuPaste(true)}>
-            粘贴（带表头）<span className="sp-ctx-shortcut">{modKey}{shiftKey}V</span>
+            {t("dataTable.ctxPasteHeader")}<span className="sp-ctx-shortcut">{modKey}{shiftKey}V</span>
           </div>
         </div>
       )}
@@ -3142,24 +3134,24 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           onClick={(e) => e.stopPropagation()}
         >
           <div className="sp-ctx-item" onClick={() => { handleInsertRowAbove(); setCornerMenu(null); }}>
-            插入行
+            {t("dataTable.ctxInsertRow")}
           </div>
           <div className="sp-ctx-item" onClick={() => { setShowInsertMultiRows(true); setCornerMenu(null); }}>
-            插入多行...
+            {t("dataTable.ctxInsertMultiRows")}
           </div>
           <div className="sp-ctx-sep" />
           <div className="sp-ctx-item" onClick={() => { handleAddColumnQuick(); setCornerMenu(null); }}>
-            插入列
+            {t("dataTable.ctxInsertCol")}
           </div>
           <div className="sp-ctx-item" onClick={() => { setShowInsertMultiCols(true); setCornerMenu(null); }}>
-            插入多列...
+            {t("dataTable.ctxInsertMultiCols")}
           </div>
           <div className="sp-ctx-sep" />
           <div className="sp-ctx-item" onClick={() => handleContextMenuPaste(false)}>
-            粘贴<span className="sp-ctx-shortcut">{modKey}V</span>
+            {t("dataTable.ctxPaste")}<span className="sp-ctx-shortcut">{modKey}V</span>
           </div>
           <div className="sp-ctx-item" onClick={() => handleContextMenuPaste(true)}>
-            粘贴（带表头）<span className="sp-ctx-shortcut">{modKey}{shiftKey}V</span>
+            {t("dataTable.ctxPasteHeader")}<span className="sp-ctx-shortcut">{modKey}{shiftKey}V</span>
           </div>
         </div>
       )}
@@ -3173,19 +3165,19 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           onClick={(e) => e.stopPropagation()}
         >
           <div className="sp-ctx-item" onClick={handleInsertRowAbove}>
-            插入行
+            {t("dataTable.ctxInsertRow")}
           </div>
           <div className="sp-ctx-item" onClick={() => { setShowInsertMultiRows(true); setRowMenu(null); }}>
-            插入多行...
+            {t("dataTable.ctxInsertMultiRows")}
           </div>
           <div className="sp-ctx-sep" />
           {selectedRows.size > 1 ? (
             <div className="sp-ctx-item sp-ctx-danger" onClick={handleDeleteRows}>
-              删除选中的 {selectedRows.size} 行
+              {t("dataTable.ctxDeleteSelectedRows", { n: selectedRows.size })}
             </div>
           ) : (
             <div className="sp-ctx-item sp-ctx-danger" onClick={() => handleDeleteSingleRow(rowMenu.rowIdx)}>
-              删除此行
+              {t("dataTable.ctxDeleteRow")}
             </div>
           )}
         </div>
@@ -3206,12 +3198,12 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 style={{ position: "fixed", left: filterPopover.anchorRect.left, top: filterPopover.anchorRect.bottom + 2 }}
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="sp-filter-title">筛选: {cols[ci]}</div>
+                <div className="sp-filter-title">{t("dataTable.filterTitle", { col: cols[ci] })}</div>
                 {isDiscrete ? (
                   <div className="sp-filter-body">
                     <div className="sp-filter-toolbar">
-                      <button className="sp-filter-btn" onClick={() => setFilterWorkingSet(new Set(filterUniqueValues))}>全选</button>
-                      <button className="sp-filter-btn" onClick={() => setFilterWorkingSet(new Set())}>全不选</button>
+                      <button className="sp-filter-btn" onClick={() => setFilterWorkingSet(new Set(filterUniqueValues))}>{t("common.selectAll")}</button>
+                      <button className="sp-filter-btn" onClick={() => setFilterWorkingSet(new Set())}>{t("common.selectNone")}</button>
                     </div>
                     <div className="sp-filter-list">
                       {filterUniqueValues.map((val, idx) => (
@@ -3245,7 +3237,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                           }}
                         >
                           <input type="checkbox" checked={filterWorkingSet.has(val)} readOnly />
-                          <span className="sp-filter-val">{val === "" ? "(空)" : val}</span>
+                          <span className="sp-filter-val">{val === "" ? t("common.empty") : val}</span>
                         </label>
                       ))}
                     </div>
@@ -3253,9 +3245,9 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 ) : (
                   <div className="sp-filter-body">
                     <div className="sp-filter-range">
-                      <label className="sp-filter-range-label">最小值</label>
+                      <label className="sp-filter-range-label">{t("dataTable.rangeMin")}</label>
                       <input className="sp-filter-range-input" type="text" value={filterRangeMin} onChange={(e) => setFilterRangeMin(e.target.value)} />
-                      <label className="sp-filter-range-label">最大值</label>
+                      <label className="sp-filter-range-label">{t("dataTable.rangeMax")}</label>
                       <input className="sp-filter-range-input" type="text" value={filterRangeMax} onChange={(e) => setFilterRangeMax(e.target.value)} />
                     </div>
                   </div>
@@ -3268,7 +3260,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                       return next;
                     });
                     setFilterPopover(null);
-                  }}>清除筛选</button>
+                  }}>{t("dataTable.clearFilter")}</button>
                   <button className="sp-filter-btn sp-filter-btn-primary" onClick={() => {
                     if (isDiscrete) {
                       if (filterWorkingSet.size < filterUniqueValues.length) {
@@ -3300,7 +3292,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                       }
                     }
                     setFilterPopover(null);
-                  }}>确定</button>
+                  }}>{t("common.confirm")}</button>
                 </div>
               </div>
             );
@@ -3312,9 +3304,9 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       {showInsertMultiRows && (
         <div className="sp-dialog-overlay" onClick={() => setShowInsertMultiRows(false)}>
           <div className="sp-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="sp-dialog-title">插入多行</div>
+            <div className="sp-dialog-title">{t("dataTable.insertMultiRowsTitle")}</div>
             <div className="sp-dialog-body">
-              <label className="sp-dialog-label">行数</label>
+              <label className="sp-dialog-label">{t("dataTable.rowCount")}</label>
               <input
                 className="sp-dialog-input"
                 type="number"
@@ -3326,8 +3318,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
               />
             </div>
             <div className="sp-dialog-actions">
-              <button className="sp-dialog-btn" onClick={() => setShowInsertMultiRows(false)}>取消</button>
-              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={handleInsertMultiRows}>确定</button>
+              <button className="sp-dialog-btn" onClick={() => setShowInsertMultiRows(false)}>{t("common.cancel")}</button>
+              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={handleInsertMultiRows}>{t("common.confirm")}</button>
             </div>
           </div>
         </div>
@@ -3337,9 +3329,9 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       {showInsertMultiCols && (
         <div className="sp-dialog-overlay" onClick={() => setShowInsertMultiCols(false)}>
           <div className="sp-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="sp-dialog-title">插入多列</div>
+            <div className="sp-dialog-title">{t("dataTable.insertMultiColsTitle")}</div>
             <div className="sp-dialog-body">
-              <label className="sp-dialog-label">列数</label>
+              <label className="sp-dialog-label">{t("dataTable.colCount")}</label>
               <input
                 className="sp-dialog-input"
                 type="number"
@@ -3349,14 +3341,14 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 onKeyDown={(e) => { if (e.key === "Enter") handleInsertMultiCols(); }}
                 autoFocus
               />
-              <label className="sp-dialog-label">列类型</label>
+              <label className="sp-dialog-label">{t("dataTable.colPropsType")}</label>
               <select className="sp-dialog-select" value={insertColType} onChange={(e) => setInsertColType(e.target.value)}>
-                {COLUMN_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                {COLUMN_TYPE_VALUES.map((v) => <option key={v} value={v}>{labelOf(v)}</option>)}
               </select>
             </div>
             <div className="sp-dialog-actions">
-              <button className="sp-dialog-btn" onClick={() => setShowInsertMultiCols(false)}>取消</button>
-              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={handleInsertMultiCols}>确定</button>
+              <button className="sp-dialog-btn" onClick={() => setShowInsertMultiCols(false)}>{t("common.cancel")}</button>
+              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={handleInsertMultiCols}>{t("common.confirm")}</button>
             </div>
           </div>
         </div>
@@ -3366,13 +3358,13 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       {batchColProps && (
         <div className="sp-dialog-overlay">
           <div className="sp-dialog sp-dialog-wide" onClick={(e) => e.stopPropagation()}>
-            <div className="sp-dialog-title">批量列属性（{batchColProps.colIndices.length} 列）</div>
+            <div className="sp-dialog-title">{t("dataTable.colPropsBatchTitle", { n: batchColProps.colIndices.length })}</div>
             <div className="sp-dialog-body">
-              <label className="sp-dialog-label">列类型</label>
+              <label className="sp-dialog-label">{t("dataTable.colPropsType")}</label>
               <select className="sp-dialog-select" value={batchColType} onChange={(e) => setBatchColType(e.target.value)}>
-                {COLUMN_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                {COLUMN_TYPE_VALUES.map((v) => <option key={v} value={v}>{labelOf(v)}</option>)}
               </select>
-              <label className="sp-dialog-label">显示格式</label>
+              <label className="sp-dialog-label">{t("dataTable.colPropsFormat")}</label>
               <select className="sp-dialog-select" value={batchColFormat.kind} onChange={(e) => {
                 const kind = e.target.value as FormatKind;
                 setBatchColFormat(kind === "currency"
@@ -3381,11 +3373,11 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                     ? { kind, decimals: 2 }
                     : { kind });
               }}>
-                {FORMAT_OPTIONS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                {FORMAT_KINDS.map((k) => <option key={k} value={k}>{t(`dataTable.format.${k}`)}</option>)}
               </select>
               {(batchColFormat.kind === "fixed" || batchColFormat.kind === "percent") && (
                 <div style={{ marginTop: 6 }}>
-                  <label className="sp-dialog-label">小数位数</label>
+                  <label className="sp-dialog-label">{t("dataTable.colPropsDigits")}</label>
                   <input
                     className="sp-dialog-input"
                     type="number"
@@ -3399,13 +3391,13 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
               {batchColFormat.kind === "currency" && (
                 <>
                   <div style={{ marginTop: 6 }}>
-                    <label className="sp-dialog-label">货币类型</label>
+                    <label className="sp-dialog-label">{t("dataTable.colPropsCurrency")}</label>
                     <select className="sp-dialog-select" value={batchColFormat.currency ?? "CNY"} onChange={(e) => setBatchColFormat((prev) => ({ ...prev, currency: e.target.value }))}>
                       {CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                     </select>
                   </div>
                   <div style={{ marginTop: 6 }}>
-                    <label className="sp-dialog-label">小数位数</label>
+                    <label className="sp-dialog-label">{t("dataTable.colPropsDigits")}</label>
                     <input
                       className="sp-dialog-input"
                       type="number"
@@ -3417,7 +3409,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                   </div>
                 </>
               )}
-              <label className="sp-dialog-label">列宽度</label>
+              <label className="sp-dialog-label">{t("dataTable.colPropsWidth")}</label>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <input
                   className="sp-dialog-input"
@@ -3433,9 +3425,9 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                     ? Array.from(batchColProps.checkedCols).map(ci => autoFitColumn(ci))
                     : [DEFAULT_COL_WIDTH]);
                   setBatchColWidth(String(maxW));
-                }}>自动</button>
+                }}>{t("common.auto")}</button>
               </div>
-              <label className="sp-dialog-label">应用到以下列：</label>
+              <label className="sp-dialog-label">{t("dataTable.colPropsApplyTo")}</label>
               <div className="sp-batch-col-list">
                 {batchColProps.colIndices.map((ci) => (
                   <label key={ci} className="sp-batch-col-item">
@@ -3453,18 +3445,18 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                       }}
                     />
                     <span className="sp-batch-col-name">{cols[ci]}</span>
-                    <span className="sp-batch-col-type">{typeLabelOf(colTypes[ci])}</span>
+                    <span className="sp-batch-col-type">{labelOf(colTypes[ci])}</span>
                   </label>
                 ))}
               </div>
               <div className="sp-batch-col-actions-row">
-                <button className="sp-batch-sel-btn" onClick={() => setBatchColProps((p) => p ? { ...p, checkedCols: new Set(p.colIndices) } : p)}>全选</button>
-                <button className="sp-batch-sel-btn" onClick={() => setBatchColProps((p) => p ? { ...p, checkedCols: new Set() } : p)}>全不选</button>
+                <button className="sp-batch-sel-btn" onClick={() => setBatchColProps((p) => p ? { ...p, checkedCols: new Set(p.colIndices) } : p)}>{t("common.selectAll")}</button>
+                <button className="sp-batch-sel-btn" onClick={() => setBatchColProps((p) => p ? { ...p, checkedCols: new Set() } : p)}>{t("common.selectNone")}</button>
               </div>
             </div>
             <div className="sp-dialog-actions">
-              <button className="sp-dialog-btn" onClick={() => setBatchColProps(null)}>取消</button>
-              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={handleApplyBatchColProps}>确定</button>
+              <button className="sp-dialog-btn" onClick={() => setBatchColProps(null)}>{t("common.cancel")}</button>
+              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={handleApplyBatchColProps}>{t("common.confirm")}</button>
             </div>
           </div>
         </div>
