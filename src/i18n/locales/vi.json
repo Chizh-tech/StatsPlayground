@@ -144,6 +144,8 @@
   },
   "prefs": {
     "title": "Tùy chọn",
+    "categoryGeneral": "Chung",
+    "categoryAppearance": "Giao diện",
     "theme": "Giao diện",
     "themeLight": "Sáng",
     "themeDark": "Tối",

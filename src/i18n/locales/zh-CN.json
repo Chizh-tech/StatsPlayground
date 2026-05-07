@@ -144,6 +144,8 @@
   },
   "prefs": {
     "title": "首选项",
+    "categoryGeneral": "常规",
+    "categoryAppearance": "外观",
     "theme": "外观主题",
     "themeLight": "浅色",
     "themeDark": "深色",

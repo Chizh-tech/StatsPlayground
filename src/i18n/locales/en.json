@@ -144,6 +144,8 @@
   },
   "prefs": {
     "title": "Preferences",
+    "categoryGeneral": "General",
+    "categoryAppearance": "Appearance",
     "theme": "Theme",
     "themeLight": "Light",
     "themeDark": "Dark",

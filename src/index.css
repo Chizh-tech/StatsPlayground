@@ -78,9 +78,9 @@
   --scrollbar-thumb: #c1c1c1;
   --scrollbar-thumb-hover: #a8a8a8;
 
-  --bg-activity-bar: #2c2c2c;
-  --fg-activity: #8a8a8a;
-  --fg-activity-active: #ffffff;
+  --bg-activity-bar: #ececec;
+  --fg-activity: #6c6c6c;
+  --fg-activity-active: #1f1f1f;
   --bg-activity-indicator: #4a6cf7;
 
   color: var(--fg-primary);

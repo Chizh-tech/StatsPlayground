@@ -1884,25 +1884,78 @@
 }
 
 /* ========= Preferences Dialog ========= */
-.pref-theme-group {
+.pref-dialog {
+  width: 640px;
+  max-width: 90vw;
+}
+
+.pref-body {
+  display: flex;
+  gap: 0;
+  padding: 0;
+  min-height: 280px;
+}
+
+.pref-nav {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 6px;
+  width: 160px;
+  flex: 0 0 160px;
+  border-right: 1px solid var(--border-main);
+  padding: 8px 0;
+  gap: 2px;
+  background: var(--bg-panel);
 }
 
-.pref-theme-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.pref-nav-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 6px 16px;
   font-size: 13px;
-  cursor: pointer;
   color: var(--fg-primary);
+  cursor: pointer;
+  border-left: 2px solid transparent;
 }
 
-.pref-theme-option input[type="radio"] {
-  margin: 0;
-  accent-color: var(--fg-accent);
+.pref-nav-item:hover {
+  background: var(--bg-hover, rgba(0,0,0,0.05));
+}
+
+.pref-nav-item-active {
+  background: var(--bg-selected-light, rgba(37,99,235,0.10));
+  border-left-color: var(--fg-accent);
+  font-weight: 500;
+}
+
+.pref-pane {
+  flex: 1 1 auto;
+  padding: 16px 20px;
+  overflow: auto;
+}
+
+.pref-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.pref-select {
+  width: 240px;
+  max-width: 100%;
+  padding: 4px 8px;
+  font-size: 13px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+}
+
+.pref-select:focus {
+  outline: none;
+  border-color: var(--border-input-focus);
 }
 
 /* ========= Activity Bar ========= */

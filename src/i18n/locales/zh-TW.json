@@ -144,6 +144,8 @@
   },
   "prefs": {
     "title": "偏好設定",
+    "categoryGeneral": "一般",
+    "categoryAppearance": "外觀",
     "theme": "外觀主題",
     "themeLight": "淺色",
     "themeDark": "深色",
