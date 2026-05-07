@@ -2874,7 +2874,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
             粘贴<span className="sp-ctx-shortcut">{modKey}V</span>
           </div>
           <div className="sp-ctx-item" onClick={() => handleContextMenuPaste(true)}>
-            带表头数据粘贴<span className="sp-ctx-shortcut">{modKey}{shiftKey}V</span>
+            粘贴（带表头）<span className="sp-ctx-shortcut">{modKey}{shiftKey}V</span>
           </div>
         </div>
       )}
@@ -2905,7 +2905,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
             粘贴<span className="sp-ctx-shortcut">{modKey}V</span>
           </div>
           <div className="sp-ctx-item" onClick={() => handleContextMenuPaste(true)}>
-            带表头数据粘贴<span className="sp-ctx-shortcut">{modKey}{shiftKey}V</span>
+            粘贴（带表头）<span className="sp-ctx-shortcut">{modKey}{shiftKey}V</span>
           </div>
         </div>
       )}
