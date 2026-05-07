@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback, useMemo } from "react"
 import { dataService } from "@/services/dataService";
 import type { TableQueryResult, ColumnDisplayProps } from "@/types/data";
 import { EXTRA_DEFS, EXTRA_KINDS, type ExtraKind, summarizeExtraKinds } from "@/types/columnExtras";
+import { ManageExtrasDialog } from "./ManageExtrasDialog";
 import { useDataStore } from "@/stores/useDataStore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useHistoryStore } from "@/stores/useHistoryStore";
@@ -512,6 +513,10 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   const [renameWidth, setRenameWidth] = useState("");
   const [renameFormat, setRenameFormat] = useState<ColumnFormat>(DEFAULT_FORMAT);
   const [renameExtras, setRenameExtras] = useState<Record<string, unknown>>({});
+  // "管理附加属性" dialog visibility — opened from the menu via a window
+  // CustomEvent so DataTableView (which owns colExtras state) is the
+  // single source of truth.
+  const [showManageExtras, setShowManageExtras] = useState(false);
   const [batchColProps, setBatchColProps] = useState<{ colIndices: number[]; checkedCols: Set<number> } | null>(null);
   const [batchColType, setBatchColType] = useState("VARCHAR");
   const [batchColWidth, setBatchColWidth] = useState("");
@@ -851,6 +856,14 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     document.addEventListener("click", handler);
     return () => document.removeEventListener("click", handler);
   }, [colMenu, rowMenu, cellMenu, cornerMenu]);
+
+  // Listen for the menu-bar "管理附加属性" trigger. Cross-component because
+  // DataTableView owns colExtras state but the menu lives in Workspace.
+  useEffect(() => {
+    const open = () => setShowManageExtras(true);
+    window.addEventListener("sp:open-manage-extras", open);
+    return () => window.removeEventListener("sp:open-manage-extras", open);
+  }, []);
 
   // Initialize colWidths and colFormats when columns change
   const visibleColCount = data ? data.columns.filter(c => c !== "_row_id").length : 0;
@@ -1358,6 +1371,16 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     } catch (e) {
       setErrorMsg(String(e));
     }
+  };
+
+  /** Apply the result of "管理附加属性" batch dialog. Replaces the entire
+   *  per-column extras array, syncs to backend, marks dirty, records history. */
+  const handleApplyManageExtras = (next: Array<Record<string, unknown> | null>) => {
+    setColExtras(next);
+    colExtrasRef.current = next;
+    syncDisplayProps(colWidthsRef.current, colFormatsRef.current);
+    markDirty();
+    recordAction("批量修改附加属性");
   };
 
   const handleRenameColumn = async () => {
@@ -3405,6 +3428,15 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {showManageExtras && (
+        <ManageExtrasDialog
+          cols={cols}
+          colExtras={colExtras}
+          onApply={handleApplyManageExtras}
+          onClose={() => setShowManageExtras(false)}
+        />
       )}
     </div>
   );

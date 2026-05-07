@@ -837,6 +837,113 @@
   font-size: 12px;
 }
 
+/* "管理附加属性" dialog: column/kind picker (step 1) */
+.sp-extras-picker-list {
+  border: 1px solid var(--border-input);
+  background: var(--bg-input);
+  border-radius: 3px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.sp-extras-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  cursor: pointer;
+  border-radius: 2px;
+}
+.sp-extras-picker-item:hover {
+  background: var(--bg-cell-hover);
+}
+.sp-extras-picker-item-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "管理附加属性" dialog: batch edit grid (step 2) */
+.sp-extras-batch-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sp-extras-batch-hint {
+  font-size: 11px;
+  color: var(--fg-hint);
+}
+.sp-extras-batch-scroll {
+  max-height: min(60vh, 480px);
+  overflow: auto;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-main);
+}
+.sp-extras-batch-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+.sp-extras-batch-table th,
+.sp-extras-batch-table td {
+  padding: 0;
+  border-right: 1px solid var(--border-cell);
+  border-bottom: 1px solid var(--border-cell);
+  text-align: left;
+}
+.sp-extras-batch-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-header);
+  color: var(--fg-secondary);
+  padding: 4px 6px;
+  font-weight: 600;
+  border-bottom: 2px solid var(--border-header-bottom);
+  z-index: 1;
+}
+.sp-extras-batch-th-name {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 2 !important;
+  min-width: 140px;
+}
+.sp-extras-batch-th {
+  min-width: 100px;
+  white-space: nowrap;
+}
+.sp-extras-batch-td-name {
+  position: sticky;
+  left: 0;
+  background: var(--bg-header);
+  color: var(--fg-primary);
+  padding: 4px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  z-index: 1;
+}
+.sp-extras-batch-input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg-primary);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  box-sizing: border-box;
+}
+.sp-extras-batch-input:focus {
+  background: var(--bg-cell-input);
+  box-shadow: inset 0 0 0 2px var(--fg-accent);
+}
+
 /* The spreadsheet grid */
 .sp-grid {
   border-collapse: collapse;

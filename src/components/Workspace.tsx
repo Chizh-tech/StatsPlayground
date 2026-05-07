@@ -501,6 +501,11 @@ export function Workspace() {
               <div className="menu-sep" />
               <div className="menu-item" onClick={handleExportSqlite}>导出为 SQLite</div>
               <div className="menu-item" onClick={handleExportCsvZip}>导出为 CSV (ZIP)</div>
+              <div className="menu-sep" />
+              <div
+                className="menu-item"
+                onClick={() => window.dispatchEvent(new CustomEvent("sp:open-manage-extras"))}
+              >管理附加属性</div>
             </MenuDropdown>
             <MenuDropdown label="图表">
               <div className="menu-item" onClick={handleCreateGraphBuilder}>新建图表构建器</div>
