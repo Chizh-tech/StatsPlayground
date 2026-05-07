@@ -53,9 +53,14 @@ export interface ColumnFormatInfo {
   currency?: string;
 }
 
-/** 列显示属性 */
+/** 列显示属性（含可选的"附加属性"） */
 export interface ColumnDisplayProps {
   colIndex: number;
   width?: number;
   format?: ColumnFormatInfo;
+  /**
+   * 附加属性键值表，键为附加属性 kind（如 "unit"/"spec"/"range"/"notes"），
+   * 值的形状由前端 `columnExtras` 注册表定义；后端按不透明 JSON 处理。
+   */
+  extras?: Record<string, unknown>;
 }

@@ -58,6 +58,9 @@ struct SpprjColumn {
     width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     format: Option<SpprjColumnFormat>,
+    /// Additional column properties (unit, spec, range, ...). Opaque JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extras: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -192,7 +195,7 @@ impl<'a> ProjectService<'a> {
             // Restore column display properties
             let mut display_props: Vec<ColumnDisplayProps> = Vec::new();
             for (i, col) in ds.columns.iter().enumerate() {
-                if col.width.is_some() || col.format.is_some() {
+                if col.width.is_some() || col.format.is_some() || col.extras.is_some() {
                     display_props.push(ColumnDisplayProps {
                         col_index: i,
                         width: col.width,
@@ -201,6 +204,7 @@ impl<'a> ProjectService<'a> {
                             decimals: f.decimals,
                             currency: f.currency.clone(),
                         }),
+                        extras: col.extras.clone(),
                     });
                 }
             }
@@ -296,6 +300,7 @@ impl<'a> ProjectService<'a> {
                         decimals: f.decimals,
                         currency: f.currency.clone(),
                     }),
+                    extras: dp.and_then(|p| p.extras.clone()),
                 }
             }).collect();
 

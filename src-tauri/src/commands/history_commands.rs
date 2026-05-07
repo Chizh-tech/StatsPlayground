@@ -30,6 +30,9 @@ pub struct SnapshotColumn {
     pub width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<SnapshotColumnFormat>,
+    /// Additional column properties (unit, spec, range, ...). Opaque JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extras: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +97,7 @@ pub fn capture_project_snapshot(
                             currency: f.currency.clone(),
                         }
                     }),
+                    extras: dp.and_then(|p| p.extras.clone()),
                 }
             })
             .collect();
@@ -226,7 +230,7 @@ pub fn restore_project_snapshot(
         // Restore column display properties
         let mut display_props: Vec<crate::models::table::ColumnDisplayProps> = Vec::new();
         for (i, col) in ds.columns.iter().enumerate() {
-            if col.width.is_some() || col.format.is_some() {
+            if col.width.is_some() || col.format.is_some() || col.extras.is_some() {
                 display_props.push(crate::models::table::ColumnDisplayProps {
                     col_index: i,
                     width: col.width,
@@ -237,6 +241,7 @@ pub fn restore_project_snapshot(
                             currency: f.currency.clone(),
                         }
                     }),
+                    extras: col.extras.clone(),
                 });
             }
         }

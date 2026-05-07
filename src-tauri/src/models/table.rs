@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Dataset metadata
@@ -48,7 +50,7 @@ pub struct ColumnFormatInfo {
     pub currency: Option<String>,
 }
 
-/// Per-column display properties (width + format)
+/// Per-column display properties (width + format + extras)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColumnDisplayProps {
@@ -57,4 +59,9 @@ pub struct ColumnDisplayProps {
     pub width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<ColumnFormatInfo>,
+    /// Open-ended bag of "additional column properties" keyed by extra-kind
+    /// (e.g. "unit", "spec", "range", "notes"). The value's shape is decided
+    /// by the frontend registry; backend treats it as opaque JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extras: Option<BTreeMap<String, serde_json::Value>>,
 }

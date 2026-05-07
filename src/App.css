@@ -741,6 +741,102 @@
   text-overflow: ellipsis;
 }
 
+/* Small "extras" badge on cols panel items (📎N) */
+.sp-cols-panel-item-extras {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--fg-accent);
+  color: #fff;
+  white-space: nowrap;
+}
+
+/* Additional column properties editor (inside column dialog) */
+.sp-extras-editor {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-main);
+  padding-top: 8px;
+}
+.sp-extras-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.sp-extras-title {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  font-weight: 600;
+}
+.sp-extras-add-select {
+  font-size: 12px;
+  padding: 2px 4px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+}
+.sp-extras-empty {
+  font-size: 11px;
+  color: var(--fg-hint);
+  padding: 6px 0;
+  text-align: center;
+}
+.sp-extras-card {
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  margin-top: 6px;
+  background: var(--bg-panel);
+}
+.sp-extras-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-main);
+  border-radius: 4px 4px 0 0;
+}
+.sp-extras-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+.sp-extras-card-remove {
+  background: none;
+  border: none;
+  color: var(--fg-hint);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.sp-extras-card-remove:hover {
+  color: var(--fg-danger);
+}
+.sp-extras-card-body {
+  padding: 6px 8px;
+}
+.sp-extras-field-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.sp-extras-field-row:last-child {
+  margin-bottom: 0;
+}
+.sp-extras-field-label {
+  flex: 0 0 56px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+}
+.sp-extras-field-input {
+  flex: 1 1 auto;
+  font-size: 12px;
+}
+
 /* The spreadsheet grid */
 .sp-grid {
   border-collapse: collapse;

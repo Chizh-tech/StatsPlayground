@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { dataService } from "@/services/dataService";
 import type { TableQueryResult, ColumnDisplayProps } from "@/types/data";
+import { EXTRA_DEFS, EXTRA_KINDS, type ExtraKind, summarizeExtraKinds } from "@/types/columnExtras";
 import { useDataStore } from "@/stores/useDataStore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useHistoryStore } from "@/stores/useHistoryStore";
@@ -218,6 +219,115 @@ const TableRow = React.memo(function TableRow({
   );
 });
 
+// ---- Column "Additional Properties" editor (used inside the column dialog) ----
+// Lets the user attach optional kinds (unit / spec / range / notes / ...) to
+// a single column. Each kind is defined in `EXTRA_DEFS`; this component
+// renders one removable card per active kind plus an "+ Add" dropdown of the
+// remaining kinds.
+interface ExtrasEditorProps {
+  extras: Record<string, unknown>;
+  onChange: (next: Record<string, unknown>) => void;
+}
+
+const ExtrasEditor = React.memo(function ExtrasEditor({ extras, onChange }: ExtrasEditorProps) {
+  const activeKinds = EXTRA_KINDS.filter((k) => extras[k] !== undefined);
+  const remainingKinds = EXTRA_KINDS.filter((k) => extras[k] === undefined);
+
+  const updateKindField = (kind: ExtraKind, key: string, raw: string, fieldType: string) => {
+    const cur = (extras[kind] as Record<string, unknown> | undefined) ?? {};
+    let value: unknown;
+    if (fieldType === "number") {
+      value = raw === "" ? null : Number(raw);
+      if (typeof value === "number" && Number.isNaN(value)) value = null;
+    } else {
+      value = raw;
+    }
+    onChange({ ...extras, [kind]: { ...cur, [key]: value } });
+  };
+
+  const removeKind = (kind: ExtraKind) => {
+    const next = { ...extras };
+    delete next[kind];
+    onChange(next);
+  };
+
+  const addKind = (kind: ExtraKind) => {
+    if (extras[kind] !== undefined) return;
+    onChange({ ...extras, [kind]: EXTRA_DEFS[kind].defaultValue() });
+  };
+
+  return (
+    <div className="sp-extras-editor">
+      <div className="sp-extras-header">
+        <span className="sp-extras-title">附加属性</span>
+        {remainingKinds.length > 0 && (
+          <select
+            className="sp-extras-add-select"
+            value=""
+            onChange={(e) => {
+              const v = e.target.value as ExtraKind | "";
+              if (v) addKind(v);
+              e.currentTarget.value = "";
+            }}
+          >
+            <option value="">+ 添加附加属性…</option>
+            {remainingKinds.map((k) => (
+              <option key={k} value={k}>{EXTRA_DEFS[k].label}</option>
+            ))}
+          </select>
+        )}
+      </div>
+      {activeKinds.length === 0 ? (
+        <div className="sp-extras-empty">尚未添加任何附加属性</div>
+      ) : (
+        activeKinds.map((kind) => {
+          const def = EXTRA_DEFS[kind];
+          const value = (extras[kind] as Record<string, unknown> | undefined) ?? {};
+          return (
+            <div key={kind} className="sp-extras-card">
+              <div className="sp-extras-card-header">
+                <span className="sp-extras-card-title">{def.label}</span>
+                <button
+                  type="button"
+                  className="sp-extras-card-remove"
+                  title="移除该附加属性"
+                  onClick={() => removeKind(kind)}
+                >×</button>
+              </div>
+              <div className="sp-extras-card-body">
+                {def.fields.map((f) => {
+                  const raw = value[f.key];
+                  const strVal = raw == null ? "" : String(raw);
+                  return (
+                    <div key={f.key} className="sp-extras-field-row">
+                      <label className="sp-extras-field-label">{f.label}</label>
+                      {f.type === "longtext" ? (
+                        <textarea
+                          className="sp-dialog-input sp-extras-field-input"
+                          rows={2}
+                          value={strVal}
+                          onChange={(e) => updateKindField(kind, f.key, e.target.value, f.type)}
+                        />
+                      ) : (
+                        <input
+                          className="sp-dialog-input sp-extras-field-input"
+                          type={f.type === "number" ? "number" : "text"}
+                          value={strVal}
+                          onChange={(e) => updateKindField(kind, f.key, e.target.value, f.type)}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+});
+
 // ---- Memoized columns side panel list ----
 // Iterates every column (potentially hundreds) and previously re-rendered
 // on every cell click because it lived inline in DataTableView. Behind
@@ -227,28 +337,38 @@ interface ColsPanelListProps {
   cols: string[];
   colTypes: string[];
   selectedCols: ReadonlySet<number>;
+  /** Per-column extras map (length matches cols); null means no extras. */
+  colExtras: ReadonlyArray<Record<string, unknown> | null>;
   onItemClick: (colIdx: number, e: React.MouseEvent) => void;
   onItemContextMenu: (e: React.MouseEvent, colIdx: number) => void;
 }
 
 const ColsPanelList = React.memo(function ColsPanelList({
-  cols, colTypes, selectedCols, onItemClick, onItemContextMenu,
+  cols, colTypes, selectedCols, colExtras, onItemClick, onItemContextMenu,
 }: ColsPanelListProps) {
   return (
     <div className="sp-cols-panel-list">
       {cols.map((name, ci) => {
         const typeLabel = typeLabelOf(colTypes[ci]);
         const isSel = selectedCols.has(ci);
+        const extras = colExtras[ci];
+        const extraSummary = extras ? summarizeExtraKinds(extras) : "";
+        const extraCount = extras ? Object.keys(extras).length : 0;
         return (
           <div
             key={ci}
             className={`sp-cols-panel-item${isSel ? " sp-cols-panel-item-selected" : ""}`}
             onClick={(e) => onItemClick(ci, e)}
             onContextMenu={(e) => onItemContextMenu(e, ci)}
-            title={`${colLetter(ci)}  ${name}  (${typeLabel})`}
+            title={`${colLetter(ci)}  ${name}  (${typeLabel})${extraSummary ? `\n附加属性: ${extraSummary}` : ""}`}
           >
             <span className="sp-cols-panel-item-type">{typeLabel}</span>
             <span className="sp-cols-panel-item-name">{name || `(列 ${colLetter(ci)})`}</span>
+            {extraCount > 0 && (
+              <span className="sp-cols-panel-item-extras" title={`附加属性: ${extraSummary}`}>
+                📎{extraCount}
+              </span>
+            )}
           </div>
         );
       })}
@@ -391,6 +511,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   const [renameType, setRenameType] = useState("");
   const [renameWidth, setRenameWidth] = useState("");
   const [renameFormat, setRenameFormat] = useState<ColumnFormat>(DEFAULT_FORMAT);
+  const [renameExtras, setRenameExtras] = useState<Record<string, unknown>>({});
   const [batchColProps, setBatchColProps] = useState<{ colIndices: number[]; checkedCols: Set<number> } | null>(null);
   const [batchColType, setBatchColType] = useState("VARCHAR");
   const [batchColWidth, setBatchColWidth] = useState("");
@@ -404,6 +525,11 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   const [colFormats, setColFormats] = useState<ColumnFormat[]>([]);
   const colFormatsRef = useRef<ColumnFormat[]>([]);
   colFormatsRef.current = colFormats;
+  // Per-column "additional properties" (unit/spec/range/notes/...).
+  // Same length as colFormats; entry is null when the column has no extras.
+  const [colExtras, setColExtras] = useState<Array<Record<string, unknown> | null>>([]);
+  const colExtrasRef = useRef<Array<Record<string, unknown> | null>>([]);
+  colExtrasRef.current = colExtras;
   const [selection, setSelection] = useState<CellRange | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -487,6 +613,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       data: structuredClone(dataRef.current),
       colWidths: [...colWidthsRef.current],
       colFormats: colFormatsRef.current.map((f: ColumnFormat) => ({ ...f })),
+      colExtras: colExtrasRef.current.map((e) => (e ? { ...e } : null)),
     };
   }, [datasetId]);
 
@@ -521,6 +648,13 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
           });
           setColFormats(formats);
           colFormatsRef.current = formats;
+          const extras = Array.from({ length: visCount }, (_, i) => {
+            const p = props.find(dp => dp.colIndex === i);
+            const e = p?.extras;
+            return e && Object.keys(e).length > 0 ? (e as Record<string, unknown>) : null;
+          });
+          setColExtras(extras);
+          colExtrasRef.current = extras;
         }
       } catch { /* ignore display prop load errors */ }
     } catch (e) {
@@ -529,20 +663,28 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     }
   }, [datasetId]);
 
-  /** Save current display props to backend */
+  /** Save current display props to backend.
+   *
+   * Note: extras are read from `colExtrasRef` rather than passed in, so
+   * existing call sites that only mutate widths/formats automatically
+   * preserve the latest extras without needing to thread them through. */
   const syncDisplayProps = useCallback(async (widths: number[], formats: ColumnFormat[]) => {
     const props: ColumnDisplayProps[] = [];
-    const len = Math.max(widths.length, formats.length);
+    const extrasArr = colExtrasRef.current;
+    const len = Math.max(widths.length, formats.length, extrasArr.length);
     for (let i = 0; i < len; i++) {
       const w = widths[i];
       const f = formats[i];
+      const ex = extrasArr[i];
       const hasWidth = w !== undefined && w !== DEFAULT_COL_WIDTH;
       const hasFormat = f !== undefined && f.kind !== "asis";
-      if (hasWidth || hasFormat) {
+      const hasExtras = ex != null && Object.keys(ex).length > 0;
+      if (hasWidth || hasFormat || hasExtras) {
         props.push({
           colIndex: i,
           width: hasWidth ? w : undefined,
           format: hasFormat ? { kind: f.kind, decimals: f.decimals, currency: f.currency } : undefined,
+          extras: hasExtras ? (ex as Record<string, unknown>) : undefined,
         });
       }
     }
@@ -583,6 +725,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       data: TableQueryResult;
       colWidths: number[];
       colFormats: ColumnFormat[];
+      colExtras?: Array<Record<string, unknown> | null>;
     };
     // Only apply if the snapshot is for this dataset
     if (snapshot.datasetId !== datasetId) {
@@ -596,6 +739,10 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     colWidthsRef.current = snapshot.colWidths;
     setColFormats(snapshot.colFormats);
     colFormatsRef.current = snapshot.colFormats;
+    const restoredExtras = snapshot.colExtras
+      ?? Array.from({ length: snapshot.colFormats.length }, () => null);
+    setColExtras(restoredExtras);
+    colExtrasRef.current = restoredExtras;
     clearPendingRestore();
     // Sync to backend in background (non-blocking)
     const rowIdIdx2 = snapshot.data.columns.indexOf("_row_id");
@@ -715,6 +862,10 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setColFormats((prev) => {
       if (prev.length === visibleColCount) return prev;
       return Array.from({ length: visibleColCount }, (_, i) => prev[i] ?? DEFAULT_FORMAT);
+    });
+    setColExtras((prev) => {
+      if (prev.length === visibleColCount) return prev;
+      return Array.from({ length: visibleColCount }, (_, i) => prev[i] ?? null);
     });
   }, [visibleColCount]);
   // Filter _row_id from display — memoized (must be before early return for hooks rules)
@@ -1159,6 +1310,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setRenameType(colTypes[colIdx]);
     setRenameWidth(String(Math.round(colWidths[colIdx] ?? DEFAULT_COL_WIDTH)));
     setRenameFormat(colFormats[colIdx] ?? DEFAULT_FORMAT);
+    const ex = colExtras[colIdx];
+    setRenameExtras(ex ? { ...ex } : {});
     setColMenu(null);
   };
 
@@ -1222,6 +1375,12 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     newFormats[renameCol.colIdx] = { ...renameFormat };
     setColFormats(newFormats);
     colFormatsRef.current = newFormats;
+    // Apply column extras (additional properties)
+    const newExtras = [...colExtras];
+    const cleanedExtras = Object.keys(renameExtras).length > 0 ? { ...renameExtras } : null;
+    newExtras[renameCol.colIdx] = cleanedExtras;
+    setColExtras(newExtras);
+    colExtrasRef.current = newExtras;
     // Sync display props to backend
     syncDisplayProps(newWidths, newFormats);
     markDirty();
@@ -2548,6 +2707,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 />
                 <button className="sp-dialog-btn" onClick={() => setRenameWidth(String(autoFitColumn(renameCol.colIdx)))}>自动</button>
               </div>
+              <ExtrasEditor extras={renameExtras} onChange={setRenameExtras} />
             </div>
             <div className="sp-dialog-actions">
               <button className="sp-dialog-btn" onClick={() => setRenameCol(null)}>取消</button>
@@ -2587,6 +2747,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
               cols={cols}
               colTypes={colTypes}
               selectedCols={selectedCols}
+              colExtras={colExtras}
               onItemClick={stableColsPanelClick}
               onItemContextMenu={stableColsPanelCtxMenu}
             />
