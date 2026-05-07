@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type ThemeMode = "light" | "dark" | "system";
 
@@ -22,9 +23,21 @@ function getEffectiveTheme(mode: ThemeMode): "light" | "dark" {
   return mode;
 }
 
+/** Sync the native OS title bar color to the app theme so the menu bar
+ *  blends with the system caption (Windows/Linux). On macOS this also
+ *  affects red/yellow/green button hover hint colors. */
+function syncWindowTheme(mode: ThemeMode) {
+  const effective = mode === "system" ? null : mode;
+  // null tells the OS to follow system; otherwise force light/dark caption.
+  getCurrentWindow().setTheme(effective).catch(() => {
+    // Non-Tauri context (e.g. browser dev) — ignore.
+  });
+}
+
 function applyTheme(mode: ThemeMode) {
   const effective = getEffectiveTheme(mode);
   document.documentElement.setAttribute("data-theme", effective);
+  syncWindowTheme(mode);
 }
 
 export const useThemeStore = create<ThemeState>((set) => ({
