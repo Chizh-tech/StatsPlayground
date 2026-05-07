@@ -90,6 +90,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const markDirty = useProjectStore((s) => s.markDirty);
 
   const [columns, setColumns] = useState<FieldRef[]>([]);
+  const [colSqlTypes, setColSqlTypes] = useState<string[]>([]);
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -147,6 +148,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           name,
           type: inferFieldType(type),
         }));
+        const sqlTypes = cols.map(([, type]) => type);
         // 简化：一次性拉取全部数据（后续可流式优化）
         const result = await dataService.queryTable({
           datasetId: dataset.id,
@@ -155,6 +157,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         });
         if (cancelled) return;
         setColumns(fields);
+        setColSqlTypes(sqlTypes);
         setData({ columns: result.columns, rows: result.rows });
       } catch (e) {
         if (!cancelled) setError(String(e));
@@ -273,26 +276,32 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       <div className="gb-body">
         {/* 左栏 */}
         <div className="gb-left">
-          <div className="gb-section">
-            <div className="gb-section-title">{t("graph.datasetHeader", { name: dataset.name, n: columns.length })}</div>
-            <div className="gb-col-list">
-              {columns.map((c) => (
-                <div
-                  key={c.name}
-                  className="gb-col-item"
-                  draggable
-                  onDragStart={(e) => onDragStart(e, c)}
-                  title={`${c.name} (${c.type})`}
-                >
-                  <span
-                    className="gb-col-icon"
-                    style={{ color: fieldTypeColor(c.type) }}
+          {/* Reuse the same column-panel styling as the data table view so the
+              two left rails look and feel identical. Items remain draggable so
+              they can be dropped into encoding slots. */}
+          <div className="sp-cols-panel gb-cols-panel">
+            <div className="sp-cols-panel-header">
+              <span className="sp-cols-panel-title">
+                {t("graph.datasetHeader", { name: dataset.name, n: columns.length })}
+              </span>
+            </div>
+            <div className="sp-cols-panel-list">
+              {columns.map((c, i) => {
+                const sqlType = colSqlTypes[i] ?? "";
+                const tLabel = t(`dataTable.type.${sqlType}`, { defaultValue: sqlType });
+                return (
+                  <div
+                    key={c.name}
+                    className="sp-cols-panel-item"
+                    draggable
+                    onDragStart={(e) => onDragStart(e, c)}
+                    title={`${c.name} (${tLabel})`}
                   >
-                    {fieldTypeIcon(c.type)}
-                  </span>
-                  <span className="gb-col-name">{c.name}</span>
-                </div>
-              ))}
+                    <span className="sp-cols-panel-item-type">{tLabel}</span>
+                    <span className="sp-cols-panel-item-name">{c.name}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -466,12 +475,6 @@ function Slot({ label, field, onDrop, onClear, orientation, required }: SlotProp
       )}
       {field && (
         <span className="gb-slot-chip">
-          <span
-            className="gb-slot-chip-icon"
-            style={{ color: fieldTypeColor(field.type) }}
-          >
-            {fieldTypeIcon(field.type)}
-          </span>
           <span className="gb-slot-chip-name">{field.name}</span>
           <button
             className="gb-slot-chip-x"

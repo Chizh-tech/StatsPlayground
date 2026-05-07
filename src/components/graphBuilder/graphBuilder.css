@@ -158,6 +158,30 @@
   flex-shrink: 0;
 }
 
+/* When the shared sp-cols-panel is embedded in the graph builder left rail
+   we want it to keep the same overall border/background but allow the
+   sibling .gb-section blocks below to coexist (so the panel does NOT take
+   the entire height — only its content's natural height with internal
+   scrolling capped). */
+.gb-cols-panel {
+  /* Override the default full-height column panel so it shares the rail
+     with chart-specific sections below. Cap to half the rail height; let
+     the inner list scroll. */
+  flex: 0 1 auto;
+  max-height: 50%;
+  border-right: none;
+  background: transparent;
+  padding-top: 0;
+}
+
+.gb-cols-panel .sp-cols-panel-item {
+  cursor: grab;
+}
+
+.gb-cols-panel .sp-cols-panel-item:active {
+  cursor: grabbing;
+}
+
 .gb-col-name {
   white-space: nowrap;
   overflow: hidden;

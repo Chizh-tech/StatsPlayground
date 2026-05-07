@@ -252,7 +252,18 @@ export function Workspace() {
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
         : `gb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const name = `Graph${nextNum}`;
+    // Per-table sequential numbering: scan existing graph builders bound to
+    // the same dataset, look at names matching `${ds.name} - Graph<N>`, and
+    // pick the next N.
+    const prefix = `${ds.name} - Graph`;
+    const perTableMax = graphBuilders
+      .filter((g) => g.sourceDatasetId === ds.id)
+      .reduce((max, g) => {
+        if (!g.name.startsWith(prefix)) return max;
+        const n = parseInt(g.name.slice(prefix.length), 10);
+        return Number.isFinite(n) && n > max ? n : max;
+      }, 0);
+    const name = `${ds.name} - Graph${perTableMax + 1}`;
     const item: GraphBuilderItem = {
       id,
       name,
