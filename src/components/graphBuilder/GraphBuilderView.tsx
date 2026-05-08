@@ -33,20 +33,11 @@ interface GraphBuilderViewProps {
 /** 所有可用的编码槽位 */
 type SlotKey = GraphSlotKey;
 
-interface SlotDef {
-  key: SlotKey;
-  label: string;
-  /** 是否允许多个字段（当前均限制为 1） */
-}
-
-const SHELF_SLOTS: SlotDef[] = [
-  { key: "overlay", label: "Overlay" },
-  { key: "color", label: "Color" },
-  { key: "size", label: "Size" },
-  { key: "groupX", label: "Group X" },
-  { key: "groupY", label: "Group Y" },
-  { key: "wrap", label: "Wrap" },
-];
+// Color / Size / Wrap encoding channels were intentionally removed —
+// the per-group Style editor (Line / Fill / Point) supersedes them.
+// Overlay drives legend grouping and now lives inside the LegendStylePanel.
+// Group X / Group Y are still exposed via the dedicated facet drop slots
+// surrounding the canvas, not via a side shelf.
 
 interface ChartTypeDef {
   kind: ElementKind;
@@ -178,7 +169,12 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
   const spec = useMemo<GraphSpec>(() => {
     const enc: GraphSpec["encoding"] = {};
+    // Color / Size / Wrap encoding channels were removed in favour of the
+    // per-group Style editor. Drop them when building the spec so legacy
+    // projects don't surprise the user with auto-coloring or auto-sizing.
+    const SKIP_KEYS = new Set<SlotKey>(["color", "size", "wrap"]);
     (Object.keys(encoding) as SlotKey[]).forEach((k) => {
+      if (SKIP_KEYS.has(k)) return;
       const v = encoding[k];
       if (v) (enc as any)[k] = v;
     });
@@ -427,30 +423,19 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           />
         </div>
 
-        {/* Legend + Style editor: 上半图例（按 Color/Overlay 分组），下
-            半样式设置（针对当前选中的图例条目，分别设置线/填充/点）。
-            无论上方激活的是散点还是箱线图，三类样式都会被对应应用。 */}
+        {/* Legend + Style editor:
+            - 顶部 Overlay 槽：拖入分类列即按其值生成图例分组；
+            - 中间图例列表：每行对应一个分组（无 Overlay 时显示 "All"）；
+            - 底部样式编辑器：针对当前选中的图例条目，分别设置线/填充/点。
+            无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
         <LegendStylePanel
           data={data}
           encoding={encoding}
           groupStyles={item.groupStyles ?? {}}
           setGroupStyle={setGroupStyle}
+          onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
+          onClearOverlay={() => clearSlot("overlay")}
         />
-
-        {/* 右栏：编码槽列表 */}
-        <div className="gb-right">
-          {SHELF_SLOTS.filter((s) => s.key !== "groupX" && s.key !== "groupY").map((s) => (
-            <Slot
-              key={s.key}
-              slot={s.key}
-              label={s.label}
-              field={encoding[s.key]}
-              onDrop={(e) => handleDropOnSlot(s.key, e)}
-              onClear={() => clearSlot(s.key)}
-              orientation="shelf"
-            />
-          ))}
-        </div>
       </div>
     </div>
   );
@@ -895,16 +880,18 @@ interface LegendStylePanelProps {
   encoding: Partial<Record<GraphSlotKey, FieldRef>>;
   groupStyles: GroupStyleMap;
   setGroupStyle: (groupKey: string, next: GroupStyle | undefined) => void;
+  onDropOverlay: (e: React.DragEvent) => void;
+  onClearOverlay: () => void;
 }
 
-function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOverlay, onClearOverlay }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
-  // Determine the grouping field (Color first, then Overlay) and extract
-  // the unique category values from the data so they can be listed as
-  // legend entries. When neither field is set we render a single
-  // "default" row so the user can still customize the chart-wide style.
-  const groupField = encoding.color || encoding.overlay;
+  // Overlay drives legend grouping. Drop a categorical column onto the
+  // Overlay slot at the top of this panel to split the chart by that
+  // column's values; otherwise the panel shows a single "All" entry that
+  // styles the entire chart at once.
+  const groupField = encoding.overlay;
   const groupKeys = useMemo<string[]>(() => {
     if (!groupField || !data) return [DEFAULT_GROUP_KEY];
     const idx = data.columns.indexOf(groupField.name);
@@ -961,10 +948,19 @@ function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle }: Legend
 
   return (
     <div className="gb-legend">
+      {/* Overlay slot (drop a categorical column to split into groups) */}
+      <Slot
+        slot="overlay"
+        label="Overlay"
+        field={encoding.overlay}
+        onDrop={onDropOverlay}
+        onClear={onClearOverlay}
+        orientation="shelf"
+      />
+
       {/* Legend header + list (top half) */}
       <div className="gb-legend-title">
         {t("graph.legend.title")}
-        {groupField && <span className="gb-legend-field"> · {groupField.name}</span>}
       </div>
       {groupKeys.map((key, idx) => {
         const st = effectiveStyleOf(key, idx);

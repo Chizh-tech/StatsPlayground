@@ -97,7 +97,7 @@
 .gb-body {
   flex: 1;
   display: grid;
-  grid-template-columns: 220px 1fr 160px 200px;
+  grid-template-columns: 220px 1fr 220px;
   min-height: 0;
   overflow: hidden;
 }
@@ -433,17 +433,6 @@
   color: var(--fg-danger);
 }
 
-/* 右栏：编码槽列表 */
-.gb-right {
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--border-main);
-  background: var(--bg-panel);
-  padding: 6px;
-  gap: 4px;
-  overflow-y: auto;
-}
-
 /* 编码槽通用 */
 .gb-slot {
   display: flex;
@@ -565,15 +554,20 @@
   color: var(--fg-danger);
 }
 
-/* ===== Right-side Legend (JMP-style customizable per layer) ===== */
+/* ===== Right-side Legend + Style editor (overlay slot + per-group styles) ===== */
 .gb-legend {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border-main);
+  border-left: 1px solid var(--border-main);
   background: var(--bg-panel);
   padding: 8px 6px;
   overflow-y: auto;
   gap: 2px;
+}
+
+.gb-legend > .gb-slot-shelf {
+  margin-bottom: 6px;
+  flex-shrink: 0;
 }
 
 .gb-legend-title {
