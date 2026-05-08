@@ -1624,6 +1624,100 @@
   opacity: 0.7;
 }
 
+/* JMP-style two-pane stack column picker */
+.sp-stack-picker {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.sp-stack-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sp-stack-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-secondary);
+  padding: 2px 4px 4px 4px;
+}
+.sp-stack-pane-count {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--fg-secondary);
+  opacity: 0.75;
+}
+.sp-stack-list {
+  flex: 1 1 0;
+  min-height: 180px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  padding: 2px;
+  background: var(--bg-cell, transparent);
+}
+.sp-stack-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+  user-select: none;
+}
+.sp-stack-list-item:hover {
+  background: var(--bg-menu-hover);
+}
+.sp-stack-list-item.is-selected {
+  background: var(--fg-accent);
+  color: #fff;
+}
+.sp-stack-list-item.is-selected .sp-col-type-hint {
+  color: #fff;
+  opacity: 0.85;
+}
+.sp-stack-list-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-stack-list-empty {
+  padding: 12px 8px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  text-align: center;
+  font-style: italic;
+}
+.sp-stack-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding-top: 22px; /* align with first list item, accounting for header */
+}
+.sp-stack-actions .sp-dialog-btn {
+  white-space: nowrap;
+  min-width: 130px;
+}
+.sp-stack-info-note {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  margin-bottom: 8px;
+  padding: 0 2px;
+}
+
 /* Batch column list */
 .sp-batch-col-list {
   max-height: 200px;
