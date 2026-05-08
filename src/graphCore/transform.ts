@@ -436,24 +436,33 @@ function buildSingleOption(
           z: 4,
         });
       }
+      const boxMaxLines = maxWrapLines(cats, 16);
+      const boxRotate = boxMaxLines === 1 && needsRotation(cats);
       return {
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
-        grid: { left: 56, right: 24, top: 32, bottom: 48 },
+        grid: {
+          left: 52,
+          right: 16,
+          top: 16,
+          bottom: (boxRotate ? 56 : 16) + Math.max(0, boxMaxLines - 1) * 14,
+        },
         tooltip: { trigger: "item" },
         xAxis: {
           type: "category",
           data: cats,
-          name: xField?.name,
-          nameLocation: "middle",
-          nameGap: 28,
           ...axis,
+          axisLabel: {
+            ...(axis.axisLabel as object),
+            interval: 0,
+            rotate: boxRotate ? 30 : 0,
+            hideOverlap: false,
+            formatter: (v: string) => wrapLabel(v, 16),
+            lineHeight: 13,
+          },
         },
         yAxis: {
           type: "value",
-          name: yField?.name,
-          nameLocation: "middle",
-          nameGap: 40,
           ...axis,
         },
         series,
@@ -482,29 +491,42 @@ function buildSingleOption(
     });
   });
 
+  // The X/Y slot chips outside the canvas already label the axes, so we
+  // intentionally omit `name` on the ECharts axes to avoid duplication.
+  const xCats = xIsCategory ? collectCategories(data, xIdx) : [];
+  // Compute rotation / wrap metrics first so the axis literal can reference them.
+  const xMaxLines = xIsCategory ? maxWrapLines(xCats, 16) : 1;
+  // Rotate only when wrapping doesn't already break long labels onto
+  // multiple lines — wrapped labels read better horizontally.
+  const xRotated = xIsCategory && xMaxLines === 1 && needsRotation(xCats);
+  const bottomGap = xIsCategory
+    ? (xRotated ? 56 : 16) + Math.max(0, xMaxLines - 1) * 14
+    : 28;
   const xAxis = xIsCategory
     ? {
         type: "category",
         // 收集所有 X 类目（按出现顺序）
-        data: collectCategories(data, xIdx),
-        name: xField?.name,
-        nameLocation: "middle",
-        nameGap: 28,
+        data: xCats,
         ...axis,
+        axisLabel: {
+          ...(axis.axisLabel as object),
+          // Force every category label to render — ECharts otherwise hides
+          // overlapping ones, which can drop most ticks for long names.
+          interval: 0,
+          rotate: xRotated ? 30 : 0,
+          hideOverlap: false,
+          // Wrap long labels onto multiple lines instead of truncating with "…".
+          formatter: (v: string) => wrapLabel(v, 16),
+          lineHeight: 13,
+        },
       }
     : xIsTime
       ? {
           type: "time",
-          name: xField?.name,
-          nameLocation: "middle",
-          nameGap: 28,
           ...axis,
         }
       : {
           type: "value",
-          name: xField?.name,
-          nameLocation: "middle",
-          nameGap: 28,
           scale: true,
           ...axis,
         };
@@ -512,7 +534,7 @@ function buildSingleOption(
   return {
     backgroundColor: "transparent",
     textStyle: { color: theme.fgPrimary },
-    grid: { left: 60, right: 24, top: legendNames.length > 0 ? 48 : 32, bottom: 48 },
+    grid: { left: 52, right: 16, top: legendNames.length > 0 ? 40 : 16, bottom: bottomGap },
     tooltip: { trigger: "item" },
     legend:
       legendNames.length > 0
@@ -526,9 +548,6 @@ function buildSingleOption(
     xAxis,
     yAxis: {
       type: "value",
-      name: yField?.name,
-      nameLocation: "middle",
-      nameGap: 44,
       scale: true,
       ...axis,
     },
@@ -549,6 +568,49 @@ function collectCategories(data: GraphData, xIdx: number): string[] {
     }
   }
   return out;
+}
+
+/** Decide if category labels should be rotated to avoid overlap.
+ *  Heuristic: rotate when there are many categories or any label is long. */
+function needsRotation(cats: string[]): boolean {
+  if (cats.length > 8) return true;
+  return cats.some((c) => c.length > 10);
+}
+
+/** Wrap a long category label across multiple lines using "\n".
+ *  Prefers splitting at common separators (` `, `-`, `_`, `/`) to keep
+ *  word boundaries; falls back to a hard chunk split for solid strings. */
+function wrapLabel(s: string, maxChars: number): string {
+  if (!s) return s;
+  if (s.length <= maxChars) return s;
+  const tokens = s.split(/(?<=[\s\-_/])/); // keep separators with prev token
+  const lines: string[] = [];
+  let line = "";
+  for (const tok of tokens) {
+    if ((line + tok).length > maxChars && line.length > 0) {
+      lines.push(line);
+      line = tok;
+    } else {
+      line += tok;
+    }
+    // If a single token is itself longer than maxChars, hard-break it.
+    while (line.length > maxChars) {
+      lines.push(line.slice(0, maxChars));
+      line = line.slice(maxChars);
+    }
+  }
+  if (line) lines.push(line);
+  return lines.map((l) => l.trim()).join("\n");
+}
+
+/** Number of wrapped lines the longest label will produce. */
+function maxWrapLines(cats: string[], maxChars: number): number {
+  let m = 1;
+  for (const c of cats) {
+    const n = wrapLabel(c, maxChars).split("\n").length;
+    if (n > m) m = n;
+  }
+  return m;
 }
 
 interface BuildCtx {
