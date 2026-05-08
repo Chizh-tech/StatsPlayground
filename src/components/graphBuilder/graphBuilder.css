@@ -402,6 +402,7 @@
 /* 中栏：画布。给 4 个轴拖放区与面板外边框之间留出呼吸空间，
    避免拖放区贴着外边框造成视觉拥挤。 */
 .gb-center {
+  flex: 1 1 0;
   display: grid;
   grid-template-rows: 28px 1fr 28px;
   min-width: 0;
