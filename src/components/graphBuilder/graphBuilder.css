@@ -566,7 +566,7 @@
 }
 
 .gb-legend > .gb-slot-shelf {
-  margin-bottom: 6px;
+  margin: 4px 0 6px 0;
   flex-shrink: 0;
 }
 
@@ -576,9 +576,7 @@
   color: var(--fg-secondary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 0 6px 6px 6px;
-  border-bottom: 1px solid var(--border-main);
-  margin-bottom: 4px;
+  padding: 0 6px 4px 6px;
 }
 
 .gb-legend-item {

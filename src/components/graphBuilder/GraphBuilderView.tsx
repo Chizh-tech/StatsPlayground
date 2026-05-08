@@ -948,7 +948,14 @@ function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOv
 
   return (
     <div className="gb-legend">
-      {/* Overlay slot (drop a categorical column to split into groups) */}
+      {/* Legend header */}
+      <div className="gb-legend-title">
+        {t("graph.legend.title")}
+      </div>
+
+      {/* Overlay slot — placed under the LEGEND title and above the first
+          legend entry so that the visual hierarchy makes it clear: the
+          legend rows below exist *because* this Overlay column is set. */}
       <Slot
         slot="overlay"
         label="Overlay"
@@ -958,10 +965,7 @@ function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOv
         orientation="shelf"
       />
 
-      {/* Legend header + list (top half) */}
-      <div className="gb-legend-title">
-        {t("graph.legend.title")}
-      </div>
+      {/* Legend list */}
       {groupKeys.map((key, idx) => {
         const st = effectiveStyleOf(key, idx);
         const label = key === DEFAULT_GROUP_KEY ? t("graph.legend.allEntries") : (key || "—");
