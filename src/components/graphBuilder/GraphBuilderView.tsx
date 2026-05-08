@@ -16,7 +16,7 @@
  *   └──────────────────────────────────────────────────────────────────┘
  */
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
 import { Graph, inferFieldType, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape } from "@/graphCore";
@@ -87,6 +87,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // (DataTableView): clamp on drag and double-click to reset.
   const [leftWidth, setLeftWidth] = useState(220);
   const [rightWidth, setRightWidth] = useState(220);
+  // Vertical split inside the left rail: percentage of the rail's height
+  // that goes to the column list, the rest to LAYERS. Mirrors the
+  // history-divider pattern in HistoryPanel.
+  const [leftTopPct, setLeftTopPct] = useState(50);
+  const leftRailRef = useRef<HTMLDivElement>(null);
   const startSideResize = useCallback(
     (side: "left" | "right") => (e: React.MouseEvent) => {
       e.preventDefault();
@@ -110,6 +115,34 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       document.body.style.userSelect = "none";
     },
     [leftWidth, rightWidth],
+  );
+
+  // Vertical drag inside the left rail (between TABLE columns and LAYERS).
+  const startLeftRowResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const rail = leftRailRef.current;
+      if (!rail) return;
+      const railH = rail.clientHeight;
+      if (railH <= 0) return;
+      const startY = e.clientY;
+      const startPct = leftTopPct;
+      const onMove = (ev: MouseEvent) => {
+        const deltaPct = ((ev.clientY - startY) / railH) * 100;
+        setLeftTopPct(Math.max(15, Math.min(85, startPct + deltaPct)));
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+    },
+    [leftTopPct],
   );
 
   // 编码状态从 store 派生
@@ -311,11 +344,14 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
       <div className="gb-body">
         {/* 左栏 */}
-        <div className="gb-left" style={{ width: leftWidth }}>
+        <div className="gb-left" style={{ width: leftWidth }} ref={leftRailRef}>
           {/* Reuse the same column-panel styling as the data table view so the
               two left rails look and feel identical. Items remain draggable so
               they can be dropped into encoding slots. */}
-          <div className="sp-cols-panel gb-cols-panel">
+          <div
+            className="sp-cols-panel gb-cols-panel"
+            style={{ flex: `0 0 ${leftTopPct}%` }}
+          >
             <div className="sp-panel-header">
               <span className="sp-panel-header-title">
                 {t("graph.datasetHeader", { name: dataset.name, n: columns.length })}
@@ -341,10 +377,21 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             </div>
           </div>
 
+          {/* Horizontal splitter between TABLE columns and LAYERS */}
+          <div
+            className="gb-splitter-h"
+            onMouseDown={startLeftRowResize}
+            onDoubleClick={() => setLeftTopPct(50)}
+            title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
+          />
+
           {/* Layer cards: one per active chart kind, plus an add-card popover.
               Replaces the old per-chart-type sections and the top-toolbar
               chart-type toggle buttons. */}
-          <div className="gb-layers">
+          <div
+            className="gb-layers"
+            style={{ flex: `0 0 ${100 - leftTopPct}%` }}
+          >
             <div className="sp-panel-header">
               <span className="sp-panel-header-title">{t("graph.layersSection")}</span>
             </div>
