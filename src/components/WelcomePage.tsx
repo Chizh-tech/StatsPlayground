@@ -28,7 +28,11 @@ export function WelcomePage() {
       multiple: false,
     });
     if (selected) {
-      await openProject(selected as string);
+      try {
+        await openProject(selected as string);
+      } catch (e) {
+        alert(t("alert.openProjectFailed", { defaultValue: "Failed to open project: {{msg}}", msg: String(e) }));
+      }
     }
   };
 

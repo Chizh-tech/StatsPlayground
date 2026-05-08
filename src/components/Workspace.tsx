@@ -567,6 +567,10 @@ export function Workspace() {
         if (result.graphBuilders && result.graphBuilders.length > 0) {
           loadGraphBuildersFromProject(result.graphBuilders as GraphBuilderItem[]);
         }
+      } catch (e) {
+        // Surface backend errors so the user isn't left staring at a screen
+        // flash with no explanation when an .spprj fails to load.
+        alert(t("alert.openProjectFailed", { defaultValue: "Failed to open project: {{msg}}", msg: String(e) }));
       } finally {
         unlisten();
         setBusyMessage(null);

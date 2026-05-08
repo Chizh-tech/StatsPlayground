@@ -106,9 +106,14 @@ impl<'a> ProjectService<'a> {
         *proj = Some(project.clone());
 
         // Re-pack graph docs into the original opaque JSON shape the frontend
-        // already understands (full body including the `id` field).
+        // already understands (full body including the `id` field). The body
+        // map stored on disk no longer carries `id` (it lives on GraphDoc
+        // itself to avoid duplicate JSON keys), so re-inject it here.
         let graph_builders = bundle.graphs.into_iter()
-            .map(|g| serde_json::Value::Object(g.body))
+            .map(|mut g| {
+                g.body.insert("id".to_string(), serde_json::Value::String(g.id.clone()));
+                serde_json::Value::Object(g.body)
+            })
             .collect();
 
         Ok(OpenProjectResult {
@@ -367,7 +372,9 @@ impl<'a> ProjectService<'a> {
     /// JSON shape the frontend uses for graph_builders (id is preserved).
     pub fn import_graph(&self, file_path: &str) -> Result<serde_json::Value, AppError> {
         let doc = spprj_archive::read_graph_file(file_path)?;
-        Ok(serde_json::Value::Object(doc.body))
+        let mut body = doc.body;
+        body.insert("id".to_string(), serde_json::Value::String(doc.id));
+        Ok(serde_json::Value::Object(body))
     }
 }
 
@@ -402,14 +409,19 @@ fn compose_graph_docs(raw: Vec<serde_json::Value>) -> Vec<GraphDoc> {
 
 /// Pull `id` (or `builderId`) out of an opaque graph-builder object and
 /// return the body. Mirrors the same logic in spprj_archive's legacy reader.
+/// id and version are *removed* from the returned body so the GraphDoc that
+/// flattens it won't emit them twice on serialization.
 fn lift_graph_id(raw: serde_json::Value) -> (String, serde_json::Map<String, serde_json::Value>) {
-    let map = match raw {
+    let mut map = match raw {
         serde_json::Value::Object(m) => m,
         _ => serde_json::Map::new(),
     };
-    let id = map.get("id").and_then(|v| v.as_str()).map(String::from)
-        .or_else(|| map.get("builderId").and_then(|v| v.as_str()).map(String::from))
+    let id = map
+        .remove("id")
+        .and_then(|v| v.as_str().map(String::from))
+        .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
         .unwrap_or_default();
+    map.remove("version");
     (id, map)
 }
 

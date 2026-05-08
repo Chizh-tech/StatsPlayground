@@ -211,7 +211,7 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
     for entry in &manifest.graphs {
         let bytes = read_entry_bytes(&mut zip, &entry.file)
             .ok_or_else(|| AppError::FileIO(format!("Missing graph entry: {}", entry.file)))?;
-        let doc: GraphDoc = serde_json::from_slice(&bytes)
+        let doc = parse_graph_doc(&bytes, &entry.id)
             .map_err(|e| AppError::FileIO(format!("Invalid graph file {}: {}", entry.file, e)))?;
         graphs.push(doc);
     }
@@ -291,15 +291,20 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
 }
 
 /// Pull an `id`/`builderId` field out of an opaque graph builder JSON value
-/// for use in the manifest, returning the body as a Map.
+/// for use in the manifest, returning the body as a Map. The id and version
+/// are *removed* from the returned body so the GraphDoc that flattens it
+/// won't emit them twice on serialization.
 fn lift_id(raw: Value, fallback_idx: usize) -> (String, serde_json::Map<String, Value>) {
-    let map = match raw {
+    let mut map = match raw {
         Value::Object(m) => m,
         _ => serde_json::Map::new(),
     };
-    let id = map.get("id").and_then(|v| v.as_str()).map(String::from)
-        .or_else(|| map.get("builderId").and_then(|v| v.as_str()).map(String::from))
+    let id = map
+        .remove("id")
+        .and_then(|v| v.as_str().map(String::from))
+        .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
         .unwrap_or_else(|| format!("graph_{}", fallback_idx));
+    map.remove("version");
     (id, map)
 }
 
@@ -429,7 +434,31 @@ pub fn write_graph_file(doc: &GraphDoc, path: &str) -> Result<(), AppError> {
 /// Read a `.spgh` file from disk into a `GraphDoc`.
 pub fn read_graph_file(path: &str) -> Result<GraphDoc, AppError> {
     let bytes = std::fs::read(path)?;
-    let doc: GraphDoc = serde_json::from_slice(&bytes)
-        .map_err(|e| AppError::FileIO(format!("Invalid .spgh file: {}", e)))?;
-    Ok(doc)
+    parse_graph_doc(&bytes, "")
+        .map_err(|e| AppError::FileIO(format!("Invalid .spgh file: {}", e)))
+}
+
+/// Tolerant `.spgh` parser. Reads the bytes into a generic `serde_json::Value`
+/// first so legacy files written before this fix — which carry a duplicate
+/// top-level `id` key (one from the named struct field, one re-emitted by the
+/// flattened `body`) — still load. `serde_json::Map` keeps only the last value
+/// for duplicate keys, so the resulting map has a single `id` entry. We then
+/// lift `id` and `version` into the named struct fields so `body` no longer
+/// carries them. `fallback_id` is used when the file omits `id` entirely.
+fn parse_graph_doc(bytes: &[u8], fallback_id: &str) -> Result<GraphDoc, String> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let mut map = match value {
+        Value::Object(m) => m,
+        _ => return Err("graph file is not a JSON object".into()),
+    };
+    let id = map
+        .remove("id")
+        .and_then(|v| v.as_str().map(String::from))
+        .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
+        .unwrap_or_else(|| fallback_id.to_string());
+    let version = map
+        .remove("version")
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(default_doc_version);
+    Ok(GraphDoc { id, version, body: map })
 }
