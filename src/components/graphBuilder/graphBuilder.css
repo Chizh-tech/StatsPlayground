@@ -712,9 +712,11 @@
 
 /* ===== In-panel per-group Style editor (bottom half of legend) ===== */
 .gb-style-editor {
-  margin-top: 8px;
-  padding-top: 0;
-  border-top: 1px solid var(--border-main);
+  /* Bleed past the parent's 8px/6px padding so the STYLE header bar lines
+     up flush with the LEGEND header bar above (no gap on the left/right
+     edges). The .sp-panel-header inside already provides the top divider
+     via its own border-bottom; we don't need a separate border-top here. */
+  margin: 8px -6px 0 -6px;
   display: flex;
   flex-direction: column;
   gap: 6px;
