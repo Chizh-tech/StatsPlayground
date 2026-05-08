@@ -161,6 +161,93 @@ function intervalHalf(ys: number[], kind: string): number {
   }
 }
 
+/** Compute per-point horizontal jitter offsets in CSS pixels.
+ *
+ *  - `auto` produces JMP-style "stack jitter": within each X category, Y
+ *    values are binned at roughly one symbol height; the points sharing a
+ *    bin are spread side by side around the X position, so every point is
+ *    visible without overlap.
+ *  - `uniform` / `normal` apply random pixel-space noise.
+ *  - `none` returns null (caller should skip applying offsets).
+ *
+ *  Returns one [dx, 0] tuple per input point or null if no jitter requested.
+ */
+function computeJitterOffsets(
+  points: Array<{ x: unknown; y: number }>,
+  mode: string,
+  limit: number,
+): Array<[number, number]> | null {
+  if (mode === "none" || points.length === 0) return null;
+  // Pixel spacing between adjacent stacked symbols. ECharts default scatter
+  // is ~6px, give a little air around it so dots don't kiss.
+  const SYMBOL_PX = 6;
+  const SPACING = SYMBOL_PX + 1;
+  // Maximum total horizontal spread per category (capped at the typical
+  // category band ~ 60px). `limit` (0..1) scales it.
+  const MAX_SPREAD = 60 * (limit > 0 ? limit : 1);
+
+  if (mode === "uniform" || mode === "normal") {
+    const half = MAX_SPREAD / 2;
+    const offs: Array<[number, number]> = new Array(points.length);
+    for (let i = 0; i < points.length; i++) {
+      let r: number;
+      if (mode === "normal") {
+        // Box-Muller, clamp to [-1, 1].
+        const u = Math.random() || 1e-9;
+        const v = Math.random();
+        r = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) / 3;
+        r = Math.max(-1, Math.min(1, r));
+      } else {
+        r = Math.random() * 2 - 1;
+      }
+      offs[i] = [r * half, 0];
+    }
+    return offs;
+  }
+
+  // "auto" → deterministic stack jitter.
+  // 1) Group by category.
+  const groups = new Map<string, number[]>();
+  for (let i = 0; i < points.length; i++) {
+    const k = toStr(points[i].x);
+    let arr = groups.get(k);
+    if (!arr) { arr = []; groups.set(k, arr); }
+    arr.push(i);
+  }
+  // 2) Compute a Y bin width: target ~80 bins across the visible Y span.
+  let yMin = Infinity, yMax = -Infinity;
+  for (const p of points) {
+    if (p.y < yMin) yMin = p.y;
+    if (p.y > yMax) yMax = p.y;
+  }
+  const yRange = yMax - yMin || 1;
+  const binSize = yRange / 80;
+
+  const offs: Array<[number, number]> = new Array(points.length);
+  for (let i = 0; i < points.length; i++) offs[i] = [0, 0];
+
+  groups.forEach((idxs) => {
+    // Bin indices within this category.
+    const bins = new Map<number, number[]>();
+    for (const idx of idxs) {
+      const b = Math.round((points[idx].y - yMin) / binSize);
+      let arr = bins.get(b);
+      if (!arr) { arr = []; bins.set(b, arr); }
+      arr.push(idx);
+    }
+    bins.forEach((bucket) => {
+      const n = bucket.length;
+      // Center the bucket horizontally; cap total width at MAX_SPREAD.
+      const spacing = Math.min(SPACING, n > 1 ? MAX_SPREAD / (n - 1) : SPACING);
+      const center = (n - 1) / 2;
+      bucket.forEach((idx, k) => {
+        offs[idx] = [(k - center) * spacing, 0];
+      });
+    });
+  });
+  return offs;
+}
+
 /** Build (x, y[, lo, hi]) per X group. Used by points/line summary modes. */
 function aggregatePoints(
   rowIdxs: number[],
@@ -207,17 +294,20 @@ function buildIntervalSeries(
     // Low line + transparent stack to high; areaStyle fills between.
     return [
       {
+        id: `${seriesName}__band_lo`,
         type: "line",
         name: `${seriesName} _lo`,
         stack: `band-${seriesName}`,
         data: agg.map((p) => [xv(p), p.lo]),
         lineStyle: { opacity: 0 },
         symbol: "none",
+        animation: false,
         silent: true,
         z: 1,
         legendHoverLink: false,
       },
       {
+        id: `${seriesName}__band_hi`,
         type: "line",
         name: `${seriesName} _hi`,
         stack: `band-${seriesName}`,
@@ -225,6 +315,7 @@ function buildIntervalSeries(
         lineStyle: { opacity: 0 },
         symbol: "none",
         areaStyle: { color, opacity: 0.18 },
+        animation: false,
         silent: true,
         z: 1,
         legendHoverLink: false,
@@ -234,6 +325,7 @@ function buildIntervalSeries(
   // Default: error bars via custom series
   return [
     {
+      id: `${seriesName}__ci`,
       type: "custom",
       name: `${seriesName} CI`,
       renderItem(_params: any, api: any) {
@@ -264,6 +356,11 @@ function buildIntervalSeries(
       },
       encode: { x: 0, y: [2, 3] },
       data: agg.map((p) => [xv(p), p.y, p.lo, p.hi]),
+      // Disable transition; animated interpolation can leave the bars
+      // stranded a frame behind the matching summary dot during option
+      // updates, producing apparent misalignment until the next resize.
+      animation: false,
+      progressive: 0,
       z: 3,
       silent: true,
       legendHoverLink: false,
@@ -296,8 +393,15 @@ function buildSingleOption(
   const sizeIdx = colIndex(data, sizeField?.name);
 
   // 决定 X 轴类型
-  const xIsCategory = xField?.type === "nominal" || xField?.type === "ordinal";
-  const xIsTime = xField?.type === "datetime";
+  // Y-only fallback collapses all points onto a single category position.
+  // Box plots also force a category axis (their categories come from the
+  // unique values in `xField`, or a single bucket if no X is bound).
+  const useRowIdxX = !xField;
+  const hasBoxplot = elements.some((e) => e.kind === "boxplot" && e.enabled !== false);
+  const xIsCategory =
+    useRowIdxX || hasBoxplot ||
+    xField?.type === "nominal" || xField?.type === "ordinal";
+  const xIsTime = !useRowIdxX && !hasBoxplot && xField?.type === "datetime";
 
   const axis = buildAxisCommon(theme);
 
@@ -349,124 +453,96 @@ function buildSingleOption(
     }
   }
 
-  // —— 箱线图：X 分类，Y 连续 ——
-  if (enabledElements.some((e) => e.kind === "boxplot")) {
-    if (yIdx >= 0) {
-      const boxEl = enabledElements.find((e) => e.kind === "boxplot")!;
-      const opts = boxEl.options;
-      const showOutliers = getOpt<boolean>(opts, "outliers", true);
-      const boxType = getOpt<string>(opts, "boxType", "outlier"); // outlier | quantile
-      const showFiveNum = getOpt<boolean>(opts, "fiveNumberSummary", false);
-      const widthProp = Math.max(0, Math.min(1, getOpt<number>(opts, "widthProportion", 0)));
+  // —— 箱线图：X 分类，Y 连续。作为一个可与点图/线图叠加的图层，
+  //   不再 early-return，而是直接 push 到共享的 series 数组中。
+  if (hasBoxplot && yIdx >= 0) {
+    const boxEl = enabledElements.find((e) => e.kind === "boxplot")!;
+    const opts = boxEl.options;
+    const showOutliers = getOpt<boolean>(opts, "outliers", true);
+    const boxType = getOpt<string>(opts, "boxType", "outlier");
+    const showFiveNum = getOpt<boolean>(opts, "fiveNumberSummary", false);
+    const widthProp = Math.max(0, Math.min(1, getOpt<number>(opts, "widthProportion", 0)));
 
-      // 按 X 分类（若无则全部）
-      const xGroups = groupBy(data, xField);
-      const cats = Array.from(xGroups.keys());
-      const boxData: Array<[number, number, number, number, number]> = [];
-      const outlierPts: Array<[string, number]> = [];
-      const labels: Array<{ x: string; y: number; text: string }> = [];
+    const xGroups = groupBy(data, xField);
+    const boxCats = Array.from(xGroups.keys());
+    const boxData: Array<[number, number, number, number, number]> = [];
+    const outlierPts: Array<[string, number]> = [];
+    const labelMarks: Array<{ x: string; y: number; text: string }> = [];
 
-      cats.forEach((cat) => {
-        const idxs = xGroups.get(cat)!;
-        const ys = idxs.map((i) => toNum(data.rows[i][yIdx])).filter(Number.isFinite);
-        if (ys.length === 0) {
-          boxData.push([0, 0, 0, 0, 0]);
-          return;
+    boxCats.forEach((cat) => {
+      const idxs = xGroups.get(cat)!;
+      const ys = idxs.map((i) => toNum(data.rows[i][yIdx])).filter(Number.isFinite);
+      if (ys.length === 0) {
+        boxData.push([0, 0, 0, 0, 0]);
+        return;
+      }
+      const stats = boxStats(ys)!;
+      const [absMin, q1, med, q3, absMax] = stats;
+      const iqr = q3 - q1;
+      let lower = absMin;
+      let upper = absMax;
+      if (boxType === "outlier") {
+        const lo = q1 - 1.5 * iqr;
+        const hi = q3 + 1.5 * iqr;
+        const inRange = ys.filter((v) => v >= lo && v <= hi);
+        if (inRange.length > 0) {
+          lower = Math.min(...inRange);
+          upper = Math.max(...inRange);
         }
-        const stats = boxStats(ys)!;
-        const [absMin, q1, med, q3, absMax] = stats;
-        const iqr = q3 - q1;
-        let lower = absMin;
-        let upper = absMax;
-        if (boxType === "outlier") {
-          const lo = q1 - 1.5 * iqr;
-          const hi = q3 + 1.5 * iqr;
-          const inRange = ys.filter((v) => v >= lo && v <= hi);
-          if (inRange.length > 0) {
-            lower = Math.min(...inRange);
-            upper = Math.max(...inRange);
-          }
-          if (showOutliers) {
-            for (const v of ys) {
-              if (v < lo || v > hi) outlierPts.push([cat, v]);
-            }
+        if (showOutliers) {
+          for (const v of ys) {
+            if (v < lo || v > hi) outlierPts.push([displayCat(cat), v]);
           }
         }
-        boxData.push([lower, q1, med, q3, upper]);
-        if (showFiveNum) {
-          labels.push({ x: cat, y: med, text: `${med.toFixed(2)}` });
-          labels.push({ x: cat, y: q1, text: `Q1 ${q1.toFixed(2)}` });
-          labels.push({ x: cat, y: q3, text: `Q3 ${q3.toFixed(2)}` });
-        }
-      });
+      }
+      boxData.push([lower, q1, med, q3, upper]);
+      if (showFiveNum) {
+        const dx = displayCat(cat);
+        labelMarks.push({ x: dx, y: med, text: `${med.toFixed(2)}` });
+        labelMarks.push({ x: dx, y: q1, text: `Q1 ${q1.toFixed(2)}` });
+        labelMarks.push({ x: dx, y: q3, text: `Q3 ${q3.toFixed(2)}` });
+      }
+    });
 
-      // widthProportion: map 0..1 → boxWidth max in px; min stays 4
-      const maxBoxPx = 12 + widthProp * 60;
+    // JMP-style: boxes fill most of the category band by default. The pixel
+    // cap below is generous (relative to a typical 80–150px bandwidth) so
+    // ECharts can grow boxes wide; the user-controlled `widthProp` (0..1)
+    // scales an extra padding allowance on top of the wide default.
+    const maxBoxPx = 60 + widthProp * 80;
+    series.push({
+      type: "boxplot",
+      name: yField?.name,
+      data: boxData,
+      boxWidth: [10, maxBoxPx],
+      itemStyle: { color: theme.categorical[0], borderColor: theme.fgSecondary, opacity: 0.7 },
+      z: 1,
+    });
+    if (outlierPts.length > 0) {
       series.push({
-        type: "boxplot",
-        name: yField?.name,
-        data: boxData,
-        boxWidth: [4, maxBoxPx],
-        itemStyle: { color: theme.categorical[0], borderColor: theme.fgSecondary },
+        type: "scatter",
+        name: "Outliers",
+        data: outlierPts,
+        symbolSize: 5,
+        itemStyle: { color: theme.fgSecondary, opacity: 0.85 },
+        z: 3,
       });
-      if (outlierPts.length > 0) {
-        series.push({
-          type: "scatter",
-          name: "Outliers",
-          data: outlierPts,
-          symbolSize: 5,
-          itemStyle: { color: theme.fgSecondary, opacity: 0.85 },
-          z: 3,
-        });
-      }
-      if (labels.length > 0) {
-        series.push({
-          type: "scatter",
-          name: "5-Number",
-          data: labels.map((l) => [l.x, l.y]),
-          symbolSize: 0.1,
-          label: {
-            show: true,
-            position: "right",
-            color: theme.fgSecondary,
-            fontSize: 10,
-            formatter: (params: any) => labels[params.dataIndex]?.text ?? "",
-          },
-          silent: true,
-          z: 4,
-        });
-      }
-      const boxMaxLines = maxWrapLines(cats, 16);
-      const boxRotate = boxMaxLines === 1 && needsRotation(cats);
-      return {
-        backgroundColor: "transparent",
-        textStyle: { color: theme.fgPrimary },
-        grid: {
-          left: 52,
-          right: 16,
-          top: 16,
-          bottom: (boxRotate ? 56 : 16) + Math.max(0, boxMaxLines - 1) * 14,
+    }
+    if (labelMarks.length > 0) {
+      series.push({
+        type: "scatter",
+        name: "5-Number",
+        data: labelMarks.map((l) => [l.x, l.y]),
+        symbolSize: 0.1,
+        label: {
+          show: true,
+          position: "right",
+          color: theme.fgSecondary,
+          fontSize: 10,
+          formatter: (params: any) => labelMarks[params.dataIndex]?.text ?? "",
         },
-        tooltip: { trigger: "item" },
-        xAxis: {
-          type: "category",
-          data: cats,
-          ...axis,
-          axisLabel: {
-            ...(axis.axisLabel as object),
-            interval: 0,
-            rotate: boxRotate ? 30 : 0,
-            hideOverlap: false,
-            formatter: (v: string) => wrapLabel(v, 16),
-            lineHeight: 13,
-          },
-        },
-        yAxis: {
-          type: "value",
-          ...axis,
-        },
-        series,
-      } as EChartsOption;
+        silent: true,
+        z: 4,
+      });
     }
   }
 
@@ -493,7 +569,7 @@ function buildSingleOption(
 
   // The X/Y slot chips outside the canvas already label the axes, so we
   // intentionally omit `name` on the ECharts axes to avoid duplication.
-  const xCats = xIsCategory ? collectCategories(data, xIdx) : [];
+  const xCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx) : [];
   // Compute rotation / wrap metrics first so the axis literal can reference them.
   const xMaxLines = xIsCategory ? maxWrapLines(xCats, 16) : 1;
   // Rotate only when wrapping doesn't already break long labels onto
@@ -570,6 +646,12 @@ function collectCategories(data: GraphData, xIdx: number): string[] {
   return out;
 }
 
+/** Map the internal placeholder used by groupBy when no field is provided
+ *  to an empty display string so the user doesn't see it on the axis. */
+function displayCat(cat: string): string {
+  return cat === "__all__" ? "" : cat;
+}
+
 /** Decide if category labels should be rotated to avoid overlap.
  *  Heuristic: rotate when there are many categories or any label is long. */
 function needsRotation(cats: string[]): boolean {
@@ -630,12 +712,17 @@ function buildElementSeries(
   ctx: BuildCtx,
 ): any[] | null {
   const { xIdx, yIdx, sizeIdx, xIsCategory, seriesName, color } = ctx;
-  if (xIdx < 0 || yIdx < 0) return null;
+  if (yIdx < 0) return null;
+
+  // When no X column is bound, collapse all points onto a single category
+  // so the user sees the Y distribution as a strip / single column.
+  const useRowIdx = xIdx < 0;
+  const SINGLE_X = "";
 
   // 取 (x, y[, size]) 数组
   const points: Array<{ x: unknown; y: number; size?: number }> = [];
   for (const i of rowIdxs) {
-    const xv = data.rows[i][xIdx];
+    const xv = useRowIdx ? SINGLE_X : data.rows[i][xIdx];
     const yv = toNum(data.rows[i][yIdx]);
     if (!Number.isFinite(yv)) continue;
     const sv = sizeIdx >= 0 ? toNum(data.rows[i][sizeIdx]) : undefined;
@@ -652,12 +739,13 @@ function buildElementSeries(
 
       // Aggregated mode: collapse repeated X values to a single summary point
       // (mean/median/sum) plus optional error interval.
-      if (summaryStat !== "none" && xIdx >= 0) {
+      if (summaryStat !== "none" && !useRowIdx && xIdx >= 0) {
         const agg = aggregatePoints(
           rowIdxs, data, xIdx, yIdx, xIsCategory, summaryStat, errorInterval,
         );
         const out: any[] = [
           {
+            id: `${seriesName}__summary`,
             type: "scatter",
             name: seriesName,
             symbolSize: 9,
@@ -665,6 +753,9 @@ function buildElementSeries(
             data: agg.map((p) =>
               xIsCategory ? [toStr(p.x), p.y] : [toNum(p.x), p.y],
             ),
+            // Disable transition so the dot doesn't lag behind the matching
+            // error interval / band when the chart option is replaced.
+            animation: false,
             z: 4,
           },
         ];
@@ -685,15 +776,28 @@ function buildElementSeries(
           );
         }
       }
+
+      // Per-point horizontal jitter so overlapping observations are visible.
+      // "auto" → JMP-style stack jitter (deterministic, bin Y, spread side
+      //   by side around the X position). Best for reading every point.
+      // "uniform" / "normal" → random pixel offset of the requested span.
+      // "none" → no offset (points overlap).
+      const jitterMode = getOpt<string>(opts, "jitter", "auto");
+      const jitterLimit = Math.max(0, Math.min(1, getOpt<number>(opts, "jitterLimit", 0.5)));
+      const offsets = computeJitterOffsets(points, jitterMode, jitterLimit);
+
       return [
         {
           type: "scatter",
           name: seriesName,
-          symbolSize: sizes ? (_val: any, params: any) => sizes![params.dataIndex] : 7,
+          symbolSize: sizes ? (_val: any, params: any) => sizes![params.dataIndex] : 6,
           itemStyle: { color, opacity: 0.85 },
-          data: points.map((p) =>
-            xIsCategory ? [toStr(p.x), p.y] : [toNum(p.x), p.y],
-          ),
+          data: points.map((p, i) => {
+            const value = xIsCategory ? [toStr(p.x), p.y] : [toNum(p.x), p.y];
+            const off = offsets ? offsets[i] : null;
+            return off ? { value, symbolOffset: off } : value;
+          }),
+          z: 5,
         },
       ];
     }
@@ -713,7 +817,7 @@ function buildElementSeries(
 
       // If a non-"none" summary stat is selected, aggregate points per X
       // (this matches JMP-style "Mean line"). Otherwise just plot raw.
-      const useAgg = summaryStat !== "none" && xIdx >= 0;
+      const useAgg = summaryStat !== "none" && !useRowIdx && xIdx >= 0;
       let lineData: Array<[unknown, number]>;
       let intervalSeries: any[] = [];
       if (useAgg) {

@@ -385,7 +385,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 <div className="gb-empty gb-error">{error}</div>
               ) : !data ? (
                 <div className="gb-empty">{t("graph.noData")}</div>
-              ) : !encoding.x && !encoding.y && !activeKinds.has("histogram") ? (
+              ) : !encoding.y && !activeKinds.has("histogram") ? (
                 <div className="gb-empty">{t("graph.dragHint")}</div>
               ) : (
                 <Graph spec={spec} data={data} />
@@ -745,7 +745,7 @@ function BoxplotOptions({ options, onChange, t }: OptionsEditorProps) {
   const boxType = getOpt<string>(options, "boxType", "outlier");
   const boxStyle = getOpt<string>(options, "boxStyle", "normal");
   const fiveNum = getOpt<boolean>(options, "fiveNumberSummary", false);
-  const widthProp = getOpt<number>(options, "widthProportion", 0);
+  const widthProp = getOpt<number>(options, "widthProportion", 0.5);
   return (
     <>
       <OptRow label={t("graph.opt.jitter")}>
