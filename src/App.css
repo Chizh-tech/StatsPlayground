@@ -676,18 +676,59 @@
   border-right: 1px solid var(--border-main);
 }
 
+/* ===== Unified panel section header =====
+   Use this for every side-panel section title (Table column list, LAYERS,
+   LEGEND, STYLE, …) so the workspace has a consistent visual language. */
+.sp-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-main);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.sp-panel-header-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Legacy sp-cols-panel-header retained as an alias of sp-panel-header so
+   existing markup keeps working without per-callsite churn. */
 .sp-cols-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 6px 4px 8px;
-  font-size: 12px;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--fg-secondary);
-  border-bottom: 1px solid var(--border-main);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   background: var(--bg-header);
+  border-bottom: 1px solid var(--border-main);
+  flex-shrink: 0;
+  user-select: none;
 }
 
 .sp-cols-panel-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
 }
 

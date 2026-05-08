@@ -96,10 +96,25 @@
 /* Body */
 .gb-body {
   flex: 1;
-  display: grid;
-  grid-template-columns: 220px 1fr 220px;
+  display: flex;
+  flex-direction: row;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Vertical splitter between gb-body columns. Mirror sp-cols-panel-splitter
+   so all draggable dividers across the workspace look identical. */
+.gb-splitter {
+  flex: 0 0 auto;
+  width: 4px;
+  cursor: col-resize;
+  background: var(--border-main);
+  transition: background 0.1s;
+}
+
+.gb-splitter:hover,
+.gb-splitter:active {
+  background: var(--fg-accent);
 }
 
 /* 左栏 */
@@ -108,21 +123,10 @@
   flex-direction: column;
   border-right: 1px solid var(--border-main);
   background: var(--bg-panel);
-  overflow-y: auto;
-}
-
-.gb-section {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border-main);
-}
-
-.gb-section-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: 6px;
+  overflow: hidden;
+  /* width is controlled by inline style in GraphBuilderView */
+  flex: 0 0 auto;
+  min-width: 160px;
 }
 
 .gb-col-list {
@@ -165,10 +169,11 @@
    scrolling capped). */
 .gb-cols-panel {
   /* Override the default full-height column panel so it shares the rail
-     with chart-specific sections below. Cap to half the rail height; let
-     the inner list scroll. */
-  flex: 0 1 auto;
-  max-height: 50%;
+     with chart-specific sections below. */
+  flex: 1 1 0;
+  min-height: 0;
+  width: auto !important;
+  min-width: 0 !important;
   border-right: none;
   background: transparent;
   padding-top: 0;
@@ -187,13 +192,19 @@
 /* ---------------------------------------------------------------------- */
 
 .gb-layers {
-  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
   border-top: 1px solid var(--border-main);
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.gb-layers-title {
-  margin-bottom: 6px;
+.gb-layers-list-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px;
 }
 
 .gb-layer-list {
@@ -560,22 +571,32 @@
   flex-direction: column;
   border-left: 1px solid var(--border-main);
   background: var(--bg-panel);
-  padding: 8px 6px;
+  overflow: hidden;
+  flex: 0 0 auto;
+  min-width: 160px;
+}
+
+.gb-legend-body {
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
   gap: 2px;
 }
 
-.gb-legend > .gb-slot-shelf {
+.gb-legend-body > .gb-slot-shelf {
   margin: 4px 0 6px 0;
   flex-shrink: 0;
 }
 
 .gb-legend-title {
+  /* Inline subtitle within the body — the actual panel header bar lives
+     above (see .sp-panel-header). Keep this for any extra labelling needs. */
   font-size: 11px;
   font-weight: 600;
   color: var(--fg-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   padding: 0 6px 4px 6px;
 }
 
@@ -691,23 +712,18 @@
 /* ===== In-panel per-group Style editor (bottom half of legend) ===== */
 .gb-style-editor {
   margin-top: 8px;
-  padding-top: 8px;
+  padding-top: 0;
   border-top: 1px solid var(--border-main);
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.gb-style-editor-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 0 6px;
+.gb-style-editor .sp-panel-header .gb-style-reset {
+  /* Reset button slips into the right of the STYLE header bar */
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
 }
 
 .gb-style-reset {
@@ -738,6 +754,7 @@
   flex-direction: column;
   gap: 2px;
   padding: 4px 6px;
+  margin: 0 6px;
   background: var(--bg-cell-hover, rgba(0, 0, 0, 0.02));
   border-radius: 4px;
 }

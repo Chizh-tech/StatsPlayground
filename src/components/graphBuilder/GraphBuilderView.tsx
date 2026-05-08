@@ -83,6 +83,35 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Resizable side-rail widths. Mirror the Excel-grid splitter pattern
+  // (DataTableView): clamp on drag and double-click to reset.
+  const [leftWidth, setLeftWidth] = useState(220);
+  const [rightWidth, setRightWidth] = useState(220);
+  const startSideResize = useCallback(
+    (side: "left" | "right") => (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = side === "left" ? leftWidth : rightWidth;
+      const dir = side === "left" ? 1 : -1;
+      const onMove = (ev: MouseEvent) => {
+        const next = Math.max(160, Math.min(500, startW + dir * (ev.clientX - startX)));
+        if (side === "left") setLeftWidth(next);
+        else setRightWidth(next);
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    },
+    [leftWidth, rightWidth],
+  );
+
   // 编码状态从 store 派生
   const encoding = item.encoding;
   const elements = item.elements;
@@ -282,13 +311,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
       <div className="gb-body">
         {/* 左栏 */}
-        <div className="gb-left">
+        <div className="gb-left" style={{ width: leftWidth }}>
           {/* Reuse the same column-panel styling as the data table view so the
               two left rails look and feel identical. Items remain draggable so
               they can be dropped into encoding slots. */}
           <div className="sp-cols-panel gb-cols-panel">
-            <div className="sp-cols-panel-header">
-              <span className="sp-cols-panel-title">
+            <div className="sp-panel-header">
+              <span className="sp-panel-header-title">
                 {t("graph.datasetHeader", { name: dataset.name, n: columns.length })}
               </span>
             </div>
@@ -316,31 +345,43 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               Replaces the old per-chart-type sections and the top-toolbar
               chart-type toggle buttons. */}
           <div className="gb-layers">
-            <div className="gb-section-title gb-layers-title">{t("graph.layersSection")}</div>
-            <div className="gb-layer-list">
-              {elements
-                .filter((el) => el.enabled !== false)
-                .map((el) => (
-                  <LayerCard
-                    key={el.kind}
-                    kind={el.kind}
-                    label={t(`graph.type.${el.kind}`)}
-                    options={el.options ?? {}}
-                    onChangeOptions={(patch) => updateElementOptions(el.kind, patch)}
-                    onRemove={() => removeElement(el.kind)}
-                    t={t}
-                  />
-                ))}
-              <AddLayerCard
-                availableKinds={CHART_TYPE_DEFS.map((c) => c.kind).filter(
-                  (k) => !activeKinds.has(k),
-                )}
-                onAdd={addElement}
-                t={t}
-              />
+            <div className="sp-panel-header">
+              <span className="sp-panel-header-title">{t("graph.layersSection")}</span>
+            </div>
+            <div className="gb-layers-list-wrap">
+              <div className="gb-layer-list">
+                {elements
+                  .filter((el) => el.enabled !== false)
+                  .map((el) => (
+                    <LayerCard
+                      key={el.kind}
+                      kind={el.kind}
+                      label={t(`graph.type.${el.kind}`)}
+                      options={el.options ?? {}}
+                      onChangeOptions={(patch) => updateElementOptions(el.kind, patch)}
+                      onRemove={() => removeElement(el.kind)}
+                      t={t}
+                    />
+                  ))}
+                <AddLayerCard
+                  availableKinds={CHART_TYPE_DEFS.map((c) => c.kind).filter(
+                    (k) => !activeKinds.has(k),
+                  )}
+                  onAdd={addElement}
+                  t={t}
+                />
+              </div>
             </div>
           </div>
         </div>
+
+        {/* Splitter: left | center */}
+        <div
+          className="gb-splitter"
+          onMouseDown={startSideResize("left")}
+          onDoubleClick={() => setLeftWidth(220)}
+          title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
+        />
 
         {/* 中栏：画布 + X 轴槽 */}
         <div className="gb-center">
@@ -423,6 +464,14 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           />
         </div>
 
+        {/* Splitter: center | right */}
+        <div
+          className="gb-splitter"
+          onMouseDown={startSideResize("right")}
+          onDoubleClick={() => setRightWidth(220)}
+          title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
+        />
+
         {/* Legend + Style editor:
             - 顶部 Overlay 槽：拖入分类列即按其值生成图例分组；
             - 中间图例列表：每行对应一个分组（无 Overlay 时显示 "All"）；
@@ -435,6 +484,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           setGroupStyle={setGroupStyle}
           onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
           onClearOverlay={() => clearSlot("overlay")}
+          width={rightWidth}
         />
       </div>
     </div>
@@ -882,9 +932,10 @@ interface LegendStylePanelProps {
   setGroupStyle: (groupKey: string, next: GroupStyle | undefined) => void;
   onDropOverlay: (e: React.DragEvent) => void;
   onClearOverlay: () => void;
+  width: number;
 }
 
-function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOverlay, onClearOverlay }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // Overlay drives legend grouping. Drop a categorical column onto the
@@ -947,92 +998,94 @@ function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOv
   const storedSelected = groupStyles[selected] ?? {};
 
   return (
-    <div className="gb-legend">
-      {/* Legend header */}
-      <div className="gb-legend-title">
-        {t("graph.legend.title")}
+    <div className="gb-legend" style={{ width }}>
+      {/* Unified panel header bar (matches Table column panel + LAYERS) */}
+      <div className="sp-panel-header">
+        <span className="sp-panel-header-title">{t("graph.legend.title")}</span>
       </div>
 
-      {/* Overlay slot — placed under the LEGEND title and above the first
-          legend entry so that the visual hierarchy makes it clear: the
-          legend rows below exist *because* this Overlay column is set. */}
-      <Slot
-        slot="overlay"
-        label="Overlay"
-        field={encoding.overlay}
-        onDrop={onDropOverlay}
-        onClear={onClearOverlay}
-        orientation="shelf"
-      />
+      <div className="gb-legend-body">
+        {/* Overlay slot — placed under the LEGEND header and above the
+            first legend entry so the visual hierarchy makes it clear: the
+            legend rows below exist *because* this Overlay column is set. */}
+        <Slot
+          slot="overlay"
+          label="Overlay"
+          field={encoding.overlay}
+          onDrop={onDropOverlay}
+          onClear={onClearOverlay}
+          orientation="shelf"
+        />
 
-      {/* Legend list */}
-      {groupKeys.map((key, idx) => {
-        const st = effectiveStyleOf(key, idx);
-        const label = key === DEFAULT_GROUP_KEY ? t("graph.legend.allEntries") : (key || "—");
-        return (
-          <div
-            key={key}
-            className={`gb-legend-item${key === selected ? " gb-legend-item-selected" : ""}`}
-            onClick={() => setSelected(key)}
-          >
-            <span className="gb-legend-swatch">
-              <CompositeSwatch style={st} />
-            </span>
-            <span className="gb-legend-label" title={label}>{label}</span>
+        {/* Legend list */}
+        {groupKeys.map((key, idx) => {
+          const st = effectiveStyleOf(key, idx);
+          const label = key === DEFAULT_GROUP_KEY ? t("graph.legend.allEntries") : (key || "—");
+          return (
+            <div
+              key={key}
+              className={`gb-legend-item${key === selected ? " gb-legend-item-selected" : ""}`}
+              onClick={() => setSelected(key)}
+            >
+              <span className="gb-legend-swatch">
+                <CompositeSwatch style={st} />
+              </span>
+              <span className="gb-legend-label" title={label}>{label}</span>
+            </div>
+          );
+        })}
+
+        {/* Style editor (bottom half) */}
+        <div className="gb-style-editor">
+          <div className="sp-panel-header">
+            <span className="sp-panel-header-title">{t("graph.style.editorTitle")}</span>
+            <button
+              className="gb-style-reset"
+              onClick={() => resetGroup(selected)}
+              title={t("graph.style.reset")}
+              disabled={!groupStyles[selected]}
+            >
+              {t("graph.style.reset")}
+            </button>
           </div>
-        );
-      })}
 
-      {/* Style editor (bottom half) */}
-      <div className="gb-style-editor">
-        <div className="gb-style-editor-header">
-          {t("graph.style.editorTitle")}
-          <button
-            className="gb-style-reset"
-            onClick={() => resetGroup(selected)}
-            title={t("graph.style.reset")}
-            disabled={!groupStyles[selected]}
-          >
-            {t("graph.style.reset")}
-          </button>
+          <MarkEditor
+            title={t("graph.mark.line")}
+            mark="line"
+            value={(storedSelected.line ?? {}) as MarkStyle}
+            effective={{
+              color: selectedStyle.line!.color!,
+              lineWidth: selectedStyle.line!.lineWidth,
+              opacity: selectedStyle.line!.opacity,
+            }}
+            onChange={(patch) => updateMark(selected, "line", patch)}
+            fields={["color", "lineWidth", "opacity"]}
+          />
+          <MarkEditor
+            title={t("graph.mark.fill")}
+            mark="fill"
+            value={(storedSelected.fill ?? {}) as MarkStyle}
+            effective={{
+              color: selectedStyle.fill!.color!,
+              opacity: selectedStyle.fill!.opacity,
+            }}
+            onChange={(patch) => updateMark(selected, "fill", patch)}
+            fields={["color", "opacity"]}
+          />
+          <MarkEditor
+            title={t("graph.mark.point")}
+            mark="point"
+            value={(storedSelected.point ?? {}) as MarkStyle}
+            effective={{
+              color: selectedStyle.point!.color!,
+              marker: selectedStyle.point!.marker,
+              markerSize: selectedStyle.point!.markerSize,
+              opacity: selectedStyle.point!.opacity,
+            }}
+            onChange={(patch) => updateMark(selected, "point", patch)}
+            fields={["color", "marker", "markerSize", "opacity"]}
+          />
         </div>
-
-        <MarkEditor
-          title={t("graph.mark.line")}
-          mark="line"
-          value={(storedSelected.line ?? {}) as MarkStyle}
-          effective={{
-            color: selectedStyle.line!.color!,
-            lineWidth: selectedStyle.line!.lineWidth,
-            opacity: selectedStyle.line!.opacity,
-          }}
-          onChange={(patch) => updateMark(selected, "line", patch)}
-          fields={["color", "lineWidth", "opacity"]}
-        />
-        <MarkEditor
-          title={t("graph.mark.fill")}
-          mark="fill"
-          value={(storedSelected.fill ?? {}) as MarkStyle}
-          effective={{
-            color: selectedStyle.fill!.color!,
-            opacity: selectedStyle.fill!.opacity,
-          }}
-          onChange={(patch) => updateMark(selected, "fill", patch)}
-          fields={["color", "opacity"]}
-        />
-        <MarkEditor
-          title={t("graph.mark.point")}
-          mark="point"
-          value={(storedSelected.point ?? {}) as MarkStyle}
-          effective={{
-            color: selectedStyle.point!.color!,
-            marker: selectedStyle.point!.marker,
-            markerSize: selectedStyle.point!.markerSize,
-            opacity: selectedStyle.point!.opacity,
-          }}
-          onChange={(patch) => updateMark(selected, "point", patch)}
-          fields={["color", "marker", "markerSize", "opacity"]}
-        />
       </div>
     </div>
   );
