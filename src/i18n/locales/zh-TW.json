@@ -399,6 +399,39 @@
     "loading": "正在載入資料…",
     "noData": "無資料",
     "dragHint": "將欄拖曳至座標槽以開始繪圖",
-    "removeSlot": "移除"
+    "removeSlot": "移除",
+    "legend": {
+      "title": "圖例",
+      "outliers": "離群點",
+      "points": "點",
+      "line": "折線",
+      "boxplot": "箱線圖",
+      "smoother": "平滑曲線",
+      "allEntries": "全部"
+    },
+    "mark": {
+      "line": "線",
+      "fill": "填充",
+      "point": "點"
+    },
+    "style": {
+      "color": "顏色",
+      "marker": "符號",
+      "markerSize": "大小",
+      "lineWidth": "線寬",
+      "opacity": "不透明度",
+      "reset": "重設",
+      "editorTitle": "樣式"
+    },
+    "shape": {
+      "circle": "圓點（實心）",
+      "emptyCircle": "圓點（空心）",
+      "square": "方塊（實心）",
+      "emptySquare": "方塊（空心）",
+      "diamond": "菱形（實心）",
+      "emptyDiamond": "菱形（空心）",
+      "triangle": "三角（實心）",
+      "emptyTriangle": "三角（空心）"
+    }
   }
 }

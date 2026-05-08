@@ -399,6 +399,39 @@
     "loading": "Loading data…",
     "noData": "No data",
     "dragHint": "Drag a column onto an axis slot to begin",
-    "removeSlot": "Remove"
+    "removeSlot": "Remove",
+    "legend": {
+      "title": "Legend",
+      "outliers": "Outliers",
+      "points": "Points",
+      "line": "Line",
+      "boxplot": "Box plot",
+      "smoother": "Smoother",
+      "allEntries": "All"
+    },
+    "mark": {
+      "line": "Line",
+      "fill": "Fill",
+      "point": "Point"
+    },
+    "style": {
+      "color": "Color",
+      "marker": "Marker",
+      "markerSize": "Size",
+      "lineWidth": "Width",
+      "opacity": "Opacity",
+      "reset": "Reset",
+      "editorTitle": "Style"
+    },
+    "shape": {
+      "circle": "Circle (filled)",
+      "emptyCircle": "Circle (hollow)",
+      "square": "Square (filled)",
+      "emptySquare": "Square (hollow)",
+      "diamond": "Diamond (filled)",
+      "emptyDiamond": "Diamond (hollow)",
+      "triangle": "Triangle (filled)",
+      "emptyTriangle": "Triangle (hollow)"
+    }
   }
 }

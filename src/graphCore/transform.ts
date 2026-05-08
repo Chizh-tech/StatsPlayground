@@ -6,11 +6,101 @@
  * 以及 X / Y / Color / Size / Overlay / GroupX / GroupY / Wrap 编码通道。
  */
 
-import type { GraphSpec, GraphData, ChartElement, FieldRef } from "./types";
+import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape } from "./types";
+import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
 import i18n from "@/i18n";
 
 type EChartsOption = Record<string, unknown>;
+
+/** Resolved per-group style. Whichever element kinds are active in the
+ *  group will pull styling from the matching sub-mark (line for line/
+ *  smoother/box border/error bar, fill for box body/area band, point
+ *  for scatter/summary dot/outliers). */
+export interface ResolvedGroupStyle {
+  line: { color: string; width: number; opacity: number };
+  fill: { color: string; opacity: number };
+  point: {
+    color: string;          // border / stroke color
+    fillColor: string;      // body color (transparent for hollow markers)
+    marker: MarkerShape;
+    size: number;
+    opacity: number;
+  };
+  /** Outlier dots inherit the point style but default to a smaller, gray
+   *  dot when the user hasn't overridden the point color. */
+  outlier: { color: string; size: number; opacity: number };
+}
+
+/** Compute the JMP-style defaults plus any per-group overrides. */
+function resolveGroupStyle(
+  groupKey: string,
+  groupColor: string,
+  grouping: boolean,
+  theme: GraphTheme,
+  styles: Record<string, GroupStyle> | undefined,
+): ResolvedGroupStyle {
+  const stored: GroupStyle = (styles && (styles[groupKey] ?? styles[DEFAULT_GROUP_KEY])) || {};
+  const baseColor = grouping ? groupColor : (theme.fgPrimary || "#000");
+
+  // Line defaults: thin, solid, baseColor.
+  const lineColor = stored.line?.color ?? baseColor;
+  const lineWidth = stored.line?.lineWidth ?? 1.5;
+  const lineOpacity = stored.line?.opacity ?? 1;
+
+  // Fill defaults: when no grouping render hollow (transparent), otherwise
+  // use the categorical color at moderate opacity so multiple groups stay
+  // distinguishable.
+  const fillColor = stored.fill?.color ?? stored.fill?.fillColor ?? (grouping ? baseColor : "transparent");
+  const fillOpacity = stored.fill?.opacity ?? (grouping ? 0.5 : 1);
+
+  // Point defaults: filled black circle 4px (or group color when grouping).
+  const pointMarker: MarkerShape = stored.point?.marker ?? "circle";
+  const pointStroke = stored.point?.color ?? baseColor;
+  const pointFill = stored.point?.fillColor ?? pointStroke;
+  const pointSize = stored.point?.markerSize ?? 4;
+  const pointOpacity = stored.point?.opacity ?? (grouping ? 0.85 : 1);
+
+  // Outlier defaults: gray when point is at default; otherwise inherit.
+  const outlierColor = stored.point?.color ?? (theme.fgDim || "#999");
+  const outlierSize = Math.max(2, (stored.point?.markerSize ?? 4));
+  const outlierOpacity = stored.point?.opacity ?? 0.85;
+
+  return {
+    line: { color: lineColor, width: lineWidth, opacity: lineOpacity },
+    fill: { color: fillColor, opacity: fillOpacity },
+    point: {
+      color: pointStroke,
+      fillColor: pointFill,
+      marker: pointMarker,
+      size: pointSize,
+      opacity: pointOpacity,
+    },
+    outlier: { color: outlierColor, size: outlierSize, opacity: outlierOpacity },
+  };
+}
+
+/** Translate a marker shape into ECharts symbol + whether it's filled. */
+function markerToSymbol(m: MarkerShape): { symbol: string; hollow: boolean } {
+  switch (m) {
+    case "emptyCircle": return { symbol: "emptyCircle", hollow: true };
+    case "square": return { symbol: "rect", hollow: false };
+    case "emptySquare": return { symbol: "rect", hollow: true };
+    case "diamond": return { symbol: "diamond", hollow: false };
+    case "emptyDiamond": return { symbol: "diamond", hollow: true };
+    case "triangle": return { symbol: "triangle", hollow: false };
+    case "emptyTriangle": return { symbol: "triangle", hollow: true };
+    case "circle":
+    default: return { symbol: "circle", hollow: false };
+  }
+}
+
+/** Build itemStyle for a point series given the resolved point sub-mark. */
+function pointItemStyle(p: ResolvedGroupStyle["point"], hollow: boolean) {
+  return hollow
+    ? { color: "transparent", borderColor: p.color, borderWidth: 1, opacity: p.opacity }
+    : { color: p.fillColor, borderColor: p.color, opacity: p.opacity };
+}
 
 /** 取列索引 */
 function colIndex(data: GraphData, name: string | undefined): number {
@@ -509,12 +599,22 @@ function buildSingleOption(
     // ECharts can grow boxes wide; the user-controlled `widthProp` (0..1)
     // scales an extra padding allowance on top of the wide default.
     const maxBoxPx = 60 + widthProp * 80;
+    // Boxplot doesn't split by Color/Overlay (one box per X category), so
+    // it always pulls the "default" group's style. The box body uses the
+    // group's `fill` sub-mark; the box border / median / whisker line use
+    // the `line` sub-mark. Outliers use the group's `point` sub-mark.
+    const boxGroupStyle = resolveGroupStyle(DEFAULT_GROUP_KEY, theme.categorical[0], false, theme, spec.styles);
     series.push({
       type: "boxplot",
       name: yField?.name,
       data: boxData,
       boxWidth: [10, maxBoxPx],
-      itemStyle: { color: theme.categorical[0], borderColor: theme.fgSecondary, opacity: 0.7 },
+      itemStyle: {
+        color: boxGroupStyle.fill.color,
+        borderColor: boxGroupStyle.line.color,
+        borderWidth: boxGroupStyle.line.width,
+        opacity: boxGroupStyle.fill.opacity,
+      },
       z: 1,
     });
     if (outlierPts.length > 0) {
@@ -522,8 +622,10 @@ function buildSingleOption(
         type: "scatter",
         name: "Outliers",
         data: outlierPts,
-        symbolSize: 5,
-        itemStyle: { color: theme.fgSecondary, opacity: 0.85 },
+        symbolSize: boxGroupStyle.outlier.size,
+        // JMP-style: outliers default to small gray dots so they read as
+        // “extreme” without competing visually with in-range data points.
+        itemStyle: { color: boxGroupStyle.outlier.color, opacity: boxGroupStyle.outlier.opacity },
         z: 3,
       });
     }
@@ -553,6 +655,12 @@ function buildSingleOption(
     const seriesName = grouping ? gKey : (yField?.name || "");
     if (grouping && !legendNames.includes(seriesName)) legendNames.push(seriesName);
 
+    // Resolve {line, fill, point, outlier} for this group exactly once.
+    // The per-element renderers below pull from this resolved style so
+    // changing it in the UI affects every active layer simultaneously.
+    const styleKey = grouping ? gKey : DEFAULT_GROUP_KEY;
+    const resolvedStyle = resolveGroupStyle(styleKey, color, !!grouping, theme, spec.styles);
+
     enabledElements.forEach((el) => {
       const built = buildElementSeries(el, rowIdxs, data, {
         xIdx,
@@ -562,6 +670,9 @@ function buildSingleOption(
         xIsTime,
         seriesName,
         color,
+        grouping: !!grouping,
+        theme,
+        style: resolvedStyle,
       });
       if (built) series.push(...built);
     });
@@ -702,7 +813,15 @@ interface BuildCtx {
   xIsCategory: boolean;
   xIsTime: boolean;
   seriesName: string;
+  /** Categorical color of the current group (used as a fallback for any
+   *  sub-mark that didn't get an explicit override). */
   color: string;
+  /** True when a Color/Overlay split produces multiple series. */
+  grouping: boolean;
+  theme: GraphTheme;
+  /** Resolved {line, fill, point, outlier} sub-marks for the current group.
+   *  Every series rendered for this element should pull from these. */
+  style: ResolvedGroupStyle;
 }
 
 function buildElementSeries(
@@ -711,7 +830,7 @@ function buildElementSeries(
   data: GraphData,
   ctx: BuildCtx,
 ): any[] | null {
-  const { xIdx, yIdx, sizeIdx, xIsCategory, seriesName, color } = ctx;
+  const { xIdx, yIdx, sizeIdx, xIsCategory, seriesName, style } = ctx;
   if (yIdx < 0) return null;
 
   // When no X column is bound, collapse all points onto a single category
@@ -743,13 +862,17 @@ function buildElementSeries(
         const agg = aggregatePoints(
           rowIdxs, data, xIdx, yIdx, xIsCategory, summaryStat, errorInterval,
         );
+        const sym = markerToSymbol(style.point.marker);
         const out: any[] = [
           {
             id: `${seriesName}__summary`,
             type: "scatter",
             name: seriesName,
-            symbolSize: 9,
-            itemStyle: { color, opacity: 0.95 },
+            symbol: sym.symbol,
+            // Summary dots are slightly larger than raw scatter dots so
+            // they read as the “mean / median” marker on top of the points.
+            symbolSize: style.point.size + 3,
+            itemStyle: pointItemStyle(style.point, sym.hollow),
             data: agg.map((p) =>
               xIsCategory ? [toStr(p.x), p.y] : [toNum(p.x), p.y],
             ),
@@ -759,7 +882,9 @@ function buildElementSeries(
             z: 4,
           },
         ];
-        out.push(...buildIntervalSeries(agg, xIsCategory, intervalStyle, color, seriesName));
+        // Error bars / band inherit the line sub-mark color so they match
+        // any line layer rendered on top.
+        out.push(...buildIntervalSeries(agg, xIsCategory, intervalStyle, style.line.color, seriesName));
         return out;
       }
 
@@ -786,12 +911,14 @@ function buildElementSeries(
       const jitterLimit = Math.max(0, Math.min(1, getOpt<number>(opts, "jitterLimit", 0.5)));
       const offsets = computeJitterOffsets(points, jitterMode, jitterLimit);
 
+      const sym = markerToSymbol(style.point.marker);
       return [
         {
           type: "scatter",
           name: seriesName,
-          symbolSize: sizes ? (_val: any, params: any) => sizes![params.dataIndex] : 6,
-          itemStyle: { color, opacity: 0.85 },
+          symbol: sym.symbol,
+          symbolSize: sizes ? (_val: any, params: any) => sizes![params.dataIndex] : style.point.size,
+          itemStyle: pointItemStyle(style.point, sym.hollow),
           data: points.map((p, i) => {
             const value = xIsCategory ? [toStr(p.x), p.y] : [toNum(p.x), p.y];
             const off = offsets ? offsets[i] : null;
@@ -828,7 +955,7 @@ function buildElementSeries(
           xIsCategory ? toStr(p.x) : toNum(p.x),
           p.y,
         ]);
-        intervalSeries = buildIntervalSeries(agg, xIsCategory, intervalStyle, color, seriesName);
+        intervalSeries = buildIntervalSeries(agg, xIsCategory, intervalStyle, style.line.color, seriesName);
       } else {
         const arr = rowOrder
           ? points
@@ -850,13 +977,14 @@ function buildElementSeries(
         smooth: isSpline,
         step: isStep,
         connectNulls,
-        lineStyle: { color, width: 2 },
-        itemStyle: { color },
+        lineStyle: { color: style.line.color, width: style.line.width, opacity: style.line.opacity },
+        itemStyle: { color: style.line.color },
         data: lineData,
         z: 2,
       };
       if (fill === "toZero") {
-        lineSeries.areaStyle = { color, opacity: 0.18 };
+        // Area fill follows the group's fill sub-mark.
+        lineSeries.areaStyle = { color: style.fill.color, opacity: style.fill.opacity * 0.5 };
       }
       // "between" fill is meaningful only with an interval band; if user
       // selected "between" but interval is none, fall back to no fill.
@@ -885,7 +1013,12 @@ function buildElementSeries(
         {
           type: "bar",
           name: seriesName,
-          itemStyle: { color, opacity: 0.85 },
+          itemStyle: {
+            color: style.fill.color,
+            borderColor: style.line.color,
+            borderWidth: style.line.width,
+            opacity: style.fill.opacity,
+          },
           data: arr,
         },
       ];
@@ -905,8 +1038,8 @@ function buildElementSeries(
           name: `${seriesName} 平滑`,
           showSymbol: false,
           smooth: true,
-          lineStyle: { color, width: 2.5, type: "solid" },
-          itemStyle: { color },
+          lineStyle: { color: style.line.color, width: style.line.width, type: "solid", opacity: style.line.opacity },
+          itemStyle: { color: style.line.color },
           z: 5,
           data: smoothed,
         },

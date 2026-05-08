@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind } from "@/graphCore";
+import { Graph, inferFieldType, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
@@ -187,8 +187,22 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       datasetName: dataset.name,
       encoding: enc,
       elements: finalElements,
+      styles: item.groupStyles,
     };
-  }, [encoding, finalElements, dataset.id, dataset.name]);
+  }, [encoding, finalElements, dataset.id, dataset.name, item.groupStyles]);
+
+  /** Replace the entire group-style entry for one group (or remove it). */
+  const setGroupStyle = useCallback(
+    (groupKey: string, next: GroupStyle | undefined) => {
+      const cur = item.groupStyles ?? {};
+      const updated: GroupStyleMap = { ...cur };
+      if (next === undefined) delete updated[groupKey];
+      else updated[groupKey] = next;
+      updateItem(item.id, { groupStyles: updated });
+      markDirty();
+    },
+    [item.id, item.groupStyles, updateItem, markDirty],
+  );
 
   // 拖放处理
   const onDragStart = (e: React.DragEvent, field: FieldRef) => {
@@ -412,6 +426,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             required
           />
         </div>
+
+        {/* Legend + Style editor: 上半图例（按 Color/Overlay 分组），下
+            半样式设置（针对当前选中的图例条目，分别设置线/填充/点）。
+            无论上方激活的是散点还是箱线图，三类样式都会被对应应用。 */}
+        <LegendStylePanel
+          data={data}
+          encoding={encoding}
+          groupStyles={item.groupStyles ?? {}}
+          setGroupStyle={setGroupStyle}
+        />
 
         {/* 右栏：编码槽列表 */}
         <div className="gb-right">
@@ -856,3 +880,314 @@ function AddLayerCard({ availableKinds, onAdd, t }: AddLayerCardProps) {
   );
 }
 
+// ---- Legend + per-group Style editor -----------------------------------
+// Top half of the panel: a legend listing every group from the Color/
+// Overlay encoding (or a single "All" entry when there is no grouping).
+// Clicking a row selects it.
+//
+// Bottom half: a style editor for the selected group with three sections
+// (Line, Fill, Point). Whatever active layer kinds (scatter, box plot,
+// line, smoother, …) reuse this style — boxplot's body uses Fill, its
+// border + median + whiskers use Line, its outliers use Point.
+
+interface LegendStylePanelProps {
+  data: GraphData | null;
+  encoding: Partial<Record<GraphSlotKey, FieldRef>>;
+  groupStyles: GroupStyleMap;
+  setGroupStyle: (groupKey: string, next: GroupStyle | undefined) => void;
+}
+
+function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle }: LegendStylePanelProps) {
+  const { t } = useTranslation();
+
+  // Determine the grouping field (Color first, then Overlay) and extract
+  // the unique category values from the data so they can be listed as
+  // legend entries. When neither field is set we render a single
+  // "default" row so the user can still customize the chart-wide style.
+  const groupField = encoding.color || encoding.overlay;
+  const groupKeys = useMemo<string[]>(() => {
+    if (!groupField || !data) return [DEFAULT_GROUP_KEY];
+    const idx = data.columns.indexOf(groupField.name);
+    if (idx < 0) return [DEFAULT_GROUP_KEY];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of data.rows) {
+      const v = r[idx];
+      const k = v == null ? "" : String(v);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(k);
+    }
+    return out.length > 0 ? out : [DEFAULT_GROUP_KEY];
+  }, [groupField, data]);
+
+  const [selected, setSelected] = useState<string>(groupKeys[0] ?? DEFAULT_GROUP_KEY);
+  // Keep the selection valid when the legend list changes underneath us.
+  useEffect(() => {
+    if (!groupKeys.includes(selected)) {
+      setSelected(groupKeys[0] ?? DEFAULT_GROUP_KEY);
+    }
+  }, [groupKeys, selected]);
+
+  // Effective style currently applied to a group (override merged with the
+  // group's categorical default color). Used to render the legend swatches.
+  const effectiveStyleOf = (key: string, idx: number): GroupStyle => {
+    const stored = groupStyles[key] ?? {};
+    const baseColor = groupField ? GROUP_COLORS[idx % GROUP_COLORS.length] : "#000";
+    return {
+      line: { color: stored.line?.color ?? baseColor, lineWidth: stored.line?.lineWidth ?? 1.5, opacity: stored.line?.opacity ?? 1 },
+      fill: { color: stored.fill?.color ?? (groupField ? baseColor : "transparent"), opacity: stored.fill?.opacity ?? (groupField ? 0.5 : 1) },
+      point: {
+        color: stored.point?.color ?? baseColor,
+        fillColor: stored.point?.fillColor ?? stored.point?.color ?? baseColor,
+        marker: stored.point?.marker ?? "circle",
+        markerSize: stored.point?.markerSize ?? 4,
+        opacity: stored.point?.opacity ?? 1,
+      },
+    };
+  };
+
+  const updateMark = (groupKey: string, mark: "line" | "fill" | "point", patch: Partial<MarkStyle>) => {
+    const cur = groupStyles[groupKey] ?? {};
+    const curMark = (cur[mark] ?? {}) as MarkStyle;
+    setGroupStyle(groupKey, { ...cur, [mark]: { ...curMark, ...patch } });
+  };
+
+  const resetGroup = (groupKey: string) => setGroupStyle(groupKey, undefined);
+
+  const selectedIdx = Math.max(0, groupKeys.indexOf(selected));
+  const selectedStyle = effectiveStyleOf(selected, selectedIdx);
+  const storedSelected = groupStyles[selected] ?? {};
+
+  return (
+    <div className="gb-legend">
+      {/* Legend header + list (top half) */}
+      <div className="gb-legend-title">
+        {t("graph.legend.title")}
+        {groupField && <span className="gb-legend-field"> · {groupField.name}</span>}
+      </div>
+      {groupKeys.map((key, idx) => {
+        const st = effectiveStyleOf(key, idx);
+        const label = key === DEFAULT_GROUP_KEY ? t("graph.legend.allEntries") : (key || "—");
+        return (
+          <div
+            key={key}
+            className={`gb-legend-item${key === selected ? " gb-legend-item-selected" : ""}`}
+            onClick={() => setSelected(key)}
+          >
+            <span className="gb-legend-swatch">
+              <CompositeSwatch style={st} />
+            </span>
+            <span className="gb-legend-label" title={label}>{label}</span>
+          </div>
+        );
+      })}
+
+      {/* Style editor (bottom half) */}
+      <div className="gb-style-editor">
+        <div className="gb-style-editor-header">
+          {t("graph.style.editorTitle")}
+          <button
+            className="gb-style-reset"
+            onClick={() => resetGroup(selected)}
+            title={t("graph.style.reset")}
+            disabled={!groupStyles[selected]}
+          >
+            {t("graph.style.reset")}
+          </button>
+        </div>
+
+        <MarkEditor
+          title={t("graph.mark.line")}
+          mark="line"
+          value={(storedSelected.line ?? {}) as MarkStyle}
+          effective={{
+            color: selectedStyle.line!.color!,
+            lineWidth: selectedStyle.line!.lineWidth,
+            opacity: selectedStyle.line!.opacity,
+          }}
+          onChange={(patch) => updateMark(selected, "line", patch)}
+          fields={["color", "lineWidth", "opacity"]}
+        />
+        <MarkEditor
+          title={t("graph.mark.fill")}
+          mark="fill"
+          value={(storedSelected.fill ?? {}) as MarkStyle}
+          effective={{
+            color: selectedStyle.fill!.color!,
+            opacity: selectedStyle.fill!.opacity,
+          }}
+          onChange={(patch) => updateMark(selected, "fill", patch)}
+          fields={["color", "opacity"]}
+        />
+        <MarkEditor
+          title={t("graph.mark.point")}
+          mark="point"
+          value={(storedSelected.point ?? {}) as MarkStyle}
+          effective={{
+            color: selectedStyle.point!.color!,
+            marker: selectedStyle.point!.marker,
+            markerSize: selectedStyle.point!.markerSize,
+            opacity: selectedStyle.point!.opacity,
+          }}
+          onChange={(patch) => updateMark(selected, "point", patch)}
+          fields={["color", "marker", "markerSize", "opacity"]}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Categorical palette for legend defaults — must match getGraphTheme() */
+const GROUP_COLORS = [
+  "#4a6cf7", "#ef8a3a", "#2ca678", "#e74c3c",
+  "#9168d6", "#8c6e3a", "#d56cb1", "#7f8c8d",
+  "#c4ad36", "#3aa6b9", "#5d8aa8", "#b87333",
+];
+
+/** Composite swatch: combines line + fill rect + point so the user sees
+ *  exactly what the three sub-marks of this group will look like. */
+function CompositeSwatch({ style }: { style: GroupStyle }) {
+  const w = 36, h = 14;
+  const cy = h / 2;
+  const lineColor = style.line?.color ?? "#000";
+  const lineWidth = style.line?.lineWidth ?? 1.5;
+  const lineOpacity = style.line?.opacity ?? 1;
+  const fillColor = style.fill?.color ?? "transparent";
+  const fillOpacity = style.fill?.opacity ?? 1;
+  const pointColor = style.point?.color ?? "#000";
+  const pointFill = style.point?.fillColor ?? pointColor;
+  const pointMarker: MarkerShape = style.point?.marker ?? "circle";
+  const pointSize = style.point?.markerSize ?? 4;
+  const pointOpacity = style.point?.opacity ?? 1;
+  const r = Math.max(2, Math.min(5, pointSize / 2));
+  const isHollow = pointMarker.startsWith("empty");
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+      {/* fill rect (left third) */}
+      <rect x={2} y={3} width={8} height={8} fill={fillColor} fillOpacity={fillOpacity} stroke={lineColor} strokeWidth={lineWidth} strokeOpacity={lineOpacity} />
+      {/* line (middle) */}
+      <line x1={12} y1={cy} x2={24} y2={cy} stroke={lineColor} strokeWidth={lineWidth} opacity={lineOpacity} />
+      {/* point (right) */}
+      <circle cx={30} cy={cy} r={r} fill={isHollow ? "transparent" : pointFill} stroke={pointColor} strokeWidth={1} opacity={pointOpacity} />
+    </svg>
+  );
+}
+
+interface MarkEditorProps {
+  title: string;
+  mark: "line" | "fill" | "point";
+  value: MarkStyle;
+  effective: { color: string; lineWidth?: number; markerSize?: number; opacity?: number; marker?: MarkerShape };
+  onChange: (patch: Partial<MarkStyle>) => void;
+  fields: Array<"color" | "lineWidth" | "markerSize" | "marker" | "opacity">;
+}
+
+function MarkEditor({ title, mark, value, effective, onChange, fields }: MarkEditorProps) {
+  const { t } = useTranslation();
+  return (
+    <div className="gb-style-section">
+      <div className="gb-style-section-title">{title}</div>
+      {fields.includes("color") && (
+        <div className="gb-style-row">
+          <span className="gb-style-label">{t("graph.style.color")}</span>
+          <div className="gb-style-color-row">
+            {STYLE_COLORS.map((c) => (
+              <button
+                key={c}
+                className={`gb-style-color-swatch${(value.color ?? effective.color) === c ? " gb-style-color-selected" : ""}`}
+                style={{ background: c }}
+                title={c}
+                onClick={() => onChange(mark === "fill" ? { color: c } : { color: c, fillColor: c })}
+              />
+            ))}
+            <input
+              type="color"
+              className="gb-style-color-picker"
+              value={value.color ?? effective.color}
+              onChange={(e) => onChange(mark === "fill" ? { color: e.target.value } : { color: e.target.value, fillColor: e.target.value })}
+              title={t("graph.style.color")}
+            />
+          </div>
+        </div>
+      )}
+      {fields.includes("marker") && (
+        <div className="gb-style-row">
+          <span className="gb-style-label">{t("graph.style.marker")}</span>
+          <select
+            className="gb-style-select"
+            value={value.marker ?? effective.marker ?? "circle"}
+            onChange={(e) => onChange({ marker: e.target.value as MarkerShape })}
+          >
+            {MARKER_SHAPES.map((m) => (
+              <option key={m} value={m}>{t(`graph.shape.${m}`)}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {fields.includes("markerSize") && (
+        <div className="gb-style-row">
+          <span className="gb-style-label">{t("graph.style.markerSize")}</span>
+          <input
+            type="number"
+            className="gb-style-number"
+            min={1}
+            max={32}
+            step={1}
+            value={value.markerSize ?? effective.markerSize ?? 4}
+            onChange={(e) => onChange({ markerSize: Number(e.target.value) })}
+          />
+        </div>
+      )}
+      {fields.includes("lineWidth") && (
+        <div className="gb-style-row">
+          <span className="gb-style-label">{t("graph.style.lineWidth")}</span>
+          <input
+            type="number"
+            className="gb-style-number"
+            min={0}
+            max={10}
+            step={0.5}
+            value={value.lineWidth ?? effective.lineWidth ?? 1.5}
+            onChange={(e) => onChange({ lineWidth: Number(e.target.value) })}
+          />
+        </div>
+      )}
+      {fields.includes("opacity") && (
+        <div className="gb-style-row">
+          <span className="gb-style-label">{t("graph.style.opacity")}</span>
+          <input
+            type="range"
+            className="gb-style-range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={value.opacity ?? effective.opacity ?? 1}
+            onChange={(e) => onChange({ opacity: Number(e.target.value) })}
+          />
+          <span className="gb-style-value">{Math.round((value.opacity ?? effective.opacity ?? 1) * 100)}%</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A small JMP-like preset palette used by the legend's color picker. */
+const STYLE_COLORS = [
+  "#000000", "#444444", "#888888", "#bbbbbb",
+  "#e74c3c", "#f39c12",
+  "#2ca678", "#27ae60",
+  "#3498db", "#4a6cf7",
+  "#9168d6", "#d56cb1",
+];
+
+const MARKER_SHAPES: MarkerShape[] = [
+  "circle",
+  "emptyCircle",
+  "square",
+  "emptySquare",
+  "diamond",
+  "emptyDiamond",
+  "triangle",
+  "emptyTriangle",
+];

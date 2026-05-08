@@ -38,6 +38,52 @@ export interface SmootherOptions {
   lambda?: number;
 }
 
+/** 点的符号形状 */
+export type MarkerShape =
+  | "circle"
+  | "emptyCircle"
+  | "square"
+  | "emptySquare"
+  | "diamond"
+  | "emptyDiamond"
+  | "triangle"
+  | "emptyTriangle";
+
+/** Style for a single visual mark category (line / fill / point).
+ *  Not every field is meaningful for every category — e.g. `marker`
+ *  only applies to point marks; `lineWidth` applies to lines and to
+ *  the borders of fills/points. Unset fields fall back to defaults. */
+export interface MarkStyle {
+  /** Stroke color (line stroke / point border / fill border) */
+  color?: string;
+  /** Fill color (point body / shape body). Defaults to `color`. */
+  fillColor?: string;
+  /** Marker shape (points only) */
+  marker?: MarkerShape;
+  /** Marker size px (points only) */
+  markerSize?: number;
+  /** Line / border width px */
+  lineWidth?: number;
+  /** Opacity 0..1 */
+  opacity?: number;
+}
+
+/** Per-group style: every chart element belonging to the group inherits
+ *  these line / fill / point sub-styles, regardless of its kind. */
+export interface GroupStyle {
+  line?: MarkStyle;
+  fill?: MarkStyle;
+  point?: MarkStyle;
+}
+
+/** Map of group key (the category value from the Color/Overlay encoding,
+ *  or the empty string for the un-grouped default) → GroupStyle. */
+export type GroupStyleMap = Record<string, GroupStyle>;
+
+/** Sentinel key used in `GroupStyleMap` when the chart has no
+ *  Color/Overlay split (single-series rendering). */
+export const DEFAULT_GROUP_KEY = "__default__";
+
 /** 单个图形元素的配置 */
 export interface ChartElement {
   kind: ElementKind;
@@ -79,6 +125,11 @@ export interface GraphSpec {
   elements: ChartElement[];
   /** 标题（可选，未提供则按编码生成） */
   title?: string;
+  /** Per-group line/fill/point style overrides. Keys are the category
+   *  values from `encoding.color`/`encoding.overlay`, or `DEFAULT_GROUP_KEY`
+   *  when there is no grouping. Missing entries fall back to JMP-style
+   *  defaults (black lines, small black filled dots, gray outliers). */
+  styles?: GroupStyleMap;
 }
 
 /** 原始数据：列式 */

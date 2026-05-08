@@ -97,7 +97,7 @@
 .gb-body {
   flex: 1;
   display: grid;
-  grid-template-columns: 220px 1fr 200px;
+  grid-template-columns: 220px 1fr 160px 200px;
   min-height: 0;
   overflow: hidden;
 }
@@ -388,18 +388,22 @@
   min-width: 0;
 }
 
-/* 中栏：画布 */
+/* 中栏：画布。给 4 个轴拖放区与面板外边框之间留出呼吸空间，
+   避免拖放区贴着外边框造成视觉拥挤。 */
 .gb-center {
   display: grid;
   grid-template-rows: 28px 1fr 28px;
   min-width: 0;
   min-height: 0;
   background: var(--bg-main);
+  padding: 8px 10px;
+  gap: 4px;
 }
 
 .gb-canvas-row {
   display: grid;
   grid-template-columns: 28px 1fr 28px;
+  gap: 6px;
   min-height: 0;
   min-width: 0;
 }
@@ -407,7 +411,7 @@
 .gb-canvas {
   background: var(--bg-card);
   border: 1px solid var(--border-main);
-  margin: 4px;
+  margin: 0;
   display: flex;
   align-items: stretch;
   justify-content: stretch;
@@ -470,7 +474,8 @@
 .gb-slot-horizontal-top,
 .gb-slot-horizontal-bottom {
   height: 28px;
-  margin: 4px 36px;
+  /* 水平插槽与两侧竖插槽列对齐：28px 列 + 6px gap = 34px。 */
+  margin: 0 34px;
   border-radius: 3px;
   flex-direction: row;
 }
@@ -478,7 +483,7 @@
 .gb-slot-vertical-left,
 .gb-slot-vertical-right {
   width: 28px;
-  margin: 4px 0;
+  margin: 0;
   text-orientation: mixed;
   flex-direction: column;
   border-radius: 3px;
@@ -558,4 +563,272 @@
 
 .gb-slot-chip-x:hover {
   color: var(--fg-danger);
+}
+
+/* ===== Right-side Legend (JMP-style customizable per layer) ===== */
+.gb-legend {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-main);
+  background: var(--bg-panel);
+  padding: 8px 6px;
+  overflow-y: auto;
+  gap: 2px;
+}
+
+.gb-legend-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 6px 6px 6px;
+  border-bottom: 1px solid var(--border-main);
+  margin-bottom: 4px;
+}
+
+.gb-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.gb-legend-item:hover {
+  background: var(--bg-cell-hover);
+}
+
+.gb-legend-item-selected,
+.gb-legend-item-selected:hover {
+  background: var(--bg-cell-selected, rgba(74, 108, 247, 0.15));
+}
+
+.gb-legend-field {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--fg-dim);
+}
+
+.gb-legend-swatch {
+  flex-shrink: 0;
+  width: 28px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gb-legend-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gb-legend-empty {
+  font-size: 11px;
+  color: var(--fg-dim);
+  padding: 4px 6px;
+  font-style: italic;
+}
+
+/* Color grid inside the right-click menu */
+.gb-style-color-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 16px);
+  gap: 4px;
+  padding: 6px 12px;
+}
+
+.gb-style-color-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1px solid var(--border-main);
+  cursor: pointer;
+  padding: 0;
+}
+
+.gb-style-color-swatch:hover {
+  outline: 2px solid var(--fg-accent);
+  outline-offset: 1px;
+}
+
+/* Submenu chevron */
+.sp-ctx-item .sp-ctx-chevron {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+/* Submenu attached to a parent .sp-ctx-item — appears to its right */
+.sp-ctx-submenu {
+  position: fixed;
+  z-index: 201;
+  background: var(--bg-ctx-menu);
+  border: 1px solid var(--border-ctx);
+  border-radius: 6px;
+  box-shadow: var(--shadow-menu);
+  padding: 4px 0;
+  min-width: 140px;
+  user-select: none;
+}
+
+.gb-style-slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.gb-style-slider input[type="range"] {
+  flex: 1;
+}
+
+.gb-style-slider input[type="number"] {
+  width: 48px;
+}
+
+/* ===== In-panel per-group Style editor (bottom half of legend) ===== */
+.gb-style-editor {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-main);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gb-style-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 6px;
+}
+
+.gb-style-reset {
+  background: transparent;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  color: var(--fg-secondary);
+  font-size: 10px;
+  padding: 1px 6px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
+.gb-style-reset:hover:not(:disabled) {
+  background: var(--bg-cell-hover);
+  color: var(--fg-primary);
+}
+
+.gb-style-reset:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.gb-style-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px;
+  background: var(--bg-cell-hover, rgba(0, 0, 0, 0.02));
+  border-radius: 4px;
+}
+
+.gb-style-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
+.gb-style-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  min-height: 20px;
+}
+
+.gb-style-label {
+  width: 44px;
+  flex-shrink: 0;
+  color: var(--fg-secondary);
+}
+
+.gb-style-color-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.gb-style-color-row .gb-style-color-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.gb-style-color-selected {
+  outline: 2px solid var(--fg-accent);
+  outline-offset: 1px;
+}
+
+.gb-style-color-picker {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-main);
+  border-radius: 2px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  margin-left: 2px;
+}
+
+.gb-style-select,
+.gb-style-number {
+  font-size: 11px;
+  padding: 1px 4px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--fg-primary);
+}
+
+.gb-style-select {
+  flex: 1;
+}
+
+.gb-style-number {
+  width: 56px;
+}
+
+.gb-style-range {
+  flex: 1;
+  min-width: 0;
+}
+
+.gb-style-value {
+  width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-secondary);
 }

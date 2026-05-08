@@ -87,8 +87,6 @@ function GraphPanel({ title, option, minHeight }: GraphPanelProps) {
         display: "flex",
         flexDirection: "column",
         background: "var(--bg-card)",
-        border: "1px solid var(--border-main)",
-        borderRadius: 4,
         minHeight,
       }}
     >
@@ -98,7 +96,6 @@ function GraphPanel({ title, option, minHeight }: GraphPanelProps) {
             padding: "4px 10px",
             fontSize: 12,
             color: "var(--fg-secondary)",
-            borderBottom: "1px solid var(--border-main)",
             background: "var(--bg-header)",
           }}
         >

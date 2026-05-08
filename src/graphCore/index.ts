@@ -4,6 +4,7 @@ export { getGraphTheme, buildAxisCommon } from "./theme";
 export { buildGraph, type BuiltGraph } from "./transform";
 export {
   inferFieldType,
+  DEFAULT_GROUP_KEY,
   type FieldRef,
   type FieldType,
   type Encoding,
@@ -12,4 +13,8 @@ export {
   type GraphSpec,
   type GraphData,
   type SmootherOptions,
+  type MarkStyle,
+  type GroupStyle,
+  type GroupStyleMap,
+  type MarkerShape,
 } from "./types";

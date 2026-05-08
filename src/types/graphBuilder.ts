@@ -4,7 +4,7 @@
  * 引用一个数据表作为数据源，自身仅保存编码与元素配置。
  */
 
-import type { ChartElement, FieldRef } from "@/graphCore";
+import type { ChartElement, FieldRef, GroupStyleMap } from "@/graphCore";
 
 export type GraphSlotKey =
   | "x"
@@ -29,6 +29,9 @@ export interface GraphBuilderItem {
   elements: ChartElement[];
   /** 平滑器 lambda 0~1 */
   smootherLambda: number;
+  /** Per-group line/fill/point style overrides. Keys are the category
+   *  values from the Color/Overlay encoding (or DEFAULT_GROUP_KEY). */
+  groupStyles?: GroupStyleMap;
   /** 创建时间 ISO 字符串 */
   createdAt: string;
 }

@@ -399,6 +399,39 @@
     "loading": "Đang tải dữ liệu…",
     "noData": "Không có dữ liệu",
     "dragHint": "Kéo cột vào ô trục để bắt đầu",
-    "removeSlot": "Xóa"
+    "removeSlot": "Xóa",
+    "legend": {
+      "title": "Chú giải",
+      "outliers": "Điểm ngoại lai",
+      "points": "Điểm",
+      "line": "Đường",
+      "boxplot": "Biểu đồ hộp",
+      "smoother": "Đường làm trơn",
+      "allEntries": "Tất cả"
+    },
+    "mark": {
+      "line": "Đường",
+      "fill": "Tô",
+      "point": "Điểm"
+    },
+    "style": {
+      "color": "Màu",
+      "marker": "Hình dạng",
+      "markerSize": "Kích thước",
+      "lineWidth": "Độ dày",
+      "opacity": "Độ mờ",
+      "reset": "Đặt lại",
+      "editorTitle": "Kiểu"
+    },
+    "shape": {
+      "circle": "Tròn (đặc)",
+      "emptyCircle": "Tròn (rỗng)",
+      "square": "Vuông (đặc)",
+      "emptySquare": "Vuông (rỗng)",
+      "diamond": "Thoi (đặc)",
+      "emptyDiamond": "Thoi (rỗng)",
+      "triangle": "Tam giác (đặc)",
+      "emptyTriangle": "Tam giác (rỗng)"
+    }
   }
 }
