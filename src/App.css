@@ -1625,20 +1625,34 @@
   opacity: 0.7;
 }
 
-/* JMP-style two-pane stack column picker */
-.sp-stack-picker {
+/* DualListPicker — JMP-style two-pane chooser. Used by Stack and any other
+ * dialog that needs an "available items / chosen items" picker.
+ *
+ * Markup contract (see src/components/DualListPicker.tsx):
+ *   .sp-dlp                  — outer flex row, gap 12px
+ *     .sp-dlp-pane           — one of the two columns
+ *       .sp-dlp-pane-header  — small uppercase label + count badge
+ *       .sp-dlp-list         — scrollable list
+ *         .sp-dlp-list-item  — one row, .is-selected for highlight
+ *           .sp-dlp-list-name
+ *           .sp-dlp-hint     — right-aligned secondary text
+ *         .sp-dlp-list-empty — empty state inside the chosen pane
+ *     .sp-dlp-actions        — center column with Add/Remove buttons
+ *   .sp-dlp-info-note        — small grey hint shown below the picker
+ */
+.sp-dlp {
   display: flex;
   align-items: stretch;
   gap: 12px;
   margin-bottom: 8px;
 }
-.sp-stack-pane {
+.sp-dlp-pane {
   flex: 1 1 0;
   min-width: 220px;
   display: flex;
   flex-direction: column;
 }
-.sp-stack-pane-header {
+.sp-dlp-pane-header {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1649,13 +1663,13 @@
   color: var(--fg-secondary);
   padding: 2px 4px 4px 4px;
 }
-.sp-stack-pane-count {
+.sp-dlp-pane-count {
   margin-left: auto;
   font-weight: 400;
   color: var(--fg-secondary);
   opacity: 0.75;
 }
-.sp-stack-list {
+.sp-dlp-list {
   flex: 1 1 0;
   min-height: 180px;
   max-height: 260px;
@@ -1665,7 +1679,7 @@
   padding: 2px;
   background: var(--bg-cell, transparent);
 }
-.sp-stack-list-item {
+.sp-dlp-list-item {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1675,32 +1689,39 @@
   border-radius: 3px;
   user-select: none;
 }
-.sp-stack-list-item:hover {
+.sp-dlp-list-item:hover {
   background: var(--bg-menu-hover);
 }
-.sp-stack-list-item.is-selected {
+.sp-dlp-list-item.is-selected {
   background: var(--fg-accent);
   color: #fff;
 }
-.sp-stack-list-item.is-selected .sp-col-type-hint {
+.sp-dlp-list-item.is-selected .sp-dlp-hint {
   color: #fff;
   opacity: 0.85;
 }
-.sp-stack-list-name {
+.sp-dlp-list-name {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sp-stack-list-empty {
+.sp-dlp-hint {
+  margin-left: auto;
+  color: var(--fg-secondary);
+  font-size: 11px;
+  opacity: 0.7;
+  flex: 0 0 auto;
+}
+.sp-dlp-list-empty {
   padding: 12px 8px;
   font-size: 11px;
   color: var(--fg-secondary);
   text-align: center;
   font-style: italic;
 }
-.sp-stack-actions {
+.sp-dlp-actions {
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1708,11 +1729,11 @@
   flex: 0 0 auto;
   padding-top: 22px; /* align with first list item, accounting for header */
 }
-.sp-stack-actions .sp-dialog-btn {
+.sp-dlp-actions .sp-dialog-btn {
   white-space: nowrap;
   min-width: 130px;
 }
-.sp-stack-info-note {
+.sp-dlp-info-note {
   font-size: 11px;
   color: var(--fg-secondary);
   margin-bottom: 8px;

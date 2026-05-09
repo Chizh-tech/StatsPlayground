@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { dataService } from "@/services/dataService";
+import { DualListPicker } from "@/components/DualListPicker";
 import type { DatasetMeta } from "@/types/data";
 
 // ─── Types ───
@@ -329,22 +330,10 @@ function StackForm({ sourceId, cols, sourceName, exec, busy, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
   exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
 }) {
-  // Right pane: the columns the user has chosen to stack, in the order they were added.
   const [stackOrder, setStackOrder] = useState<string[]>([]);
-  // Highlights for multi-select inside each pane (independent of stack membership).
-  const [leftSel, setLeftSel] = useState<Set<string>>(new Set());
-  const [rightSel, setRightSel] = useState<Set<string>>(new Set());
-  const lastLeftClickRef = useRef<number | null>(null);
-  const lastRightClickRef = useRef<number | null>(null);
 
   // Reset whenever the source table changes.
-  useEffect(() => {
-    setStackOrder([]);
-    setLeftSel(new Set());
-    setRightSel(new Set());
-    lastLeftClickRef.current = null;
-    lastRightClickRef.current = null;
-  }, [sourceId]);
+  useEffect(() => { setStackOrder([]); }, [sourceId]);
 
   // Drop any stack entries that no longer exist in the current column list.
   useEffect(() => {
@@ -352,141 +341,33 @@ function StackForm({ sourceId, cols, sourceName, exec, busy, t }: {
     setStackOrder(prev => prev.filter(n => valid.has(n)));
   }, [cols]);
 
-  const stackSet = useMemo(() => new Set(stackOrder), [stackOrder]);
-  const available = useMemo(() => cols.filter(([n]) => !stackSet.has(n)), [cols, stackSet]);
-  const stackItems = useMemo(() => {
-    const lookup = new Map(cols);
-    return stackOrder.map(n => [n, lookup.get(n) ?? ""] as [string, string]);
-  }, [stackOrder, cols]);
-
-  // Number of columns that will become identifier columns (auto = everything not stacked).
-  const autoIdCount = available.length;
-
-  const pickRange = useCallback((items: [string, string][], from: number, to: number) => {
-    const lo = Math.min(from, to), hi = Math.max(from, to);
-    const out = new Set<string>();
-    for (let i = lo; i <= hi; i++) out.add(items[i][0]);
-    return out;
-  }, []);
-
-  const handlePaneClick = useCallback((
-    e: React.MouseEvent,
-    index: number,
-    items: [string, string][],
-    sel: Set<string>,
-    setSel: (s: Set<string>) => void,
-    lastRef: React.MutableRefObject<number | null>,
-  ) => {
-    e.preventDefault();
-    const name = items[index][0];
-    if (e.shiftKey && lastRef.current !== null) {
-      setSel(pickRange(items, lastRef.current, index));
-    } else if (e.ctrlKey || e.metaKey) {
-      const next = new Set(sel);
-      if (next.has(name)) next.delete(name); else next.add(name);
-      setSel(next);
-    } else {
-      setSel(new Set([name]));
-    }
-    lastRef.current = index;
-  }, [pickRange]);
-
-  const addToStack = useCallback((names: string[]) => {
-    if (names.length === 0) return;
-    setStackOrder(prev => {
-      const seen = new Set(prev);
-      const out = [...prev];
-      for (const n of names) if (!seen.has(n)) { out.push(n); seen.add(n); }
-      return out;
-    });
-    setLeftSel(new Set());
-    setRightSel(new Set(names));
-    lastLeftClickRef.current = null;
-  }, []);
-
-  const removeFromStack = useCallback((names: string[]) => {
-    if (names.length === 0) return;
-    const drop = new Set(names);
-    setStackOrder(prev => prev.filter(n => !drop.has(n)));
-    setRightSel(new Set());
-    setLeftSel(new Set(names));
-    lastRightClickRef.current = null;
-  }, []);
-
-  const handleAddClick = () => addToStack([...leftSel]);
-  const handleRemoveClick = () => removeFromStack([...rightSel]);
+  const items = useMemo(
+    () => cols.map(([name, type_]) => ({ key: name, label: name, hint: type_ })),
+    [cols],
+  );
+  const idCount = items.length - stackOrder.length;
+  const idCols = useMemo(() => {
+    const stacked = new Set(stackOrder);
+    return cols.map(([n]) => n).filter(n => !stacked.has(n));
+  }, [cols, stackOrder]);
 
   return (
     <>
-      <div className="sp-stack-picker">
-        <div className="sp-stack-pane">
-          <div className="sp-stack-pane-header">
-            {t("tableOp.stackAvailable", { defaultValue: "Available columns" })}
-            <span className="sp-stack-pane-count">{available.length}</span>
-          </div>
-          <div className="sp-stack-list">
-            {available.map(([name, type_], i) => (
-              <div
-                key={name}
-                className={`sp-stack-list-item${leftSel.has(name) ? " is-selected" : ""}`}
-                title={type_}
-                onMouseDown={(e) => handlePaneClick(e, i, available, leftSel, setLeftSel, lastLeftClickRef)}
-                onDoubleClick={() => addToStack([name])}
-              >
-                <span className="sp-stack-list-name">{name}</span>
-                <span className="sp-col-type-hint">{type_}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+      <DualListPicker
+        items={items}
+        selected={stackOrder}
+        onChange={setStackOrder}
+        availableLabel={t("tableOp.stackAvailable", { defaultValue: "Available columns" })}
+        selectedLabel={t("tableOp.stackSelected", { defaultValue: "Stack columns" })}
+        addLabel={t("tableOp.stackAdd", { defaultValue: "Stack Columns →" })}
+        removeLabel={t("tableOp.stackRemove", { defaultValue: "← Remove" })}
+        emptyHint={t("tableOp.stackEmptyHint", { defaultValue: "Pick columns on the left, then click ‘Stack Columns →’." })}
+      />
 
-        <div className="sp-stack-actions">
-          <button
-            type="button"
-            className="sp-dialog-btn"
-            disabled={leftSel.size === 0}
-            onClick={handleAddClick}
-            title={t("tableOp.stackAdd", { defaultValue: "Stack Columns →" })}
-          >{t("tableOp.stackAdd", { defaultValue: "Stack Columns →" })}</button>
-          <button
-            type="button"
-            className="sp-dialog-btn"
-            disabled={rightSel.size === 0}
-            onClick={handleRemoveClick}
-            title={t("tableOp.stackRemove", { defaultValue: "← Remove" })}
-          >{t("tableOp.stackRemove", { defaultValue: "← Remove" })}</button>
-        </div>
-
-        <div className="sp-stack-pane">
-          <div className="sp-stack-pane-header">
-            {t("tableOp.stackSelected", { defaultValue: "Stack columns" })}
-            <span className="sp-stack-pane-count">{stackItems.length}</span>
-          </div>
-          <div className="sp-stack-list">
-            {stackItems.length === 0 ? (
-              <div className="sp-stack-list-empty">
-                {t("tableOp.stackEmptyHint", { defaultValue: "Pick columns on the left, then click ‘Stack Columns →’." })}
-              </div>
-            ) : stackItems.map(([name, type_], i) => (
-              <div
-                key={name}
-                className={`sp-stack-list-item${rightSel.has(name) ? " is-selected" : ""}`}
-                title={type_}
-                onMouseDown={(e) => handlePaneClick(e, i, stackItems, rightSel, setRightSel, lastRightClickRef)}
-                onDoubleClick={() => removeFromStack([name])}
-              >
-                <span className="sp-stack-list-name">{name}</span>
-                <span className="sp-col-type-hint">{type_}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="sp-stack-info-note">
+      <div className="sp-dlp-info-note">
         {t("tableOp.stackInfoNote", {
           defaultValue: "Other {{count}} column(s) will be kept as identifier columns.",
-          count: autoIdCount,
+          count: idCount,
         })}
       </div>
 
@@ -497,7 +378,7 @@ function StackForm({ sourceId, cols, sourceName, exec, busy, t }: {
           onClick={() => exec(() => dataService.stackTable(
             sourceId,
             stackOrder,
-            available.map(([n]) => n),
+            idCols,
             t("tableOp.resultSuffix.stack", { name: sourceName }),
           ))}
         >{t("common.confirm")}</button>
