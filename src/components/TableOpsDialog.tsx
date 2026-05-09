@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { dataService } from "@/services/dataService";
@@ -10,6 +10,14 @@ import type { DatasetMeta } from "@/types/data";
 export type TableOpType =
   | "summary" | "subset" | "sort" | "stack"
   | "split" | "transpose" | "join" | "update" | "concatenate";
+
+/**
+ * Each form registers its primary (Confirm) action with the parent through
+ * `setPrimary`, so that Confirm and Cancel can be rendered together in the
+ * outer footer. `null` means no Confirm button is shown.
+ */
+export type PrimaryAction = { disabled: boolean; onClick: () => void };
+export type SetPrimary = (p: PrimaryAction | null) => void;
 
 interface Props {
   op: TableOpType;
@@ -114,6 +122,7 @@ export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreat
   const { t } = useTranslation();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [primary, setPrimary] = useState<PrimaryAction | null>(null);
 
   // Source dataset (most ops work on the active dataset)
   const [sourceId, setSourceId] = useState(activeDatasetId ?? "");
@@ -127,7 +136,9 @@ export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreat
 
   const sourceName = datasets.find(d => d.id === sourceId)?.name ?? "";
 
-  const exec = async (fn: () => Promise<DatasetMeta | void>) => {
+  // Memoized so child forms can put `exec` in their useLayoutEffect deps without
+  // re-registering primary on every parent render.
+  const exec = useCallback(async (fn: () => Promise<DatasetMeta | void>) => {
     setError(null);
     setBusy(true);
     try {
@@ -143,7 +154,7 @@ export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreat
     } finally {
       setBusy(false);
     }
-  };
+  }, [onCreated, onUpdated, onClose]);
 
   const title: Record<TableOpType, string> = {
     summary: t("tableOp.summary"),
@@ -157,6 +168,8 @@ export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreat
     concatenate: t("tableOp.concatenate"),
   };
 
+  const confirmDisabled = busy || !primary || primary.disabled;
+
   return (
     <div className="sp-dialog-overlay" onMouseDown={onClose}>
       <div className="sp-dialog sp-dialog-wide" onMouseDown={e => e.stopPropagation()}>
@@ -168,19 +181,24 @@ export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreat
           )}
 
           {/* Per-op UI */}
-          {op === "sort" && <SortForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
-          {op === "subset" && <SubsetForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
-          {op === "summary" && <SummaryForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
-          {op === "transpose" && <TransposeForm sourceId={sourceId} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
-          {op === "stack" && <StackForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
-          {op === "split" && <SplitForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} busy={busy} t={t} />}
-          {op === "join" && <JoinForm datasets={datasets} activeId={activeDatasetId} exec={exec} busy={busy} t={t} />}
-          {op === "update" && <UpdateForm datasets={datasets} activeId={activeDatasetId} exec={exec} busy={busy} t={t} />}
-          {op === "concatenate" && <ConcatenateForm datasets={datasets} activeId={activeDatasetId} exec={exec} busy={busy} t={t} />}
+          {op === "sort" && <SortForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} setPrimary={setPrimary} t={t} />}
+          {op === "subset" && <SubsetForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} setPrimary={setPrimary} t={t} />}
+          {op === "summary" && <SummaryForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} setPrimary={setPrimary} t={t} />}
+          {op === "transpose" && <TransposeForm sourceId={sourceId} sourceName={sourceName} exec={exec} setPrimary={setPrimary} t={t} />}
+          {op === "stack" && <StackForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} setPrimary={setPrimary} t={t} />}
+          {op === "split" && <SplitForm sourceId={sourceId} cols={cols} sourceName={sourceName} exec={exec} setPrimary={setPrimary} t={t} />}
+          {op === "join" && <JoinForm datasets={datasets} activeId={activeDatasetId} exec={exec} setPrimary={setPrimary} t={t} />}
+          {op === "update" && <UpdateForm datasets={datasets} activeId={activeDatasetId} exec={exec} setPrimary={setPrimary} t={t} />}
+          {op === "concatenate" && <ConcatenateForm datasets={datasets} activeId={activeDatasetId} exec={exec} setPrimary={setPrimary} t={t} />}
 
           {error && <div className="sp-dialog-error">{error}</div>}
         </div>
         <div className="sp-dialog-actions">
+          <button
+            className="sp-dialog-btn sp-dialog-btn-primary"
+            disabled={confirmDisabled}
+            onClick={() => primary?.onClick()}
+          >{t("common.confirm")}</button>
           <button className="sp-dialog-btn" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
         </div>
       </div>
@@ -190,14 +208,21 @@ export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreat
 
 // ─── Sort ───
 
-function SortForm({ sourceId, cols, sourceName, exec, busy, t }: {
+function SortForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
   const [sortCol, setSortCol] = useState("");
   const [sortOrder, setSortOrder] = useState("asc");
 
   useEffect(() => { if (cols.length > 0 && !sortCol) setSortCol(cols[0][0]); }, [cols]);
+
+  useLayoutEffect(() => {
+    setPrimary({
+      disabled: !sourceId || !sortCol,
+      onClick: () => exec(() => dataService.sortTable(sourceId, [sortCol], [sortOrder], t("tableOp.resultSuffix.sort", { name: sourceName }))),
+    });
+  }, [setPrimary, sourceId, sortCol, sortOrder, sourceName, exec, t]);
 
   return (
     <>
@@ -214,28 +239,28 @@ function SortForm({ sourceId, cols, sourceName, exec, busy, t }: {
           <option value="desc">{t("tableOp.sortDesc")}</option>
         </select>
       </div>
-      <div className="sp-dialog-actions">
-        <button
-          className="sp-dialog-btn sp-dialog-btn-primary"
-          disabled={busy || !sourceId || !sortCol}
-          onClick={() => exec(() => dataService.sortTable(sourceId, [sortCol], [sortOrder], t("tableOp.resultSuffix.sort", { name: sourceName })))}
-        >{t("common.confirm")}</button>
-      </div>
     </>
   );
 }
 
 // ─── Subset ───
 
-function SubsetForm({ sourceId, cols, sourceName, exec, busy, t }: {
+function SubsetForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
   const [selectedCols, setSelectedCols] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
 
   // Select all by default
   useEffect(() => { setSelectedCols(new Set(cols.map(([n]) => n))); }, [cols]);
+
+  useLayoutEffect(() => {
+    setPrimary({
+      disabled: !sourceId || selectedCols.size === 0,
+      onClick: () => exec(() => dataService.subsetTable(sourceId, [...selectedCols], filter || null, t("tableOp.resultSuffix.subset", { name: sourceName }))),
+    });
+  }, [setPrimary, sourceId, selectedCols, filter, sourceName, exec, t]);
 
   return (
     <>
@@ -245,22 +270,15 @@ function SubsetForm({ sourceId, cols, sourceName, exec, busy, t }: {
         <input className="sp-dialog-input" value={filter} onChange={e => setFilter(e.target.value)}
           placeholder={t("tableOp.subsetWherePlaceholder")} />
       </div>
-      <div className="sp-dialog-actions">
-        <button
-          className="sp-dialog-btn sp-dialog-btn-primary"
-          disabled={busy || !sourceId || selectedCols.size === 0}
-          onClick={() => exec(() => dataService.subsetTable(sourceId, [...selectedCols], filter || null, t("tableOp.resultSuffix.subset", { name: sourceName })))}
-        >{t("common.confirm")}</button>
-      </div>
     </>
   );
 }
 
 // ─── Summary ───
 
-function SummaryForm({ sourceId, cols, sourceName, exec, busy, t }: {
+function SummaryForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
   const [statCols, setStatCols] = useState<Set<string>>(new Set());
   const [groupCols, setGroupCols] = useState<Set<string>>(new Set());
@@ -275,6 +293,13 @@ function SummaryForm({ sourceId, cols, sourceName, exec, busy, t }: {
     { key: "sum", label: t("tableOp.stat_sum") },
     { key: "median", label: t("tableOp.stat_median") },
   ];
+
+  useLayoutEffect(() => {
+    setPrimary({
+      disabled: !sourceId || statCols.size === 0 || stats.size === 0,
+      onClick: () => exec(() => dataService.summaryTable(sourceId, [...statCols], [...groupCols], [...stats], t("tableOp.resultSuffix.summary", { name: sourceName }))),
+    });
+  }, [setPrimary, sourceId, statCols, groupCols, stats, sourceName, exec, t]);
 
   return (
     <>
@@ -296,39 +321,30 @@ function SummaryForm({ sourceId, cols, sourceName, exec, busy, t }: {
           ))}
         </div>
       </div>
-      <div className="sp-dialog-actions">
-        <button
-          className="sp-dialog-btn sp-dialog-btn-primary"
-          disabled={busy || !sourceId || statCols.size === 0 || stats.size === 0}
-          onClick={() => exec(() => dataService.summaryTable(sourceId, [...statCols], [...groupCols], [...stats], t("tableOp.resultSuffix.summary", { name: sourceName })))}
-        >{t("common.confirm")}</button>
-      </div>
     </>
   );
 }
 
 // ─── Transpose ───
 
-function TransposeForm({ sourceId, sourceName, exec, busy, t }: {
+function TransposeForm({ sourceId, sourceName, exec, setPrimary, t }: {
   sourceId: string; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
-  return (
-    <div className="sp-dialog-actions">
-      <button
-        className="sp-dialog-btn sp-dialog-btn-primary"
-        disabled={busy || !sourceId}
-        onClick={() => exec(() => dataService.transposeTable(sourceId, t("tableOp.resultSuffix.transpose", { name: sourceName })))}
-      >{t("common.confirm")}</button>
-    </div>
-  );
+  useLayoutEffect(() => {
+    setPrimary({
+      disabled: !sourceId,
+      onClick: () => exec(() => dataService.transposeTable(sourceId, t("tableOp.resultSuffix.transpose", { name: sourceName }))),
+    });
+  }, [setPrimary, sourceId, sourceName, exec, t]);
+  return null;
 }
 
 // ─── Stack ───
 
-function StackForm({ sourceId, cols, sourceName, exec, busy, t }: {
+function StackForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
   const [stackOrder, setStackOrder] = useState<string[]>([]);
 
@@ -351,6 +367,18 @@ function StackForm({ sourceId, cols, sourceName, exec, busy, t }: {
     return cols.map(([n]) => n).filter(n => !stacked.has(n));
   }, [cols, stackOrder]);
 
+  useLayoutEffect(() => {
+    setPrimary({
+      disabled: !sourceId || stackOrder.length === 0,
+      onClick: () => exec(() => dataService.stackTable(
+        sourceId,
+        stackOrder,
+        idCols,
+        t("tableOp.resultSuffix.stack", { name: sourceName }),
+      )),
+    });
+  }, [setPrimary, sourceId, stackOrder, idCols, sourceName, exec, t]);
+
   return (
     <>
       <DualListPicker
@@ -368,28 +396,15 @@ function StackForm({ sourceId, cols, sourceName, exec, busy, t }: {
           count: idCount,
         })}
       </div>
-
-      <div className="sp-dialog-actions">
-        <button
-          className="sp-dialog-btn sp-dialog-btn-primary"
-          disabled={busy || !sourceId || stackOrder.length === 0}
-          onClick={() => exec(() => dataService.stackTable(
-            sourceId,
-            stackOrder,
-            idCols,
-            t("tableOp.resultSuffix.stack", { name: sourceName }),
-          ))}
-        >{t("common.confirm")}</button>
-      </div>
     </>
   );
 }
 
 // ─── Split ───
 
-function SplitForm({ sourceId, cols, sourceName, exec, busy, t }: {
+function SplitForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
   const [splitCol, setSplitCol] = useState("");
   const [valueCol, setValueCol] = useState("");
@@ -401,6 +416,13 @@ function SplitForm({ sourceId, cols, sourceName, exec, busy, t }: {
       setValueCol(cols[1][0]);
     }
   }, [cols]);
+
+  useLayoutEffect(() => {
+    setPrimary({
+      disabled: !sourceId || !splitCol || !valueCol || splitCol === valueCol,
+      onClick: () => exec(() => dataService.splitTable(sourceId, splitCol, valueCol, [...idCols], t("tableOp.resultSuffix.split", { name: sourceName }))),
+    });
+  }, [setPrimary, sourceId, splitCol, valueCol, idCols, sourceName, exec, t]);
 
   return (
     <>
@@ -417,22 +439,15 @@ function SplitForm({ sourceId, cols, sourceName, exec, busy, t }: {
         </select>
       </div>
       <ColCheckList cols={cols.filter(([n]) => n !== splitCol && n !== valueCol)} selected={idCols} onChange={setIdCols} label={t("tableOp.splitGroupCols")} />
-      <div className="sp-dialog-actions">
-        <button
-          className="sp-dialog-btn sp-dialog-btn-primary"
-          disabled={busy || !sourceId || !splitCol || !valueCol || splitCol === valueCol}
-          onClick={() => exec(() => dataService.splitTable(sourceId, splitCol, valueCol, [...idCols], t("tableOp.resultSuffix.split", { name: sourceName })))}
-        >{t("common.confirm")}</button>
-      </div>
     </>
   );
 }
 
 // ─── Join ───
 
-function JoinForm({ datasets, activeId, exec, busy, t }: {
+function JoinForm({ datasets, activeId, exec, setPrimary, t }: {
   datasets: DatasetMeta[]; activeId: string | null;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
   const [leftId, setLeftId] = useState(activeId ?? "");
   const [rightId, setRightId] = useState("");
@@ -455,6 +470,13 @@ function JoinForm({ datasets, activeId, exec, busy, t }: {
 
   const leftName = datasets.find(d => d.id === leftId)?.name ?? "";
   const rightName = datasets.find(d => d.id === rightId)?.name ?? "";
+
+  useLayoutEffect(() => {
+    setPrimary({
+      disabled: !leftId || !rightId || !leftKey || !rightKey,
+      onClick: () => exec(() => dataService.joinTables(leftId, rightId, joinType, leftKey, rightKey, t("tableOp.resultSuffix.join", { left: leftName, right: rightName }))),
+    });
+  }, [setPrimary, leftId, rightId, joinType, leftKey, rightKey, leftName, rightName, exec, t]);
 
   return (
     <>
@@ -481,22 +503,15 @@ function JoinForm({ datasets, activeId, exec, busy, t }: {
           {rightCols.map(([n]) => <option key={n} value={n}>{n}</option>)}
         </select>
       </div>
-      <div className="sp-dialog-actions">
-        <button
-          className="sp-dialog-btn sp-dialog-btn-primary"
-          disabled={busy || !leftId || !rightId || !leftKey || !rightKey}
-          onClick={() => exec(() => dataService.joinTables(leftId, rightId, joinType, leftKey, rightKey, t("tableOp.resultSuffix.join", { left: leftName, right: rightName })))}
-        >{t("common.confirm")}</button>
-      </div>
     </>
   );
 }
 
 // ─── Update ───
 
-function UpdateForm({ datasets, activeId, exec, busy, t }: {
+function UpdateForm({ datasets, activeId, exec, setPrimary, t }: {
   datasets: DatasetMeta[]; activeId: string | null;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
   const [leftId, setLeftId] = useState(activeId ?? "");
   const [rightId, setRightId] = useState("");
@@ -520,6 +535,13 @@ function UpdateForm({ datasets, activeId, exec, busy, t }: {
     ([n]) => n !== matchCol && leftCols.some(([ln]) => ln === n)
   );
 
+  useLayoutEffect(() => {
+    setPrimary({
+      disabled: !leftId || !rightId || !matchCol || updateCols.size === 0,
+      onClick: () => exec(() => dataService.updateTable(leftId, rightId, matchCol, [...updateCols])),
+    });
+  }, [setPrimary, leftId, rightId, matchCol, updateCols, exec]);
+
   return (
     <>
       <DatasetSelect datasets={datasets} value={leftId} onChange={setLeftId} label={t("tableOp.updateTarget")} />
@@ -533,55 +555,46 @@ function UpdateForm({ datasets, activeId, exec, busy, t }: {
       {commonCols.length > 0 && (
         <ColCheckList cols={commonCols} selected={updateCols} onChange={setUpdateCols} label={t("tableOp.updateCols")} />
       )}
-      <div className="sp-dialog-actions">
-        <button
-          className="sp-dialog-btn sp-dialog-btn-primary"
-          disabled={busy || !leftId || !rightId || !matchCol || updateCols.size === 0}
-          onClick={() => exec(() => dataService.updateTable(leftId, rightId, matchCol, [...updateCols]))}
-        >{t("common.confirm")}</button>
-      </div>
     </>
   );
 }
 
 // ─── Concatenate ───
 
-function ConcatenateForm({ datasets, activeId, exec, busy, t }: {
+function ConcatenateForm({ datasets, activeId, exec, setPrimary, t }: {
   datasets: DatasetMeta[]; activeId: string | null;
-  exec: (fn: () => Promise<DatasetMeta | void>) => void; busy: boolean; t: TFunction;
+  exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set(activeId ? [activeId] : []));
 
   const dsItems: [string, string][] = datasets.map(d => [d.id, `${d.name} (${d.rowCount}×${d.colCount})`]);
 
+  useLayoutEffect(() => {
+    setPrimary({
+      disabled: selected.size < 2,
+      onClick: () => exec(() => dataService.concatenateTables([...selected], t("tableOp.concatResult"))),
+    });
+  }, [setPrimary, selected, exec, t]);
+
   return (
-    <>
-      <div className="sp-dialog-field">
-        <label className="sp-dialog-label">{t("tableOp.concatPickTables")}</label>
-        <div className="sp-col-checklist">
-          {dsItems.map(([id, label]) => (
-            <label key={id} className="sp-col-check-item">
-              <input
-                type="checkbox"
-                checked={selected.has(id)}
-                onChange={e => {
-                  const next = new Set(selected);
-                  if (e.target.checked) next.add(id); else next.delete(id);
-                  setSelected(next);
-                }}
-              />
-              <span>{label}</span>
-            </label>
-          ))}
-        </div>
+    <div className="sp-dialog-field">
+      <label className="sp-dialog-label">{t("tableOp.concatPickTables")}</label>
+      <div className="sp-col-checklist">
+        {dsItems.map(([id, label]) => (
+          <label key={id} className="sp-col-check-item">
+            <input
+              type="checkbox"
+              checked={selected.has(id)}
+              onChange={e => {
+                const next = new Set(selected);
+                if (e.target.checked) next.add(id); else next.delete(id);
+                setSelected(next);
+              }}
+            />
+            <span>{label}</span>
+          </label>
+        ))}
       </div>
-      <div className="sp-dialog-actions">
-        <button
-          className="sp-dialog-btn sp-dialog-btn-primary"
-          disabled={busy || selected.size < 2}
-          onClick={() => exec(() => dataService.concatenateTables([...selected], t("tableOp.concatResult")))}
-        >{t("common.confirm")}</button>
-      </div>
-    </>
+    </div>
   );
 }
