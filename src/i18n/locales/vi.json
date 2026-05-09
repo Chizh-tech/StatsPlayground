@@ -184,9 +184,7 @@
     "stat_median": "Trung vị (Median)",
     "stackAvailable": "Cột khả dụng",
     "stackSelected": "Cột xếp chồng",
-    "stackAdd": "Xếp chồng cột →",
-    "stackRemove": "← Xóa",
-    "stackEmptyHint": "Chọn các cột bên trái, sau đó nhấn ‘Xếp chồng cột →’.",
+    "stackEmptyHint": "Chọn các cột bên trái, sau đó nhấn ‘Thêm’.",
     "stackInfoNote_one": "{{count}} cột còn lại sẽ được giữ làm cột định danh.",
     "stackInfoNote_other": "{{count}} cột còn lại sẽ được giữ làm cột định danh.",
     "splitKeyCol": "Cột tách (giá trị làm tên cột mới)",
@@ -216,6 +214,12 @@
       "split": "{{name}} - Đã tách",
       "join": "{{left}} + {{right}}"
     }
+  },
+  "picker": {
+    "add": "Thêm",
+    "remove": "Xóa",
+    "addAll": "Thêm tất cả",
+    "removeAll": "Xóa tất cả"
   },
   "extras": {
     "title": "Thuộc tính bổ sung",

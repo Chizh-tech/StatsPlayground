@@ -184,9 +184,7 @@
     "stat_median": "中位数 (Median)",
     "stackAvailable": "可选列",
     "stackSelected": "堆叠列",
-    "stackAdd": "堆叠列 →",
-    "stackRemove": "← 移除",
-    "stackEmptyHint": "在左侧选中列，然后点击“堆叠列 →”。",
+    "stackEmptyHint": "在左侧选中列，然后点击“添加”。",
     "stackInfoNote_one": "其余 {{count}} 列将作为标识列保留。",
     "stackInfoNote_other": "其余 {{count}} 列将作为标识列保留。",
     "splitKeyCol": "拆分列 (值作为新列名)",
@@ -216,6 +214,12 @@
       "split": "{{name}} - 拆分",
       "join": "{{left}} + {{right}}"
     }
+  },
+  "picker": {
+    "add": "添加",
+    "remove": "移除",
+    "addAll": "全部添加",
+    "removeAll": "全部移除"
   },
   "extras": {
     "title": "附加属性",

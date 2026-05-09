@@ -359,9 +359,7 @@ function StackForm({ sourceId, cols, sourceName, exec, busy, t }: {
         onChange={setStackOrder}
         availableLabel={t("tableOp.stackAvailable", { defaultValue: "Available columns" })}
         selectedLabel={t("tableOp.stackSelected", { defaultValue: "Stack columns" })}
-        addLabel={t("tableOp.stackAdd", { defaultValue: "Stack Columns →" })}
-        removeLabel={t("tableOp.stackRemove", { defaultValue: "← Remove" })}
-        emptyHint={t("tableOp.stackEmptyHint", { defaultValue: "Pick columns on the left, then click ‘Stack Columns →’." })}
+        emptyHint={t("tableOp.stackEmptyHint", { defaultValue: "Select columns on the left, then click ‘Add’." })}
       />
 
       <div className="sp-dlp-info-note">

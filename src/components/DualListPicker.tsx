@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export interface DualListPickerItem {
   /** Stable identifier passed back via `selected` / `onChange`. */
@@ -35,8 +36,11 @@ interface Props {
   onChange: (next: string[]) => void;
   availableLabel: string;
   selectedLabel: string;
-  addLabel: string;
-  removeLabel: string;
+  /** Override button labels. Defaults are pulled from i18n (picker.add etc). */
+  addLabel?: string;
+  removeLabel?: string;
+  addAllLabel?: string;
+  removeAllLabel?: string;
   /** Shown inside the right pane when no items are chosen. */
   emptyHint?: string;
   /** Optional extra class on the outer container. */
@@ -45,13 +49,20 @@ interface Props {
 
 export function DualListPicker({
   items, selected, onChange,
-  availableLabel, selectedLabel, addLabel, removeLabel,
+  availableLabel, selectedLabel,
+  addLabel, removeLabel, addAllLabel, removeAllLabel,
   emptyHint, className,
 }: Props) {
+  const { t } = useTranslation();
   const [leftSel, setLeftSel] = useState<Set<string>>(new Set());
   const [rightSel, setRightSel] = useState<Set<string>>(new Set());
   const lastLeftClickRef = useRef<number | null>(null);
   const lastRightClickRef = useRef<number | null>(null);
+
+  const addText = addLabel ?? t("picker.add", { defaultValue: "Add" });
+  const removeText = removeLabel ?? t("picker.remove", { defaultValue: "Remove" });
+  const addAllText = addAllLabel ?? t("picker.addAll", { defaultValue: "Add All" });
+  const removeAllText = removeAllLabel ?? t("picker.removeAll", { defaultValue: "Remove All" });
 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const available = useMemo(
@@ -147,15 +158,29 @@ export function DualListPicker({
           className="sp-dialog-btn"
           disabled={leftSel.size === 0}
           onClick={() => moveRight([...leftSel])}
-          title={addLabel}
-        >{addLabel}</button>
+          title={addText}
+        >{addText}</button>
         <button
           type="button"
           className="sp-dialog-btn"
           disabled={rightSel.size === 0}
           onClick={() => moveLeft([...rightSel])}
-          title={removeLabel}
-        >{removeLabel}</button>
+          title={removeText}
+        >{removeText}</button>
+        <button
+          type="button"
+          className="sp-dialog-btn"
+          disabled={available.length === 0}
+          onClick={() => moveRight(available.map(it => it.key))}
+          title={addAllText}
+        >{addAllText}</button>
+        <button
+          type="button"
+          className="sp-dialog-btn"
+          disabled={selectedItems.length === 0}
+          onClick={() => moveLeft(selectedItems.map(it => it.key))}
+          title={removeAllText}
+        >{removeAllText}</button>
       </div>
 
       <div className="sp-dlp-pane">

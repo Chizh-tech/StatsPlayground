@@ -184,9 +184,7 @@
     "stat_median": "中位數 (Median)",
     "stackAvailable": "可選欄位",
     "stackSelected": "堆疊欄位",
-    "stackAdd": "堆疊欄位 →",
-    "stackRemove": "← 移除",
-    "stackEmptyHint": "在左側選中欄位，然後點選「堆疊欄位 →」。",
+    "stackEmptyHint": "在左側選中欄位，然後點選「新增」。",
     "stackInfoNote_one": "其餘 {{count}} 欄將作為識別欄位保留。",
     "stackInfoNote_other": "其餘 {{count}} 欄將作為識別欄位保留。",
     "splitKeyCol": "拆分欄 (值作為新欄名)",
@@ -216,6 +214,12 @@
       "split": "{{name}} - 拆分",
       "join": "{{left}} + {{right}}"
     }
+  },
+  "picker": {
+    "add": "新增",
+    "remove": "移除",
+    "addAll": "全部新增",
+    "removeAll": "全部移除"
   },
   "extras": {
     "title": "附加屬性",

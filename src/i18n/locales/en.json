@@ -184,9 +184,7 @@
     "stat_median": "Median",
     "stackAvailable": "Available columns",
     "stackSelected": "Stack columns",
-    "stackAdd": "Stack Columns →",
-    "stackRemove": "← Remove",
-    "stackEmptyHint": "Pick columns on the left, then click ‘Stack Columns →’.",
+    "stackEmptyHint": "Select columns on the left, then click ‘Add’.",
     "stackInfoNote_one": "The other {{count}} column will be kept as an identifier column.",
     "stackInfoNote_other": "The other {{count}} columns will be kept as identifier columns.",
     "splitKeyCol": "Split column (values become new column names)",
@@ -216,6 +214,12 @@
       "split": "{{name}} - Split",
       "join": "{{left}} + {{right}}"
     }
+  },
+  "picker": {
+    "add": "Add",
+    "remove": "Remove",
+    "addAll": "Add All",
+    "removeAll": "Remove All"
   },
   "extras": {
     "title": "Extra Properties",

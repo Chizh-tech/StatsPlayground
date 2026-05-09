@@ -1731,7 +1731,8 @@
 }
 .sp-dlp-actions .sp-dialog-btn {
   white-space: nowrap;
-  min-width: 130px;
+  min-width: 96px;
+  padding: 5px 10px;
 }
 .sp-dlp-info-note {
   font-size: 11px;
