@@ -1574,7 +1574,8 @@
 }
 
 .sp-dialog-wide {
-  min-width: 360px;
+  min-width: 640px;
+  max-width: min(90vw, 880px);
 }
 
 .sp-dialog-error {
@@ -1628,12 +1629,12 @@
 .sp-stack-picker {
   display: flex;
   align-items: stretch;
-  gap: 8px;
+  gap: 12px;
   margin-bottom: 8px;
 }
 .sp-stack-pane {
   flex: 1 1 0;
-  min-width: 0;
+  min-width: 220px;
   display: flex;
   flex-direction: column;
 }
