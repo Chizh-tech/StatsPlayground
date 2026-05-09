@@ -1750,7 +1750,7 @@
 .sp-dlp-actions {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 6px;
   flex: 0 0 auto;
   padding-top: 22px; /* align with first list item, accounting for header */
