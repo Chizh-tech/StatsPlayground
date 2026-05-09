@@ -1485,6 +1485,10 @@
   box-shadow: var(--shadow-dialog);
   min-width: 300px;
   max-width: 400px;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .sp-dialog-title {
@@ -1492,10 +1496,16 @@
   font-size: 15px;
   font-weight: 600;
   color: var(--fg-primary);
+  flex: 0 0 auto;
 }
 
 .sp-dialog-body {
   padding: 14px 18px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .sp-dialog-label {
@@ -1547,6 +1557,7 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 0 18px 14px;
+  flex: 0 0 auto;
 }
 
 .sp-dialog-btn {
@@ -1576,6 +1587,19 @@
 .sp-dialog-wide {
   min-width: 640px;
   max-width: min(90vw, 880px);
+}
+
+/*
+ * Wide dialogs that contain a DualListPicker should fill most of the viewport
+ * vertically so the lists have plenty of room. Capped to a sensible max so
+ * very tall monitors don't produce an awkward letterbox, and a min so the
+ * controls never get squeezed out.
+ */
+.sp-dialog-wide:has(.sp-dlp) {
+  width: min(92vw, 960px);
+  max-width: min(92vw, 960px);
+  height: min(85vh, 780px);
+  min-height: 460px;
 }
 
 .sp-dialog-error {
@@ -1645,6 +1669,8 @@
   align-items: stretch;
   gap: 12px;
   margin-bottom: 8px;
+  flex: 1 1 auto;
+  min-height: 240px;
 }
 .sp-dlp-pane {
   flex: 1 1 0;
