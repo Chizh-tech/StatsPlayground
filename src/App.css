@@ -1669,12 +1669,13 @@
   align-items: stretch;
   gap: 12px;
   margin-bottom: 8px;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 240px;
 }
 .sp-dlp-pane {
   flex: 1 1 0;
   min-width: 220px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -1698,7 +1699,6 @@
 .sp-dlp-list {
   flex: 1 1 0;
   min-height: 180px;
-  max-height: 260px;
   overflow-y: auto;
   border: 1px solid var(--border-main);
   border-radius: 4px;
