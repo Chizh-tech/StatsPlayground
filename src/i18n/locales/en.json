@@ -219,7 +219,8 @@
     "add": "Add",
     "remove": "Remove",
     "addAll": "Add All",
-    "removeAll": "Remove All"
+    "removeAll": "Remove All",
+    "available": "Available columns"
   },
   "extras": {
     "title": "Extra Properties",

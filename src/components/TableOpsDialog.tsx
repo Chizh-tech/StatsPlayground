@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { dataService } from "@/services/dataService";
@@ -30,66 +30,14 @@ interface Props {
 
 // ─── Shared helpers ───
 
-function ColCheckList({
-  cols, selected, onChange, label,
-}: {
-  cols: [string, string][];
-  selected: Set<string>;
-  onChange: (s: Set<string>) => void;
-  label: string;
-}) {
-  const lastClickedRef = useRef<number | null>(null);
-
-  const handleItemClick = useCallback((e: React.MouseEvent, index: number) => {
-    // Prevent default label→checkbox toggle; we handle it ourselves
-    e.preventDefault();
-    const name = cols[index][0];
-    const next = new Set(selected);
-
-    if (e.shiftKey && lastClickedRef.current !== null) {
-      // Shift+click: range select/deselect from last clicked to current
-      const from = Math.min(lastClickedRef.current, index);
-      const to = Math.max(lastClickedRef.current, index);
-      const adding = !selected.has(name);
-      for (let i = from; i <= to; i++) {
-        if (adding) next.add(cols[i][0]); else next.delete(cols[i][0]);
-      }
-    } else if (e.ctrlKey || e.metaKey) {
-      // Ctrl/Cmd+click: toggle single item without affecting others
-      if (next.has(name)) next.delete(name); else next.add(name);
-    } else {
-      // Plain click: toggle single item
-      if (next.has(name)) next.delete(name); else next.add(name);
-    }
-
-    lastClickedRef.current = index;
-    onChange(next);
-  }, [cols, selected, onChange]);
-
-  return (
-    <div className="sp-dialog-field">
-      <label className="sp-dialog-label">{label}</label>
-      <div className="sp-col-checklist">
-        {cols.map(([name, type_], i) => (
-          <label
-            key={name}
-            className="sp-col-check-item"
-            title={type_}
-            onMouseDown={(e) => handleItemClick(e, i)}
-          >
-            <input
-              type="checkbox"
-              checked={selected.has(name)}
-              readOnly
-              tabIndex={-1}
-            />
-            <span>{name}</span>
-            <span className="sp-col-type-hint">{type_}</span>
-          </label>
-        ))}
-      </div>
-    </div>
-  );
+/**
+ * Re-order a list of column keys back to the source table's natural order.
+ * The DualListPicker tracks insertion order, but for table operations we want
+ * the result columns to appear in their original positions.
+ */
+function sortByColOrder(keys: string[], cols: [string, string][]): string[] {
+  const order = new Map(cols.map(([n], i) => [n, i]));
+  return [...keys].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
 }
 
 function DatasetSelect({
@@ -249,22 +197,38 @@ function SubsetForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
   exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
-  const [selectedCols, setSelectedCols] = useState<Set<string>>(new Set());
+  const [selectedCols, setSelectedCols] = useState<string[]>([]);
   const [filter, setFilter] = useState("");
 
-  // Select all by default
-  useEffect(() => { setSelectedCols(new Set(cols.map(([n]) => n))); }, [cols]);
+  // Default: keep all columns whenever the source table changes.
+  useEffect(() => { setSelectedCols(cols.map(([n]) => n)); }, [cols]);
+
+  const items = useMemo(
+    () => cols.map(([name, type_]) => ({ key: name, label: name, hint: type_ })),
+    [cols],
+  );
 
   useLayoutEffect(() => {
     setPrimary({
-      disabled: !sourceId || selectedCols.size === 0,
-      onClick: () => exec(() => dataService.subsetTable(sourceId, [...selectedCols], filter || null, t("tableOp.resultSuffix.subset", { name: sourceName }))),
+      disabled: !sourceId || selectedCols.length === 0,
+      onClick: () => exec(() => dataService.subsetTable(
+        sourceId,
+        sortByColOrder(selectedCols, cols),
+        filter || null,
+        t("tableOp.resultSuffix.subset", { name: sourceName }),
+      )),
     });
-  }, [setPrimary, sourceId, selectedCols, filter, sourceName, exec, t]);
+  }, [setPrimary, sourceId, selectedCols, cols, filter, sourceName, exec, t]);
 
   return (
     <>
-      <ColCheckList cols={cols} selected={selectedCols} onChange={setSelectedCols} label={t("tableOp.subsetColumns")} />
+      <DualListPicker
+        items={items}
+        selected={selectedCols}
+        onChange={setSelectedCols}
+        availableLabel={t("picker.available", { defaultValue: "Available columns" })}
+        selectedLabel={t("tableOp.subsetColumns")}
+      />
       <div className="sp-dialog-field">
         <label className="sp-dialog-label">{t("tableOp.subsetWhere")}</label>
         <input className="sp-dialog-input" value={filter} onChange={e => setFilter(e.target.value)}
@@ -280,9 +244,21 @@ function SummaryForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
   sourceId: string; cols: [string, string][]; sourceName: string;
   exec: (fn: () => Promise<DatasetMeta | void>) => void; setPrimary: SetPrimary; t: TFunction;
 }) {
-  const [statCols, setStatCols] = useState<Set<string>>(new Set());
-  const [groupCols, setGroupCols] = useState<Set<string>>(new Set());
+  const [statCols, setStatCols] = useState<string[]>([]);
+  const [groupCols, setGroupCols] = useState<string[]>([]);
   const [stats, setStats] = useState<Set<string>>(new Set(["n", "mean", "std", "min", "max"]));
+
+  // Drop stale picks when source columns change.
+  useEffect(() => {
+    const valid = new Set(cols.map(c => c[0]));
+    setStatCols(prev => prev.filter(k => valid.has(k)));
+    setGroupCols(prev => prev.filter(k => valid.has(k)));
+  }, [cols]);
+
+  const items = useMemo(
+    () => cols.map(([name, type_]) => ({ key: name, label: name, hint: type_ })),
+    [cols],
+  );
 
   const allStats = [
     { key: "n", label: t("tableOp.stat_count") },
@@ -296,15 +272,35 @@ function SummaryForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
 
   useLayoutEffect(() => {
     setPrimary({
-      disabled: !sourceId || statCols.size === 0 || stats.size === 0,
-      onClick: () => exec(() => dataService.summaryTable(sourceId, [...statCols], [...groupCols], [...stats], t("tableOp.resultSuffix.summary", { name: sourceName }))),
+      disabled: !sourceId || statCols.length === 0 || stats.size === 0,
+      onClick: () => exec(() => dataService.summaryTable(
+        sourceId,
+        sortByColOrder(statCols, cols),
+        sortByColOrder(groupCols, cols),
+        [...stats],
+        t("tableOp.resultSuffix.summary", { name: sourceName }),
+      )),
     });
-  }, [setPrimary, sourceId, statCols, groupCols, stats, sourceName, exec, t]);
+  }, [setPrimary, sourceId, statCols, groupCols, cols, stats, sourceName, exec, t]);
+
+  const availableLabel = t("picker.available", { defaultValue: "Available columns" });
 
   return (
     <>
-      <ColCheckList cols={cols} selected={statCols} onChange={setStatCols} label={t("tableOp.summaryColumns")} />
-      <ColCheckList cols={cols} selected={groupCols} onChange={setGroupCols} label={t("tableOp.summaryGroupBy")} />
+      <DualListPicker
+        items={items}
+        selected={statCols}
+        onChange={setStatCols}
+        availableLabel={availableLabel}
+        selectedLabel={t("tableOp.summaryColumns")}
+      />
+      <DualListPicker
+        items={items}
+        selected={groupCols}
+        onChange={setGroupCols}
+        availableLabel={availableLabel}
+        selectedLabel={t("tableOp.summaryGroupBy")}
+      />
       <div className="sp-dialog-field">
         <label className="sp-dialog-label">{t("tableOp.summaryStats")}</label>
         <div className="sp-col-checklist">
@@ -408,7 +404,7 @@ function SplitForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
 }) {
   const [splitCol, setSplitCol] = useState("");
   const [valueCol, setValueCol] = useState("");
-  const [idCols, setIdCols] = useState<Set<string>>(new Set());
+  const [idCols, setIdCols] = useState<string[]>([]);
 
   useEffect(() => {
     if (cols.length >= 2 && !splitCol) {
@@ -417,12 +413,32 @@ function SplitForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
     }
   }, [cols]);
 
+  const items = useMemo(
+    () => cols
+      .filter(([n]) => n !== splitCol && n !== valueCol)
+      .map(([name, type_]) => ({ key: name, label: name, hint: type_ })),
+    [cols, splitCol, valueCol],
+  );
+
+  // Drop any id-col picks that are no longer eligible (became split/value col
+  // or vanished from the source).
+  useEffect(() => {
+    const valid = new Set(items.map(i => i.key));
+    setIdCols(prev => prev.filter(k => valid.has(k)));
+  }, [items]);
+
   useLayoutEffect(() => {
     setPrimary({
       disabled: !sourceId || !splitCol || !valueCol || splitCol === valueCol,
-      onClick: () => exec(() => dataService.splitTable(sourceId, splitCol, valueCol, [...idCols], t("tableOp.resultSuffix.split", { name: sourceName }))),
+      onClick: () => exec(() => dataService.splitTable(
+        sourceId,
+        splitCol,
+        valueCol,
+        sortByColOrder(idCols, cols),
+        t("tableOp.resultSuffix.split", { name: sourceName }),
+      )),
     });
-  }, [setPrimary, sourceId, splitCol, valueCol, idCols, sourceName, exec, t]);
+  }, [setPrimary, sourceId, splitCol, valueCol, idCols, cols, sourceName, exec, t]);
 
   return (
     <>
@@ -438,7 +454,13 @@ function SplitForm({ sourceId, cols, sourceName, exec, setPrimary, t }: {
           {cols.map(([n]) => <option key={n} value={n}>{n}</option>)}
         </select>
       </div>
-      <ColCheckList cols={cols.filter(([n]) => n !== splitCol && n !== valueCol)} selected={idCols} onChange={setIdCols} label={t("tableOp.splitGroupCols")} />
+      <DualListPicker
+        items={items}
+        selected={idCols}
+        onChange={setIdCols}
+        availableLabel={t("picker.available", { defaultValue: "Available columns" })}
+        selectedLabel={t("tableOp.splitGroupCols")}
+      />
     </>
   );
 }
@@ -516,7 +538,7 @@ function UpdateForm({ datasets, activeId, exec, setPrimary, t }: {
   const [leftId, setLeftId] = useState(activeId ?? "");
   const [rightId, setRightId] = useState("");
   const [matchCol, setMatchCol] = useState("");
-  const [updateCols, setUpdateCols] = useState<Set<string>>(new Set());
+  const [updateCols, setUpdateCols] = useState<string[]>([]);
   const [leftCols, setLeftCols] = useState<[string, string][]>([]);
   const [rightCols, setRightCols] = useState<[string, string][]>([]);
 
@@ -530,17 +552,29 @@ function UpdateForm({ datasets, activeId, exec, setPrimary, t }: {
   }, [rightId]);
   useEffect(() => { if (leftCols.length > 0 && !matchCol) setMatchCol(leftCols[0][0]); }, [leftCols]);
 
-  // Update cols = intersection of left and right cols (excluding matchCol)
-  const commonCols: [string, string][] = rightCols.filter(
-    ([n]) => n !== matchCol && leftCols.some(([ln]) => ln === n)
+  // Update cols = intersection of left and right cols (excluding matchCol).
+  // Source order is the left table so the picker shows columns in target order.
+  const commonCols: [string, string][] = useMemo(
+    () => leftCols.filter(([n]) => n !== matchCol && rightCols.some(([rn]) => rn === n)),
+    [leftCols, rightCols, matchCol],
   );
+  const items = useMemo(
+    () => commonCols.map(([name, type_]) => ({ key: name, label: name, hint: type_ })),
+    [commonCols],
+  );
+
+  // Drop stale picks when the eligible set changes.
+  useEffect(() => {
+    const valid = new Set(items.map(i => i.key));
+    setUpdateCols(prev => prev.filter(k => valid.has(k)));
+  }, [items]);
 
   useLayoutEffect(() => {
     setPrimary({
-      disabled: !leftId || !rightId || !matchCol || updateCols.size === 0,
-      onClick: () => exec(() => dataService.updateTable(leftId, rightId, matchCol, [...updateCols])),
+      disabled: !leftId || !rightId || !matchCol || updateCols.length === 0,
+      onClick: () => exec(() => dataService.updateTable(leftId, rightId, matchCol, sortByColOrder(updateCols, leftCols))),
     });
-  }, [setPrimary, leftId, rightId, matchCol, updateCols, exec]);
+  }, [setPrimary, leftId, rightId, matchCol, updateCols, leftCols, exec]);
 
   return (
     <>
@@ -553,7 +587,13 @@ function UpdateForm({ datasets, activeId, exec, setPrimary, t }: {
         </select>
       </div>
       {commonCols.length > 0 && (
-        <ColCheckList cols={commonCols} selected={updateCols} onChange={setUpdateCols} label={t("tableOp.updateCols")} />
+        <DualListPicker
+          items={items}
+          selected={updateCols}
+          onChange={setUpdateCols}
+          availableLabel={t("picker.available", { defaultValue: "Available columns" })}
+          selectedLabel={t("tableOp.updateCols")}
+        />
       )}
     </>
   );

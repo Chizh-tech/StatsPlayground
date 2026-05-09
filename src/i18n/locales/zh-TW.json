@@ -219,7 +219,8 @@
     "add": "新增",
     "remove": "移除",
     "addAll": "全部新增",
-    "removeAll": "全部移除"
+    "removeAll": "全部移除",
+    "available": "可選欄"
   },
   "extras": {
     "title": "附加屬性",

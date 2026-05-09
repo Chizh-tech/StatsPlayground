@@ -219,7 +219,8 @@
     "add": "Thêm",
     "remove": "Xóa",
     "addAll": "Thêm tất cả",
-    "removeAll": "Xóa tất cả"
+    "removeAll": "Xóa tất cả",
+    "available": "Cột khả dụng"
   },
   "extras": {
     "title": "Thuộc tính bổ sung",
