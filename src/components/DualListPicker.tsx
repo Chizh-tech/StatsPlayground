@@ -13,7 +13,7 @@
  * `selected` prop and updated via `onChange`.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 export interface DualListPickerItem {
@@ -63,6 +63,14 @@ export function DualListPicker({
   const lastLeftClickRef = useRef<string | null>(null);
   const lastRightClickRef = useRef<string | null>(null);
 
+  // Belt and suspenders: if the items pool changes identity (parent loaded
+  // new data, HMR preserved a stale ref of the wrong type, etc.) clear the
+  // anchors so the next shift-click can't dereference something stale.
+  useEffect(() => {
+    lastLeftClickRef.current = null;
+    lastRightClickRef.current = null;
+  }, [items]);
+
   const addText = addLabel ?? t("picker.add", { defaultValue: "Add" });
   const removeText = removeLabel ?? t("picker.remove", { defaultValue: "Remove" });
   const addAllText = addAllLabel ?? t("picker.addAll", { defaultValue: "Add All" });
@@ -102,26 +110,57 @@ export function DualListPicker({
     setSel: (s: Set<string>) => void,
     lastRef: React.MutableRefObject<string | null>,
   ) => {
+    // Only react to the primary (left) mouse button; right/middle clicks would
+    // otherwise toggle selection unintentionally.
+    if (e.button !== 0) return;
     e.preventDefault();
-    const key = rows[index].key;
-    if (e.shiftKey && lastRef.current !== null) {
-      // Re-resolve the anchor against the CURRENT rows. If it's gone (item was
-      // moved to the other pane, or items prop changed), fall back to single-click
-      // instead of crashing on an out-of-bounds index.
-      const fromIdx = rows.findIndex(r => r.key === lastRef.current);
-      if (fromIdx >= 0) {
-        setSel(pickRange(rows, fromIdx, index));
+    try {
+      const row = rows[index];
+      if (!row) return;
+      const key = row.key;
+
+      if (e.shiftKey) {
+        // Resolve the anchor against the CURRENT rows. Prefer the explicit
+        // anchor key; if it's gone, fall back to the nearest already-selected
+        // item in this pane so shift-click still behaves like Windows Explorer
+        // ("extend from where the selection currently is").
+        let anchorIdx = -1;
+        if (typeof lastRef.current === "string") {
+          anchorIdx = rows.findIndex(r => r.key === lastRef.current);
+        }
+        if (anchorIdx < 0 && sel.size > 0) {
+          // Pick the selected item that's nearest to the clicked index, so the
+          // range fans out naturally instead of jumping to row 0.
+          let bestDist = Infinity;
+          for (let i = 0; i < rows.length; i++) {
+            if (sel.has(rows[i].key)) {
+              const d = Math.abs(i - index);
+              if (d < bestDist) { bestDist = d; anchorIdx = i; }
+            }
+          }
+        }
+        if (anchorIdx >= 0) {
+          setSel(pickRange(rows, anchorIdx, index));
+        } else {
+          // No anchor anywhere; treat as a plain single-click.
+          setSel(new Set([key]));
+        }
+      } else if (e.ctrlKey || e.metaKey) {
+        const next = new Set(sel);
+        if (next.has(key)) next.delete(key); else next.add(key);
+        setSel(next);
       } else {
         setSel(new Set([key]));
       }
-    } else if (e.ctrlKey || e.metaKey) {
-      const next = new Set(sel);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      setSel(next);
-    } else {
-      setSel(new Set([key]));
+      lastRef.current = key;
+    } catch (err) {
+      // Never let the picker take down the whole dialog. If something goes
+      // wrong, log it and clear selection rather than throwing through render.
+      // eslint-disable-next-line no-console
+      console.error("DualListPicker handlePaneClick failed", err);
+      setSel(new Set());
+      lastRef.current = null;
     }
-    lastRef.current = key;
   }, [pickRange]);
 
   const moveRight = useCallback((keys: string[]) => {

@@ -1704,6 +1704,10 @@
   border-radius: 4px;
   padding: 2px;
   background: var(--bg-cell, transparent);
+  /* Block the native shift-click text selection drag that WebView2 sometimes
+     starts on the empty padding between items. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .sp-dlp-list-item {
   display: flex;
