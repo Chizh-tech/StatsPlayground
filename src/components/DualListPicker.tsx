@@ -56,8 +56,12 @@ export function DualListPicker({
   const { t } = useTranslation();
   const [leftSel, setLeftSel] = useState<Set<string>>(new Set());
   const [rightSel, setRightSel] = useState<Set<string>>(new Set());
-  const lastLeftClickRef = useRef<number | null>(null);
-  const lastRightClickRef = useRef<number | null>(null);
+  // Anchors are stored as item KEYS, not indices: indices go stale (and can
+  // crash pickRange with `rows[i].key` on undefined) the moment items move
+  // across panes or the parent updates the items prop. A key stays valid until
+  // the row is gone, at which point shift-click degrades to a single-click.
+  const lastLeftClickRef = useRef<string | null>(null);
+  const lastRightClickRef = useRef<string | null>(null);
 
   const addText = addLabel ?? t("picker.add", { defaultValue: "Add" });
   const removeText = removeLabel ?? t("picker.remove", { defaultValue: "Remove" });
@@ -80,9 +84,13 @@ export function DualListPicker({
   }, [items, selected]);
 
   const pickRange = useCallback((rows: DualListPickerItem[], from: number, to: number) => {
-    const lo = Math.min(from, to), hi = Math.max(from, to);
+    const lo = Math.max(0, Math.min(from, to));
+    const hi = Math.min(rows.length - 1, Math.max(from, to));
     const out = new Set<string>();
-    for (let i = lo; i <= hi; i++) out.add(rows[i].key);
+    for (let i = lo; i <= hi; i++) {
+      const row = rows[i];
+      if (row) out.add(row.key);
+    }
     return out;
   }, []);
 
@@ -92,12 +100,20 @@ export function DualListPicker({
     rows: DualListPickerItem[],
     sel: Set<string>,
     setSel: (s: Set<string>) => void,
-    lastRef: React.MutableRefObject<number | null>,
+    lastRef: React.MutableRefObject<string | null>,
   ) => {
     e.preventDefault();
     const key = rows[index].key;
     if (e.shiftKey && lastRef.current !== null) {
-      setSel(pickRange(rows, lastRef.current, index));
+      // Re-resolve the anchor against the CURRENT rows. If it's gone (item was
+      // moved to the other pane, or items prop changed), fall back to single-click
+      // instead of crashing on an out-of-bounds index.
+      const fromIdx = rows.findIndex(r => r.key === lastRef.current);
+      if (fromIdx >= 0) {
+        setSel(pickRange(rows, fromIdx, index));
+      } else {
+        setSel(new Set([key]));
+      }
     } else if (e.ctrlKey || e.metaKey) {
       const next = new Set(sel);
       if (next.has(key)) next.delete(key); else next.add(key);
@@ -105,7 +121,7 @@ export function DualListPicker({
     } else {
       setSel(new Set([key]));
     }
-    lastRef.current = index;
+    lastRef.current = key;
   }, [pickRange]);
 
   const moveRight = useCallback((keys: string[]) => {
