@@ -1007,13 +1007,27 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       const nonNull = vals.filter(v => v != null);
       const nums = nonNull.map(v => Number(v)).filter(n => !isNaN(n));
       if (nums.length > 0 && nums.length === nonNull.length) {
-        const sum = nums.reduce((a, b) => a + b, 0);
+        // Compute sum/min/max in a single pass. We deliberately avoid
+        // `Math.min(...nums)` / `Math.max(...nums)` because spreading a large
+        // array as function arguments overflows the JS engine's argument
+        // limit and throws `RangeError: Maximum call stack size exceeded`
+        // once the selection covers more than ~10^5 numeric cells (easily
+        // reachable on a 1000-column × 1000-row range select).
+        let sum = 0;
+        let min = Infinity;
+        let max = -Infinity;
+        for (let i = 0; i < nums.length; i++) {
+          const n = nums[i];
+          sum += n;
+          if (n < min) min = n;
+          if (n > max) max = n;
+        }
         selectionStats = {
           count: nonNull.length,
           sum,
           avg: sum / nums.length,
-          min: Math.min(...nums),
-          max: Math.max(...nums),
+          min,
+          max,
         };
       } else {
         selectionStats = { count: nonNull.length };
@@ -3421,9 +3435,17 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 />
                 <button className="sp-dialog-btn" onClick={() => {
                   if (!batchColProps) return;
-                  const maxW = Math.max(...batchColProps.checkedCols.size > 0
-                    ? Array.from(batchColProps.checkedCols).map(ci => autoFitColumn(ci))
-                    : [DEFAULT_COL_WIDTH]);
+                  // Avoid `Math.max(...arr)` spread: blows the JS argument
+                  // limit on very wide tables. Iterate instead.
+                  let maxW = DEFAULT_COL_WIDTH;
+                  if (batchColProps.checkedCols.size > 0) {
+                    maxW = 0;
+                    for (const ci of batchColProps.checkedCols) {
+                      const w = autoFitColumn(ci);
+                      if (w > maxW) maxW = w;
+                    }
+                    if (maxW === 0) maxW = DEFAULT_COL_WIDTH;
+                  }
                   setBatchColWidth(String(maxW));
                 }}>{t("common.auto")}</button>
               </div>
