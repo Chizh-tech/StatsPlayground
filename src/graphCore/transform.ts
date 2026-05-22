@@ -176,8 +176,15 @@ function histogramBins(values: number[], binCount = 20): {
 } {
   const finite = values.filter((v) => Number.isFinite(v));
   if (finite.length === 0) return { centers: [], counts: [], width: 1 };
-  const min = Math.min(...finite);
-  const max = Math.max(...finite);
+  // Use a single-pass loop instead of Math.min/max(...finite) so large
+  // datasets don't overflow V8's argument-count limit (RangeError).
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < finite.length; i++) {
+    const v = finite[i];
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
   if (min === max) return { centers: [min], counts: [finite.length], width: 1 };
   const width = (max - min) / binCount;
   const counts = new Array<number>(binCount).fill(0);
@@ -576,8 +583,17 @@ function buildSingleOption(
         const hi = q3 + 1.5 * iqr;
         const inRange = ys.filter((v) => v >= lo && v <= hi);
         if (inRange.length > 0) {
-          lower = Math.min(...inRange);
-          upper = Math.max(...inRange);
+          // Single-pass min/max; avoids Math.min/max(...inRange) overflow
+          // when a category contains very many in-range points.
+          let mn = Infinity;
+          let mx = -Infinity;
+          for (let i = 0; i < inRange.length; i++) {
+            const v = inRange[i];
+            if (v < mn) mn = v;
+            if (v > mx) mx = v;
+          }
+          lower = mn;
+          upper = mx;
         }
         if (showOutliers) {
           for (const v of ys) {
@@ -893,8 +909,15 @@ function buildElementSeries(
       if (sizeIdx >= 0) {
         const ss = points.map((p) => p.size ?? NaN).filter(Number.isFinite);
         if (ss.length > 0) {
-          const min = Math.min(...ss);
-          const max = Math.max(...ss);
+          // Single-pass min/max; avoids Math.min/max(...ss) overflow on
+          // scatter plots with very many points.
+          let min = Infinity;
+          let max = -Infinity;
+          for (let i = 0; i < ss.length; i++) {
+            const v = ss[i];
+            if (v < min) min = v;
+            if (v > max) max = v;
+          }
           const range = max - min || 1;
           sizes = points.map((p) =>
             Number.isFinite(p.size!) ? 6 + ((p.size! - min) / range) * 22 : 6,
