@@ -1884,6 +1884,89 @@
   padding: 0 2px;
 }
 
+/*
+ * Help → About / License dialog. Reuses .sp-dialog-overlay /
+ * .sp-dialog-wide so it's centered and capped at 92vh, but trims the
+ * default min-width back down because the content (a short About
+ * blurb or the LICENSE text) reads better in a narrower column.
+ */
+.sp-help-dialog {
+  min-width: 520px;
+  max-width: min(90vw, 720px);
+}
+
+.sp-help-about {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sp-help-appname {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.sp-help-version {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.sp-help-desc {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--fg-primary);
+  line-height: 1.5;
+}
+
+.sp-help-copyright {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.sp-help-section-title {
+  margin-top: 18px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.sp-help-section-intro {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.5;
+}
+
+.sp-help-acks {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  line-height: 1.7;
+}
+
+.sp-help-ack-name {
+  color: var(--fg-primary);
+  font-weight: 500;
+}
+
+.sp-help-ack-license {
+  color: var(--fg-secondary);
+  font-size: 11px;
+}
+
+.sp-help-license {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fg-primary);
+  white-space: pre-wrap;
+  word-break: normal;
+}
+
 /* Batch column list */
 .sp-batch-col-list {
   max-height: 200px;

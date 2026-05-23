@@ -54,7 +54,10 @@
     "opTranspose": "转置",
     "opJoin": "连接",
     "opUpdate": "更新",
-    "opConcatenate": "合并"
+    "opConcatenate": "合并",
+    "help": "帮助",
+    "about": "关于",
+    "license": "许可证"
   },
   "alert": {
     "selectDatasetFirst": "请先选择一个数据表作为数据源",
@@ -156,6 +159,16 @@
     "themeSystem": "跟随系统",
     "language": "界面语言",
     "done": "完成"
+  },
+  "help": {
+    "aboutTitle": "关于 StatsPlayground",
+    "licenseTitle": "许可证",
+    "version": "版本",
+    "description": "一款超轻量、开源、可扩展的数据分析工具。",
+    "copyright": "版权所有 © 2026 Ashton Huang，保留所有权利。",
+    "acknowledgments": "鸣谢",
+    "acknowledgmentsIntro": "StatsPlayground 基于以下开源项目构建，谨向各项目的维护者与贡献者致以诚挚谢意。",
+    "close": "关闭"
   },
   "tableOp": {
     "summary": "汇总",

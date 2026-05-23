@@ -10,6 +10,7 @@ import { projectService } from "@/services/projectService";
 import { DataTableView } from "./DataTableView";
 import { HistoryPanel, type SnapshotMenuData } from "./HistoryPanel";
 import { PreferencesDialog } from "./PreferencesDialog";
+import { HelpDialog } from "./HelpDialog";
 import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
 import { GraphBuilderView } from "./graphBuilder";
 import "./graphBuilder/graphBuilder.css";
@@ -148,6 +149,7 @@ export function Workspace() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [showPrefs, setShowPrefs] = useState(false);
+  const [helpDialog, setHelpDialog] = useState<"about" | "license" | null>(null);
   const [tableOp, setTableOp] = useState<TableOpType | null>(null);
   const [saveToast, setSaveToast] = useState(false);
   const [dsMenu, setDsMenu] = useState<{ x: number; y: number; id: string } | null>(null);
@@ -670,6 +672,10 @@ export function Workspace() {
               <div className="menu-item" onClick={() => setTableOp("update")}>{t("menu.opUpdate")}</div>
               <div className="menu-item" onClick={() => setTableOp("concatenate")}>{t("menu.opConcatenate")}</div>
             </MenuDropdown>
+            <MenuDropdown label={t("menu.help")}>
+              <div className="menu-item" onClick={() => setHelpDialog("about")}>{t("menu.about")}</div>
+              <div className="menu-item" onClick={() => setHelpDialog("license")}>{t("menu.license")}</div>
+            </MenuDropdown>
           </MenuBar>
         </div>
         <div className="menu-spacer" />
@@ -894,6 +900,8 @@ export function Workspace() {
       </div>
 
       {showPrefs && <PreferencesDialog onClose={() => setShowPrefs(false)} />}
+
+      {helpDialog && <HelpDialog mode={helpDialog} onClose={() => setHelpDialog(null)} />}
 
       {tableOp && (
         <TableOpsDialog

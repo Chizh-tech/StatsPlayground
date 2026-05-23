@@ -54,7 +54,10 @@
     "opTranspose": "Chuyển vị",
     "opJoin": "Kết hợp",
     "opUpdate": "Cập nhật",
-    "opConcatenate": "Nối"
+    "opConcatenate": "Nối",
+    "help": "Trợ giúp",
+    "about": "Giới thiệu",
+    "license": "Giấy phép"
   },
   "alert": {
     "selectDatasetFirst": "Vui lòng chọn một bảng dữ liệu làm nguồn trước.",
@@ -156,6 +159,16 @@
     "themeSystem": "Theo hệ thống",
     "language": "Ngôn ngữ",
     "done": "Xong"
+  },
+  "help": {
+    "aboutTitle": "Giới thiệu StatsPlayground",
+    "licenseTitle": "Giấy phép",
+    "version": "Phiên bản",
+    "description": "Công cụ phân tích dữ liệu siêu nhẹ, mã nguồn mở và có thể mở rộng.",
+    "copyright": "Bản quyền © 2026 Ashton Huang. Bảo lưu mọi quyền.",
+    "acknowledgments": "Lời cảm ơn",
+    "acknowledgmentsIntro": "StatsPlayground được xây dựng trên các dự án mã nguồn mở dưới đây. Xin chân thành cảm ơn các nhà bảo trì và đóng góp của các dự án này.",
+    "close": "Đóng"
   },
   "tableOp": {
     "summary": "Tổng hợp",

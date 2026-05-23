@@ -54,7 +54,10 @@
     "opTranspose": "Transpose",
     "opJoin": "Join",
     "opUpdate": "Update",
-    "opConcatenate": "Concatenate"
+    "opConcatenate": "Concatenate",
+    "help": "Help",
+    "about": "About",
+    "license": "License"
   },
   "alert": {
     "selectDatasetFirst": "Please select a data table as the source first.",
@@ -156,6 +159,16 @@
     "themeSystem": "Follow system",
     "language": "Language",
     "done": "Done"
+  },
+  "help": {
+    "aboutTitle": "About StatsPlayground",
+    "licenseTitle": "License",
+    "version": "Version",
+    "description": "An ultra-lightweight, open-source, and extensible data analysis tool.",
+    "copyright": "Copyright © 2026 Ashton Huang. All rights reserved.",
+    "acknowledgments": "Acknowledgments",
+    "acknowledgmentsIntro": "StatsPlayground is built on top of the following open-source projects. Sincere thanks to their maintainers and contributors.",
+    "close": "Close"
   },
   "tableOp": {
     "summary": "Summary",

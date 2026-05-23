@@ -54,7 +54,10 @@
     "opTranspose": "轉置",
     "opJoin": "連結",
     "opUpdate": "更新",
-    "opConcatenate": "合併"
+    "opConcatenate": "合併",
+    "help": "說明",
+    "about": "關於",
+    "license": "授權"
   },
   "alert": {
     "selectDatasetFirst": "請先選擇一個資料表作為資料來源",
@@ -156,6 +159,16 @@
     "themeSystem": "跟隨系統",
     "language": "介面語言",
     "done": "完成"
+  },
+  "help": {
+    "aboutTitle": "關於 StatsPlayground",
+    "licenseTitle": "授權",
+    "version": "版本",
+    "description": "一款超輕量、開源、可擴充的資料分析工具。",
+    "copyright": "版權所有 © 2026 Ashton Huang，保留所有權利。",
+    "acknowledgments": "鳴謝",
+    "acknowledgmentsIntro": "StatsPlayground 建構於下列開源專案之上，謹向各專案的維護者與貢獻者致上誠摯謝意。",
+    "close": "關閉"
   },
   "tableOp": {
     "summary": "彙總",
