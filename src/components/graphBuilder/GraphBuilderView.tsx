@@ -296,6 +296,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     [item.id, item.groupStyles, updateItem, markDirty],
   );
 
+  /** Clear every per-group override at once — used by the STYLE editor's
+   *  Reset button. Lives at the parent level (not inside the panel) so a
+   *  multi-group reset is a single atomic store write, instead of N writes
+   *  that would each trigger a re-render. */
+  const resetAllGroupStyles = useCallback(() => {
+    if (!item.groupStyles || Object.keys(item.groupStyles).length === 0) return;
+    updateItem(item.id, { groupStyles: {} });
+    markDirty();
+  }, [item.id, item.groupStyles, updateItem, markDirty]);
+
   // 拖放处理
   const onDragStart = (e: React.DragEvent, field: FieldRef) => {
     e.dataTransfer.setData(DRAG_MIME, JSON.stringify(field));
@@ -564,6 +574,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           elements={elements}
           groupStyles={item.groupStyles ?? {}}
           setGroupStyle={setGroupStyle}
+          resetAllGroupStyles={resetAllGroupStyles}
           onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
           onClearOverlay={() => clearSlot("overlay")}
           width={rightWidth}
@@ -1097,12 +1108,15 @@ interface LegendStylePanelProps {
   elements: ChartElement[];
   groupStyles: GroupStyleMap;
   setGroupStyle: (groupKey: string, next: GroupStyle | undefined) => void;
+  /** Drop every per-group override and return the chart to factory
+   *  defaults. Wired to the STYLE editor's Reset button. */
+  resetAllGroupStyles: () => void;
   onDropOverlay: (e: React.DragEvent) => void;
   onClearOverlay: () => void;
   width: number;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // Overlay drives legend grouping. Drop a categorical column onto the
@@ -1243,7 +1257,14 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
     };
   }, [paletteCtxMenu]);
 
-  const resetGroup = (groupKey: string) => setGroupStyle(groupKey, undefined);
+  // The Reset button in the STYLE editor header is a *chart-wide* reset,
+  // not per-group. It lives in the editor's section header (not next to a
+  // legend row), so users reasonably read it as "restore defaults for the
+  // whole chart". A per-group-only reset also broke the enabled state
+  // (button disabled while viewing an untouched group even though OTHER
+  // groups were still customized) and made the only path to clean state a
+  // tedious select-each-group / click-reset loop.
+  const hasAnyCustomStyles = Object.keys(groupStyles).length > 0;
 
   const selectedIdx = Math.max(0, groupKeys.indexOf(selected));
   const selectedStyle = effectiveStyleOf(selected, selectedIdx);
@@ -1293,9 +1314,9 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
             <span className="sp-panel-header-title">{t("graph.style.editorTitle")}</span>
             <button
               className="gb-style-reset"
-              onClick={() => resetGroup(selected)}
-              title={t("graph.style.reset")}
-              disabled={!groupStyles[selected]}
+              onClick={resetAllGroupStyles}
+              title={t("graph.style.resetAllHint")}
+              disabled={!hasAnyCustomStyles}
             >
               {t("graph.style.reset")}
             </button>

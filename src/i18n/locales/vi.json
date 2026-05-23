@@ -453,6 +453,7 @@
       "lineWidth": "Độ dày",
       "opacity": "Độ mờ",
       "reset": "Đặt lại",
+      "resetAllHint": "Đặt lại kiểu tùy chỉnh của tất cả nhóm về mặc định",
       "editorTitle": "Kiểu",
       "theme": "Chủ đề màu",
       "themeHint": "Đặt cuùng lúc màu cho Đường / Nền / Điểm",

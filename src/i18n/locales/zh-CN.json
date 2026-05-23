@@ -453,6 +453,7 @@
       "lineWidth": "线宽",
       "opacity": "不透明度",
       "reset": "重置",
+      "resetAllHint": "将所有分组的样式调整重置为默认值",
       "editorTitle": "样式",
       "theme": "色彩主题",
       "themeHint": "一键设置线 / 面 / 点的颜色",

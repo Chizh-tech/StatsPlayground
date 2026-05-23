@@ -453,6 +453,7 @@
       "lineWidth": "Width",
       "opacity": "Opacity",
       "reset": "Reset",
+      "resetAllHint": "Reset all groups' style overrides to defaults",
       "editorTitle": "Style",
       "theme": "Theme",
       "themeHint": "Set Line / Fill / Point color at once",
