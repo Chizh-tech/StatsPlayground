@@ -1398,6 +1398,19 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
           </div>
 
           <MarkEditor
+            title={t("graph.mark.point")}
+            mark="point"
+            value={(storedSelected.point ?? {}) as MarkStyle}
+            effective={{
+              color: selectedStyle.point!.color!,
+              marker: selectedStyle.point!.marker,
+              markerSize: selectedStyle.point!.markerSize,
+              opacity: selectedStyle.point!.opacity,
+            }}
+            onChange={(patch) => updateMark(selected, "point", patch)}
+            fields={["color", "marker", "markerSize", "opacity"]}
+          />
+          <MarkEditor
             title={t("graph.mark.line")}
             mark="line"
             value={(storedSelected.line ?? {}) as MarkStyle}
@@ -1419,19 +1432,6 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
             }}
             onChange={(patch) => updateMark(selected, "fill", patch)}
             fields={["color", "opacity"]}
-          />
-          <MarkEditor
-            title={t("graph.mark.point")}
-            mark="point"
-            value={(storedSelected.point ?? {}) as MarkStyle}
-            effective={{
-              color: selectedStyle.point!.color!,
-              marker: selectedStyle.point!.marker,
-              markerSize: selectedStyle.point!.markerSize,
-              opacity: selectedStyle.point!.opacity,
-            }}
-            onChange={(patch) => updateMark(selected, "point", patch)}
-            fields={["color", "marker", "markerSize", "opacity"]}
           />
         </div>
       </div>
