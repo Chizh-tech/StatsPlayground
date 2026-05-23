@@ -643,7 +643,6 @@ function buildSingleOption(
   const axis = buildAxisCommon(theme);
 
   const series: any[] = [];
-  const legendNames: string[] = [];
 
   // 按 color/overlay 分组
   const grouping = colorField || overlayField;
@@ -831,7 +830,6 @@ function buildSingleOption(
           ? shade(groupColor, SHADE_RATIO_FILL)
           : neutralBoxFill;
       const seriesName = grouping ? gKey : (yField?.name ?? "");
-      if (grouping && !legendNames.includes(gKey)) legendNames.push(gKey);
 
       series.push({
         type: "boxplot",
@@ -890,7 +888,6 @@ function buildSingleOption(
     const color = theme.categorical[colorIndexOf(gKey) % theme.categorical.length];
     const rowIdxs = groups.get(gKey)!;
     const seriesName = grouping ? gKey : (yField?.name || "");
-    if (grouping && !legendNames.includes(seriesName)) legendNames.push(seriesName);
 
     // Resolve {line, fill, point, outlier} for this group exactly once.
     // The per-element renderers below pull from this resolved style so
@@ -973,19 +970,17 @@ function buildSingleOption(
   return {
     backgroundColor: "transparent",
     textStyle: { color: theme.fgPrimary },
-    grid: { left: 52, right: 16, top: legendNames.length > 0 ? 40 : 16, bottom: bottomGap },
+    // The legend panel on the right already enumerates every group with
+    // its color swatch — drawing a second legend strip on top of the
+    // canvas is redundant and steals vertical space. Always reserve the
+    // small 16-px top margin so titles / tooltips have headroom.
+    grid: { left: 52, right: 16, top: 16, bottom: bottomGap },
     // See histogram path above — appendToBody avoids the bottom-edge
     // scrollbar flash; confine keeps the tooltip glued to the chart area.
     tooltip: { trigger: "item", confine: true, appendToBody: true },
-    legend:
-      legendNames.length > 0
-        ? {
-            data: legendNames,
-            top: 4,
-            textStyle: { color: theme.fgSecondary, fontSize: 12 },
-            icon: "circle",
-          }
-        : undefined,
+    // No in-chart legend: the right-side STYLE panel owns group identity.
+    // Series still carry `name` so tooltips and exports stay labeled.
+    legend: undefined,
     xAxis,
     yAxis: {
       type: "value",
