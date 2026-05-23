@@ -8,6 +8,7 @@ import { ManageExtrasDialog } from "./ManageExtrasDialog";
 import { useDataStore } from "@/stores/useDataStore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useHistoryStore } from "@/stores/useHistoryStore";
+import { useTableZoomStore } from "@/stores/useTableZoomStore";
 import { modKey, shiftKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 
@@ -30,12 +31,18 @@ const colLetter = (i: number): string => {
   return s;
 };
 
-const DEFAULT_COL_WIDTH = 120;
-const ROW_HEIGHT = 27; // 26px cell height + 1px border
+// Base (1.0×) dimensions. Inside the component, these are multiplied by
+// the current table-zoom factor to produce the actual layout values used
+// by virtualization math and column sizing. Stored column widths in
+// `colWidths[]` are kept in base units so they remain stable across zoom
+// changes; we scale when rendering and unscale when committing resizes.
+const BASE_DEFAULT_COL_WIDTH = 120;
+const BASE_ROW_HEIGHT = 27; // 26px cell height + 1px border
+const BASE_ROW_HDR_WIDTH = 46;
+const BASE_ADD_COL_WIDTH = 40;
+const BASE_HEADER_HEIGHT = 48; // approximate sticky header height
 const OVERSCAN = 10; // extra rows above/below viewport
 const COLUMN_OVERSCAN = 4; // extra columns left/right of viewport
-const ROW_HDR_WIDTH = 46;
-const ADD_COL_WIDTH = 40;
 
 // Shared empty Set so resetting "selected rows/cols" to empty doesn't
 // allocate a new reference every time and trigger downstream re-renders.
@@ -587,6 +594,18 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   const { refreshDatasets, setStatusInfo } = useDataStore();
   const { markDirty } = useProjectStore();
   const { record: recordHistory, undo: historyUndo, redo: historyRedo, pendingRestore, clearPendingRestore } = useHistoryStore();
+  const zoom = useTableZoomStore((s) => s.zoom);
+  const zoomIn = useTableZoomStore((s) => s.zoomIn);
+  const zoomOut = useTableZoomStore((s) => s.zoomOut);
+  const resetZoom = useTableZoomStore((s) => s.resetZoom);
+
+  // Scaled layout dimensions. Stored column widths (`colWidths[]`) are kept
+  // in base units (zoom-independent) and multiplied by `zoom` at render time
+  // so resizing at 150% and viewing at 100% remain consistent.
+  const ROW_HEIGHT = Math.max(1, Math.round(BASE_ROW_HEIGHT * zoom));
+  const ROW_HDR_WIDTH = Math.max(1, Math.round(BASE_ROW_HDR_WIDTH * zoom));
+  const ADD_COL_WIDTH = Math.max(1, Math.round(BASE_ADD_COL_WIDTH * zoom));
+  const DEFAULT_COL_WIDTH = Math.max(1, Math.round(BASE_DEFAULT_COL_WIDTH * zoom));
 
   // Refs for tracking latest state (used by recordAction and pendingRestore)
   const dataRef = useRef<TableQueryResult | null>(null);
@@ -635,7 +654,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
         // may have leaked from a previously-viewed dataset.
         const widths = Array.from({ length: visCount }, (_, i) => {
           const p = props.find(dp => dp.colIndex === i);
-          return p?.width ?? DEFAULT_COL_WIDTH;
+          return p?.width ?? BASE_DEFAULT_COL_WIDTH;
         });
         setColWidths(widths);
         colWidthsRef.current = widths;
@@ -672,7 +691,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       const w = widths[i];
       const f = formats[i];
       const ex = extrasArr[i];
-      const hasWidth = w !== undefined && w !== DEFAULT_COL_WIDTH;
+      const hasWidth = w !== undefined && w !== BASE_DEFAULT_COL_WIDTH;
       const hasFormat = f !== undefined && f.kind !== "asis";
       const hasExtras = ex != null && Object.keys(ex).length > 0;
       if (hasWidth || hasFormat || hasExtras) {
@@ -755,7 +774,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   useEffect(() => {
     if (!activeCell || !tableRef.current) return;
     const wrapper = tableRef.current;
-    const headerH = 48;
+    const headerH = Math.max(1, Math.round(BASE_HEADER_HEIGHT * zoom));
     const rowTop = activeCell.row * ROW_HEIGHT + headerH;
     const rowBottom = rowTop + ROW_HEIGHT;
     const viewTop = wrapper.scrollTop;
@@ -781,7 +800,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   useEffect(() => {
     if (!selection || !tableRef.current) return;
     const wrapper = tableRef.current;
-    const headerH = 48;
+    const headerH = Math.max(1, Math.round(BASE_HEADER_HEIGHT * zoom));
     const rowTop = selection.endRow * ROW_HEIGHT + headerH;
     const rowBottom = rowTop + ROW_HEIGHT;
     const viewTop = wrapper.scrollTop;
@@ -861,7 +880,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   useEffect(() => {
     setColWidths((prev) => {
       if (prev.length === visibleColCount) return prev;
-      return Array.from({ length: visibleColCount }, (_, i) => prev[i] ?? DEFAULT_COL_WIDTH);
+      return Array.from({ length: visibleColCount }, (_, i) => prev[i] ?? BASE_DEFAULT_COL_WIDTH);
     });
     setColFormats((prev) => {
       if (prev.length === visibleColCount) return prev;
@@ -1092,7 +1111,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   }, [data]);
   const wrapperHeight = wrapperSize.height;
   const wrapperWidth = wrapperSize.width;
-  const headerHeight = 48; // approximate sticky header height
+  const headerHeight = Math.max(1, Math.round(BASE_HEADER_HEIGHT * zoom));
   const visibleAreaHeight = wrapperHeight - headerHeight;
   const totalRowCount = displayRows.length;
   const virtualRange = useMemo(() => {
@@ -1100,17 +1119,18 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     const visibleCount = Math.ceil(visibleAreaHeight / ROW_HEIGHT) + 2 * OVERSCAN;
     const endIdx = Math.min(totalRowCount, startIdx + visibleCount);
     return { startIdx, endIdx };
-  }, [scrollTop, totalRowCount, visibleAreaHeight, headerHeight]);
+  }, [scrollTop, totalRowCount, visibleAreaHeight, headerHeight, ROW_HEIGHT]);
 
   // Column virtualization: cumulative widths and visible column range.
+  // Stored colWidths are in base (zoom-independent) units; scale on output.
   const colOffsets = useMemo(() => {
     const arr = new Array<number>(cols.length + 1);
     arr[0] = 0;
     for (let i = 0; i < cols.length; i++) {
-      arr[i + 1] = arr[i] + (colWidths[i] ?? DEFAULT_COL_WIDTH);
+      arr[i + 1] = arr[i] + (colWidths[i] ?? BASE_DEFAULT_COL_WIDTH) * zoom;
     }
     return arr;
-  }, [cols.length, colWidths]);
+  }, [cols.length, colWidths, zoom]);
   const totalColsWidth = colOffsets[cols.length] ?? 0;
   const colVirtRange = useMemo(() => {
     const totalCols = cols.length;
@@ -1126,7 +1146,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     const leftSpacerW = colOffsets[startIdx];
     const rightSpacerW = totalColsWidth - colOffsets[endIdx];
     return { startIdx, endIdx, leftSpacerW, rightSpacerW };
-  }, [scrollLeft, wrapperWidth, colOffsets, totalColsWidth, cols.length]);
+  }, [scrollLeft, wrapperWidth, colOffsets, totalColsWidth, cols.length, ROW_HDR_WIDTH, ADD_COL_WIDTH]);
   // Build the visible column index list once (used by colgroup + thead).
   const visibleColIdxs = useMemo(() => {
     const arr: number[] = [];
@@ -1328,7 +1348,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     setRenameCol({ colIdx, oldName: cols[colIdx], oldType: colTypes[colIdx] });
     setRenameValue(cols[colIdx]);
     setRenameType(colTypes[colIdx]);
-    setRenameWidth(String(Math.round(colWidths[colIdx] ?? DEFAULT_COL_WIDTH)));
+    // Stored width is in base (1×) units; show as visual width at current zoom.
+    setRenameWidth(String(Math.round((colWidths[colIdx] ?? BASE_DEFAULT_COL_WIDTH) * zoom)));
     setRenameFormat(colFormats[colIdx] ?? DEFAULT_FORMAT);
     const ex = colExtras[colIdx];
     setRenameExtras(ex ? { ...ex } : {});
@@ -1340,15 +1361,17 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     if (indices.length === 0) return;
     setBatchColProps({ colIndices: indices, checkedCols: new Set(indices) });
     setBatchColType(colTypes[indices[0]] || "VARCHAR");
-    setBatchColWidth(String(Math.round(colWidths[indices[0]] ?? DEFAULT_COL_WIDTH)));
+    // Stored width is in base (1×) units; show as visual width at current zoom.
+    setBatchColWidth(String(Math.round((colWidths[indices[0]] ?? BASE_DEFAULT_COL_WIDTH) * zoom)));
     setBatchColFormat(colFormats[indices[0]] ?? DEFAULT_FORMAT);
     setColMenu(null);
   };
 
   const handleApplyBatchColProps = async () => {
     if (!batchColProps) return;
-    // Apply column widths
-    const newW = Math.max(DEFAULT_COL_WIDTH, Math.round(Number(batchColWidth) || DEFAULT_COL_WIDTH));
+    // Apply column widths — user-entered value is visual; store as base.
+    const visualW = Math.max(DEFAULT_COL_WIDTH, Math.round(Number(batchColWidth) || DEFAULT_COL_WIDTH));
+    const newW = Math.max(BASE_DEFAULT_COL_WIDTH, Math.round(visualW / zoom));
     const newWidths = [...colWidths];
     for (const ci of batchColProps.checkedCols) {
       newWidths[ci] = newW;
@@ -1394,8 +1417,9 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     if (!renameCol || !renameValue.trim()) return;
     const nameChanged = renameValue.trim() !== renameCol.oldName;
     const typeChanged = renameType !== renameCol.oldType;
-    // Apply column width
-    const newW = Math.max(DEFAULT_COL_WIDTH, Math.round(Number(renameWidth) || DEFAULT_COL_WIDTH));
+    // Apply column width — user-entered value is visual; store as base.
+    const visualW = Math.max(DEFAULT_COL_WIDTH, Math.round(Number(renameWidth) || DEFAULT_COL_WIDTH));
+    const newW = Math.max(BASE_DEFAULT_COL_WIDTH, Math.round(visualW / zoom));
     const newWidths = [...colWidths];
     newWidths[renameCol.colIdx] = newW;
     setColWidths(newWidths);
@@ -1981,6 +2005,26 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     }
     const isMeta = e.ctrlKey || e.metaKey;
 
+    // Cmd/Ctrl + = or + : zoom in   |   Cmd/Ctrl + - : zoom out   |   Cmd/Ctrl + 0 : reset
+    // Match both physical keys: `=` (Plus) and `+` (Shift+=) and `-`/`_`.
+    if (isMeta && !editCell) {
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        zoomIn();
+        return;
+      }
+      if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        zoomOut();
+        return;
+      }
+      if (e.key === "0") {
+        e.preventDefault();
+        resetZoom();
+        return;
+      }
+    }
+
     // Cmd/Ctrl+Z: undo
     if (isMeta && !e.shiftKey && e.key.toLowerCase() === "z") {
       if (!editCell) {
@@ -2514,14 +2558,16 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     const th = (e.target as HTMLElement).closest("th");
     const borderX = th ? th.getBoundingClientRect().right : startX;
     const offsetX = startX - borderX;
-    const startW = colWidths[colIdx] ?? DEFAULT_COL_WIDTH;
+    // `colWidths` stores base (1×) widths. The drag distance is in visual
+    // pixels, so divide by zoom before adding to the base width.
+    const startW = colWidths[colIdx] ?? BASE_DEFAULT_COL_WIDTH;
     const batchCols = selectedCols.has(colIdx) ? Array.from(selectedCols).filter(ci => ci !== colIdx) : [];
     resizingRef.current = { colIdx, startX, startW };
 
     const onMouseMove = (ev: MouseEvent) => {
       if (!resizingRef.current) return;
       const delta = ev.clientX - offsetX - resizingRef.current.startX;
-      const newW = Math.max(DEFAULT_COL_WIDTH, startW + delta);
+      const newW = Math.max(BASE_DEFAULT_COL_WIDTH, startW + delta / zoom);
       setColWidths((prev) => {
         const next = [...prev];
         next[colIdx] = newW;
@@ -2588,7 +2634,8 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     for (const t of hdrTexts) {
       maxW = Math.max(maxW, ctx.measureText(t).width + HDR_PADDING);
     }
-    return Math.max(DEFAULT_COL_WIDTH, Math.ceil(maxW));
+    // Measurement uses base 13px font, so the returned width is in base units.
+    return Math.max(BASE_DEFAULT_COL_WIDTH, Math.ceil(maxW));
   };
 
   // ---- Double-click resize to auto-fit (supports batch) ----
@@ -2637,7 +2684,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     const wrapper = tableRef.current;
     if (wrapper && colOffsets[colIdx] != null) {
       const colLeft = ROW_HDR_WIDTH + colOffsets[colIdx];
-      const colRight = colLeft + (colWidths[colIdx] ?? DEFAULT_COL_WIDTH);
+      const colRight = colLeft + (colWidths[colIdx] ?? BASE_DEFAULT_COL_WIDTH) * zoom;
       const viewLeft = wrapper.scrollLeft + ROW_HDR_WIDTH;
       const viewRight = wrapper.scrollLeft + wrapper.clientWidth;
       if (colLeft < viewLeft) wrapper.scrollLeft = colLeft - ROW_HDR_WIDTH;
@@ -2679,7 +2726,14 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
   const formulaMaxCol = cols.length - 1;
 
   return (
-    <div className={`sp-spreadsheet${isDragging ? " sp-dragging" : ""}`} onKeyDown={handleKeyDown} onPaste={handlePaste} tabIndex={0} ref={containerRef}>
+    <div
+      className={`sp-spreadsheet${isDragging ? " sp-dragging" : ""}`}
+      onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
+      tabIndex={0}
+      ref={containerRef}
+      style={{ ["--sp-zoom" as string]: String(zoom) } as React.CSSProperties}
+    >
 
       {/* Add column inline form */}
       {showAddCol && (
@@ -2774,7 +2828,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                   onChange={(e) => setRenameWidth(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleRenameColumn(); if (e.key === "Escape") setRenameCol(null); }}
                 />
-                <button className="sp-dialog-btn" onClick={() => setRenameWidth(String(autoFitColumn(renameCol.colIdx)))}>{t("common.auto")}</button>
+                <button className="sp-dialog-btn" onClick={() => setRenameWidth(String(Math.round(autoFitColumn(renameCol.colIdx) * zoom)))}>{t("common.auto")}</button>
               </div>
               <ExtrasEditor extras={renameExtras} onChange={setRenameExtras} />
             </div>
@@ -2871,7 +2925,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
             <col style={{ width: ROW_HDR_WIDTH }} />
             {colVirtRange.leftSpacerW > 0 && <col style={{ width: colVirtRange.leftSpacerW }} />}
             {visibleColIdxs.map((ci) => (
-              <col key={ci} style={{ width: colWidths[ci] ?? DEFAULT_COL_WIDTH }} />
+              <col key={ci} style={{ width: (colWidths[ci] ?? BASE_DEFAULT_COL_WIDTH) * zoom }} />
             ))}
             {colVirtRange.rightSpacerW > 0 && <col style={{ width: colVirtRange.rightSpacerW }} />}
             <col style={{ width: ADD_COL_WIDTH }} />
@@ -3436,17 +3490,18 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 <button className="sp-dialog-btn" onClick={() => {
                   if (!batchColProps) return;
                   // Avoid `Math.max(...arr)` spread: blows the JS argument
-                  // limit on very wide tables. Iterate instead.
-                  let maxW = DEFAULT_COL_WIDTH;
+                  // limit on very wide tables. Iterate instead. Track in
+                  // base units, then convert to visual for the input field.
+                  let maxBaseW = BASE_DEFAULT_COL_WIDTH;
                   if (batchColProps.checkedCols.size > 0) {
-                    maxW = 0;
+                    maxBaseW = 0;
                     for (const ci of batchColProps.checkedCols) {
                       const w = autoFitColumn(ci);
-                      if (w > maxW) maxW = w;
+                      if (w > maxBaseW) maxBaseW = w;
                     }
-                    if (maxW === 0) maxW = DEFAULT_COL_WIDTH;
+                    if (maxBaseW === 0) maxBaseW = BASE_DEFAULT_COL_WIDTH;
                   }
-                  setBatchColWidth(String(maxW));
+                  setBatchColWidth(String(Math.round(maxBaseW * zoom)));
                 }}>{t("common.auto")}</button>
               </div>
               <label className="sp-dialog-label">{t("dataTable.colPropsApplyTo")}</label>

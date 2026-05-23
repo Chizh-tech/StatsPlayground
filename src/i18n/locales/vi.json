@@ -123,7 +123,11 @@
     "importingSqlite": "Đang nhập cơ sở dữ liệu SQLite…",
     "importProgressTable": "Bảng {{i}}/{{total}}: {{name}}",
     "importProgressRows": "hàng",
-    "createSnapshotTitle": "Tạo ảnh chụp"
+    "createSnapshotTitle": "Tạo ảnh chụp",
+    "zoomIn": "Phóng to bảng",
+    "zoomOut": "Thu nhỏ bảng",
+    "zoomReset": "Đặt lại về 100%",
+    "zoomTooltip": "Thu phóng bảng"
   },
   "welcome": {
     "subtitle": "Nhẹ · Đa nền tảng · Công cụ phân tích dữ liệu mã nguồn mở",

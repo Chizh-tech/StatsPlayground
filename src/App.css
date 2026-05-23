@@ -1052,7 +1052,9 @@
 /* The spreadsheet grid */
 .sp-grid {
   border-collapse: collapse;
-  font-size: 13px;
+  /* Base font-size scaled by the spreadsheet zoom factor (set as inline
+     style on .sp-spreadsheet). Defaults to 1x when the variable is unset. */
+  font-size: calc(13px * var(--sp-zoom, 1));
   table-layout: fixed;
 }
 
@@ -1062,8 +1064,8 @@
   top: 0;
   left: 0;
   z-index: 3;
-  width: 46px;
-  min-width: 46px;
+  width: calc(46px * var(--sp-zoom, 1));
+  min-width: calc(46px * var(--sp-zoom, 1));
   background: var(--bg-header);
   background-clip: padding-box;
   /* inset box-shadow instead of border-right/bottom — same reason as .sp-cell:
@@ -1127,19 +1129,19 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 3px 8px;
+  padding: calc(3px * var(--sp-zoom, 1)) calc(8px * var(--sp-zoom, 1));
   gap: 0;
 }
 
 .sp-col-letter {
-  font-size: 10px;
+  font-size: calc(10px * var(--sp-zoom, 1));
   color: var(--fg-hint);
   font-weight: 600;
   line-height: 1;
 }
 
 .sp-col-name {
-  font-size: 12px;
+  font-size: calc(12px * var(--sp-zoom, 1));
   font-weight: 600;
   color: var(--fg-secondary);
   line-height: 1.3;
@@ -1150,7 +1152,7 @@
 }
 
 .sp-col-type {
-  font-size: 9px;
+  font-size: calc(9px * var(--sp-zoom, 1));
   color: var(--fg-dim);
   line-height: 1;
 }
@@ -1162,11 +1164,11 @@
   z-index: 2;
   background: var(--bg-header);
   border-bottom: 2px solid var(--border-header-bottom);
-  width: 32px;
-  min-width: 32px;
+  width: calc(32px * var(--sp-zoom, 1));
+  min-width: calc(32px * var(--sp-zoom, 1));
   text-align: center;
   color: var(--fg-dim);
-  font-size: 16px;
+  font-size: calc(16px * var(--sp-zoom, 1));
   cursor: pointer;
   user-select: none;
 }
@@ -1181,15 +1183,15 @@
   position: sticky;
   left: 0;
   z-index: 1;
-  width: 46px;
-  min-width: 46px;
+  width: calc(46px * var(--sp-zoom, 1));
+  min-width: calc(46px * var(--sp-zoom, 1));
   background: var(--bg-header);
   background-clip: padding-box;
   box-shadow:
     inset -1px 0 0 var(--border-header),
     inset 0 -1px 0 var(--border-header-h);
   text-align: center;
-  font-size: 11px;
+  font-size: calc(11px * var(--sp-zoom, 1));
   color: var(--fg-hint);
   cursor: pointer;
   user-select: none;
@@ -1223,7 +1225,7 @@
     inset -1px 0 0 var(--border-cell),
     inset 0 -1px 0 var(--border-cell);
   padding: 0;
-  height: 26px;
+  height: calc(26px * var(--sp-zoom, 1));
   position: relative;
   cursor: cell;
   overflow: hidden;
@@ -1236,12 +1238,12 @@
 .sp-cell .sp-val,
 .sp-cell .sp-null {
   display: block;
-  padding: 0 6px;
+  padding: 0 calc(6px * var(--sp-zoom, 1));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  line-height: 26px;
-  height: 26px;
+  line-height: calc(26px * var(--sp-zoom, 1));
+  height: calc(26px * var(--sp-zoom, 1));
   box-sizing: border-box;
 }
 
@@ -1279,12 +1281,12 @@
   height: 100%;
   border: none;
   outline: none;
-  padding: 0 6px;
-  font-size: 13px;
+  padding: 0 calc(6px * var(--sp-zoom, 1));
+  font-size: calc(13px * var(--sp-zoom, 1));
   font-family: inherit;
   background: var(--bg-cell-input);
   color: var(--fg-primary);
-  line-height: 26px;
+  line-height: calc(26px * var(--sp-zoom, 1));
   box-sizing: border-box;
   min-width: 0;
 }
@@ -2076,6 +2078,44 @@
 
 .status-spacer {
   flex: 1;
+}
+
+/* Compact table-zoom control rendered at the far right of the status bar.
+   Three small buttons: zoom-out, current percentage (resets to 100%), zoom-in. */
+.sp-zoom-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 8px;
+}
+
+.sp-zoom-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--fg-status);
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.sp-zoom-btn:hover {
+  background: var(--bg-header-hover);
+  color: var(--fg-primary);
+}
+
+.sp-zoom-btn:active {
+  background: var(--bg-header-active);
+}
+
+.sp-zoom-value {
+  min-width: 38px;
+  font-variant-numeric: tabular-nums;
 }
 
 .status-stats {

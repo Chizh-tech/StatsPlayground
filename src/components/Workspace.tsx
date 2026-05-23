@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useDataStore } from "@/stores/useDataStore";
 import { useHistoryStore } from "@/stores/useHistoryStore";
+import { useTableZoomStore } from "@/stores/useTableZoomStore";
 import { dataService } from "@/services/dataService";
 import { ioService } from "@/services/ioService";
 import { projectService } from "@/services/projectService";
@@ -24,6 +25,45 @@ function formatStat(n: number): string {
   if (Number.isInteger(n) && Math.abs(n) < 1e15) return n.toString();
   const s = n.toPrecision(10);
   return parseFloat(s).toString();
+}
+
+/**
+ * Compact zoom control rendered in the status bar when a dataset is open.
+ * Three buttons: zoom-out (−), current percentage (click to reset), zoom-in (+).
+ * Mirrors the Cmd/Ctrl + −/=/0 shortcuts handled inside DataTableView.
+ */
+function TableZoomControl() {
+  const { t } = useTranslation();
+  const zoom = useTableZoomStore((s) => s.zoom);
+  const zoomIn = useTableZoomStore((s) => s.zoomIn);
+  const zoomOut = useTableZoomStore((s) => s.zoomOut);
+  const resetZoom = useTableZoomStore((s) => s.resetZoom);
+  const pct = Math.round(zoom * 100);
+  return (
+    <span className="sp-zoom-control" title={t("workspace.zoomTooltip", { defaultValue: "Table zoom" })}>
+      <button
+        type="button"
+        className="sp-zoom-btn"
+        onClick={zoomOut}
+        title={t("workspace.zoomOut", { defaultValue: "Zoom out" }) + ` (${modKey}−)`}
+        aria-label={t("workspace.zoomOut", { defaultValue: "Zoom out" })}
+      >−</button>
+      <button
+        type="button"
+        className="sp-zoom-btn sp-zoom-value"
+        onClick={resetZoom}
+        title={t("workspace.zoomReset", { defaultValue: "Reset to 100%" }) + ` (${modKey}0)`}
+        aria-label={t("workspace.zoomReset", { defaultValue: "Reset to 100%" })}
+      >{pct}%</button>
+      <button
+        type="button"
+        className="sp-zoom-btn"
+        onClick={zoomIn}
+        title={t("workspace.zoomIn", { defaultValue: "Zoom in" }) + ` (${modKey}=)`}
+        aria-label={t("workspace.zoomIn", { defaultValue: "Zoom in" })}
+      >+</button>
+    </span>
+  );
 }
 
 function MenuBar({ children }: { children: React.ReactNode }) {
@@ -850,6 +890,7 @@ export function Workspace() {
           <span>{statusInfo.selectionLabel || statusInfo.cellLabel}</span>
         )}
         {statusInfo?.dimensions && <span>{statusInfo.dimensions}</span>}
+        {activeDatasetId && <TableZoomControl />}
       </div>
 
       {showPrefs && <PreferencesDialog onClose={() => setShowPrefs(false)} />}

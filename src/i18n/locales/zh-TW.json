@@ -123,7 +123,11 @@
     "importingSqlite": "正在匯入 SQLite 資料庫…",
     "importProgressTable": "資料表 {{i}}/{{total}}：{{name}}",
     "importProgressRows": "列",
-    "createSnapshotTitle": "建立快照"
+    "createSnapshotTitle": "建立快照",
+    "zoomIn": "放大表格",
+    "zoomOut": "縮小表格",
+    "zoomReset": "重設為 100%",
+    "zoomTooltip": "表格縮放"
   },
   "welcome": {
     "subtitle": "輕量化 · 跨平台 · 開放原始碼資料分析工具",
