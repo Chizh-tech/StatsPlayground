@@ -560,11 +560,20 @@ function buildIntervalSeries(
   ];
 }
 
-/** 构建一个简单的「分面」标题（当前在标题中拼接，未实现真正网格分面） */
-function facetTitle(facetKey: string, encoding: GraphSpec["encoding"]): string {
+/** 构建一个简单的「分面」标题
+ *
+ *  Encoded as "<X-field>=<X-val> | <Y-field>=<Y-val>" so the user can read
+ *  both facet axes off a panel header when a Trellis grid is active.
+ *  Either key may be null when only one facet axis is bound. */
+function facetTitle(
+  xKey: string | null,
+  yKey: string | null,
+  encoding: GraphSpec["encoding"],
+): string {
   const parts: string[] = [];
-  if (encoding.groupX) parts.push(`${encoding.groupX.name}=${facetKey}`);
-  return parts.join(" / ");
+  if (encoding.groupX && xKey !== null) parts.push(`${encoding.groupX.name}=${xKey}`);
+  if (encoding.groupY && yKey !== null) parts.push(`${encoding.groupY.name}=${yKey}`);
+  return parts.join(" | ");
 }
 
 /** 渲染一个单图（不分面）的 ECharts option
@@ -1262,39 +1271,44 @@ function buildElementSeries(
  *
  * 当前实现：分面（groupX/groupY/wrap）以多个独立 option 返回，
  * 由 <Graph> 组件渲染为网格。
+ *
+ * Layout rules:
+ *   - No facet         → 1 panel, 1×1.
+ *   - groupX only      → 1 row × N cols (panels laid out left-to-right;
+ *                        they visually "share" the Y axis).
+ *   - groupY only      → N rows × 1 col (panels stacked top-to-bottom;
+ *                        they visually "share" the X axis). Matches
+ *                        JMP's Group Y semantics.
+ *   - groupX × groupY  → Ny rows × Nx cols Trellis grid (row-major).
+ *   - wrap only        → falls back to the legacy sqrt-grid auto wrap.
+ *   - wrap is ignored when either groupX or groupY is bound (the
+ *     explicit facet axes take precedence).
  */
 export interface BuiltGraph {
-  /** 子图列表（无分面时长度为 1） */
-  panels: { title: string; option: EChartsOption }[];
+  /** 子图列表（无分面时长度为 1，row-major: rows top→bottom × cols left→right） */
+  panels: {
+    title: string;
+    option: EChartsOption;
+    /** Per-panel facet labels (null when that axis isn't faceted). Used
+     *  by the renderer to draw row / column header strips around the grid. */
+    groupXValue: string | null;
+    groupYValue: string | null;
+  }[];
   /** 网格列数（用于布局） */
   cols: number;
+  /** 网格行数（用于布局） */
+  rows: number;
 }
 
-export function buildGraph(
-  spec: GraphSpec,
+/** Collect facet category keys in their natural-occurrence order, honouring
+ *  any user-defined Value Order on the column. */
+function collectFacetKeys(
   data: GraphData,
-  theme: GraphTheme,
+  field: FieldRef,
   valueOrders?: Record<string, string[]>,
-): BuiltGraph {
-  const { encoding } = spec;
-  const facetField = encoding.groupX || encoding.wrap;
-
-  if (!facetField) {
-    return {
-      panels: [{ title: spec.title || "", option: buildSingleOption(spec, data, theme, undefined, valueOrders) }],
-      cols: 1,
-    };
-  }
-
-  const idx = colIndex(data, facetField.name);
-  if (idx < 0) {
-    return {
-      panels: [{ title: spec.title || "", option: buildSingleOption(spec, data, theme, undefined, valueOrders) }],
-      cols: 1,
-    };
-  }
-
-  // 收集 facet 类目（按出现顺序）
+): string[] | null {
+  const idx = colIndex(data, field.name);
+  if (idx < 0) return null;
   const seen: string[] = [];
   const seenSet = new Set<string>();
   for (const r of data.rows) {
@@ -1304,9 +1318,18 @@ export function buildGraph(
       seen.push(k);
     }
   }
-  // Honor Value Order on the facet column too, so subplots are laid out
-  // in the user-defined order.
-  const facetOrdered = applyValueOrder(seen, valueOrders?.[facetField.name]);
+  return applyValueOrder(seen, valueOrders?.[field.name]);
+}
+
+export function buildGraph(
+  spec: GraphSpec,
+  data: GraphData,
+  theme: GraphTheme,
+  valueOrders?: Record<string, string[]>,
+): BuiltGraph {
+  const { encoding } = spec;
+  const fx = encoding.groupX;
+  const fy = encoding.groupY;
 
   // Compute the global ordering of overlay/color groups across the FULL
   // dataset so each panel can map its local group(s) back to the same
@@ -1317,20 +1340,93 @@ export function buildGraph(
     ? applyValueOrder(Array.from(groupBy(data, grouping).keys()), valueOrders?.[grouping.name])
     : undefined;
 
-  const panels = facetOrdered.map((key) => {
-    const subRows = data.rows.filter((r) => toStr(r[idx]) === key);
-    const subData: GraphData = { columns: data.columns, rows: subRows };
-    const subSpec: GraphSpec = {
-      ...spec,
-      encoding: { ...encoding, groupX: undefined, wrap: undefined },
-    };
-    return {
-      title: facetTitle(key, encoding),
-      option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders),
-    };
-  });
+  // No explicit groupX / groupY — fall through to the legacy single-axis
+  // wrap path (handled below).
+  if (!fx && !fy) {
+    const fw = encoding.wrap;
+    if (!fw) {
+      return {
+        panels: [{
+          title: spec.title || "",
+          option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders),
+          groupXValue: null,
+          groupYValue: null,
+        }],
+        cols: 1,
+        rows: 1,
+      };
+    }
+    const wrapKeys = collectFacetKeys(data, fw, valueOrders);
+    if (!wrapKeys) {
+      return {
+        panels: [{
+          title: spec.title || "",
+          option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders),
+          groupXValue: null,
+          groupYValue: null,
+        }],
+        cols: 1,
+        rows: 1,
+      };
+    }
+    const wIdx = colIndex(data, fw.name);
+    const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(wrapKeys.length))));
+    const rows = Math.max(1, Math.ceil(wrapKeys.length / cols));
+    const panels = wrapKeys.map((key) => {
+      const subRows = data.rows.filter((r) => toStr(r[wIdx]) === key);
+      const subData: GraphData = { columns: data.columns, rows: subRows };
+      const subSpec: GraphSpec = {
+        ...spec,
+        encoding: { ...encoding, wrap: undefined },
+      };
+      return {
+        title: `${fw.name}=${key}`,
+        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders),
+        groupXValue: null,
+        groupYValue: null,
+      };
+    });
+    return { panels, cols, rows };
+  }
 
-  // 列数：wrap 时根据数量自动；groupX 时全部一行
-  const cols = encoding.wrap ? Math.min(4, Math.ceil(Math.sqrt(panels.length))) : panels.length;
-  return { panels, cols: Math.max(1, cols) };
+  // groupX and/or groupY active — build a 2D Trellis grid. Either axis
+  // may be missing, in which case its key list collapses to a single
+  // sentinel slot so the cross-product still produces panels.
+  const xKeys = fx ? (collectFacetKeys(data, fx, valueOrders) ?? [""]) : [null];
+  const yKeys = fy ? (collectFacetKeys(data, fy, valueOrders) ?? [""]) : [null];
+  const fxIdx = fx ? colIndex(data, fx.name) : -1;
+  const fyIdx = fy ? colIndex(data, fy.name) : -1;
+
+  // row-major: outer loop = Y (top → bottom rows), inner loop = X
+  // (left → right within each row). Matches the CSS grid in <Graph>.
+  const panels: BuiltGraph["panels"] = [];
+  for (const yKey of yKeys) {
+    for (const xKey of xKeys) {
+      const subRows = data.rows.filter((r) => {
+        if (fx && xKey !== null && toStr(r[fxIdx]) !== xKey) return false;
+        if (fy && yKey !== null && toStr(r[fyIdx]) !== yKey) return false;
+        return true;
+      });
+      const subData: GraphData = { columns: data.columns, rows: subRows };
+      // Strip the facet encodings from the sub-spec so the inner builder
+      // doesn't try to re-facet recursively, and drop `wrap` too — when
+      // groupX / groupY are present, wrap is ignored (see header comment).
+      const subSpec: GraphSpec = {
+        ...spec,
+        encoding: { ...encoding, groupX: undefined, groupY: undefined, wrap: undefined },
+      };
+      panels.push({
+        title: facetTitle(xKey, yKey, encoding),
+        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders),
+        groupXValue: xKey,
+        groupYValue: yKey,
+      });
+    }
+  }
+
+  return {
+    panels,
+    cols: Math.max(1, xKeys.length),
+    rows: Math.max(1, yKeys.length),
+  };
 }

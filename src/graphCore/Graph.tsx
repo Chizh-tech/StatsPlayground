@@ -46,6 +46,13 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
       style={{
         display: "grid",
         gridTemplateColumns: `repeat(${built.cols}, minmax(${minPanelWidth}px, 1fr))`,
+        // Explicit row count is required so Group Y (vertical faceting)
+        // actually stacks panels into N rows — without this, the grid
+        // falls back to a single implicit row and panels reflow into the
+        // X axis only. minmax() keeps each row from collapsing below the
+        // per-panel minimum height while still letting the grid grow to
+        // fill the available space.
+        gridTemplateRows: `repeat(${built.rows}, minmax(${minPanelHeight}px, 1fr))`,
         gap: 8,
         width: "100%",
         height: "100%",
