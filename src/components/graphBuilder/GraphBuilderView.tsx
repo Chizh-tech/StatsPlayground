@@ -558,6 +558,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         <LegendStylePanel
           data={data}
           encoding={encoding}
+          elements={elements}
           groupStyles={item.groupStyles ?? {}}
           setGroupStyle={setGroupStyle}
           onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
@@ -1087,6 +1088,10 @@ function AddLayerCard({ availableKinds, onAdd, t }: AddLayerCardProps) {
 interface LegendStylePanelProps {
   data: GraphData | null;
   encoding: Partial<Record<GraphSlotKey, FieldRef>>;
+  /** Active layer kinds — used to pick a sensible Fill default in the
+   *  swatch (box plots want a colored fill even when ungrouped, while
+   *  scatter / line / bar prefer the JMP "hollow" look). */
+  elements: ChartElement[];
   groupStyles: GroupStyleMap;
   setGroupStyle: (groupKey: string, next: GroupStyle | undefined) => void;
   onDropOverlay: (e: React.DragEvent) => void;
@@ -1094,7 +1099,7 @@ interface LegendStylePanelProps {
   width: number;
 }
 
-function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // Overlay drives legend grouping. Drop a categorical column onto the
@@ -1133,12 +1138,19 @@ function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOv
   // each group gets a base hue (its slot in GROUP_COLORS) which is then
   // split into three shades — Point dark, Line mid, Fill light — so the
   // three sub-marks render distinctly when layered. Without grouping,
-  // single-color charts keep the JMP look (black point + line, hollow fill).
+  // single-color charts keep the JMP look (black point + line, hollow fill)
+  // — EXCEPT when a box plot layer is active, since the box body IS the
+  // primary mark and rendering it transparent would make the chart look
+  // empty. In that case the swatch shows the categorical-blue light shade
+  // that transform.ts will actually paint, so the legend stays in sync.
+  const hasBoxplot = elements.some((e) => e.kind === "boxplot" && e.enabled !== false);
   const effectiveStyleOf = (key: string, idx: number): GroupStyle => {
     const stored = groupStyles[key] ?? {};
     const baseColor = groupField ? GROUP_COLORS[idx % GROUP_COLORS.length] : "#000000";
     const lineDefault = groupField ? shade(baseColor, SHADE_RATIO_LINE) : baseColor;
-    const fillDefault = groupField ? shade(baseColor, SHADE_RATIO_FILL) : "transparent";
+    const fillDefault = groupField
+      ? shade(baseColor, SHADE_RATIO_FILL)
+      : (hasBoxplot ? shade(GROUP_COLORS[0], SHADE_RATIO_FILL) : "transparent");
     const pointDefault = groupField ? shade(baseColor, SHADE_RATIO_POINT) : baseColor;
     return {
       line: {

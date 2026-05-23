@@ -756,6 +756,20 @@ function buildSingleOption(
       // group's `point` sub-mark.
       const styleKey = grouping ? gKey : DEFAULT_GROUP_KEY;
       const boxGroupStyle = resolveGroupStyle(styleKey, groupColor, !!grouping, theme, spec.styles);
+      // Box plots are special: the fill IS the primary mark, not an
+      // overlay on top of a stroke layer (as with points / lines / bars).
+      // `resolveGroupStyle` defaults ungrouped fill to "transparent" to
+      // preserve the JMP scatter/line look, which renders boxes invisible
+      // in single-color box plots. Substitute a categorical-color light
+      // shade when the user hasn't explicitly set a fill, so a freshly
+      // dropped boxplot is visible by default. Theme-aware via
+      // `groupColor` (= `theme.categorical[...]`); fully respects user
+      // overrides from the Fill picker once they exist.
+      const userFill = spec.styles?.[styleKey]?.fill;
+      const hasUserFill = !!(userFill?.color ?? userFill?.fillColor);
+      const effectiveBoxFillColor = hasUserFill
+        ? boxGroupStyle.fill.color
+        : shade(groupColor, SHADE_RATIO_FILL);
       const seriesName = grouping ? gKey : (yField?.name ?? "");
       if (grouping && !legendNames.includes(gKey)) legendNames.push(gKey);
 
@@ -770,7 +784,7 @@ function buildSingleOption(
         // Result: Fill opacity affects only the box body; Line opacity
         // affects only the box border / median / whiskers.
         itemStyle: {
-          color: withAlpha(boxGroupStyle.fill.color, boxGroupStyle.fill.opacity),
+          color: withAlpha(effectiveBoxFillColor, boxGroupStyle.fill.opacity),
           borderColor: withAlpha(boxGroupStyle.line.color, boxGroupStyle.line.opacity),
           borderWidth: boxGroupStyle.line.width,
         },
