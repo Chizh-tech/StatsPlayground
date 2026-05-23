@@ -760,16 +760,26 @@ function buildSingleOption(
       // overlay on top of a stroke layer (as with points / lines / bars).
       // `resolveGroupStyle` defaults ungrouped fill to "transparent" to
       // preserve the JMP scatter/line look, which renders boxes invisible
-      // in single-color box plots. Substitute a categorical-color light
-      // shade when the user hasn't explicitly set a fill, so a freshly
-      // dropped boxplot is visible by default. Theme-aware via
-      // `groupColor` (= `theme.categorical[...]`); fully respects user
-      // overrides from the Fill picker once they exist.
+      // in single-color box plots. Substitute a visible default when the
+      // user hasn't explicitly set a fill — but the choice of default
+      // depends on whether grouping is active:
+      //   - Grouped: lighten each group's categorical color so the boxes
+      //     stay color-coded and distinguishable.
+      //   - Ungrouped: use a neutral grey derived from the foreground
+      //     color (≈ JMP's silver box default). Picking up `categorical[0]`
+      //     here would render every untouched single-series boxplot in
+      //     the same accent color as a "live" theme selection, which made
+      //     post-Reset state look like the user had picked a blue theme.
+      //  User overrides from the Fill picker (or an applied theme) still
+      //  win because `hasUserFill` short-circuits both branches.
       const userFill = spec.styles?.[styleKey]?.fill;
       const hasUserFill = !!(userFill?.color ?? userFill?.fillColor);
+      const neutralBoxFill = shade(theme.fgPrimary || "#000", SHADE_RATIO_FILL);
       const effectiveBoxFillColor = hasUserFill
         ? boxGroupStyle.fill.color
-        : shade(groupColor, SHADE_RATIO_FILL);
+        : grouping
+          ? shade(groupColor, SHADE_RATIO_FILL)
+          : neutralBoxFill;
       const seriesName = grouping ? gKey : (yField?.name ?? "");
       if (grouping && !legendNames.includes(gKey)) legendNames.push(gKey);
 

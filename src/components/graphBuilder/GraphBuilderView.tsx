@@ -1158,8 +1158,11 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
   // single-color charts keep the JMP look (black point + line, hollow fill)
   // — EXCEPT when a box plot layer is active, since the box body IS the
   // primary mark and rendering it transparent would make the chart look
-  // empty. In that case the swatch shows the categorical-blue light shade
-  // that transform.ts will actually paint, so the legend stays in sync.
+  // empty. In that case the swatch shows a neutral grey (shaded from the
+  // ungrouped foreground color) — matching what transform.ts paints when
+  // no Fill override exists. Earlier this used the categorical-blue light
+  // shade, which made post-Reset boxes look like the user had picked a
+  // blue theme; grey reads as "default / neutral", consistent with JMP.
   const hasBoxplot = elements.some((e) => e.kind === "boxplot" && e.enabled !== false);
   const effectiveStyleOf = (key: string, idx: number): GroupStyle => {
     const stored = groupStyles[key] ?? {};
@@ -1167,7 +1170,7 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
     const lineDefault = groupField ? shade(baseColor, SHADE_RATIO_LINE) : baseColor;
     const fillDefault = groupField
       ? shade(baseColor, SHADE_RATIO_FILL)
-      : (hasBoxplot ? shade(GROUP_COLORS[0], SHADE_RATIO_FILL) : "transparent");
+      : (hasBoxplot ? shade(baseColor, SHADE_RATIO_FILL) : "transparent");
     const pointDefault = groupField ? shade(baseColor, SHADE_RATIO_POINT) : baseColor;
     return {
       line: {
