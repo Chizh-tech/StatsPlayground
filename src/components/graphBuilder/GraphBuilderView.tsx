@@ -1118,7 +1118,7 @@ function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOv
       },
       fill: {
         color: stored.fill?.color ?? fillDefault,
-        opacity: stored.fill?.opacity ?? (groupField ? 0.85 : 1),
+        opacity: stored.fill?.opacity ?? 1,
       },
       point: {
         color: stored.point?.color ?? pointDefault,

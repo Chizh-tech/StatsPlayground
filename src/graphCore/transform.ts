@@ -55,6 +55,20 @@ function shade(hex: string, ratio: number): string {
   return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`;
 }
 
+/** Bake an alpha channel into a hex color so the fill alpha can be set
+ *  independently of any shape-level `opacity` (which otherwise affects
+ *  both fill and border together — see boxplot itemStyle). */
+function withAlpha(color: string, alpha: number): string {
+  if (!color || color === "transparent") return color;
+  const a = Math.max(0, Math.min(1, alpha));
+  const m = /^#?([0-9a-f]{6})$/i.exec(color);
+  if (!m) return color;
+  const r = parseInt(m[1].slice(0, 2), 16);
+  const g = parseInt(m[1].slice(2, 4), 16);
+  const b = parseInt(m[1].slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
 /** Compute the JMP-style defaults plus any per-group overrides.
  *
  *  Each legend group is auto-themed: from one base hue we derive a
@@ -79,10 +93,12 @@ function resolveGroupStyle(
 
   // Fill defaults: hollow when single-group (preserves the JMP look),
   // lighter shade of the categorical color when grouped so multiple
-  // groups stay distinguishable without being noisy.
+  // groups stay distinguishable without being noisy. Opacity defaults
+  // to fully opaque — the lightened shade already provides enough
+  // visual breathing room for the line/point on top to read clearly.
   const fillColor = stored.fill?.color ?? stored.fill?.fillColor
     ?? (grouping ? shade(baseColor, SHADE_RATIO_FILL) : "transparent");
-  const fillOpacity = stored.fill?.opacity ?? (grouping ? 0.85 : 1);
+  const fillOpacity = stored.fill?.opacity ?? 1;
 
   // Point defaults: filled circle 4px. When grouping, use the darker
   // shade so points read clearly on top of the lighter fill.
@@ -681,11 +697,15 @@ function buildSingleOption(
         name: seriesName,
         data: boxData,
         boxWidth: [10, maxBoxPx],
+        // ECharts' top-level `itemStyle.opacity` applies to *both* the
+        // fill color and the border, so we bake the per-mark alphas into
+        // the colors themselves via rgba() and leave `opacity` unset.
+        // Result: Fill opacity affects only the box body; Line opacity
+        // affects only the box border / median / whiskers.
         itemStyle: {
-          color: boxGroupStyle.fill.color,
-          borderColor: boxGroupStyle.line.color,
+          color: withAlpha(boxGroupStyle.fill.color, boxGroupStyle.fill.opacity),
+          borderColor: withAlpha(boxGroupStyle.line.color, boxGroupStyle.line.opacity),
           borderWidth: boxGroupStyle.line.width,
-          opacity: boxGroupStyle.fill.opacity,
         },
         z: 1,
       });
