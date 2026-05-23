@@ -32,20 +32,24 @@ function readCssVar(name: string, fallback: string): string {
   return v || fallback;
 }
 
-/** 默认 12 色分类调色板（参考 Tableau 10 风格但经过自有调整） */
+/** 默认 12 色分类调色板（参考 Tableau 10 风格但经过自有调整）
+ *  按对比度由高到低排列：前 8 个是高对比度的彩色
+ *  （蓝/橙/绿/红/紫/黄/粉/青），后 4 个是低饱和度的灰棕色，
+ *  这样图例自动着色时优先把差异最大的颜色分配给前几组。
+ *  必须与 GraphBuilderView 里的 GROUP_COLORS 保持完全一致。 */
 const DEFAULT_CATEGORICAL = [
-  "#4a6cf7",
-  "#ef8a3a",
-  "#2ca678",
-  "#e74c3c",
-  "#9168d6",
-  "#8c6e3a",
-  "#d56cb1",
-  "#7f8c8d",
-  "#c4ad36",
-  "#3aa6b9",
-  "#5d8aa8",
-  "#b87333",
+  "#4a6cf7", // 蓝
+  "#ef8a3a", // 橙
+  "#2ca678", // 绿
+  "#e74c3c", // 红
+  "#9168d6", // 紫
+  "#c4ad36", // 黄
+  "#d56cb1", // 粉
+  "#3aa6b9", // 青
+  "#5d8aa8", // 灰蓝
+  "#8c6e3a", // 棕
+  "#b87333", // 铜
+  "#7f8c8d", // 灰
 ];
 
 export function getGraphTheme(): GraphTheme {

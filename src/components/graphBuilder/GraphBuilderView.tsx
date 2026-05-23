@@ -161,6 +161,43 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const elements = item.elements;
   const smootherLambda = item.smootherLambda;
 
+  // User-saved CustomPalettes feed into legend default-color assignment:
+  // when a group doesn't have an explicit style override yet, the renderer
+  // walks these palettes first before falling back to GROUP_COLORS.
+  const customPalettes = useGraphPaletteStore((s) => s.palettes);
+
+  // Distinct group values driving the legend. Lifted from LegendStylePanel
+  // so the parent can pre-compute effectiveStyles in the same single source
+  // of truth that gets handed both to the renderer (via spec.styles) and to
+  // the panel (for swatches and the editor's "default vs override" check).
+  const groupKeys = useMemo<string[]>(() => {
+    const groupField = encoding.overlay;
+    if (!groupField || !data) return [DEFAULT_GROUP_KEY];
+    const colIdx = data.columns.indexOf(groupField.name);
+    if (colIdx < 0) return [DEFAULT_GROUP_KEY];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of data.rows) {
+      const v = r[colIdx];
+      const k = v == null ? "" : String(v);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(k);
+    }
+    return out.length > 0 ? out : [DEFAULT_GROUP_KEY];
+  }, [encoding.overlay, data]);
+
+  const effectiveStyles = useMemo<GroupStyleMap>(
+    () =>
+      buildEffectiveStyles(
+        groupKeys,
+        item.groupStyles ?? {},
+        customPalettes,
+        !!encoding.overlay,
+      ),
+    [groupKeys, item.groupStyles, customPalettes, encoding.overlay],
+  );
+
   const setEncoding = useCallback(
     (
       updater:
@@ -279,9 +316,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       datasetName: dataset.name,
       encoding: enc,
       elements: finalElements,
-      styles: item.groupStyles,
+      styles: effectiveStyles,
     };
-  }, [encoding, finalElements, dataset.id, dataset.name, item.groupStyles]);
+  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -573,6 +610,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           encoding={encoding}
           elements={elements}
           groupStyles={item.groupStyles ?? {}}
+          groupKeys={groupKeys}
+          effectiveStyles={effectiveStyles}
           setGroupStyle={setGroupStyle}
           resetAllGroupStyles={resetAllGroupStyles}
           onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
@@ -1107,6 +1146,14 @@ interface LegendStylePanelProps {
    *  scatter / line / bar prefer the JMP "hollow" look). */
   elements: ChartElement[];
   groupStyles: GroupStyleMap;
+  /** Group values driving the legend, computed at the parent level so
+   *  the same list feeds both the renderer (via spec) and this panel. */
+  groupKeys: string[];
+  /** Fully-resolved per-group styles (user overrides + palette/categorical
+   *  auto-defaults). Used by the swatches and as the "live" preview the
+   *  MarkEditor falls back to when a particular mark hasn't been
+   *  explicitly overridden yet. */
+  effectiveStyles: GroupStyleMap;
   setGroupStyle: (groupKey: string, next: GroupStyle | undefined) => void;
   /** Drop every per-group override and return the chart to factory
    *  defaults. Wired to the STYLE editor's Reset button. */
@@ -1116,29 +1163,15 @@ interface LegendStylePanelProps {
   width: number;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
-  // Overlay drives legend grouping. Drop a categorical column onto the
-  // Overlay slot at the top of this panel to split the chart by that
-  // column's values; otherwise the panel shows a single "All" entry that
-  // styles the entire chart at once.
-  const groupField = encoding.overlay;
-  const groupKeys = useMemo<string[]>(() => {
-    if (!groupField || !data) return [DEFAULT_GROUP_KEY];
-    const idx = data.columns.indexOf(groupField.name);
-    if (idx < 0) return [DEFAULT_GROUP_KEY];
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const r of data.rows) {
-      const v = r[idx];
-      const k = v == null ? "" : String(v);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(k);
-    }
-    return out.length > 0 ? out : [DEFAULT_GROUP_KEY];
-  }, [groupField, data]);
+  // `data` and `elements` are still part of the public prop contract for
+  // historical reasons (other call sites can pass them through); reference
+  // them here so TS' noUnusedParameters check stays happy without forcing
+  // every caller to drop them.
+  void data;
+  void elements;
 
   const [selected, setSelected] = useState<string>(groupKeys[0] ?? DEFAULT_GROUP_KEY);
   // Keep the selection valid when the legend list changes underneath us.
@@ -1148,47 +1181,18 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
     }
   }, [groupKeys, selected]);
 
-  // Effective style currently applied to a group (override merged with the
-  // group's categorical default color). Used to render the legend swatches.
-  //
-  // Default per-mark shades mirror the chart-side `resolveGroupStyle`:
-  // each group gets a base hue (its slot in GROUP_COLORS) which is then
-  // split into three shades — Point dark, Line mid, Fill light — so the
-  // three sub-marks render distinctly when layered. Without grouping,
-  // single-color charts keep the JMP look (black point + line, hollow fill)
-  // — EXCEPT when a box plot layer is active, since the box body IS the
-  // primary mark and rendering it transparent would make the chart look
-  // empty. In that case the swatch shows a neutral grey (shaded from the
-  // ungrouped foreground color) — matching what transform.ts paints when
-  // no Fill override exists. Earlier this used the categorical-blue light
-  // shade, which made post-Reset boxes look like the user had picked a
-  // blue theme; grey reads as "default / neutral", consistent with JMP.
-  const hasBoxplot = elements.some((e) => e.kind === "boxplot" && e.enabled !== false);
-  const effectiveStyleOf = (key: string, idx: number): GroupStyle => {
-    const stored = groupStyles[key] ?? {};
-    const baseColor = groupField ? GROUP_COLORS[idx % GROUP_COLORS.length] : "#000000";
-    const lineDefault = groupField ? shade(baseColor, SHADE_RATIO_LINE) : baseColor;
-    const fillDefault = groupField
-      ? shade(baseColor, SHADE_RATIO_FILL)
-      : (hasBoxplot ? shade(baseColor, SHADE_RATIO_FILL) : "transparent");
-    const pointDefault = groupField ? shade(baseColor, SHADE_RATIO_POINT) : baseColor;
+  // Resolve "what color should the swatch / fallback show" for one group.
+  // The expensive default-derivation logic lives at the parent in
+  // `buildEffectiveStyles`; this thin wrapper just reads from the map and
+  // returns a hard-fallback for the rare case where a group key isn't in
+  // the map yet (e.g. during a render frame right after data changed).
+  const effectiveStyleOf = (key: string): GroupStyle => {
+    const eff = effectiveStyles[key];
+    if (eff) return eff;
     return {
-      line: {
-        color: stored.line?.color ?? lineDefault,
-        lineWidth: stored.line?.lineWidth ?? 1.5,
-        opacity: stored.line?.opacity ?? 1,
-      },
-      fill: {
-        color: stored.fill?.color ?? fillDefault,
-        opacity: stored.fill?.opacity ?? 1,
-      },
-      point: {
-        color: stored.point?.color ?? pointDefault,
-        fillColor: stored.point?.fillColor ?? stored.point?.color ?? pointDefault,
-        marker: stored.point?.marker ?? "circle",
-        markerSize: stored.point?.markerSize ?? 4,
-        opacity: stored.point?.opacity ?? 1,
-      },
+      line: { color: "#000", lineWidth: 1.5, opacity: 1 },
+      fill: { color: "transparent", opacity: 1 },
+      point: { color: "#000", fillColor: "#000", marker: "circle", markerSize: 4, opacity: 1 },
     };
   };
 
@@ -1269,8 +1273,7 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
   // tedious select-each-group / click-reset loop.
   const hasAnyCustomStyles = Object.keys(groupStyles).length > 0;
 
-  const selectedIdx = Math.max(0, groupKeys.indexOf(selected));
-  const selectedStyle = effectiveStyleOf(selected, selectedIdx);
+  const selectedStyle = effectiveStyleOf(selected);
   const storedSelected = groupStyles[selected] ?? {};
 
   return (
@@ -1294,8 +1297,8 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
         />
 
         {/* Legend list */}
-        {groupKeys.map((key, idx) => {
-          const st = effectiveStyleOf(key, idx);
+        {groupKeys.map((key) => {
+          const st = effectiveStyleOf(key);
           const label = key === DEFAULT_GROUP_KEY ? t("graph.legend.allEntries") : (key || "—");
           return (
             <div
@@ -1472,12 +1475,72 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
   );
 }
 
-/** Categorical palette for legend defaults — must match getGraphTheme() */
+/** Categorical palette for legend defaults — must match DEFAULT_CATEGORICAL
+ *  in graphCore/theme.ts. Sorted by contrast: vivid hues first, muted/gray
+ *  last, so auto-assigned legend colors stay maximally distinct. */
 const GROUP_COLORS = [
-  "#4a6cf7", "#ef8a3a", "#2ca678", "#e74c3c",
-  "#9168d6", "#8c6e3a", "#d56cb1", "#7f8c8d",
-  "#c4ad36", "#3aa6b9", "#5d8aa8", "#b87333",
+  "#4a6cf7", "#ef8a3a", "#2ca678", "#e74c3c", // blue / orange / green / red
+  "#9168d6", "#c4ad36", "#d56cb1", "#3aa6b9", // purple / yellow / pink / teal
+  "#5d8aa8", "#8c6e3a", "#b87333", "#7f8c8d", // slate / brown / copper / gray
 ];
+
+/** Build the fully-resolved per-group style map handed to the renderer
+ *  (`spec.styles`) and to the legend swatches.
+ *
+ *  Resolution rules (in priority order):
+ *    1. Any explicit per-mark override the user has set (Line/Fill/Point)
+ *       wins for that mark.
+ *    2. For unset marks, when grouped:
+ *       a) Use the user's saved CustomPalettes for the first N groups
+ *          (so users get THEIR favourite colors before falling back to
+ *          the built-in palette). Palette.point/line/fill map straight
+ *          onto the three sub-marks.
+ *       b) Beyond that, derive shades from GROUP_COLORS — but offset
+ *          the index by the palette count so the first un-palette group
+ *          still gets the highest-contrast built-in color.
+ *    3. When not grouped (single DEFAULT_GROUP_KEY), keep the user
+ *       styles map untouched; the renderer applies its single-color
+ *       defaults (black line/point + transparent/grey fill). */
+function buildEffectiveStyles(
+  groupKeys: string[],
+  userStyles: GroupStyleMap,
+  customPalettes: CustomPalette[],
+  isGrouped: boolean,
+): GroupStyleMap {
+  if (!isGrouped) return userStyles;
+  const out: GroupStyleMap = { ...userStyles };
+  groupKeys.forEach((key, idx) => {
+    // Compute the auto-default for this slot.
+    let autoLine: MarkStyle;
+    let autoFill: MarkStyle;
+    let autoPoint: MarkStyle;
+    if (idx < customPalettes.length) {
+      const p = customPalettes[idx];
+      autoLine = { color: p.line, lineWidth: 1.5, opacity: 1 };
+      autoFill = { color: p.fill, opacity: 1 };
+      autoPoint = { color: p.point, fillColor: p.point, marker: "circle", markerSize: 4, opacity: 1 };
+    } else {
+      const fallbackIdx = (idx - customPalettes.length) % GROUP_COLORS.length;
+      const base = GROUP_COLORS[fallbackIdx];
+      autoLine = { color: shade(base, SHADE_RATIO_LINE), lineWidth: 1.5, opacity: 1 };
+      autoFill = { color: shade(base, SHADE_RATIO_FILL), opacity: 1 };
+      autoPoint = {
+        color: shade(base, SHADE_RATIO_POINT),
+        fillColor: shade(base, SHADE_RATIO_POINT),
+        marker: "circle",
+        markerSize: 4,
+        opacity: 1,
+      };
+    }
+    const user = userStyles[key];
+    out[key] = {
+      line: user?.line ?? autoLine,
+      fill: user?.fill ?? autoFill,
+      point: user?.point ?? autoPoint,
+    };
+  });
+  return out;
+}
 
 /** Composite swatch: combines line + fill rect + point so the user sees
  *  exactly what the three sub-marks of this group will look like. */
