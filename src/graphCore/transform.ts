@@ -520,11 +520,19 @@ function facetTitle(facetKey: string, encoding: GraphSpec["encoding"]): string {
   return parts.join(" / ");
 }
 
-/** 渲染一个单图（不分面）的 ECharts option */
+/** 渲染一个单图（不分面）的 ECharts option
+ *
+ *  When called from the faceted path (`buildGraph` with `groupX`/`wrap`),
+ *  each panel only sees its own subset of rows — so the panel-local
+ *  ordering of overlay groups can collapse to a single group. Without
+ *  `globalGroupKeys`, every panel would then pick color[0] and lose the
+ *  per-group theming. Passing the full-dataset ordering keeps EV1 = blue,
+ *  TC1.6 = orange, … across every panel. */
 function buildSingleOption(
   spec: GraphSpec,
   data: GraphData,
   theme: GraphTheme,
+  globalGroupKeys?: string[],
 ): EChartsOption {
   const { encoding, elements } = spec;
   const xField = encoding.x;
@@ -557,6 +565,16 @@ function buildSingleOption(
   const grouping = colorField || overlayField;
   const groups = groupBy(data, grouping);
   const groupKeys = Array.from(groups.keys());
+
+  /** Stable color index for a group: prefers the global ordering passed
+   *  in by the faceted caller; falls back to the panel-local order. */
+  const colorIndexOf = (gKey: string): number => {
+    if (globalGroupKeys) {
+      const i = globalGroupKeys.indexOf(gKey);
+      if (i >= 0) return i;
+    }
+    return Math.max(0, groupKeys.indexOf(gKey));
+  };
 
   const enabledElements = elements.filter((e) => e.enabled !== false);
 
@@ -627,9 +645,9 @@ function buildSingleOption(
     // the same X categories so ECharts dodges them within each bucket.
     const boxIterGroups: string[] = grouping ? groupKeys : [DEFAULT_GROUP_KEY];
 
-    boxIterGroups.forEach((gKey, gi) => {
+    boxIterGroups.forEach((gKey) => {
       const groupColor = grouping
-        ? theme.categorical[gi % theme.categorical.length]
+        ? theme.categorical[colorIndexOf(gKey) % theme.categorical.length]
         : theme.categorical[0];
       const groupRowSet = grouping ? new Set(groups.get(gKey) ?? []) : null;
 
@@ -745,8 +763,8 @@ function buildSingleOption(
   }
 
   // —— 通用 X-Y 元素：points / line / bar / smoother ——
-  groupKeys.forEach((gKey, gi) => {
-    const color = theme.categorical[gi % theme.categorical.length];
+  groupKeys.forEach((gKey) => {
+    const color = theme.categorical[colorIndexOf(gKey) % theme.categorical.length];
     const rowIdxs = groups.get(gKey)!;
     const seriesName = grouping ? gKey : (yField?.name || "");
     if (grouping && !legendNames.includes(seriesName)) legendNames.push(seriesName);
@@ -1200,6 +1218,15 @@ export function buildGraph(
     }
   }
 
+  // Compute the global ordering of overlay/color groups across the FULL
+  // dataset so each panel can map its local group(s) back to the same
+  // color slot. Without this, every panel restarts its group index at 0
+  // and the per-group themes set in the legend collapse to a single hue.
+  const grouping = encoding.color || encoding.overlay;
+  const globalGroupKeys = grouping
+    ? Array.from(groupBy(data, grouping).keys())
+    : undefined;
+
   const panels = seen.map((key) => {
     const subRows = data.rows.filter((r) => toStr(r[idx]) === key);
     const subData: GraphData = { columns: data.columns, rows: subRows };
@@ -1209,7 +1236,7 @@ export function buildGraph(
     };
     return {
       title: facetTitle(key, encoding),
-      option: buildSingleOption(subSpec, subData, theme),
+      option: buildSingleOption(subSpec, subData, theme, globalGroupKeys),
     };
   });
 
