@@ -194,8 +194,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         item.groupStyles ?? {},
         customPalettes,
         !!encoding.overlay,
+        elements.some((e) => e.kind === "boxplot" && e.enabled !== false),
       ),
-    [groupKeys, item.groupStyles, customPalettes, encoding.overlay],
+    [groupKeys, item.groupStyles, customPalettes, encoding.overlay, elements],
   );
 
   const setEncoding = useCallback(
@@ -1545,23 +1546,39 @@ const GROUP_COLORS = [
  *       b) Beyond that, derive shades from GROUP_COLORS — but offset
  *          the index by the palette count so the first un-palette group
  *          still gets the highest-contrast built-in color.
- *    3. When not grouped (single DEFAULT_GROUP_KEY), keep the user
- *       styles map untouched; the renderer applies its single-color
- *       defaults (black line/point + transparent/grey fill). */
+ *    3. When not grouped (single DEFAULT_GROUP_KEY), fill with the JMP
+ *       look: black line/point, transparent fill — EXCEPT for boxplot
+ *       layers where the box body IS the primary mark, so we substitute
+ *       a neutral grey (matching transform.ts' `neutralBoxFill`).
+ *
+ *  The returned map is ALWAYS fully populated for every key in
+ *  `groupKeys` — every entry has line/fill/point objects with all
+ *  required sub-fields. The legend swatches and the STYLE editor depend
+ *  on that contract; falling through to `undefined` crashes the
+ *  editor's `selectedStyle.line.color` lookup. */
 function buildEffectiveStyles(
   groupKeys: string[],
   userStyles: GroupStyleMap,
   customPalettes: CustomPalette[],
   isGrouped: boolean,
+  hasBoxplot: boolean,
 ): GroupStyleMap {
-  if (!isGrouped) return userStyles;
   const out: GroupStyleMap = { ...userStyles };
   groupKeys.forEach((key, idx) => {
-    // Compute the auto-default for this slot.
     let autoLine: MarkStyle;
     let autoFill: MarkStyle;
     let autoPoint: MarkStyle;
-    if (idx < customPalettes.length) {
+    if (!isGrouped) {
+      // Ungrouped: JMP look. baseColor='#000000' here mirrors
+      // resolveGroupStyle() in transform.ts so the chart and the
+      // editor swatches stay in lockstep.
+      autoLine = { color: "#000000", lineWidth: 1.5, opacity: 1 };
+      autoFill = {
+        color: hasBoxplot ? shade("#000000", SHADE_RATIO_FILL) : "transparent",
+        opacity: 1,
+      };
+      autoPoint = { color: "#000000", fillColor: "#000000", marker: "circle", markerSize: 4, opacity: 1 };
+    } else if (idx < customPalettes.length) {
       const p = customPalettes[idx];
       autoLine = { color: p.line, lineWidth: 1.5, opacity: 1 };
       autoFill = { color: p.fill, opacity: 1 };
