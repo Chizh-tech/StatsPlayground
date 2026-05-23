@@ -84,7 +84,16 @@ function resolveGroupStyle(
   styles: Record<string, GroupStyle> | undefined,
 ): ResolvedGroupStyle {
   const stored: GroupStyle = (styles && (styles[groupKey] ?? styles[DEFAULT_GROUP_KEY])) || {};
-  const baseColor = grouping ? groupColor : (theme.fgPrimary || "#000");
+  // For ungrouped charts the panel's STYLE editor treats "no override" as
+  // equivalent to the first preset theme (LINE_PALETTE[0] = '#000000',
+  // FILL_PALETTE[0] = shade('#000000', 0.55), POINT_PALETTE[0] = '#000000')
+  // — that's how the THEME picker auto-highlights theme[0] when nothing
+  // is stored. Use the same literal '#000000' here (instead of
+  // theme.fgPrimary, which is '#1a1a2e' in light mode) so the chart
+  // actually paints theme[0]'s colors when the user clicks Reset.
+  // Otherwise the legend swatch says "theme[0] selected" but the chart
+  // renders a slightly different shade, making Reset look broken.
+  const baseColor = grouping ? groupColor : "#000000";
 
   // Line defaults: thin, solid, baseColor (mid shade).
   const lineColor = stored.line?.color ?? (grouping ? shade(baseColor, SHADE_RATIO_LINE) : baseColor);
@@ -761,20 +770,21 @@ function buildSingleOption(
       // `resolveGroupStyle` defaults ungrouped fill to "transparent" to
       // preserve the JMP scatter/line look, which renders boxes invisible
       // in single-color box plots. Substitute a visible default when the
-      // user hasn't explicitly set a fill — but the choice of default
-      // depends on whether grouping is active:
-      //   - Grouped: lighten each group's categorical color so the boxes
-      //     stay color-coded and distinguishable.
-      //   - Ungrouped: use a neutral grey derived from the foreground
-      //     color (≈ JMP's silver box default). Picking up `categorical[0]`
-      //     here would render every untouched single-series boxplot in
-      //     the same accent color as a "live" theme selection, which made
-      //     post-Reset state look like the user had picked a blue theme.
+      // user hasn't explicitly set a fill — chosen so that the cleared /
+      // post-Reset rendering is *identical* to applying the first preset
+      // theme (theme[0]) in the panel:
+      //   - Grouped: lighten each group's categorical color (per-group
+      //     differentiation; matches how grouped legend swatches resolve).
+      //   - Ungrouped: shade('#000000', 0.55) = FILL_PALETTE[0], i.e. the
+      //     exact fill color that theme[0] would write. Using
+      //     theme.fgPrimary here instead produced a slightly different
+      //     grey (#9898a1 vs #8c8c8c) which made Reset look like it
+      //     produced a *different* state than the swatch-highlighted theme.
       //  User overrides from the Fill picker (or an applied theme) still
       //  win because `hasUserFill` short-circuits both branches.
       const userFill = spec.styles?.[styleKey]?.fill;
       const hasUserFill = !!(userFill?.color ?? userFill?.fillColor);
-      const neutralBoxFill = shade(theme.fgPrimary || "#000", SHADE_RATIO_FILL);
+      const neutralBoxFill = shade("#000000", SHADE_RATIO_FILL);
       const effectiveBoxFillColor = hasUserFill
         ? boxGroupStyle.fill.color
         : grouping
