@@ -576,6 +576,29 @@ function facetTitle(
   return parts.join(" | ");
 }
 
+/** Shared axis ranges computed across the FULL faceted dataset.
+ *
+ *  When `buildGraph` splits data into multiple panels, each panel's
+ *  subset has its own min/max — left unconstrained, ECharts auto-scales
+ *  each axis independently, so the same numeric value lands at different
+ *  pixel heights across panels. That makes side-by-side comparison
+ *  visually misleading (the exact failure mode the user called out:
+ *  "严重的判断失误"). The faceted caller therefore pre-computes the
+ *  global bounds once over the full dataset and forwards them here so
+ *  every panel pins its axes to the same range. */
+interface SharedAxisRanges {
+  /** Forced numeric min/max for the X axis (value or time type). */
+  xMin?: number;
+  xMax?: number;
+  /** Union of all X categories across panels — used when xAxis.type ===
+   *  "category" so missing categories still occupy the same slot on each
+   *  panel's axis. */
+  xCats?: string[];
+  /** Forced numeric min/max for the Y axis (always value type). */
+  yMin?: number;
+  yMax?: number;
+}
+
 /** 渲染一个单图（不分面）的 ECharts option
  *
  *  When called from the faceted path (`buildGraph` with `groupX`/`wrap`),
@@ -583,13 +606,17 @@ function facetTitle(
  *  ordering of overlay groups can collapse to a single group. Without
  *  `globalGroupKeys`, every panel would then pick color[0] and lose the
  *  per-group theming. Passing the full-dataset ordering keeps EV1 = blue,
- *  TC1.6 = orange, … across every panel. */
+ *  TC1.6 = orange, … across every panel.
+ *
+ *  `sharedRanges` is set by the faceted caller to force every panel to
+ *  the same axis bounds (see SharedAxisRanges above). */
 function buildSingleOption(
   spec: GraphSpec,
   data: GraphData,
   theme: GraphTheme,
   globalGroupKeys?: string[],
   valueOrders?: Record<string, string[]>,
+  sharedRanges?: SharedAxisRanges,
 ): EChartsOption {
   const { encoding, elements } = spec;
   const xField = encoding.x;
@@ -668,6 +695,10 @@ function buildSingleOption(
           nameLocation: "middle",
           nameGap: 28,
           ...axis,
+          // Faceted histograms still benefit from a shared X span so the
+          // bin centers are visually comparable across panels.
+          ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
+          ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
         },
         yAxis: {
           type: "value",
@@ -887,7 +918,14 @@ function buildSingleOption(
   // The X/Y slot chips outside the canvas already label the axes, so we
   // intentionally omit `name` on the ECharts axes to avoid duplication.
   const rawXCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx) : [];
-  const xCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
+  const localXCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
+  // When the faceted caller forwards a global category union, use it as
+  // the axis spine instead of the panel-local list — keeps every panel
+  // aligned to the same X positions even when this subset is missing
+  // some categories. Tick label sizing (rotate/wrap) is still driven by
+  // the actual rendered category list so it accounts for the widest
+  // label that will appear.
+  const xCats = xIsCategory && sharedRanges?.xCats ? sharedRanges.xCats : localXCats;
   // Compute rotation / wrap metrics first so the axis literal can reference them.
   const xMaxLines = xIsCategory ? maxWrapLines(xCats, 16) : 1;
   // Rotate only when wrapping doesn't already break long labels onto
@@ -918,11 +956,18 @@ function buildSingleOption(
       ? {
           type: "time",
           ...axis,
+          // Pin to shared bounds when faceted so every panel's time axis
+          // covers the same span.
+          ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
+          ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
         }
       : {
           type: "value",
           scale: true,
           ...axis,
+          // Pin to shared bounds when faceted (see SharedAxisRanges).
+          ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
+          ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
         };
 
   return {
@@ -946,6 +991,10 @@ function buildSingleOption(
       type: "value",
       scale: true,
       ...axis,
+      // Pin to shared bounds when faceted so every panel's Y axis covers
+      // exactly the same range — the whole point of small multiples.
+      ...(sharedRanges?.yMin != null ? { min: sharedRanges.yMin } : {}),
+      ...(sharedRanges?.yMax != null ? { max: sharedRanges.yMax } : {}),
     },
     series,
     animationDuration: 250,
@@ -1321,6 +1370,92 @@ function collectFacetKeys(
   return applyValueOrder(seen, valueOrders?.[field.name]);
 }
 
+/** Compute shared X / Y axis ranges across the FULL faceted dataset.
+ *
+ *  Faceting splits the rows into per-panel subsets whose local min/max
+ *  almost always differ. With per-panel auto-scale, the same Y value
+ *  lands at a different pixel height in each panel — exactly the failure
+ *  mode the user flagged ("严重的判断失误"). Pinning every panel's axes
+ *  to the global bounds restores cross-panel comparability.
+ *
+ *  - Y is always a value axis (histograms aside) — emit numeric min/max.
+ *  - X depends on the column type:
+ *      * nominal/ordinal → union of categories (so missing categories
+ *        still occupy the same slot on every panel)
+ *      * datetime → numeric min/max in ms-since-epoch
+ *      * quantitative / unknown → numeric min/max
+ *  - A tiny relative pad (~2 %) is added to numeric bounds to keep
+ *    points off the axis edge; ECharts' `scale: true` does this
+ *    automatically when min/max are unset, so we replicate the feel. */
+function computeSharedRanges(
+  data: GraphData,
+  encoding: GraphSpec["encoding"],
+  valueOrders?: Record<string, string[]>,
+): SharedAxisRanges {
+  const out: SharedAxisRanges = {};
+
+  const yField = encoding.y;
+  if (yField) {
+    const yIdx = colIndex(data, yField.name);
+    if (yIdx >= 0) {
+      let yMin = Infinity;
+      let yMax = -Infinity;
+      for (const r of data.rows) {
+        const v = toNum(r[yIdx]);
+        if (Number.isFinite(v)) {
+          if (v < yMin) yMin = v;
+          if (v > yMax) yMax = v;
+        }
+      }
+      if (Number.isFinite(yMin) && Number.isFinite(yMax)) {
+        const pad = (yMax - yMin) * 0.02 || Math.abs(yMax) * 0.02 || 1;
+        out.yMin = yMin - pad;
+        out.yMax = yMax + pad;
+      }
+    }
+  }
+
+  const xField = encoding.x;
+  if (xField) {
+    const xIdx = colIndex(data, xField.name);
+    if (xIdx >= 0) {
+      const xIsCat = xField.type === "nominal" || xField.type === "ordinal";
+      if (xIsCat) {
+        const seen = new Set<string>();
+        const cats: string[] = [];
+        for (const r of data.rows) {
+          const k = toStr(r[xIdx]);
+          if (!seen.has(k)) {
+            seen.add(k);
+            cats.push(k);
+          }
+        }
+        out.xCats = applyValueOrder(cats, valueOrders?.[xField.name]);
+      } else {
+        let xMin = Infinity;
+        let xMax = -Infinity;
+        for (const r of data.rows) {
+          const raw = r[xIdx];
+          const v = xField.type === "datetime"
+            ? (raw instanceof Date ? raw.getTime() : new Date(raw as string).getTime())
+            : toNum(raw);
+          if (Number.isFinite(v)) {
+            if (v < xMin) xMin = v;
+            if (v > xMax) xMax = v;
+          }
+        }
+        if (Number.isFinite(xMin) && Number.isFinite(xMax)) {
+          const pad = (xMax - xMin) * 0.02 || Math.abs(xMax) * 0.02 || 1;
+          out.xMin = xMin - pad;
+          out.xMax = xMax + pad;
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
 export function buildGraph(
   spec: GraphSpec,
   data: GraphData,
@@ -1372,6 +1507,8 @@ export function buildGraph(
     const wIdx = colIndex(data, fw.name);
     const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(wrapKeys.length))));
     const rows = Math.max(1, Math.ceil(wrapKeys.length / cols));
+    // Pin every wrap panel to the same axis bounds for fair comparison.
+    const sharedRanges = computeSharedRanges(data, encoding, valueOrders);
     const panels = wrapKeys.map((key) => {
       const subRows = data.rows.filter((r) => toStr(r[wIdx]) === key);
       const subData: GraphData = { columns: data.columns, rows: subRows };
@@ -1381,7 +1518,7 @@ export function buildGraph(
       };
       return {
         title: `${fw.name}=${key}`,
-        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders),
+        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges),
         groupXValue: null,
         groupYValue: null,
       };
@@ -1399,6 +1536,10 @@ export function buildGraph(
 
   // row-major: outer loop = Y (top → bottom rows), inner loop = X
   // (left → right within each row). Matches the CSS grid in <Graph>.
+  // Compute global axis bounds once so every Trellis cell pins to the
+  // same X / Y range — this is what makes Group Y stacking and Group X
+  // tiling actually comparable ("完全相同的 Y 轴坐标").
+  const sharedRanges = computeSharedRanges(data, encoding, valueOrders);
   const panels: BuiltGraph["panels"] = [];
   for (const yKey of yKeys) {
     for (const xKey of xKeys) {
@@ -1417,7 +1558,7 @@ export function buildGraph(
       };
       panels.push({
         title: facetTitle(xKey, yKey, encoding),
-        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders),
+        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges),
         groupXValue: xKey,
         groupYValue: yKey,
       });
