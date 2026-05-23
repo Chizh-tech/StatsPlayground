@@ -13,9 +13,9 @@
 import i18n from "@/i18n";
 import type { TFunction } from "i18next";
 
-export type ExtraKind = "unit" | "spec" | "range" | "notes";
+export type ExtraKind = "unit" | "spec" | "range" | "notes" | "valueOrder";
 
-export type ExtraFieldType = "text" | "number" | "longtext";
+export type ExtraFieldType = "text" | "number" | "longtext" | "valueList";
 
 export interface ExtraFieldDef {
   /** Field key used inside the value object, e.g. spec.lsl */
@@ -29,6 +29,10 @@ export interface ExtraDef {
   fields: ExtraFieldDef[];
   /** Default value when adding this kind */
   defaultValue: () => Record<string, unknown>;
+  /** When true, this kind is excluded from the batch (ManageExtras) grid
+   *  because its field shape doesn't fit a flat cell — e.g. `valueOrder`
+   *  is an ordered list that only makes sense to edit one column at a time. */
+  batchExcluded?: boolean;
 }
 
 export const EXTRA_DEFS: Record<ExtraKind, ExtraDef> = {
@@ -59,10 +63,25 @@ export const EXTRA_DEFS: Record<ExtraKind, ExtraDef> = {
     fields: [{ key: "value", type: "longtext" }],
     defaultValue: () => ({ value: "" }),
   },
+  // JMP-style "Value Order": a custom ordering of unique values that
+  // downstream consumers (Graph Builder axes, legend, boxplot groups, …)
+  // honor when laying out categories. This is metadata only — it does NOT
+  // reorder the underlying data rows. Stored as `{ values: string[] }`.
+  // Excluded from the batch grid because every column has a different
+  // value vocabulary and a flat CSV cell can't represent an ordered list
+  // gracefully; instead it must be edited from the per-column properties
+  // dialog where we can render a proper list editor (drag / up / down /
+  // remove / "Pull from data").
+  valueOrder: {
+    kind: "valueOrder",
+    fields: [{ key: "values", type: "valueList" }],
+    defaultValue: () => ({ values: [] }),
+    batchExcluded: true,
+  },
 };
 
 /** All kinds, in the order shown in dropdowns */
-export const EXTRA_KINDS: ExtraKind[] = ["unit", "spec", "range", "notes"];
+export const EXTRA_KINDS: ExtraKind[] = ["unit", "spec", "range", "notes", "valueOrder"];
 
 export function getExtraDef(kind: string): ExtraDef | undefined {
   return (EXTRA_DEFS as Record<string, ExtraDef | undefined>)[kind];

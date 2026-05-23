@@ -890,6 +890,117 @@
   font-size: 12px;
 }
 
+/* Value-order list editor (JMP-style "Value Order" custom list) */
+.sp-value-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 4px;
+}
+.sp-value-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.sp-value-list-toolbar-btn {
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.sp-value-list-toolbar-btn:hover:not(:disabled) {
+  background: var(--bg-cell-hover);
+}
+.sp-value-list-toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sp-value-list-items {
+  border: 1px solid var(--border-input);
+  background: var(--bg-input);
+  border-radius: 3px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.sp-value-list-empty {
+  font-size: 11px;
+  color: var(--fg-hint);
+  padding: 8px 6px;
+  text-align: center;
+}
+.sp-value-list-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  border-radius: 2px;
+}
+.sp-value-list-item:hover {
+  background: var(--bg-cell-hover);
+}
+.sp-value-list-item-idx {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--fg-hint);
+  min-width: 18px;
+  text-align: right;
+}
+.sp-value-list-item-text {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-value-list-item-btn {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+.sp-value-list-item-btn:hover:not(:disabled) {
+  background: var(--bg-cell-hover);
+  color: var(--fg-primary);
+}
+.sp-value-list-item-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.sp-value-list-item-remove:hover {
+  color: var(--fg-danger);
+}
+.sp-value-list-add {
+  display: flex;
+  gap: 4px;
+}
+.sp-value-list-add-input {
+  flex: 1 1 auto;
+  font-size: 12px;
+  padding: 2px 6px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  min-width: 0;
+}
+.sp-value-list-hint {
+  font-size: 10px;
+  color: var(--fg-hint);
+  font-style: italic;
+}
+
 /* "管理附加属性" dialog: column/kind picker (step 1) */
 .sp-extras-picker-list {
   border: 1px solid var(--border-input);

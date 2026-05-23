@@ -265,13 +265,15 @@
       "unit": "Unit",
       "spec": "Spec",
       "range": "Range Check",
-      "notes": "Notes"
+      "notes": "Notes",
+      "valueOrder": "Value Order"
     },
     "kindDesc": {
       "unit": "Physical or business unit, e.g. mm, kg, °C",
       "spec": "Spec limits and target value, used for capability analysis etc.",
       "range": "Min/max valid range; out-of-range is flagged",
-      "notes": "Free-text notes about the column"
+      "notes": "Free-text notes about the column",
+      "valueOrder": "Custom ordering of values used by Graph Builder for axes / legend / box groups (does not reorder the data)."
     },
     "field": {
       "unit_value": "Unit",
@@ -280,7 +282,23 @@
       "spec_usl": "Upper",
       "range_min": "Min",
       "range_max": "Max",
-      "notes_value": "Notes"
+      "notes_value": "Notes",
+      "valueOrder_values": "Order"
+    },
+    "valueOrder": {
+      "addPlaceholder": "Type a value, then ↵ or +",
+      "add": "Add",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "remove": "Remove",
+      "reverse": "Reverse",
+      "clear": "Clear all",
+      "pullFromData": "Pull from data",
+      "pullFromDataTitle": "Replace the order list with all unique values from this column, in data order",
+      "countSummary": "{{n}} ordered",
+      "empty": "No custom order yet. Click \"Pull from data\" to seed from the column, or add values one by one.",
+      "batchHint": "Edit per column in the column properties dialog.",
+      "missingHint": "Values not in this list keep their natural order at the end."
     }
   },
   "dataTable": {

@@ -169,6 +169,44 @@ function toStr(v: unknown): string {
   return String(v);
 }
 
+/**
+ * Reorder a list of category names by the user-defined value order.
+ * - Values present in `order` come first, in the order declared.
+ * - Values NOT in `order` keep their natural (data) order, appended at
+ *   the end. This matches the JMP behavior described in the i18n
+ *   `missingHint` string and avoids surprising data loss when the user
+ *   adds a new category to the column without updating Value Order.
+ * - Returns the original `values` reference when `order` is empty (no
+ *   re-shuffling needed), so downstream code that holds onto the array
+ *   stays referentially stable.
+ */
+function applyValueOrder(values: string[], order: string[] | undefined): string[] {
+  if (!order || order.length === 0) return values;
+  const valueSet = new Set(values);
+  const head: string[] = [];
+  const headSet = new Set<string>();
+  for (const v of order) {
+    if (valueSet.has(v) && !headSet.has(v)) {
+      head.push(v);
+      headSet.add(v);
+    }
+  }
+  const tail = values.filter((v) => !headSet.has(v));
+  if (head.length === 0) return values;
+  return [...head, ...tail];
+}
+
+/** Reorder a Map's keys by `applyValueOrder`. Preserves the value arrays. */
+function reorderMapByValueOrder<V>(m: Map<string, V>, order: string[] | undefined): Map<string, V> {
+  if (!order || order.length === 0) return m;
+  const keys = Array.from(m.keys());
+  const reordered = applyValueOrder(keys, order);
+  if (reordered === keys) return m;
+  const out = new Map<string, V>();
+  for (const k of reordered) out.set(k, m.get(k)!);
+  return out;
+}
+
 /** 按字段对行进行分组 */
 function groupBy(
   data: GraphData,
@@ -533,6 +571,7 @@ function buildSingleOption(
   data: GraphData,
   theme: GraphTheme,
   globalGroupKeys?: string[],
+  valueOrders?: Record<string, string[]>,
 ): EChartsOption {
   const { encoding, elements } = spec;
   const xField = encoding.x;
@@ -563,7 +602,12 @@ function buildSingleOption(
 
   // 按 color/overlay 分组
   const grouping = colorField || overlayField;
-  const groups = groupBy(data, grouping);
+  const rawGroups = groupBy(data, grouping);
+  // Respect Value Order on the grouping column so the legend and color
+  // assignment follow the user-defined order. With no grouping field this
+  // is a no-op (the map has a single "__all__" key).
+  const groupingOrder = grouping ? valueOrders?.[grouping.name] : undefined;
+  const groups = reorderMapByValueOrder(rawGroups, groupingOrder);
   const groupKeys = Array.from(groups.keys());
 
   /** Stable color index for a group: prefers the global ordering passed
@@ -636,7 +680,7 @@ function buildSingleOption(
     const showFiveNum = getOpt<boolean>(opts, "fiveNumberSummary", false);
     const widthProp = Math.max(0, Math.min(1, getOpt<number>(opts, "widthProportion", 0)));
 
-    const xGroups = groupBy(data, xField);
+    const xGroups = reorderMapByValueOrder(groupBy(data, xField), xField ? valueOrders?.[xField.name] : undefined);
     const boxCats = Array.from(xGroups.keys());
 
     // JMP-style: boxes fill most of the category band by default. The pixel
@@ -799,7 +843,8 @@ function buildSingleOption(
 
   // The X/Y slot chips outside the canvas already label the axes, so we
   // intentionally omit `name` on the ECharts axes to avoid duplication.
-  const xCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx) : [];
+  const rawXCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx) : [];
+  const xCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
   // Compute rotation / wrap metrics first so the axis literal can reference them.
   const xMaxLines = xIsCategory ? maxWrapLines(xCats, 16) : 1;
   // Rotate only when wrapping doesn't already break long labels onto
@@ -1195,13 +1240,14 @@ export function buildGraph(
   spec: GraphSpec,
   data: GraphData,
   theme: GraphTheme,
+  valueOrders?: Record<string, string[]>,
 ): BuiltGraph {
   const { encoding } = spec;
   const facetField = encoding.groupX || encoding.wrap;
 
   if (!facetField) {
     return {
-      panels: [{ title: spec.title || "", option: buildSingleOption(spec, data, theme) }],
+      panels: [{ title: spec.title || "", option: buildSingleOption(spec, data, theme, undefined, valueOrders) }],
       cols: 1,
     };
   }
@@ -1209,7 +1255,7 @@ export function buildGraph(
   const idx = colIndex(data, facetField.name);
   if (idx < 0) {
     return {
-      panels: [{ title: spec.title || "", option: buildSingleOption(spec, data, theme) }],
+      panels: [{ title: spec.title || "", option: buildSingleOption(spec, data, theme, undefined, valueOrders) }],
       cols: 1,
     };
   }
@@ -1224,6 +1270,9 @@ export function buildGraph(
       seen.push(k);
     }
   }
+  // Honor Value Order on the facet column too, so subplots are laid out
+  // in the user-defined order.
+  const facetOrdered = applyValueOrder(seen, valueOrders?.[facetField.name]);
 
   // Compute the global ordering of overlay/color groups across the FULL
   // dataset so each panel can map its local group(s) back to the same
@@ -1231,10 +1280,10 @@ export function buildGraph(
   // and the per-group themes set in the legend collapse to a single hue.
   const grouping = encoding.color || encoding.overlay;
   const globalGroupKeys = grouping
-    ? Array.from(groupBy(data, grouping).keys())
+    ? applyValueOrder(Array.from(groupBy(data, grouping).keys()), valueOrders?.[grouping.name])
     : undefined;
 
-  const panels = seen.map((key) => {
+  const panels = facetOrdered.map((key) => {
     const subRows = data.rows.filter((r) => toStr(r[idx]) === key);
     const subData: GraphData = { columns: data.columns, rows: subRows };
     const subSpec: GraphSpec = {
@@ -1243,7 +1292,7 @@ export function buildGraph(
     };
     return {
       title: facetTitle(key, encoding),
-      option: buildSingleOption(subSpec, subData, theme, globalGroupKeys),
+      option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders),
     };
   });
 

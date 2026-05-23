@@ -265,13 +265,15 @@
       "unit": "Đơn vị",
       "spec": "Tiêu chuẩn",
       "range": "Kiểm tra phạm vi",
-      "notes": "Ghi chú"
+      "notes": "Ghi chú",
+      "valueOrder": "Thứ tự giá trị"
     },
     "kindDesc": {
       "unit": "Đơn vị vật lý hoặc kinh doanh, ví dụ mm, kg, °C",
       "spec": "Giới hạn tiêu chuẩn và giá trị mục tiêu, dùng cho phân tích năng lực v.v.",
       "range": "Phạm vi giá trị hợp lệ; giá trị ngoài phạm vi sẽ được đánh dấu",
-      "notes": "Ghi chú văn bản tự do cho cột"
+      "notes": "Ghi chú văn bản tự do cho cột",
+      "valueOrder": "Thứ tự tùy chỉnh của các giá trị; Graph Builder dùng cho trục / chú giải / nhóm hộp (không sắp xếp lại dữ liệu)."
     },
     "field": {
       "unit_value": "Đơn vị",
@@ -280,7 +282,23 @@
       "spec_usl": "Trên",
       "range_min": "Nhỏ nhất",
       "range_max": "Lớn nhất",
-      "notes_value": "Ghi chú"
+      "notes_value": "Ghi chú",
+      "valueOrder_values": "Thứ tự"
+    },
+    "valueOrder": {
+      "addPlaceholder": "Nhập giá trị, sau đó ↵ hoặc +",
+      "add": "Thêm",
+      "moveUp": "Lên",
+      "moveDown": "Xuống",
+      "remove": "Xóa",
+      "reverse": "Đảo ngược",
+      "clear": "Xóa tất cả",
+      "pullFromData": "Lấy từ dữ liệu",
+      "pullFromDataTitle": "Thay thế danh sách bằng tất cả giá trị duy nhất từ cột (theo thứ tự dữ liệu)",
+      "countSummary": "{{n}} giá trị đã sắp xếp",
+      "empty": "Chưa có thứ tự tùy chỉnh. Bấm \"Lấy từ dữ liệu\" để khởi tạo từ cột, hoặc thêm từng giá trị bên dưới.",
+      "batchHint": "Chỉnh theo từng cột trong hộp thoại thuộc tính cột.",
+      "missingHint": "Giá trị không có trong danh sách sẽ giữ thứ tự tự nhiên ở cuối."
     }
   },
   "dataTable": {

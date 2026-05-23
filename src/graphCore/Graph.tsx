@@ -20,17 +20,25 @@ interface GraphProps {
   minPanelWidth?: number;
   /** 单个面板最小高 */
   minPanelHeight?: number;
+  /**
+   * Optional per-column user-defined value ordering. Keyed by column name;
+   * each entry lists the categorical values in the order they should appear
+   * on category axes (X / boxplot bins), in the legend, and in faceted
+   * panels. Values missing from a list keep their natural data order at
+   * the end (see transform.ts `applyValueOrder`).
+   */
+  valueOrders?: Record<string, string[]>;
 }
 
-export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240 }: GraphProps) {
+export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders }: GraphProps) {
   // 订阅主题变化以触发重渲染
   const themeMode = useThemeStore((s) => s.mode);
 
   const built = useMemo(() => {
     const theme = getGraphTheme();
-    return buildGraph(spec, data, theme);
+    return buildGraph(spec, data, theme, valueOrders);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spec, data, themeMode]);
+  }, [spec, data, themeMode, valueOrders]);
 
   return (
     <div

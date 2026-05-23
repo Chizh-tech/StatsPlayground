@@ -265,13 +265,15 @@
       "unit": "单位",
       "spec": "规格",
       "range": "范围检查",
-      "notes": "备注"
+      "notes": "备注",
+      "valueOrder": "值顺序"
     },
     "kindDesc": {
       "unit": "列数值的物理/业务单位，例如 mm、kg、°C",
       "spec": "规格上下限与目标值，用于过程能力分析等",
       "range": "合法取值的最小/最大值，超出范围标记异常",
-      "notes": "对该列的自由文本说明"
+      "notes": "对该列的自由文本说明",
+      "valueOrder": "自定义值的排列顺序，Graph Builder 的坐标轴/图例/分箱会按此顺序展示（并不会重排原始数据）。"
     },
     "field": {
       "unit_value": "单位",
@@ -280,7 +282,23 @@
       "spec_usl": "上限",
       "range_min": "最小",
       "range_max": "最大",
-      "notes_value": "备注"
+      "notes_value": "备注",
+      "valueOrder_values": "顺序"
+    },
+    "valueOrder": {
+      "addPlaceholder": "输入一个值，按 ↵ 或 + 添加",
+      "add": "添加",
+      "moveUp": "上移",
+      "moveDown": "下移",
+      "remove": "移除",
+      "reverse": "反转",
+      "clear": "全部清空",
+      "pullFromData": "从数据导入",
+      "pullFromDataTitle": "用该列的全部唯一值（按数据出现顺序）替换列表",
+      "countSummary": "已排序 {{n}} 项",
+      "empty": "尚未自定义顺序。点击「从数据导入」从该列填充，或在下方逐项添加。",
+      "batchHint": "请在单列属性对话框中编辑。",
+      "missingHint": "未列入的值会按自然顺序排在末尾。"
     }
   },
   "dataTable": {

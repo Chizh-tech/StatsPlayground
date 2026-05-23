@@ -265,13 +265,15 @@
       "unit": "單位",
       "spec": "規格",
       "range": "範圍檢查",
-      "notes": "備註"
+      "notes": "備註",
+      "valueOrder": "值順序"
     },
     "kindDesc": {
       "unit": "欄數值的物理／業務單位，例如 mm、kg、°C",
       "spec": "規格上下限與目標值，用於製程能力分析等",
       "range": "合法取值的最小／最大值，超出範圍標記異常",
-      "notes": "對該欄的自由文字說明"
+      "notes": "對該欄的自由文字說明",
+      "valueOrder": "自訂值的排列順序，Graph Builder 的座標軸／圖例／盒形分組會依此排列（不會重排原始資料）。"
     },
     "field": {
       "unit_value": "單位",
@@ -280,7 +282,23 @@
       "spec_usl": "上限",
       "range_min": "最小",
       "range_max": "最大",
-      "notes_value": "備註"
+      "notes_value": "備註",
+      "valueOrder_values": "順序"
+    },
+    "valueOrder": {
+      "addPlaceholder": "輸入一個值，按 ↵ 或 + 新增",
+      "add": "新增",
+      "moveUp": "上移",
+      "moveDown": "下移",
+      "remove": "移除",
+      "reverse": "反向",
+      "clear": "全部清除",
+      "pullFromData": "從資料匯入",
+      "pullFromDataTitle": "以該欄的全部唯一值（依資料出現順序）取代列表",
+      "countSummary": "已排序 {{n}} 項",
+      "empty": "尚未自訂順序。點選「從資料匯入」以該欄填入，或在下方逐項新增。",
+      "batchHint": "請在單欄屬性對話框中編輯。",
+      "missingHint": "未列入的值會依自然順序排在末尾。"
     }
   },
   "dataTable": {

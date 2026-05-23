@@ -83,6 +83,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Per-column user-defined value ordering, keyed by column name. Populated
+  // from the dataset's `ColumnDisplayProps.extras.valueOrder.values`. Used
+  // by <Graph> to reorder categorical X axes, legend entries, boxplot
+  // category positions, and faceted-panel ordering. Re-fetched on focus so
+  // edits made in DataTableView take effect when the user switches back to
+  // the graph tab.
+  const [valueOrders, setValueOrders] = useState<Record<string, string[]>>({});
 
   // Resizable side-rail widths. Mirror the Excel-grid splitter pattern
   // (DataTableView): clamp on drag and double-click to reset.
@@ -206,10 +213,33 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           page: 0,
           pageSize: Math.max(1, dataset.rowCount || 100000),
         });
+        // Pull per-column display props in parallel with data so the
+        // Value Order metadata is available on first render. Display
+        // props can legitimately be missing (older projects, fresh
+        // datasets) — treat any failure as "no value orders".
+        let displayProps: Awaited<ReturnType<typeof dataService.getColumnDisplayProps>> = [];
+        try {
+          displayProps = await dataService.getColumnDisplayProps(dataset.id);
+        } catch { /* ignore — empty value orders are fine */ }
         if (cancelled) return;
+        // Build the colIndex → name map from `cols` (which already excludes
+        // internal `_row_id` because get_user_columns filters it out). The
+        // colIndex stored in ColumnDisplayProps is the visible-column
+        // index, so it indexes directly into `cols`.
+        const vo: Record<string, string[]> = {};
+        for (const p of displayProps) {
+          const ex = p.extras as Record<string, unknown> | undefined;
+          const node = ex?.valueOrder as { values?: unknown } | undefined;
+          const vals = node?.values;
+          if (!Array.isArray(vals) || vals.length === 0) continue;
+          const colName = cols[p.colIndex]?.[0];
+          if (!colName) continue;
+          vo[colName] = vals.map((v) => String(v));
+        }
         setColumns(fields);
         setColSqlTypes(sqlTypes);
         setData({ columns: result.columns, rows: result.rows });
+        setValueOrders(vo);
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
@@ -487,7 +517,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               ) : !encoding.y && !activeKinds.has("histogram") ? (
                 <div className="gb-empty">{t("graph.dragHint")}</div>
               ) : (
-                <Graph spec={spec} data={data} />
+                <Graph spec={spec} data={data} valueOrders={valueOrders} />
               )}
             </div>
             <Slot

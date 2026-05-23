@@ -211,6 +211,132 @@ const TableRow = React.memo(function TableRow({
   );
 });
 
+// ---- JMP-style ordered list editor for `valueList` extra fields ----
+// Used inside ExtrasEditor when a kind declares a `valueList` field
+// (currently only `valueOrder`). Behaves like JMP's Value Order custom list:
+// add/remove/reorder items, reverse the whole list, clear it, or "pull from
+// data" to seed the list with all unique values from the column in data
+// order. The stored value is a string[]; downstream consumers (graph
+// transform) read it and prepend matching values to the natural order.
+interface ValueListEditorProps {
+  values: string[];
+  onChange: (next: string[]) => void;
+  /** When provided, enables the "Pull from data" button. */
+  getColumnUniqueValues?: () => string[];
+}
+
+const ValueListEditor = React.memo(function ValueListEditor({ values, onChange, getColumnUniqueValues }: ValueListEditorProps) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState("");
+
+  const move = (i: number, di: number) => {
+    const j = i + di;
+    if (j < 0 || j >= values.length) return;
+    const next = values.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  const remove = (i: number) => onChange(values.filter((_, k) => k !== i));
+  const reverse = () => onChange(values.slice().reverse());
+  const clear = () => onChange([]);
+  const add = () => {
+    const v = draft.trim();
+    if (!v) return;
+    if (values.includes(v)) { setDraft(""); return; }
+    onChange([...values, v]);
+    setDraft("");
+  };
+  const pull = () => {
+    if (!getColumnUniqueValues) return;
+    const uniq = getColumnUniqueValues();
+    onChange(uniq);
+  };
+
+  return (
+    <div className="sp-value-list">
+      <div className="sp-value-list-toolbar">
+        <button
+          type="button"
+          className="sp-value-list-toolbar-btn"
+          onClick={pull}
+          disabled={!getColumnUniqueValues}
+          title={t("extras.valueOrder.pullFromDataTitle")}
+        >{t("extras.valueOrder.pullFromData")}</button>
+        <button
+          type="button"
+          className="sp-value-list-toolbar-btn"
+          onClick={reverse}
+          disabled={values.length < 2}
+        >{t("extras.valueOrder.reverse")}</button>
+        <button
+          type="button"
+          className="sp-value-list-toolbar-btn"
+          onClick={clear}
+          disabled={values.length === 0}
+        >{t("extras.valueOrder.clear")}</button>
+        {values.length > 0 && (
+          <span style={{ marginLeft: "auto", alignSelf: "center", fontSize: 11, color: "var(--fg-hint)" }}>
+            {t("extras.valueOrder.countSummary", { n: values.length })}
+          </span>
+        )}
+      </div>
+      <div className="sp-value-list-items">
+        {values.length === 0 ? (
+          <div className="sp-value-list-empty">{t("extras.valueOrder.empty")}</div>
+        ) : (
+          values.map((v, i) => (
+            <div key={`${i}-${v}`} className="sp-value-list-item">
+              <span className="sp-value-list-item-idx">{i + 1}.</span>
+              <span className="sp-value-list-item-text" title={v}>{v === "" ? <em style={{ color: "var(--fg-hint)" }}>(empty)</em> : v}</span>
+              <button
+                type="button"
+                className="sp-value-list-item-btn"
+                onClick={() => move(i, -1)}
+                disabled={i === 0}
+                title={t("extras.valueOrder.moveUp")}
+              >▲</button>
+              <button
+                type="button"
+                className="sp-value-list-item-btn"
+                onClick={() => move(i, 1)}
+                disabled={i === values.length - 1}
+                title={t("extras.valueOrder.moveDown")}
+              >▼</button>
+              <button
+                type="button"
+                className="sp-value-list-item-btn sp-value-list-item-remove"
+                onClick={() => remove(i)}
+                title={t("extras.valueOrder.remove")}
+              >×</button>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="sp-value-list-add">
+        <input
+          className="sp-value-list-add-input"
+          type="text"
+          value={draft}
+          placeholder={t("extras.valueOrder.addPlaceholder")}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); add(); }
+          }}
+        />
+        <button
+          type="button"
+          className="sp-value-list-toolbar-btn"
+          onClick={add}
+          disabled={draft.trim() === ""}
+        >{t("extras.valueOrder.add")}</button>
+      </div>
+      {values.length > 0 && (
+        <div className="sp-value-list-hint">{t("extras.valueOrder.missingHint")}</div>
+      )}
+    </div>
+  );
+});
+
 // ---- Column "Additional Properties" editor (used inside the column dialog) ----
 // Lets the user attach optional kinds (unit / spec / range / notes / ...) to
 // a single column. Each kind is defined in `EXTRA_DEFS`; this component
@@ -219,9 +345,15 @@ const TableRow = React.memo(function TableRow({
 interface ExtrasEditorProps {
   extras: Record<string, unknown>;
   onChange: (next: Record<string, unknown>) => void;
+  /**
+   * Optional resolver that returns the unique values from the column being
+   * edited (in data order). When provided, `valueList` fields gain a
+   * "Pull from data" button.
+   */
+  getColumnUniqueValues?: () => string[];
 }
 
-const ExtrasEditor = React.memo(function ExtrasEditor({ extras, onChange }: ExtrasEditorProps) {
+const ExtrasEditor = React.memo(function ExtrasEditor({ extras, onChange, getColumnUniqueValues }: ExtrasEditorProps) {
   const { t } = useTranslation();
   const activeKinds = EXTRA_KINDS.filter((k) => extras[k] !== undefined);
   const remainingKinds = EXTRA_KINDS.filter((k) => extras[k] === undefined);
@@ -236,6 +368,11 @@ const ExtrasEditor = React.memo(function ExtrasEditor({ extras, onChange }: Extr
       value = raw;
     }
     onChange({ ...extras, [kind]: { ...cur, [key]: value } });
+  };
+
+  const updateKindArrayField = (kind: ExtraKind, key: string, next: string[]) => {
+    const cur = (extras[kind] as Record<string, unknown> | undefined) ?? {};
+    onChange({ ...extras, [kind]: { ...cur, [key]: next } });
   };
 
   const removeKind = (kind: ExtraKind) => {
@@ -300,6 +437,12 @@ const ExtrasEditor = React.memo(function ExtrasEditor({ extras, onChange }: Extr
                           rows={2}
                           value={strVal}
                           onChange={(e) => updateKindField(kind, f.key, e.target.value, f.type)}
+                        />
+                      ) : f.type === "valueList" ? (
+                        <ValueListEditor
+                          values={Array.isArray(raw) ? (raw as unknown[]).map((x) => String(x)) : []}
+                          onChange={(next) => updateKindArrayField(kind, f.key, next)}
+                          getColumnUniqueValues={getColumnUniqueValues}
                         />
                       ) : (
                         <input
@@ -841,6 +984,29 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       renameInputRef.current.select();
     }
   }, [renameCol]);
+
+  // "Pull from data" resolver for the column-properties dialog's Value Order
+  // editor: returns every unique value (in the order they first appear) from
+  // the column being edited. Uses `allRows` (filters are an orthogonal
+  // concern; the value-order list should cover the full vocabulary, not just
+  // currently visible rows).
+  const renameUniqueValues = useMemo(() => {
+    if (!renameCol) return undefined;
+    const ci = renameCol.colIdx;
+    return () => {
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const r of allRows) {
+        const v = (r as unknown[])[ci];
+        const s = v == null ? "" : String(v);
+        if (!seen.has(s)) {
+          seen.add(s);
+          out.push(s);
+        }
+      }
+      return out;
+    };
+  }, [renameCol, allRows]);
 
   // Auto-dismiss error toast
   useEffect(() => {
@@ -2830,7 +2996,7 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
                 />
                 <button className="sp-dialog-btn" onClick={() => setRenameWidth(String(Math.round(autoFitColumn(renameCol.colIdx) * zoom)))}>{t("common.auto")}</button>
               </div>
-              <ExtrasEditor extras={renameExtras} onChange={setRenameExtras} />
+              <ExtrasEditor extras={renameExtras} onChange={setRenameExtras} getColumnUniqueValues={renameUniqueValues} />
             </div>
             <div className="sp-dialog-actions">
               <button className="sp-dialog-btn" onClick={() => setRenameCol(null)}>{t("common.cancel")}</button>

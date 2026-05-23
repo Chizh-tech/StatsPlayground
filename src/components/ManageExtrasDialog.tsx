@@ -34,9 +34,14 @@ function flattenFields(kinds: ExtraKind[], t: TFunction): FlatField[] {
   const out: FlatField[] = [];
   for (const k of kinds) {
     const def = EXTRA_DEFS[k];
+    if (def.batchExcluded) continue; // belt-and-braces: shouldn't be selectable
     const single = def.fields.length === 1;
     const kindLabel = extraKindLabel(k, t);
     for (const f of def.fields) {
+      // Skip fields whose editor doesn't fit a flat grid cell (e.g.
+      // valueList). Defensive — `batchExcluded` already excludes the whole
+      // kind, but a future kind could mix flat and list fields.
+      if (f.type === "valueList") continue;
       out.push({
         kind: k,
         fieldKey: f.key,
@@ -55,9 +60,11 @@ function buildHeaderIndex(t: TFunction): Map<string, FlatField> {
   const idx = new Map<string, FlatField>();
   for (const k of EXTRA_KINDS) {
     const def = EXTRA_DEFS[k];
+    if (def.batchExcluded) continue;
     const single = def.fields.length === 1;
     const kindLabel = extraKindLabel(k, t);
     for (const f of def.fields) {
+      if (f.type === "valueList") continue;
       const header = single ? kindLabel : `${kindLabel} / ${extraFieldLabel(k, f.key, t)}`;
       idx.set(header, { kind: k, fieldKey: f.key, header, type: f.type });
     }
@@ -497,7 +504,7 @@ function Step1({
       <div style={{ flex: "0 0 200px" }}>
         <div className="sp-dialog-label">{t("extras.kindsHeader")}</div>
         <div className="sp-extras-picker-list">
-          {EXTRA_KINDS.map((k) => (
+          {EXTRA_KINDS.filter((k) => !EXTRA_DEFS[k].batchExcluded).map((k) => (
             <label key={k} className="sp-extras-picker-item">
               <input
                 type="checkbox"
@@ -508,6 +515,11 @@ function Step1({
             </label>
           ))}
         </div>
+        {EXTRA_KINDS.some((k) => EXTRA_DEFS[k].batchExcluded) && (
+          <div style={{ fontSize: 10, color: "var(--fg-hint)", fontStyle: "italic", marginTop: 4 }}>
+            {t("extras.valueOrder.batchHint")}
+          </div>
+        )}
       </div>
     </div>
   );
