@@ -985,29 +985,6 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     }
   }, [renameCol]);
 
-  // "Pull from data" resolver for the column-properties dialog's Value Order
-  // editor: returns every unique value (in the order they first appear) from
-  // the column being edited. Uses `allRows` (filters are an orthogonal
-  // concern; the value-order list should cover the full vocabulary, not just
-  // currently visible rows).
-  const renameUniqueValues = useMemo(() => {
-    if (!renameCol) return undefined;
-    const ci = renameCol.colIdx;
-    return () => {
-      const seen = new Set<string>();
-      const out: string[] = [];
-      for (const r of allRows) {
-        const v = (r as unknown[])[ci];
-        const s = v == null ? "" : String(v);
-        if (!seen.has(s)) {
-          seen.add(s);
-          out.push(s);
-        }
-      }
-      return out;
-    };
-  }, [renameCol, allRows]);
-
   // Auto-dismiss error toast
   useEffect(() => {
     if (errorMsg) {
@@ -1077,6 +1054,32 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
     data ? data.rows.map((raw) => (raw as unknown[]).filter((_, i) => i !== rowIdIdx)) : [],
     [data, rowIdIdx]
   );
+
+  // "Pull from data" resolver for the column-properties dialog's Value Order
+  // editor: returns every unique value (in the order they first appear) from
+  // the column being edited. Uses `allRows` (filters are an orthogonal
+  // concern; the value-order list should cover the full vocabulary, not just
+  // currently visible rows). MUST be declared after `allRows` to avoid the
+  // useMemo callback closing over a TDZ binding (React would still invoke
+  // it during render even if no rename dialog is open, throwing
+  // "Cannot access 'allRows' before initialization").
+  const renameUniqueValues = useMemo(() => {
+    if (!renameCol) return undefined;
+    const ci = renameCol.colIdx;
+    return () => {
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const r of allRows) {
+        const v = (r as unknown[])[ci];
+        const s = v == null ? "" : String(v);
+        if (!seen.has(s)) {
+          seen.add(s);
+          out.push(s);
+        }
+      }
+      return out;
+    };
+  }, [renameCol, allRows]);
 
   // Filtered display rows + index mapping back to data.rows indices
   const { displayRows, displayIdxMap } = useMemo(() => {
