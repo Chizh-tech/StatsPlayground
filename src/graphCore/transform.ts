@@ -32,7 +32,36 @@ export interface ResolvedGroupStyle {
   outlier: { color: string; size: number; opacity: number };
 }
 
-/** Compute the JMP-style defaults plus any per-group overrides. */
+/** Per-mark shade ratios — Point darkest, Line mid (base), Fill lightest.
+ *  Must stay in sync with the panel's GraphBuilderView constants so the
+ *  legend swatch on the right matches what ECharts renders on the canvas. */
+const SHADE_RATIO_POINT = -0.2;
+const SHADE_RATIO_LINE = 0;
+const SHADE_RATIO_FILL = 0.55;
+
+/** Mix `hex` toward black (ratio<0) or white (ratio>0). ratio in [-1,1]. */
+function shade(hex: string, ratio: number): string {
+  if (!hex || ratio === 0) return hex;
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const hh = m[1];
+  const r = parseInt(hh.slice(0, 2), 16);
+  const g = parseInt(hh.slice(2, 4), 16);
+  const b = parseInt(hh.slice(4, 6), 16);
+  const mix = (c: number) =>
+    ratio < 0 ? Math.round(c * (1 + ratio)) : Math.round(c + (255 - c) * ratio);
+  const clamp = (n: number) => Math.max(0, Math.min(255, n));
+  const toHex = (n: number) => clamp(n).toString(16).padStart(2, "0");
+  return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`;
+}
+
+/** Compute the JMP-style defaults plus any per-group overrides.
+ *
+ *  Each legend group is auto-themed: from one base hue we derive a
+ *  darker shade for the Point, the base shade for the Line, and a much
+ *  lighter shade for the Fill. The shading keeps the three sub-marks
+ *  visually distinguishable when they're layered on top of each other
+ *  (otherwise the fill swallows the line and the point disappears). */
 function resolveGroupStyle(
   groupKey: string,
   groupColor: string,
@@ -43,23 +72,26 @@ function resolveGroupStyle(
   const stored: GroupStyle = (styles && (styles[groupKey] ?? styles[DEFAULT_GROUP_KEY])) || {};
   const baseColor = grouping ? groupColor : (theme.fgPrimary || "#000");
 
-  // Line defaults: thin, solid, baseColor.
-  const lineColor = stored.line?.color ?? baseColor;
+  // Line defaults: thin, solid, baseColor (mid shade).
+  const lineColor = stored.line?.color ?? (grouping ? shade(baseColor, SHADE_RATIO_LINE) : baseColor);
   const lineWidth = stored.line?.lineWidth ?? 1.5;
   const lineOpacity = stored.line?.opacity ?? 1;
 
-  // Fill defaults: when no grouping render hollow (transparent), otherwise
-  // use the categorical color at moderate opacity so multiple groups stay
-  // distinguishable.
-  const fillColor = stored.fill?.color ?? stored.fill?.fillColor ?? (grouping ? baseColor : "transparent");
-  const fillOpacity = stored.fill?.opacity ?? (grouping ? 0.5 : 1);
+  // Fill defaults: hollow when single-group (preserves the JMP look),
+  // lighter shade of the categorical color when grouped so multiple
+  // groups stay distinguishable without being noisy.
+  const fillColor = stored.fill?.color ?? stored.fill?.fillColor
+    ?? (grouping ? shade(baseColor, SHADE_RATIO_FILL) : "transparent");
+  const fillOpacity = stored.fill?.opacity ?? (grouping ? 0.85 : 1);
 
-  // Point defaults: filled black circle 4px (or group color when grouping).
+  // Point defaults: filled circle 4px. When grouping, use the darker
+  // shade so points read clearly on top of the lighter fill.
   const pointMarker: MarkerShape = stored.point?.marker ?? "circle";
-  const pointStroke = stored.point?.color ?? baseColor;
+  const pointDefault = grouping ? shade(baseColor, SHADE_RATIO_POINT) : baseColor;
+  const pointStroke = stored.point?.color ?? pointDefault;
   const pointFill = stored.point?.fillColor ?? pointStroke;
   const pointSize = stored.point?.markerSize ?? 4;
-  const pointOpacity = stored.point?.opacity ?? (grouping ? 0.85 : 1);
+  const pointOpacity = stored.point?.opacity ?? (grouping ? 0.9 : 1);
 
   // Outlier defaults: gray when point is at default; otherwise inherit.
   const outlierColor = stored.point?.color ?? (theme.fgDim || "#999");
@@ -552,6 +584,11 @@ function buildSingleOption(
 
   // —— 箱线图：X 分类，Y 连续。作为一个可与点图/线图叠加的图层，
   //   不再 early-return，而是直接 push 到共享的 series 数组中。
+  //
+  // When an Overlay/Color column is set, the box plot splits into one
+  // box series per group, rendered side-by-side within each X category
+  // (matching how the right-side legend panel lists those groups). With
+  // no grouping we fall back to a single box per X category.
   if (hasBoxplot && yIdx >= 0) {
     const boxEl = enabledElements.find((e) => e.kind === "boxplot")!;
     const opts = boxEl.options;
@@ -562,106 +599,129 @@ function buildSingleOption(
 
     const xGroups = groupBy(data, xField);
     const boxCats = Array.from(xGroups.keys());
-    const boxData: Array<[number, number, number, number, number]> = [];
-    const outlierPts: Array<[string, number]> = [];
-    const labelMarks: Array<{ x: string; y: number; text: string }> = [];
-
-    boxCats.forEach((cat) => {
-      const idxs = xGroups.get(cat)!;
-      const ys = idxs.map((i) => toNum(data.rows[i][yIdx])).filter(Number.isFinite);
-      if (ys.length === 0) {
-        boxData.push([0, 0, 0, 0, 0]);
-        return;
-      }
-      const stats = boxStats(ys)!;
-      const [absMin, q1, med, q3, absMax] = stats;
-      const iqr = q3 - q1;
-      let lower = absMin;
-      let upper = absMax;
-      if (boxType === "outlier") {
-        const lo = q1 - 1.5 * iqr;
-        const hi = q3 + 1.5 * iqr;
-        const inRange = ys.filter((v) => v >= lo && v <= hi);
-        if (inRange.length > 0) {
-          // Single-pass min/max; avoids Math.min/max(...inRange) overflow
-          // when a category contains very many in-range points.
-          let mn = Infinity;
-          let mx = -Infinity;
-          for (let i = 0; i < inRange.length; i++) {
-            const v = inRange[i];
-            if (v < mn) mn = v;
-            if (v > mx) mx = v;
-          }
-          lower = mn;
-          upper = mx;
-        }
-        if (showOutliers) {
-          for (const v of ys) {
-            if (v < lo || v > hi) outlierPts.push([displayCat(cat), v]);
-          }
-        }
-      }
-      boxData.push([lower, q1, med, q3, upper]);
-      if (showFiveNum) {
-        const dx = displayCat(cat);
-        labelMarks.push({ x: dx, y: med, text: `${med.toFixed(2)}` });
-        labelMarks.push({ x: dx, y: q1, text: `Q1 ${q1.toFixed(2)}` });
-        labelMarks.push({ x: dx, y: q3, text: `Q3 ${q3.toFixed(2)}` });
-      }
-    });
 
     // JMP-style: boxes fill most of the category band by default. The pixel
     // cap below is generous (relative to a typical 80–150px bandwidth) so
     // ECharts can grow boxes wide; the user-controlled `widthProp` (0..1)
     // scales an extra padding allowance on top of the wide default.
     const maxBoxPx = 60 + widthProp * 80;
-    // Boxplot doesn't split by Color/Overlay (one box per X category), so
-    // it always pulls the "default" group's style. The box body uses the
-    // group's `fill` sub-mark; the box border / median / whisker line use
-    // the `line` sub-mark. Outliers use the group's `point` sub-mark.
-    const boxGroupStyle = resolveGroupStyle(DEFAULT_GROUP_KEY, theme.categorical[0], false, theme, spec.styles);
-    series.push({
-      type: "boxplot",
-      name: yField?.name,
-      data: boxData,
-      boxWidth: [10, maxBoxPx],
-      itemStyle: {
-        color: boxGroupStyle.fill.color,
-        borderColor: boxGroupStyle.line.color,
-        borderWidth: boxGroupStyle.line.width,
-        opacity: boxGroupStyle.fill.opacity,
-      },
-      z: 1,
-    });
-    if (outlierPts.length > 0) {
-      series.push({
-        type: "scatter",
-        name: "Outliers",
-        data: outlierPts,
-        symbolSize: boxGroupStyle.outlier.size,
-        // JMP-style: outliers default to small gray dots so they read as
-        // “extreme” without competing visually with in-range data points.
-        itemStyle: { color: boxGroupStyle.outlier.color, opacity: boxGroupStyle.outlier.opacity },
-        z: 3,
+
+    // Outer iteration: one box series per overlay/color group when grouping
+    // is active, otherwise a single "default" series. Each series shares
+    // the same X categories so ECharts dodges them within each bucket.
+    const boxIterGroups: string[] = grouping ? groupKeys : [DEFAULT_GROUP_KEY];
+
+    boxIterGroups.forEach((gKey, gi) => {
+      const groupColor = grouping
+        ? theme.categorical[gi % theme.categorical.length]
+        : theme.categorical[0];
+      const groupRowSet = grouping ? new Set(groups.get(gKey) ?? []) : null;
+
+      const boxData: Array<[number, number, number, number, number]> = [];
+      const outlierPts: Array<[string, number]> = [];
+      const labelMarks: Array<{ x: string; y: number; text: string }> = [];
+
+      boxCats.forEach((cat) => {
+        let idxs = xGroups.get(cat)!;
+        if (groupRowSet) idxs = idxs.filter((i) => groupRowSet.has(i));
+        const ys = idxs.map((i) => toNum(data.rows[i][yIdx])).filter(Number.isFinite);
+        if (ys.length === 0) {
+          boxData.push([0, 0, 0, 0, 0]);
+          return;
+        }
+        const stats = boxStats(ys)!;
+        const [absMin, q1, med, q3, absMax] = stats;
+        const iqr = q3 - q1;
+        let lower = absMin;
+        let upper = absMax;
+        if (boxType === "outlier") {
+          const lo = q1 - 1.5 * iqr;
+          const hi = q3 + 1.5 * iqr;
+          const inRange = ys.filter((v) => v >= lo && v <= hi);
+          if (inRange.length > 0) {
+            // Single-pass min/max; avoids Math.min/max(...inRange) overflow
+            // when a category contains very many in-range points.
+            let mn = Infinity;
+            let mx = -Infinity;
+            for (let i = 0; i < inRange.length; i++) {
+              const v = inRange[i];
+              if (v < mn) mn = v;
+              if (v > mx) mx = v;
+            }
+            lower = mn;
+            upper = mx;
+          }
+          if (showOutliers) {
+            for (const v of ys) {
+              if (v < lo || v > hi) outlierPts.push([displayCat(cat), v]);
+            }
+          }
+        }
+        boxData.push([lower, q1, med, q3, upper]);
+        // Only label the 5-number summary when there's a single box per
+        // category — with grouped boxes the labels would overlap.
+        if (showFiveNum && !grouping) {
+          const dx = displayCat(cat);
+          labelMarks.push({ x: dx, y: med, text: `${med.toFixed(2)}` });
+          labelMarks.push({ x: dx, y: q1, text: `Q1 ${q1.toFixed(2)}` });
+          labelMarks.push({ x: dx, y: q3, text: `Q3 ${q3.toFixed(2)}` });
+        }
       });
-    }
-    if (labelMarks.length > 0) {
+
+      // The box body uses the group's `fill` sub-mark; the box border /
+      // median / whisker line use the `line` sub-mark. Outliers use the
+      // group's `point` sub-mark.
+      const styleKey = grouping ? gKey : DEFAULT_GROUP_KEY;
+      const boxGroupStyle = resolveGroupStyle(styleKey, groupColor, !!grouping, theme, spec.styles);
+      const seriesName = grouping ? gKey : (yField?.name ?? "");
+      if (grouping && !legendNames.includes(gKey)) legendNames.push(gKey);
+
       series.push({
-        type: "scatter",
-        name: "5-Number",
-        data: labelMarks.map((l) => [l.x, l.y]),
-        symbolSize: 0.1,
-        label: {
-          show: true,
-          position: "right",
-          color: theme.fgSecondary,
-          fontSize: 10,
-          formatter: (params: any) => labelMarks[params.dataIndex]?.text ?? "",
+        type: "boxplot",
+        name: seriesName,
+        data: boxData,
+        boxWidth: [10, maxBoxPx],
+        itemStyle: {
+          color: boxGroupStyle.fill.color,
+          borderColor: boxGroupStyle.line.color,
+          borderWidth: boxGroupStyle.line.width,
+          opacity: boxGroupStyle.fill.opacity,
         },
-        silent: true,
-        z: 4,
+        z: 1,
       });
-    }
+      if (outlierPts.length > 0) {
+        series.push({
+          type: "scatter",
+          // Attach outliers to the parent group's legend entry so toggling
+          // the group in the legend hides its outliers too.
+          name: seriesName,
+          data: outlierPts,
+          symbolSize: boxGroupStyle.outlier.size,
+          // Outliers default to a small gray dot when ungrouped (JMP look);
+          // when grouped, they inherit the group's point color so the
+          // viewer can tell which group an extreme value belongs to.
+          itemStyle: { color: boxGroupStyle.outlier.color, opacity: boxGroupStyle.outlier.opacity },
+          z: 3,
+        });
+      }
+      if (labelMarks.length > 0) {
+        series.push({
+          type: "scatter",
+          name: "5-Number",
+          data: labelMarks.map((l) => [l.x, l.y]),
+          symbolSize: 0.1,
+          label: {
+            show: true,
+            position: "right",
+            color: theme.fgSecondary,
+            fontSize: 10,
+            formatter: (params: any) => labelMarks[params.dataIndex]?.text ?? "",
+          },
+          silent: true,
+          z: 4,
+        });
+      }
+    });
   }
 
   // —— 通用 X-Y 元素：points / line / bar / smoother ——

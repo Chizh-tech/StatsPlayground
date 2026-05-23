@@ -435,7 +435,9 @@
       "lineWidth": "Độ dày",
       "opacity": "Độ mờ",
       "reset": "Đặt lại",
-      "editorTitle": "Kiểu"
+      "editorTitle": "Kiểu",
+      "theme": "Chủ đề màu",
+      "themeHint": "Đặt cuùng lúc màu cho Đường / Nền / Điểm"
     },
     "shape": {
       "circle": "Tròn (đặc)",

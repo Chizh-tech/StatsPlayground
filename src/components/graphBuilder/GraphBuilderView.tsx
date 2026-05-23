@@ -1098,15 +1098,31 @@ function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOv
 
   // Effective style currently applied to a group (override merged with the
   // group's categorical default color). Used to render the legend swatches.
+  //
+  // Default per-mark shades mirror the chart-side `resolveGroupStyle`:
+  // each group gets a base hue (its slot in GROUP_COLORS) which is then
+  // split into three shades — Point dark, Line mid, Fill light — so the
+  // three sub-marks render distinctly when layered. Without grouping,
+  // single-color charts keep the JMP look (black point + line, hollow fill).
   const effectiveStyleOf = (key: string, idx: number): GroupStyle => {
     const stored = groupStyles[key] ?? {};
-    const baseColor = groupField ? GROUP_COLORS[idx % GROUP_COLORS.length] : "#000";
+    const baseColor = groupField ? GROUP_COLORS[idx % GROUP_COLORS.length] : "#000000";
+    const lineDefault = groupField ? shade(baseColor, SHADE_RATIO_LINE) : baseColor;
+    const fillDefault = groupField ? shade(baseColor, SHADE_RATIO_FILL) : "transparent";
+    const pointDefault = groupField ? shade(baseColor, SHADE_RATIO_POINT) : baseColor;
     return {
-      line: { color: stored.line?.color ?? baseColor, lineWidth: stored.line?.lineWidth ?? 1.5, opacity: stored.line?.opacity ?? 1 },
-      fill: { color: stored.fill?.color ?? (groupField ? baseColor : "transparent"), opacity: stored.fill?.opacity ?? (groupField ? 0.5 : 1) },
+      line: {
+        color: stored.line?.color ?? lineDefault,
+        lineWidth: stored.line?.lineWidth ?? 1.5,
+        opacity: stored.line?.opacity ?? 1,
+      },
+      fill: {
+        color: stored.fill?.color ?? fillDefault,
+        opacity: stored.fill?.opacity ?? (groupField ? 0.85 : 1),
+      },
       point: {
-        color: stored.point?.color ?? baseColor,
-        fillColor: stored.point?.fillColor ?? stored.point?.color ?? baseColor,
+        color: stored.point?.color ?? pointDefault,
+        fillColor: stored.point?.fillColor ?? stored.point?.color ?? pointDefault,
         marker: stored.point?.marker ?? "circle",
         markerSize: stored.point?.markerSize ?? 4,
         opacity: stored.point?.opacity ?? 1,
@@ -1118,6 +1134,28 @@ function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOv
     const cur = groupStyles[groupKey] ?? {};
     const curMark = (cur[mark] ?? {}) as MarkStyle;
     setGroupStyle(groupKey, { ...cur, [mark]: { ...curMark, ...patch } });
+  };
+
+  /**
+   * Apply a color *theme* to Line / Fill / Point at once. The theme picks
+   * one base hue from the JMP palette and assigns a darker shade to the
+   * Point, the base shade to the Line, and a lighter shade to the Fill
+   * so the three sub-marks stay distinguishable when layered.
+   * Other per-mark properties (line width, marker, opacity, …) are kept
+   * as-is so the user can theme the color independently of size/shape.
+   */
+  const applyTheme = (groupKey: string, idx: number) => {
+    const cur = groupStyles[groupKey] ?? {};
+    setGroupStyle(groupKey, {
+      ...cur,
+      line: { ...(cur.line ?? {}), color: LINE_PALETTE[idx] },
+      fill: { ...(cur.fill ?? {}), color: FILL_PALETTE[idx] },
+      point: {
+        ...(cur.point ?? {}),
+        color: POINT_PALETTE[idx],
+        fillColor: POINT_PALETTE[idx],
+      },
+    });
   };
 
   const resetGroup = (groupKey: string) => setGroupStyle(groupKey, undefined);
@@ -1176,6 +1214,43 @@ function LegendStylePanel({ data, encoding, groupStyles, setGroupStyle, onDropOv
             >
               {t("graph.style.reset")}
             </button>
+          </div>
+
+          {/* Color theme — one-click recolor of Line/Fill/Point. Each
+              theme assigns a darker shade to Point, base shade to Line
+              and a lighter shade to Fill so the three sub-marks stay
+              visually distinguishable when stacked. Other per-mark
+              properties (width, marker shape, opacity, …) are preserved. */}
+          <div className="gb-style-section gb-style-theme-section">
+            <div
+              className="gb-style-section-title"
+              title={t("graph.style.themeHint")}
+            >
+              {t("graph.style.theme")}
+            </div>
+            <div className="gb-style-row">
+              <div className="gb-style-color-row gb-style-theme-row">
+                {STYLE_COLORS.map((_, i) => {
+                  const matches =
+                    selectedStyle.line!.color === LINE_PALETTE[i] &&
+                    selectedStyle.fill!.color === FILL_PALETTE[i] &&
+                    selectedStyle.point!.color === POINT_PALETTE[i];
+                  // Vertical 3-band gradient communicates the shade trio
+                  // — Fill (top, light), Line (middle, mid), Point (bottom, dark).
+                  const bg = `linear-gradient(180deg, ${FILL_PALETTE[i]} 0 33%, ${LINE_PALETTE[i]} 33% 67%, ${POINT_PALETTE[i]} 67% 100%)`;
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      className={`gb-style-color-swatch gb-style-theme-swatch${matches ? " gb-style-color-selected" : ""}`}
+                      style={{ background: bg }}
+                      title={`${FILL_PALETTE[i]} / ${LINE_PALETTE[i]} / ${POINT_PALETTE[i]}`}
+                      onClick={() => applyTheme(selected, i)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
           <MarkEditor
@@ -1267,6 +1342,7 @@ interface MarkEditorProps {
 
 function MarkEditor({ title, mark, value, effective, onChange, fields }: MarkEditorProps) {
   const { t } = useTranslation();
+  const palette = MARK_PALETTE[mark];
   return (
     <div className="gb-style-section">
       <div className="gb-style-section-title">{title}</div>
@@ -1274,7 +1350,7 @@ function MarkEditor({ title, mark, value, effective, onChange, fields }: MarkEdi
         <div className="gb-style-row">
           <span className="gb-style-label">{t("graph.style.color")}</span>
           <div className="gb-style-color-row">
-            {STYLE_COLORS.map((c) => (
+            {palette.map((c) => (
               <button
                 key={c}
                 className={`gb-style-color-swatch${(value.color ?? effective.color) === c ? " gb-style-color-selected" : ""}`}
@@ -1354,7 +1430,11 @@ function MarkEditor({ title, mark, value, effective, onChange, fields }: MarkEdi
   );
 }
 
-/** A small JMP-like preset palette used by the legend's color picker. */
+/** A small JMP-like preset palette used by the legend's color picker.
+ *  This is the *base* (mid-shade) palette; per-mark pickers (Point / Line /
+ *  Fill) derive darker / mid / lighter variants from these via `shade()`
+ *  so a single applied theme stays visually layered (the fill doesn't
+ *  swallow the line; the point still pops against both). */
 const STYLE_COLORS = [
   "#000000", "#444444", "#888888", "#bbbbbb",
   "#e74c3c", "#f39c12",
@@ -1362,6 +1442,39 @@ const STYLE_COLORS = [
   "#3498db", "#4a6cf7",
   "#9168d6", "#d56cb1",
 ];
+
+/** Per-mark shade ratios — Point darkest, Line mid (base), Fill lightest.
+ *  Picked so that applying one color family across all three sub-marks
+ *  keeps each mark distinguishable from the others. */
+export const SHADE_RATIO_POINT = -0.2;
+export const SHADE_RATIO_LINE = 0;
+export const SHADE_RATIO_FILL = 0.55;
+
+/** Mix `hex` toward black (ratio<0) or white (ratio>0). ratio in [-1,1]. */
+export function shade(hex: string, ratio: number): string {
+  if (!hex || ratio === 0) return hex;
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const hh = m[1];
+  const r = parseInt(hh.slice(0, 2), 16);
+  const g = parseInt(hh.slice(2, 4), 16);
+  const b = parseInt(hh.slice(4, 6), 16);
+  const mix = (c: number) =>
+    ratio < 0 ? Math.round(c * (1 + ratio)) : Math.round(c + (255 - c) * ratio);
+  const clamp = (n: number) => Math.max(0, Math.min(255, n));
+  const toHex = (n: number) => clamp(n).toString(16).padStart(2, "0");
+  return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`;
+}
+
+const POINT_PALETTE = STYLE_COLORS.map((c) => shade(c, SHADE_RATIO_POINT));
+const LINE_PALETTE = STYLE_COLORS.map((c) => shade(c, SHADE_RATIO_LINE));
+const FILL_PALETTE = STYLE_COLORS.map((c) => shade(c, SHADE_RATIO_FILL));
+
+const MARK_PALETTE: Record<"line" | "fill" | "point", string[]> = {
+  line: LINE_PALETTE,
+  fill: FILL_PALETTE,
+  point: POINT_PALETTE,
+};
 
 const MARKER_SHAPES: MarkerShape[] = [
   "circle",

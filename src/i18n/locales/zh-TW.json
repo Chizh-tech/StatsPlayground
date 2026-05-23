@@ -435,7 +435,9 @@
       "lineWidth": "線寬",
       "opacity": "不透明度",
       "reset": "重設",
-      "editorTitle": "樣式"
+      "editorTitle": "樣式",
+      "theme": "色彩主題",
+      "themeHint": "一鍵設定線 / 面 / 點的色彩"
     },
     "shape": {
       "circle": "圓點（實心）",

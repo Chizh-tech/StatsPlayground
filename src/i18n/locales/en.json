@@ -435,7 +435,9 @@
       "lineWidth": "Width",
       "opacity": "Opacity",
       "reset": "Reset",
-      "editorTitle": "Style"
+      "editorTitle": "Style",
+      "theme": "Theme",
+      "themeHint": "Set Line / Fill / Point color at once"
     },
     "shape": {
       "circle": "Circle (filled)",
