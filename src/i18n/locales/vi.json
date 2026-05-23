@@ -439,7 +439,9 @@
       "line": "Đường",
       "boxplot": "Biểu đồ hộp",
       "smoother": "Đường làm trơn",
-      "allEntries": "Tất cả"
+      "allEntries": "Tất cả",
+      "hide": "Ẩn nhóm này",
+      "show": "Hiện nhóm này"
     },
     "mark": {
       "line": "Đường",

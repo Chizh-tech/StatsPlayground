@@ -32,6 +32,11 @@ export interface GraphBuilderItem {
   /** Per-group line/fill/point style overrides. Keys are the category
    *  values from the Color/Overlay encoding (or DEFAULT_GROUP_KEY). */
   groupStyles?: GroupStyleMap;
+  /** Legend entries the user has explicitly hidden via the eye-icon
+   *  toggle. Hidden groups are excluded from the rendered series and
+   *  from the shared-axis range calculation, but keep their slot in
+   *  globalGroupKeys so unhiding restores the same color. */
+  hiddenGroups?: string[];
   /** 创建时间 ISO 字符串 */
   createdAt: string;
 }

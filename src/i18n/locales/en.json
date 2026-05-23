@@ -439,7 +439,9 @@
       "line": "Line",
       "boxplot": "Box plot",
       "smoother": "Smoother",
-      "allEntries": "All"
+      "allEntries": "All",
+      "hide": "Hide this group",
+      "show": "Show this group"
     },
     "mark": {
       "line": "Line",

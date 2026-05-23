@@ -130,6 +130,12 @@ export interface GraphSpec {
    *  when there is no grouping. Missing entries fall back to JMP-style
    *  defaults (black lines, small black filled dots, gray outliers). */
   styles?: GroupStyleMap;
+  /** Group values to hide from the chart (legend show/hide toggle).
+   *  Hidden groups keep their color slot reserved so toggling back on
+   *  restores the same color, but their series are skipped at render
+   *  time and their rows are excluded from shared-axis range computation
+   *  so visible data fills the chart area. */
+  hiddenGroups?: string[];
 }
 
 /** 原始数据：列式 */

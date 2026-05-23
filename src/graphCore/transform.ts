@@ -666,6 +666,13 @@ function buildSingleOption(
 
   const enabledElements = elements.filter((e) => e.enabled !== false);
 
+  /** Set of group values the user has hidden via the legend show/hide
+   *  toggle. Only meaningful when there's a grouping field; ignored
+   *  otherwise (a single ungrouped chart has nothing to hide against). */
+  const hiddenSet = new Set(spec.hiddenGroups ?? []);
+  const isHidden = (gKey: string): boolean =>
+    !!grouping && hiddenSet.has(gKey);
+
   // —— 直方图：忽略 Y，仅 X 数值 ——
   if (enabledElements.some((e) => e.kind === "histogram")) {
     if (xIdx >= 0) {
@@ -743,6 +750,8 @@ function buildSingleOption(
     const boxIterGroups: string[] = grouping ? groupKeys : [DEFAULT_GROUP_KEY];
 
     boxIterGroups.forEach((gKey) => {
+      // Skip groups hidden via the legend show/hide toggle.
+      if (isHidden(gKey)) return;
       const groupColor = grouping
         ? theme.categorical[colorIndexOf(gKey) % theme.categorical.length]
         : theme.categorical[0];
@@ -885,6 +894,8 @@ function buildSingleOption(
 
   // —— 通用 X-Y 元素：points / line / bar / smoother ——
   groupKeys.forEach((gKey) => {
+    // Skip groups hidden via the legend show/hide toggle.
+    if (isHidden(gKey)) return;
     const color = theme.categorical[colorIndexOf(gKey) % theme.categorical.length];
     const rowIdxs = groups.get(gKey)!;
     const seriesName = grouping ? gKey : (yField?.name || "");
@@ -1386,8 +1397,25 @@ function computeSharedRanges(
   data: GraphData,
   encoding: GraphSpec["encoding"],
   valueOrders?: Record<string, string[]>,
+  hiddenGroups?: string[],
 ): SharedAxisRanges {
   const out: SharedAxisRanges = {};
+
+  // Resolve the grouping field (color or overlay) and pre-compute the
+  // column index + a Set of hidden values so we can cheaply skip rows
+  // that belong to a hidden legend group. Hidden rows shouldn't drag the
+  // shared axis bounds — otherwise hiding a noisy outlier group does
+  // nothing visible because the axes still cover its range.
+  const grouping = encoding.color || encoding.overlay;
+  const groupingIdx = grouping ? colIndex(data, grouping.name) : -1;
+  const hiddenSet = new Set(hiddenGroups ?? []);
+  const useHiddenFilter = !!grouping && groupingIdx >= 0 && hiddenSet.size > 0;
+  const isRowHidden = (r: unknown[]): boolean => {
+    if (!useHiddenFilter) return false;
+    const v = r[groupingIdx];
+    const k = v == null ? "" : String(v);
+    return hiddenSet.has(k);
+  };
 
   const yField = encoding.y;
   if (yField) {
@@ -1396,6 +1424,7 @@ function computeSharedRanges(
       let yMin = Infinity;
       let yMax = -Infinity;
       for (const r of data.rows) {
+        if (isRowHidden(r)) continue;
         const v = toNum(r[yIdx]);
         if (Number.isFinite(v)) {
           if (v < yMin) yMin = v;
@@ -1419,6 +1448,7 @@ function computeSharedRanges(
         const seen = new Set<string>();
         const cats: string[] = [];
         for (const r of data.rows) {
+          if (isRowHidden(r)) continue;
           const k = toStr(r[xIdx]);
           if (!seen.has(k)) {
             seen.add(k);
@@ -1430,6 +1460,7 @@ function computeSharedRanges(
         let xMin = Infinity;
         let xMax = -Infinity;
         for (const r of data.rows) {
+          if (isRowHidden(r)) continue;
           const raw = r[xIdx];
           const v = xField.type === "datetime"
             ? (raw instanceof Date ? raw.getTime() : new Date(raw as string).getTime())
@@ -1503,7 +1534,7 @@ export function buildGraph(
     const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(wrapKeys.length))));
     const rows = Math.max(1, Math.ceil(wrapKeys.length / cols));
     // Pin every wrap panel to the same axis bounds for fair comparison.
-    const sharedRanges = computeSharedRanges(data, encoding, valueOrders);
+    const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups);
     const panels = wrapKeys.map((key) => {
       const subRows = data.rows.filter((r) => toStr(r[wIdx]) === key);
       const subData: GraphData = { columns: data.columns, rows: subRows };
@@ -1529,13 +1560,15 @@ export function buildGraph(
   const fxIdx = fx ? colIndex(data, fx.name) : -1;
   const fyIdx = fy ? colIndex(data, fy.name) : -1;
 
-  // row-major: outer loop = Y (top → bottom rows), inner loop = X
-  // (left → right within each row). Matches the CSS grid in <Graph>.
   // Compute global axis bounds once so every Trellis cell pins to the
   // same X / Y range — this is what makes Group Y stacking and Group X
-  // tiling actually comparable ("完全相同的 Y 轴坐标").
-  const sharedRanges = computeSharedRanges(data, encoding, valueOrders);
+  // tiling actually comparable ("完全相同的 Y 轴坐标"). Hidden legend
+  // groups are excluded from the range calc so visible data fills the
+  // chart area instead of being squashed by data that never renders.
+  const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups);
   const panels: BuiltGraph["panels"] = [];
+  // row-major: outer loop = Y (top → bottom rows), inner loop = X
+  // (left → right within each row). Matches the CSS grid in <Graph>.
   for (const yKey of yKeys) {
     for (const xKey of xKeys) {
       const subRows = data.rows.filter((r) => {

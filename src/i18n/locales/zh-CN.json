@@ -439,7 +439,9 @@
       "line": "折线",
       "boxplot": "箱线图",
       "smoother": "平滑曲线",
-      "allEntries": "全部"
+      "allEntries": "全部",
+      "hide": "隐藏该分组",
+      "show": "显示该分组"
     },
     "mark": {
       "line": "线",

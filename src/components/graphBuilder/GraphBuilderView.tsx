@@ -317,8 +317,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       encoding: enc,
       elements: finalElements,
       styles: effectiveStyles,
+      hiddenGroups: item.hiddenGroups,
     };
-  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles]);
+  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -331,6 +332,22 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       markDirty();
     },
     [item.id, item.groupStyles, updateItem, markDirty],
+  );
+
+  /** Toggle a group's visibility in the legend (eye-icon button). Hidden
+   *  groups keep their color slot reserved — un-hiding restores the same
+   *  color — but their series are skipped at render time and excluded
+   *  from the shared-axis range calc so visible data fills the chart. */
+  const toggleGroupHidden = useCallback(
+    (groupKey: string) => {
+      const cur = item.hiddenGroups ?? [];
+      const next = cur.includes(groupKey)
+        ? cur.filter((k) => k !== groupKey)
+        : [...cur, groupKey];
+      updateItem(item.id, { hiddenGroups: next });
+      markDirty();
+    },
+    [item.id, item.hiddenGroups, updateItem, markDirty],
   );
 
   /** Clear every per-group override at once — used by the STYLE editor's
@@ -612,6 +629,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           groupStyles={item.groupStyles ?? {}}
           groupKeys={groupKeys}
           effectiveStyles={effectiveStyles}
+          hiddenGroups={item.hiddenGroups ?? []}
+          toggleGroupHidden={toggleGroupHidden}
           setGroupStyle={setGroupStyle}
           resetAllGroupStyles={resetAllGroupStyles}
           onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
@@ -1154,6 +1173,10 @@ interface LegendStylePanelProps {
    *  MarkEditor falls back to when a particular mark hasn't been
    *  explicitly overridden yet. */
   effectiveStyles: GroupStyleMap;
+  /** Group values currently hidden via the legend show/hide toggle. */
+  hiddenGroups: string[];
+  /** Flip one group's hidden state. */
+  toggleGroupHidden: (groupKey: string) => void;
   setGroupStyle: (groupKey: string, next: GroupStyle | undefined) => void;
   /** Drop every per-group override and return the chart to factory
    *  defaults. Wired to the STYLE editor's Reset button. */
@@ -1163,7 +1186,7 @@ interface LegendStylePanelProps {
   width: number;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // `data` and `elements` are still part of the public prop contract for
@@ -1300,16 +1323,40 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
         {groupKeys.map((key) => {
           const st = effectiveStyleOf(key);
           const label = key === DEFAULT_GROUP_KEY ? t("graph.legend.allEntries") : (key || "—");
+          // Show/hide toggle is per-group and only meaningful when the
+          // legend has more than one entry — hiding the only entry would
+          // erase the chart. Keep the button rendered (no layout jitter)
+          // but disable it for the ungrouped single-row case.
+          const isHidden = hiddenGroups.includes(key);
+          const canToggle = !!encoding.overlay;
+          const hideTitle = isHidden
+            ? t("graph.legend.show", { defaultValue: "Show this group" })
+            : t("graph.legend.hide", { defaultValue: "Hide this group" });
           return (
             <div
               key={key}
-              className={`gb-legend-item${key === selected ? " gb-legend-item-selected" : ""}`}
+              className={`gb-legend-item${key === selected ? " gb-legend-item-selected" : ""}${isHidden ? " gb-legend-item-hidden" : ""}`}
               onClick={() => setSelected(key)}
             >
               <span className="gb-legend-swatch">
                 <CompositeSwatch style={st} />
               </span>
               <span className="gb-legend-label" title={label}>{label}</span>
+              <button
+                className="gb-legend-toggle"
+                onClick={(e) => {
+                  // Don't let the click also flip the row's selected
+                  // state — the eye button is a discrete action.
+                  e.stopPropagation();
+                  if (canToggle) toggleGroupHidden(key);
+                }}
+                disabled={!canToggle}
+                title={hideTitle}
+                aria-label={hideTitle}
+                aria-pressed={isHidden}
+              >
+                {isHidden ? "🙈" : "👁"}
+              </button>
             </div>
           );
         })}

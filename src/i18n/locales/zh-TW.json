@@ -439,7 +439,9 @@
       "line": "折線",
       "boxplot": "箱線圖",
       "smoother": "平滑曲線",
-      "allEntries": "全部"
+      "allEntries": "全部",
+      "hide": "隱藏該分組",
+      "show": "顯示該分組"
     },
     "mark": {
       "line": "線",
