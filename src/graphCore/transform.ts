@@ -594,7 +594,12 @@ function buildSingleOption(
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
         grid: { left: 56, right: 24, top: 32, bottom: 48 },
-        tooltip: { trigger: "axis" },
+        // appendToBody + confine: rendering the tooltip into document.body
+        // keeps it from briefly enlarging the chart container (which made
+        // the parent's overflow:auto flash a 1-px scrollbar at the bottom
+        // edge); `confine` then keeps the tooltip inside the chart's
+        // bounding box so it still visually anchors to the data point.
+        tooltip: { trigger: "axis", confine: true, appendToBody: true },
         xAxis: {
           type: "value",
           name: xField?.name,
@@ -836,7 +841,9 @@ function buildSingleOption(
     backgroundColor: "transparent",
     textStyle: { color: theme.fgPrimary },
     grid: { left: 52, right: 16, top: legendNames.length > 0 ? 40 : 16, bottom: bottomGap },
-    tooltip: { trigger: "item" },
+    // See histogram path above — appendToBody avoids the bottom-edge
+    // scrollbar flash; confine keeps the tooltip glued to the chart area.
+    tooltip: { trigger: "item", confine: true, appendToBody: true },
     legend:
       legendNames.length > 0
         ? {
