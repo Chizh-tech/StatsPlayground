@@ -694,7 +694,6 @@
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: 12px;
   line-height: 1;
   color: var(--fg-secondary);
   opacity: 0;
@@ -702,6 +701,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.gb-legend-toggle svg {
+  display: block;
 }
 
 .gb-legend-item:hover .gb-legend-toggle {

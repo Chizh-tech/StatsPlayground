@@ -1356,7 +1356,20 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
                 aria-label={hideTitle}
                 aria-pressed={isHidden}
               >
-                {isHidden ? "🙈" : "👁"}
+                {isHidden ? (
+                  // Eye-off (hidden) — outline eye with a diagonal slash.
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M2 8s2.2-4 6-4c1.2 0 2.2.3 3.1.8M14 8s-2.2 4-6 4c-1.2 0-2.2-.3-3.1-.8" />
+                    <path d="M6.5 6.5a2 2 0 0 0 2.9 2.9" />
+                    <path d="M2.5 13.5l11-11" />
+                  </svg>
+                ) : (
+                  // Eye (visible) — outline almond shape with pupil.
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M1.5 8S4 4 8 4s6.5 4 6.5 4-2.5 4-6.5 4S1.5 8 1.5 8z" />
+                    <circle cx="8" cy="8" r="1.8" />
+                  </svg>
+                )}
               </button>
             </div>
           );
