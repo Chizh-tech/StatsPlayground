@@ -36,7 +36,11 @@ SIZE = 1024                       # master canvas (square)
 SQUIRCLE_SIZE = 824
 SAFE_MARGIN = (SIZE - SQUIRCLE_SIZE) // 2       # 100
 CORNER_RADIUS = 185                              # ~22.5% of SQUIRCLE_SIZE
-PADDING = 135                                    # inset INSIDE the squircle
+# Inset INSIDE the squircle. The Font Awesome bullseye-spiral path leaves
+# noticeable transparent space inside its 640x640 viewBox, so the rendered
+# glyph reads smaller than the padding number alone suggests. Keep this
+# value low enough that the artwork visually fills the squircle.
+PADDING = 70                                     # ~8.5% of SQUIRCLE_SIZE
 
 BG = (248, 249, 251, 255)         # near-white, faint cool tint
 FG_HEX = "#081036"                # very deep navy blue
