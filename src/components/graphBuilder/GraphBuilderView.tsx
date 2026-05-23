@@ -16,7 +16,8 @@
  *   └──────────────────────────────────────────────────────────────────┘
  */
 
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
 import { Graph, inferFieldType, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape } from "@/graphCore";
@@ -925,20 +926,100 @@ interface AddLayerCardProps {
 
 function AddLayerCard({ availableKinds, onAdd, t }: AddLayerCardProps) {
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  // Anchored position for the portaled menu. Recomputed when opened and on
+  // window resize / ancestor scroll so the menu stays glued to the button
+  // and never gets clipped by the surrounding scroll container.
+  const [pos, setPos] = useState<{ left: number; top: number; width: number; flipUp: boolean } | null>(null);
+
+  const recompute = useCallback(() => {
+    const btn = btnRef.current;
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+    // Estimate menu height from item count; clamp to a sane max.
+    const estItemH = 28;
+    const estMenuH = Math.min(availableKinds.length * estItemH + 8, 320);
+    const spaceBelow = vh - r.bottom;
+    const spaceAbove = r.top;
+    const flipUp = spaceBelow < estMenuH + 8 && spaceAbove > spaceBelow;
+    const top = flipUp ? Math.max(4, r.top - estMenuH - 4) : Math.min(vh - 4, r.bottom + 4);
+    const left = Math.max(4, Math.min(r.left, vw - r.width - 4));
+    setPos({ left, top, width: r.width, flipUp });
+  }, [availableKinds.length]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    recompute();
+    const onWin = () => recompute();
+    window.addEventListener("resize", onWin);
+    window.addEventListener("scroll", onWin, true); // capture: catch all ancestor scrolls
+    return () => {
+      window.removeEventListener("resize", onWin);
+      window.removeEventListener("scroll", onWin, true);
+    };
+  }, [open, recompute]);
+
+  // Close on outside click / Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const tgt = e.target as Node | null;
+      if (!tgt) return;
+      if (btnRef.current?.contains(tgt)) return;
+      if (menuRef.current?.contains(tgt)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // After first paint, refine top if real height differs from estimate (esp.
+  // when flipping above the button).
+  useLayoutEffect(() => {
+    if (!open || !pos || !menuRef.current) return;
+    const real = menuRef.current.getBoundingClientRect();
+    const btn = btnRef.current?.getBoundingClientRect();
+    if (!btn) return;
+    const vh = window.innerHeight;
+    if (pos.flipUp) {
+      const want = Math.max(4, btn.top - real.height - 4);
+      if (Math.abs(want - pos.top) > 0.5) setPos({ ...pos, top: want });
+    } else if (pos.top + real.height > vh - 4) {
+      // Not enough room — flip up.
+      const want = Math.max(4, btn.top - real.height - 4);
+      setPos({ ...pos, top: want, flipUp: true });
+    }
+  }, [open, pos]);
+
   if (availableKinds.length === 0) return null;
   return (
     <div className="gb-layer-add-wrap">
       <button
+        ref={btnRef}
         className="gb-layer-add"
         onClick={() => setOpen((o) => !o)}
         title={t("graph.addLayer")}
       >
         +
       </button>
-      {open && (
+      {open && pos && createPortal(
         <div
-          className="gb-layer-add-menu"
-          onMouseLeave={() => setOpen(false)}
+          ref={menuRef}
+          className="gb-layer-add-menu gb-layer-add-menu-portal"
+          style={{ left: pos.left, top: pos.top, minWidth: pos.width }}
         >
           {availableKinds.map((k) => {
             const def = CHART_TYPE_DEFS.find((c) => c.kind === k);
@@ -956,7 +1037,8 @@ function AddLayerCard({ availableKinds, onAdd, t }: AddLayerCardProps) {
               </button>
             );
           })}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

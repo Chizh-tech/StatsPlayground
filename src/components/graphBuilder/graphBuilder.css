@@ -373,6 +373,21 @@
   flex-direction: column;
 }
 
+/* When portaled to <body>, the menu is positioned via inline left/top
+   (computed from the trigger button's viewport rect) and must use
+   `position: fixed` so it escapes any scrollable / overflow:hidden
+   ancestor of the "+ Add layer" button. */
+.gb-layer-add-menu-portal {
+  position: fixed;
+  left: auto;
+  right: auto;
+  top: auto;
+  margin-top: 0;
+  z-index: 1000;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
 .gb-layer-add-item {
   display: flex;
   align-items: center;
