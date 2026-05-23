@@ -455,7 +455,19 @@
       "reset": "Đặt lại",
       "editorTitle": "Kiểu",
       "theme": "Chủ đề màu",
-      "themeHint": "Đặt cuùng lúc màu cho Đường / Nền / Điểm"
+      "themeHint": "Đặt cuùng lúc màu cho Đường / Nền / Điểm",
+      "addTheme": "Thêm chủ đề tuỳ chỉnh",
+      "removeTheme": "Xoá chủ đề",
+      "themeDialog": {
+        "title": "Thêm chủ đề tuỳ chỉnh",
+        "modeAuto": "Tự động suy ra",
+        "modeManual": "Thủ công",
+        "modeAutoHint": "Chọn màu cho Điểm; hệ thống sẽ tự suy ra các sắc Đường và Nền nhạt hơn.",
+        "modeManualHint": "Chọn riêng màu cho Điểm, Đường và Nền.",
+        "basePoint": "Màu điểm",
+        "preview": "Xem trước (Nền / Đường / Điểm)",
+        "tooLight": "Màu này quá nhạt — các sắc Đường / Nền được suy ra sẽ gần như trắng. Hãy chọn màu đậm hơn, hoặc chuyển sang chế độ Thủ công."
+      }
     },
     "shape": {
       "circle": "Tròn (đặc)",

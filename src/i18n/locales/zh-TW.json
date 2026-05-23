@@ -455,7 +455,19 @@
       "reset": "重設",
       "editorTitle": "樣式",
       "theme": "色彩主題",
-      "themeHint": "一鍵設定線 / 面 / 點的色彩"
+      "themeHint": "一鍵設定線 / 面 / 點的色彩",
+      "addTheme": "新增自訂主題",
+      "removeTheme": "刪除主題",
+      "themeDialog": {
+        "title": "新增自訂主題",
+        "modeAuto": "自動推導",
+        "modeManual": "手動指定",
+        "modeAutoHint": "選擇點的顏色，系統會自動推導出較淺的線與面色彩。",
+        "modeManualHint": "分別指定點、線、面的色彩。",
+        "basePoint": "點顏色",
+        "preview": "預覽（面 / 線 / 點）",
+        "tooLight": "此色彩太淺，推導出的線與面將接近純白，無法在畫布上看清。請選擇更深的色彩，或切換到手動指定模式。"
+      }
     },
     "shape": {
       "circle": "圓點（實心）",

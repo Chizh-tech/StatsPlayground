@@ -25,6 +25,9 @@ import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useProjectStore } from "@/stores/useProjectStore";
+import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPaletteStore";
+import { ctxMenuRef } from "@/utils/ctxMenu";
+import { AddPaletteDialog } from "./AddPaletteDialog";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -1200,6 +1203,46 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
     });
   };
 
+  /**
+   * Apply a user-defined custom palette (stored in useGraphPaletteStore).
+   * Unlike the built-in `applyTheme`, custom palettes carry their three
+   * final per-mark colors verbatim — no `shade()` re-derivation here, so
+   * what the user saved is exactly what gets painted.
+   */
+  const applyCustomTheme = (groupKey: string, p: CustomPalette) => {
+    const cur = groupStyles[groupKey] ?? {};
+    setGroupStyle(groupKey, {
+      ...cur,
+      line: { ...(cur.line ?? {}), color: p.line },
+      fill: { ...(cur.fill ?? {}), color: p.fill },
+      point: {
+        ...(cur.point ?? {}),
+        color: p.point,
+        fillColor: p.point,
+      },
+    });
+  };
+
+  // Custom user-defined palettes (persisted across sessions). The Theme
+  // picker below renders these after the built-in swatches and ends with
+  // a "+" button that opens AddPaletteDialog.
+  const customPalettes = useGraphPaletteStore((s) => s.palettes);
+  const addPalette = useGraphPaletteStore((s) => s.addPalette);
+  const removePalette = useGraphPaletteStore((s) => s.removePalette);
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  // Right-click on a custom swatch opens a tiny "Delete" context menu.
+  const [paletteCtxMenu, setPaletteCtxMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!paletteCtxMenu) return;
+    const close = () => setPaletteCtxMenu(null);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [paletteCtxMenu]);
+
   const resetGroup = (groupKey: string) => setGroupStyle(groupKey, undefined);
 
   const selectedIdx = Math.max(0, groupKeys.indexOf(selected));
@@ -1291,6 +1334,41 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
                     />
                   );
                 })}
+                {/* Custom user-saved palettes — same swatch styling so
+                    they sit visually flush with the built-ins. Right-click
+                    opens a delete affordance; left-click applies the theme
+                    to the currently selected legend group. */}
+                {customPalettes.map((p) => {
+                  const matches =
+                    selectedStyle.line!.color === p.line &&
+                    selectedStyle.fill!.color === p.fill &&
+                    selectedStyle.point!.color === p.point;
+                  const bg = `linear-gradient(180deg, ${p.fill} 0 33%, ${p.line} 33% 67%, ${p.point} 67% 100%)`;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`gb-style-color-swatch gb-style-theme-swatch${matches ? " gb-style-color-selected" : ""}`}
+                      style={{ background: bg }}
+                      title={`${p.fill} / ${p.line} / ${p.point}`}
+                      onClick={() => applyCustomTheme(selected, p)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPaletteCtxMenu({ id: p.id, x: e.clientX, y: e.clientY });
+                      }}
+                    />
+                  );
+                })}
+                <button
+                  type="button"
+                  className="gb-style-color-swatch gb-style-theme-swatch gb-style-theme-add"
+                  title={t("graph.style.addTheme")}
+                  onClick={() => setShowAddDialog(true)}
+                  aria-label={t("graph.style.addTheme")}
+                >
+                  +
+                </button>
               </div>
             </div>
           </div>
@@ -1333,6 +1411,39 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, setGroupStyle
           />
         </div>
       </div>
+
+      {/* Add-theme dialog — rendered inside the panel; the .sp-dialog-overlay
+          is position:fixed so it covers the whole viewport regardless of
+          this panel's local stacking context. */}
+      {showAddDialog && (
+        <AddPaletteDialog
+          onSave={(p) => addPalette(p)}
+          onClose={() => setShowAddDialog(false)}
+        />
+      )}
+
+      {/* Right-click context menu for deleting a custom palette. Built-in
+          STYLE_COLORS swatches don't open this — only entries in
+          customPalettes can be deleted (since they're the only ones the
+          user created). */}
+      {paletteCtxMenu && (
+        <div
+          ref={ctxMenuRef}
+          className="sp-ctx-menu"
+          style={{ left: paletteCtxMenu.x, top: paletteCtxMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div
+            className="sp-ctx-item sp-ctx-danger"
+            onClick={() => {
+              removePalette(paletteCtxMenu.id);
+              setPaletteCtxMenu(null);
+            }}
+          >
+            {t("graph.style.removeTheme")}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

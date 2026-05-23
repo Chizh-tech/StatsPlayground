@@ -455,7 +455,19 @@
       "reset": "Reset",
       "editorTitle": "Style",
       "theme": "Theme",
-      "themeHint": "Set Line / Fill / Point color at once"
+      "themeHint": "Set Line / Fill / Point color at once",
+      "addTheme": "Add custom theme",
+      "removeTheme": "Remove theme",
+      "themeDialog": {
+        "title": "Add Custom Theme",
+        "modeAuto": "Auto-derive",
+        "modeManual": "Manual",
+        "modeAutoHint": "Pick the Point color; the system derives lighter Line and Fill shades from it.",
+        "modeManualHint": "Pick the Point, Line and Fill colors independently.",
+        "basePoint": "Point color",
+        "preview": "Preview (Fill / Line / Point)",
+        "tooLight": "This color is too light — the derived Line / Fill shades would be nearly white. Please pick a darker color, or switch to Manual mode."
+      }
     },
     "shape": {
       "circle": "Circle (filled)",
