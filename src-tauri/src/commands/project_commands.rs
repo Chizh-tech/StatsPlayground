@@ -46,6 +46,7 @@ pub fn save_project(
     graph_builders: Option<Vec<serde_json::Value>>,
     folders: Option<Vec<String>>,
     table_folders: Option<std::collections::HashMap<String, String>>,
+    graph_folders: Option<std::collections::HashMap<String, String>>,
 ) -> Result<ProjectInfo, AppError> {
     let service = ProjectService::new(&state);
     service.save_project(
@@ -55,6 +56,7 @@ pub fn save_project(
         graph_builders,
         folders,
         table_folders,
+        graph_folders,
     )?;
     // Return updated project info
     service.get_current_project()?.ok_or_else(|| AppError::InvalidParam("No project".into()))
@@ -98,23 +100,23 @@ pub fn export_tables_sptb_zip(
 }
 
 /// Result of importing a standalone `.sptb` into the current project.
+/// Per issue #7 the `.sptb` body no longer carries folder info — the imported
+/// table lands wherever the caller decides (root by default).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportTableResult {
     pub id: String,
-    pub folder: Option<String>,
 }
 
-/// Returns the new dataset id assigned to the imported table, plus the folder
-/// it should be placed in (taken from the `.sptb` itself).
+/// Returns the new dataset id assigned to the imported table.
 #[tauri::command]
 pub fn import_table(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<ImportTableResult, AppError> {
     let service = ProjectService::new(&state);
-    let (id, folder) = service.import_table(&file_path)?;
-    Ok(ImportTableResult { id, folder })
+    let id = service.import_table(&file_path)?;
+    Ok(ImportTableResult { id })
 }
 
 #[tauri::command]

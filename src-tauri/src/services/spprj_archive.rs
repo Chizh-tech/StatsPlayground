@@ -15,6 +15,13 @@
 //! Extracting the archive yields a tidy directory tree the user can browse
 //! with any zip tool — exactly what they see inside StatsPlayground.
 //!
+//! Design principle (issue #7): an `.spprj` is conceptually just a folder of
+//! files. The folder a `.sptb` / `.spgh` lives in is encoded ONLY by its
+//! archive path — never duplicated inside the file body or as a separate
+//! `folder` field on the manifest entry. `manifest.json` is pure metadata:
+//! project name, version, created_at, the list of folders that exist
+//! (including empty ones), and a `{id → file}` index for tables and graphs.
+//!
 //! v1 `.spprj` files (`tables/<uuid>.sptb`, `graphs/<uuid>.spgh`, no folders)
 //! still open: the reader does NOT migrate at read time. Migration to v2
 //! happens implicitly on the next save, when the writer re-derives filenames
@@ -67,11 +74,8 @@ pub struct TableEntryRef {
     pub name: String,
     /// Relative path inside the archive — for v2 this is `<folder>/<name>.sptb`
     /// (or `<name>.sptb` at the root). For v1 reads this stays `tables/<id>.sptb`.
+    /// The folder is derived from `dirname(file)` on read; never duplicated here.
     pub file: String,
-    /// Folder the table belongs to (None / null = project root).
-    /// `None` rather than `""` to keep manifest JSON minimal.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -83,23 +87,20 @@ pub struct GraphEntryRef {
     #[serde(default)]
     pub name: String,
     /// Relative path inside the archive, e.g. `<folder>/<name>.spgh`.
+    /// The folder is derived from `dirname(file)` on read; never duplicated here.
     pub file: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder: Option<String>,
 }
 
 /// One table file (`.sptb`). Self-contained: includes its own id/name so that
 /// importing a standalone `.sptb` back into a project doesn't lose anything.
+/// Per issue #7, this body does NOT carry folder information — a file is
+/// just a file; where it lives is the folder it sits in.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TableDoc {
     pub id: String,
     pub name: String,
     pub source_type: String,
-    /// Folder this table lives in (None = project root). Carried inside the
-    /// standalone `.sptb` so re-importing into a project preserves the layout.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder: Option<String>,
     /// Doc format version — bump if the rows/columns shape changes.
     #[serde(default = "default_doc_version")]
     pub version: String,
@@ -132,8 +133,8 @@ pub struct TableColumnFormat {
 
 /// One graph file (`.spgh`). The body is opaque JSON owned by the frontend
 /// (graph builder config). We require an `id` field at the top level so the
-/// manifest can index it; `name` and `folder` are pulled into the named
-/// fields so the writer can build the archive path.
+/// manifest can index it; `name` is pulled into the named field so the writer
+/// can build the archive path. Per issue #7, folder info is NOT carried here.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphDoc {
@@ -142,9 +143,6 @@ pub struct GraphDoc {
     /// Defaults to empty (the writer falls back to the id then).
     #[serde(default)]
     pub name: String,
-    /// Folder this graph lives in (None = project root).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder: Option<String>,
     /// Doc format version.
     #[serde(default = "default_doc_version")]
     pub version: String,
@@ -277,20 +275,21 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
     let legacy: LegacySpprj = serde_json::from_slice(bytes)
         .map_err(|e| AppError::FileIO(format!("Invalid project file: {}", e)))?;
 
+    // v0 (legacy single-file JSON) had no folder concept — every table /
+    // graph lives at the project root. Synthesize root-level paths so the
+    // path-derived folder logic in open_project naturally returns `None`.
     let mut tables = Vec::with_capacity(legacy.datasets.len());
     let mut table_refs = Vec::with_capacity(legacy.datasets.len());
     for ds in legacy.datasets {
         table_refs.push(TableEntryRef {
             id: ds.id.clone(),
             name: ds.name.clone(),
-            file: format!("tables/{}.sptb", ds.id),
-            folder: None,
+            file: format!("{}.sptb", ds.id),
         });
         tables.push(TableDoc {
             id: ds.id,
             name: ds.name,
             source_type: ds.source_type,
-            folder: None,
             version: default_doc_version(),
             columns: ds.columns,
             rows: ds.rows,
@@ -307,10 +306,9 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
             graph_refs.push(GraphEntryRef {
                 id: id.clone(),
                 name: name.clone(),
-                file: format!("graphs/{}.spgh", id),
-                folder: None,
+                file: format!("{}.spgh", id),
             });
-            graphs.push(GraphDoc { id, name, folder: None, version: default_doc_version(), body });
+            graphs.push(GraphDoc { id, name, version: default_doc_version(), body });
         }
     }
 
@@ -332,10 +330,12 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
     })
 }
 
-/// Pull `id`, `name`, and `builderId` out of an opaque graph builder JSON
-/// value for use in the manifest, returning `(id, name, body)`. The id, name,
-/// and version are *removed* from the returned body so the GraphDoc that
-/// flattens it won't emit them twice on serialization.
+/// Pull `id` and `name` out of an opaque graph builder JSON value for use in
+/// the manifest, returning `(id, name, body)`. `id`, `name`, `version`, and
+/// any legacy `folder` field are *removed* from the returned body so the
+/// GraphDoc that flattens it won't emit duplicate keys on serialization, and
+/// so legacy in-body folder hints can never silently override the
+/// path-derived folder.
 fn lift_id_name(raw: Value, fallback_idx: usize) -> (String, String, serde_json::Map<String, Value>) {
     let mut map = match raw {
         Value::Object(m) => m,
@@ -351,7 +351,7 @@ fn lift_id_name(raw: Value, fallback_idx: usize) -> (String, String, serde_json:
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_default();
     map.remove("version");
-    map.remove("folder");
+    map.remove("folder"); // legacy: drop in-body folder; archive path is the source of truth.
     (id, name, map)
 }
 
@@ -359,20 +359,23 @@ fn lift_id_name(raw: Value, fallback_idx: usize) -> (String, String, serde_json:
 // Write API
 // ----------------------------------------------------------------------------
 
-/// Build a `ProjectBundle` from per-doc inputs. The writer derives each entry's
-/// archive path from its display name and folder (`<folder>/<name>.<ext>`),
-/// sanitizing the name and auto-suffixing `" (2)"`, `" (3)"`, … on collisions
-/// within the same folder + extension. The computed paths are then mirrored
-/// back into both the manifest's `TableEntryRef`/`GraphEntryRef.file` and each
-/// doc's own `file` placeholder is irrelevant — we only ever read the manifest
-/// `file` paths.
+/// Build a `ProjectBundle` from per-doc inputs.
+///
+/// Folder routing is supplied OUT-OF-BAND via `table_folders` and
+/// `graph_folders` (id → folder path); per issue #7 the file bodies
+/// themselves carry no folder information. The writer derives each entry's
+/// archive path from its display name and the supplied folder
+/// (`<folder>/<name>.<ext>`), sanitizing the name and auto-suffixing
+/// `" (2)"`, `" (3)"`, … on collisions within the same folder + extension.
 pub fn build_bundle(
     name: String,
     version: String,
     created_at: String,
-    mut tables: Vec<TableDoc>,
-    mut graphs: Vec<GraphDoc>,
+    tables: Vec<TableDoc>,
+    graphs: Vec<GraphDoc>,
     folders: Vec<String>,
+    table_folders: &HashMap<String, String>,
+    graph_folders: &HashMap<String, String>,
     history: Vec<Value>,
     snapshots: Vec<Value>,
 ) -> ProjectBundle {
@@ -382,21 +385,20 @@ pub fn build_bundle(
     let mut taken: HashSet<String> = HashSet::new();
 
     let mut table_refs: Vec<TableEntryRef> = Vec::with_capacity(tables.len());
-    for t in tables.iter_mut() {
-        let folder_norm = normalize_folder(t.folder.as_deref());
+    for t in tables.iter() {
+        let folder_norm = normalize_folder(table_folders.get(&t.id).map(|s| s.as_str()));
         let base = sanitize_name(&t.name, &t.id);
         let path = unique_archive_path(&folder_norm, &base, "sptb", &mut taken);
         table_refs.push(TableEntryRef {
             id: t.id.clone(),
             name: t.name.clone(),
             file: path,
-            folder: folder_norm,
         });
     }
 
     let mut graph_refs: Vec<GraphEntryRef> = Vec::with_capacity(graphs.len());
-    for g in graphs.iter_mut() {
-        let folder_norm = normalize_folder(g.folder.as_deref());
+    for g in graphs.iter() {
+        let folder_norm = normalize_folder(graph_folders.get(&g.id).map(|s| s.as_str()));
         // Graph name may be empty (legacy / synthesized); fall back to id.
         let display_name = if g.name.is_empty() { g.id.clone() } else { g.name.clone() };
         let base = sanitize_name(&display_name, &g.id);
@@ -405,7 +407,6 @@ pub fn build_bundle(
             id: g.id.clone(),
             name: g.name.clone(),
             file: path,
-            folder: folder_norm,
         });
     }
 
@@ -562,9 +563,10 @@ pub fn read_graph_file(path: &str) -> Result<GraphDoc, AppError> {
 /// top-level `id` key (one from the named struct field, one re-emitted by the
 /// flattened `body`) — still load. `serde_json::Map` keeps only the last value
 /// for duplicate keys, so the resulting map has a single `id` entry. We then
-/// lift `id`, `name`, `folder`, and `version` into the named struct fields so
-/// `body` no longer carries them. `fallback_id` is used when the file omits
-/// `id` entirely.
+/// lift `id`, `name`, and `version` into the named struct fields so `body` no
+/// longer carries them. Any in-body `folder` field from pre-#7 files is
+/// silently discarded — the folder a graph lives in is now decided purely by
+/// the archive path. `fallback_id` is used when the file omits `id` entirely.
 fn parse_graph_doc(bytes: &[u8], fallback_id: &str) -> Result<GraphDoc, String> {
     let value: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let mut map = match value {
@@ -580,17 +582,14 @@ fn parse_graph_doc(bytes: &[u8], fallback_id: &str) -> Result<GraphDoc, String> 
         .remove("name")
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_default();
-    let folder = map
-        .remove("folder")
-        .and_then(|v| match v {
-            Value::String(s) if !s.is_empty() => Some(s),
-            _ => None,
-        });
     let version = map
         .remove("version")
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_else(default_doc_version);
-    Ok(GraphDoc { id, name, folder, version, body: map })
+    // Pre-#7 files may have stuffed a `folder` field inside the body —
+    // strip it so it can never override the path-derived folder.
+    map.remove("folder");
+    Ok(GraphDoc { id, name, version, body: map })
 }
 
 // ----------------------------------------------------------------------------
@@ -670,7 +669,7 @@ fn unique_archive_path(
 }
 
 /// Parent folder of an archive entry path, or `None` if at root.
-fn parent_folder(file: &str) -> Option<String> {
+pub fn parent_folder(file: &str) -> Option<String> {
     let idx = file.rfind('/')?;
     Some(file[..idx].to_string())
 }

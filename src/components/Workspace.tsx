@@ -549,12 +549,9 @@ export function Workspace() {
     try {
       const result = await projectService.importTable(selected as string);
       await refreshDatasets();
-      // Imported .sptb files may carry a folder hint (origin folder when the
-      // file was exported); honor it so the table lands in the expected
-      // location instead of always at root.
-      if (result.folder) {
-        fsSetTableFolder(result.id, result.folder);
-      }
+      // Per issue #7 the .sptb file carries no folder info; the imported
+      // table lands at the project root. The user can drag it into a
+      // folder afterwards.
       setActiveDataset(result.id);
     } catch (e) {
       alert(t("alert.importTableFailed") + String(e));
@@ -607,15 +604,14 @@ export function Workspace() {
     const { snapshots } = useHistoryStore.getState();
     const gbItems = useGraphBuilderStore.getState().items;
     // History is session-only (not persisted); only snapshots are saved.
-    // Graph folder assignment lives on each GraphBuilderItem.folder, so we
-    // bake it into the serialized body before passing graphs to the backend.
-    const gbItemsWithFolder = gbItems.map((g) => {
-      const f = graphFolders[g.id] ?? null;
-      return f ? { ...g, folder: f } : { ...g, folder: null };
-    });
+    // Per issue #7 folder routing for both tables and graphs flows OUT-OF-BAND
+    // via the folderPayload — the file bodies (.sptb / .spgh) themselves
+    // never carry a `folder` field. The backend uses tableFolders and
+    // graphFolders to derive each file's path inside the archive.
     const folderPayload = {
       folders,
       tableFolders,
+      graphFolders,
     };
     if (!project?.filePath) {
       const filePath = await save({
@@ -624,9 +620,9 @@ export function Workspace() {
         filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
       });
       if (!filePath) return; // User cancelled
-      await saveProject(filePath, [], snapshots, gbItemsWithFolder, folderPayload);
+      await saveProject(filePath, [], snapshots, gbItems, folderPayload);
     } else {
-      await saveProject(undefined, [], snapshots, gbItemsWithFolder, folderPayload);
+      await saveProject(undefined, [], snapshots, gbItems, folderPayload);
     }
     setSaveToast(true);
     setTimeout(() => setSaveToast(false), 1500);

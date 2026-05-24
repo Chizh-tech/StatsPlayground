@@ -19,8 +19,9 @@ export interface OpenProjectResult {
   graphFolders: Record<string, string>;
 }
 
-/** 导入 .sptb 的返回值。 */
+/** 导入 .sptb 的返回值。
+ *  按 #7 设计，.sptb 文件本身不携带 folder 信息——导入后默认落在根目录，
+ *  调用方可选地把它移动到目标文件夹。 */
 export interface ImportTableResult {
   id: string;
-  folder: string | null;
 }

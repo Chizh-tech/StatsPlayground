@@ -1,12 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
 
-/** Optional folder payload accepted by the v2 save_project command. */
+/** Optional folder payload accepted by the v2 save_project command.
+ *  Per issue #7 the file bodies (.sptb / .spgh) carry no folder info; the
+ *  folder a file lives in is encoded purely by its path inside the archive,
+ *  which the backend derives from these maps. */
 export interface SaveProjectFolders {
   /** All folder paths that exist in the project, including empty ones. */
   folders: string[];
   /** datasetId → folder path. Root datasets are simply absent. */
   tableFolders: Record<string, string>;
+  /** graphId → folder path. Root graphs are simply absent. */
+  graphFolders: Record<string, string>;
 }
 
 export const projectService = {
@@ -33,6 +38,7 @@ export const projectService = {
       graphBuilders: graphBuilders ?? null,
       folders: folders?.folders ?? null,
       tableFolders: folders?.tableFolders ?? null,
+      graphFolders: folders?.graphFolders ?? null,
     }),
 
   getCurrentProject: () => invoke<ProjectInfo | null>("get_current_project"),
@@ -59,9 +65,9 @@ export const projectService = {
       archivePaths: archivePaths ?? null,
     }),
 
-  /** Import a `.sptb` file. Returns the new dataset id assigned in the project
-   *  plus the folder the table was originally exported from (so the UI can
-   *  drop it into the same folder). */
+  /** Import a `.sptb` file. Returns the new dataset id assigned in the
+   *  project. Per issue #7 the `.sptb` body carries no folder info; the
+   *  caller decides where to place the imported table (defaults to root). */
   importTable: (filePath: string) =>
     invoke<ImportTableResult>("import_table", { filePath }),
 

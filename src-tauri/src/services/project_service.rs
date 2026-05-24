@@ -71,11 +71,15 @@ impl<'a> ProjectService<'a> {
             created_at: now.clone(),
         };
 
+        let empty_folders: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         let bundle = spprj_archive::build_bundle(
             name.to_string(),
             SPPRJ_VERSION.to_string(),
             now,
-            Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+            Vec::new(), Vec::new(), Vec::new(),
+            &empty_folders, &empty_folders,
+            Vec::new(), Vec::new(),
         );
         spprj_archive::write_project_archive(&bundle, file_path)?;
 
@@ -114,38 +118,35 @@ impl<'a> ProjectService<'a> {
             .map_err(|e| AppError::Database(e.to_string()))?;
         *proj = Some(project.clone());
 
-        // Build folder maps from the manifest entries before we consume them.
+        // Folder for every file is derived from its archive path
+        // (`dirname(entry.file)`). The manifest no longer carries a separate
+        // `folder` field — the path IS the source of truth (issue #7).
         let mut table_folders: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for entry in &bundle.manifest.tables {
-            if let Some(f) = &entry.folder {
-                if !f.is_empty() { table_folders.insert(entry.id.clone(), f.clone()); }
+            if let Some(f) = spprj_archive::parent_folder(&entry.file) {
+                if !f.is_empty() { table_folders.insert(entry.id.clone(), f); }
             }
         }
         let mut graph_folders: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for entry in &bundle.manifest.graphs {
-            if let Some(f) = &entry.folder {
-                if !f.is_empty() { graph_folders.insert(entry.id.clone(), f.clone()); }
+            if let Some(f) = spprj_archive::parent_folder(&entry.file) {
+                if !f.is_empty() { graph_folders.insert(entry.id.clone(), f); }
             }
         }
         let folders = bundle.manifest.folders.clone();
 
-        // Re-pack graph docs into the original opaque JSON shape the frontend
-        // already understands (full body including the `id` / `name` /
-        // `folder` fields). The body map stored on disk no longer carries
-        // these named keys (they live on GraphDoc itself to avoid duplicate
-        // JSON keys), so re-inject them here.
+        // Re-pack graph docs into the opaque JSON shape the frontend
+        // understands. The body map stored on disk no longer carries named
+        // keys (they live on GraphDoc itself to avoid duplicate JSON keys),
+        // so re-inject `id` / `name`. Folder is intentionally NOT injected
+        // into the body — it flows via the separate `graphFolders` map.
         let graph_builders = bundle.graphs.into_iter()
             .map(|mut g| {
                 g.body.insert("id".to_string(), serde_json::Value::String(g.id.clone()));
                 if !g.name.is_empty() {
                     g.body.insert("name".to_string(), serde_json::Value::String(g.name.clone()));
-                }
-                if let Some(f) = &g.folder {
-                    if !f.is_empty() {
-                        g.body.insert("folder".to_string(), serde_json::Value::String(f.clone()));
-                    }
                 }
                 serde_json::Value::Object(g.body)
             })
@@ -163,6 +164,10 @@ impl<'a> ProjectService<'a> {
     }
 
     /// Save the current project state to disk as a new ZIP archive.
+    ///
+    /// Per issue #7, folder routing is supplied OUT-OF-BAND via
+    /// `table_folders` and `graph_folders` (id → folder path). The file
+    /// bodies themselves never carry folder info.
     pub fn save_project(
         &self,
         file_path: Option<&str>,
@@ -171,6 +176,7 @@ impl<'a> ProjectService<'a> {
         graph_builders_data: Option<Vec<serde_json::Value>>,
         folders: Option<Vec<String>>,
         table_folders: Option<std::collections::HashMap<String, String>>,
+        graph_folders: Option<std::collections::HashMap<String, String>>,
     ) -> Result<(), AppError> {
         let mut proj = self.state.project.write()
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -192,23 +198,24 @@ impl<'a> ProjectService<'a> {
         let save_created_at = project.created_at.clone();
         drop(proj);
 
-        // Compose every dataset into a TableDoc, stamping the folder mapping
-        // (if any) onto each doc so the writer can derive its archive path.
+        // Compose every dataset into a TableDoc. The doc body is folder-free
+        // (issue #7); folder routing is supplied separately via the
+        // `table_folders` map and consumed by `build_bundle` to derive
+        // archive paths.
         let datasets = {
             let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
             db.list_datasets()?
         };
         let table_folders_map = table_folders.unwrap_or_default();
+        let graph_folders_map = graph_folders.unwrap_or_default();
         let mut table_docs = Vec::with_capacity(datasets.len());
         for ds in &datasets {
-            let mut doc = self.compose_table_doc(&ds.id)?;
-            doc.folder = table_folders_map.get(&ds.id).cloned();
+            let doc = self.compose_table_doc(&ds.id)?;
             table_docs.push(doc);
         }
 
-        // Graph docs carry their own folder inside their opaque body (the
-        // frontend writes `folder` on each graph builder), so the helper
-        // already lifts it into GraphDoc.folder.
+        // Graph docs are folder-free too — `compose_graph_docs` strips any
+        // legacy in-body `folder` field via `lift_graph_meta`.
         let graph_docs = compose_graph_docs(graph_builders_data.unwrap_or_default());
 
         let bundle = spprj_archive::build_bundle(
@@ -218,6 +225,8 @@ impl<'a> ProjectService<'a> {
             table_docs,
             graph_docs,
             folders.unwrap_or_default(),
+            &table_folders_map,
+            &graph_folders_map,
             history_data.unwrap_or_default(),
             snapshots_data.unwrap_or_default(),
         );
@@ -302,7 +311,6 @@ impl<'a> ProjectService<'a> {
             id: dataset_id.to_string(),
             name: meta.name,
             source_type: meta.source_type,
-            folder: None,
             version: "1".to_string(),
             columns,
             rows,
@@ -398,8 +406,8 @@ impl<'a> ProjectService<'a> {
     /// path inside the zip (the `.sptb` extension is added automatically and
     /// duplicates are auto-suffixed with ` (2)`, ` (3)`, …). Datasets not
     /// present in the map fall back to the dataset's plain name at the zip
-    /// root. The folder of each TableDoc is preserved so a re-import places
-    /// the table in the same folder it came from.
+    /// root. Per issue #7 the `.sptb` body itself carries no folder info —
+    /// the folder is encoded purely by the file's path inside the zip.
     pub fn export_tables_sptb_zip(
         &self,
         dataset_ids: &[String],
@@ -441,44 +449,40 @@ impl<'a> ProjectService<'a> {
 
     /// Import a `.sptb` file from disk into the current project. Always
     /// allocates a fresh dataset id to avoid colliding with anything already
-    /// loaded; returns `(new_id, folder)` so the caller can place the new
-    /// dataset in the same folder the `.sptb` was exported from.
-    pub fn import_table(&self, file_path: &str) -> Result<(String, Option<String>), AppError> {
+    /// loaded; returns the new id. Per issue #7 the `.sptb` body carries no
+    /// folder info — the caller decides where to place the imported table
+    /// (defaults to project root).
+    pub fn import_table(&self, file_path: &str) -> Result<String, AppError> {
         let mut doc = spprj_archive::read_table_file(file_path)?;
-        let folder = doc.folder.clone();
         // Re-issue id to avoid collision with existing datasets in the project.
         let new_id = uuid::Uuid::new_v4().to_string();
         doc.id = new_id.clone();
         self.restore_table_doc(&doc)?;
-        Ok((new_id, folder))
+        Ok(new_id)
     }
 
     /// Export an arbitrary graph builder config (opaque to backend) as a
-    /// standalone `.spgh` file on disk.
+    /// standalone `.spgh` file on disk. Per issue #7 the body is folder-free.
     pub fn export_graph(
         &self,
         graph: serde_json::Value,
         file_path: &str,
     ) -> Result<(), AppError> {
-        let (id, name, folder, body) = lift_graph_meta(graph);
-        let doc = GraphDoc { id, name, folder, version: "1".to_string(), body };
+        let (id, name, body) = lift_graph_meta(graph);
+        let doc = GraphDoc { id, name, version: "1".to_string(), body };
         spprj_archive::write_graph_file(&doc, file_path)
     }
 
     /// Read a `.spgh` file off disk and return its body as the same opaque
-    /// JSON shape the frontend uses for graph_builders (id/name/folder are
-    /// preserved inside the body).
+    /// JSON shape the frontend uses for graph_builders. `id` and `name` are
+    /// re-injected into the body for frontend convenience; folder is NOT
+    /// (the imported graph lands wherever the caller decides).
     pub fn import_graph(&self, file_path: &str) -> Result<serde_json::Value, AppError> {
         let doc = spprj_archive::read_graph_file(file_path)?;
         let mut body = doc.body;
         body.insert("id".to_string(), serde_json::Value::String(doc.id));
         if !doc.name.is_empty() {
             body.insert("name".to_string(), serde_json::Value::String(doc.name));
-        }
-        if let Some(f) = doc.folder {
-            if !f.is_empty() {
-                body.insert("folder".to_string(), serde_json::Value::String(f));
-            }
         }
         Ok(serde_json::Value::Object(body))
     }
@@ -505,23 +509,26 @@ fn duckdb_to_json(value: duckdb::types::Value) -> serde_json::Value {
 
 /// Convert a list of opaque graph-builder JSON objects (frontend shape) into
 /// `GraphDoc`s suitable for the archive. Ensures every doc has a stable id
-/// and preserves the display name + folder so the writer can place files at
-/// the right paths inside the archive.
+/// and preserves the display name so the writer can place files at the right
+/// paths inside the archive. Folder routing is handled OUT-OF-BAND via the
+/// `graph_folders` map (issue #7) — any legacy in-body `folder` field is
+/// silently stripped by `lift_graph_meta`.
 fn compose_graph_docs(raw: Vec<serde_json::Value>) -> Vec<GraphDoc> {
     raw.into_iter().enumerate().map(|(idx, value)| {
-        let (id, name, folder, body) = lift_graph_meta(value);
+        let (id, name, body) = lift_graph_meta(value);
         let id = if id.is_empty() { format!("graph_{}", idx) } else { id };
-        GraphDoc { id, name, folder, version: "1".to_string(), body }
+        GraphDoc { id, name, version: "1".to_string(), body }
     }).collect()
 }
 
-/// Pull `id` (or `builderId`), `name`, and `folder` out of an opaque
-/// graph-builder object. id / name / folder / version are *removed* from
-/// the returned body so the GraphDoc that flattens it won't emit duplicate
-/// JSON keys on serialization.
+/// Pull `id` (or `builderId`) and `name` out of an opaque graph-builder
+/// object. id / name / version / folder are *removed* from the returned body
+/// so the GraphDoc that flattens it won't emit duplicate JSON keys on
+/// serialization, and so legacy in-body folder hints can never override the
+/// path-derived folder.
 fn lift_graph_meta(
     raw: serde_json::Value,
-) -> (String, String, Option<String>, serde_json::Map<String, serde_json::Value>) {
+) -> (String, String, serde_json::Map<String, serde_json::Value>) {
     let mut map = match raw {
         serde_json::Value::Object(m) => m,
         _ => serde_json::Map::new(),
@@ -535,14 +542,9 @@ fn lift_graph_meta(
         .remove("name")
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_default();
-    let folder = map
-        .remove("folder")
-        .and_then(|v| match v {
-            serde_json::Value::String(s) if !s.is_empty() => Some(s),
-            _ => None,
-        });
     map.remove("version");
-    (id, name, folder, map)
+    map.remove("folder"); // issue #7: folder lives only on archive paths.
+    (id, name, map)
 }
 
 fn chrono_now() -> String {

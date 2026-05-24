@@ -37,9 +37,10 @@ export interface GraphBuilderItem {
    *  from the shared-axis range calculation, but keep their slot in
    *  globalGroupKeys so unhiding restores the same color. */
   hiddenGroups?: string[];
-  /** 所在文件夹路径（用 "/" 分隔），`null`/缺省表示位于项目根目录。
-   *  与数据表的 folder 共享同一名字空间，保存到 spprj 时决定归档内位置。 */
-  folder?: string | null;
-  /** 创建时间 ISO 字符串 */
+  /** 创建时间 ISO 字符串。
+ *
+ *  注：图所属的文件夹不属于图本身的内禀属性——按 #7 设计，文件夹只
+ *  是图在 spprj 内被放置到的位置。该映射由 `useFolderStore.graphFolders`
+ *  统一管理，保存时单独传给后端，绝不持久化在 .spgh 文件体里。 */
   createdAt: string;
 }
