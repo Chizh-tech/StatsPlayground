@@ -1,9 +1,15 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useDataStore } from "@/stores/useDataStore";
 import { useHistoryStore } from "@/stores/useHistoryStore";
 import { useTableZoomStore } from "@/stores/useTableZoomStore";
+import {
+  useFolderStore,
+  folderBaseName,
+  folderParent,
+  validateFolderOrFileName,
+} from "@/stores/useFolderStore";
 import { dataService } from "@/services/dataService";
 import { ioService } from "@/services/ioService";
 import { projectService } from "@/services/projectService";
@@ -152,7 +158,40 @@ export function Workspace() {
   const [helpDialog, setHelpDialog] = useState<"about" | "license" | null>(null);
   const [tableOp, setTableOp] = useState<TableOpType | null>(null);
   const [saveToast, setSaveToast] = useState(false);
-  const [dsMenu, setDsMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+
+  // Folder tree state ------------------------------------------------------
+  const folders = useFolderStore((s) => s.folders);
+  const tableFolders = useFolderStore((s) => s.tableFolders);
+  const graphFolders = useFolderStore((s) => s.graphFolders);
+  const collapsedFolders = useFolderStore((s) => s.collapsed);
+  const fsCreateFolder = useFolderStore((s) => s.createFolder);
+  const fsRenameFolder = useFolderStore((s) => s.renameFolder);
+  const fsDeleteFolder = useFolderStore((s) => s.deleteFolder);
+  const fsMoveFolder = useFolderStore((s) => s.moveFolder);
+  const fsSetTableFolder = useFolderStore((s) => s.setTableFolder);
+  const fsSetGraphFolder = useFolderStore((s) => s.setGraphFolder);
+  const fsToggleCollapsed = useFolderStore((s) => s.toggleCollapsed);
+  const fsCollapseAll = useFolderStore((s) => s.collapseAll);
+  const fsLoadFromProject = useFolderStore((s) => s.loadFromProject);
+  const fsPrune = useFolderStore((s) => s.pruneAssignments);
+  const fsReset = useFolderStore((s) => s.reset);
+
+  // Per-context renaming for folders is separate from the existing
+  // `renamingId` (used for tables/graphs) so a folder rename in progress
+  // doesn't clobber a table rename or vice versa.
+  const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
+  const [folderRenameValue, setFolderRenameValue] = useState("");
+  // Drag-and-drop target highlight; null = nothing being hovered as a target.
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  /** Unified context menu — handles tables, graphs, folders, and the empty
+   *  whitespace below the tree (which lets the user create a root folder). */
+  type CtxMenu =
+    | { kind: "table"; id: string; x: number; y: number }
+    | { kind: "graph"; id: string; x: number; y: number }
+    | { kind: "folder"; path: string; x: number; y: number }
+    | { kind: "empty"; x: number; y: number };
+  const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
   const [snapMenu, setSnapMenu] = useState<SnapshotMenuData | null>(null);
   const [confirmDeleteSnapId, setConfirmDeleteSnapId] = useState<string | null>(null);
   const snapRenameRef = useRef<((id: string) => void) | null>(null);
@@ -189,13 +228,13 @@ export function Workspace() {
     refreshDatasets();
   }, []);
 
-  // Dismiss dataset context menu on click
+  // Dismiss the unified context menu on outside click.
   useEffect(() => {
-    if (!dsMenu) return;
-    const handler = () => setDsMenu(null);
+    if (!ctxMenu) return;
+    const handler = () => setCtxMenu(null);
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [dsMenu]);
+  }, [ctxMenu]);
 
   // Dismiss snapshot context menu on click
   useEffect(() => {
@@ -217,6 +256,16 @@ export function Workspace() {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, []);
+
+  // Whenever the set of live datasets or graph builders changes, drop any
+  // folder→item assignments that point at items which no longer exist.
+  // This keeps tableFolders / graphFolders from accumulating stale ids after
+  // deletes or after restoring a snapshot that strips some tables.
+  useEffect(() => {
+    const dsIds = new Set(datasets.map((d) => d.id));
+    const gbIds = new Set(graphBuilders.map((g) => g.id));
+    fsPrune(dsIds, gbIds);
+  }, [datasets, graphBuilders, fsPrune]);
 
   // Cmd/Ctrl+,: open preferences
   useEffect(() => {
@@ -438,7 +487,11 @@ export function Workspace() {
     });
     if (filePath) {
       try {
-        await ioService.exportSqlite(filePath);
+        // Menu-bar "Export → SQLite": dump every table into one .db, using
+        // `folder-tablename` names so users can still tell which folder a
+        // table came from after extraction (SQLite has no nested namespaces).
+        const ids = datasets.map((d) => d.id);
+        await ioService.exportSqliteSubset(filePath, ids, buildSqliteNames(ids, null));
       } catch (e) {
         alert(t("alert.exportSqliteFailed") + String(e));
       }
@@ -453,7 +506,10 @@ export function Workspace() {
     });
     if (filePath) {
       try {
-        await ioService.exportCsvZip(filePath);
+        // Menu-bar "Export → CSV": dump every table into one .zip preserving
+        // the project's folder tree as nested directories inside the archive.
+        const ids = datasets.map((d) => d.id);
+        await ioService.exportCsvZipSubset(filePath, ids, buildArchivePaths(ids, null, "csv"));
       } catch (e) {
         alert(t("alert.exportCsvFailed") + String(e));
       }
@@ -491,9 +547,15 @@ export function Workspace() {
     });
     if (!selected) return;
     try {
-      const newId = await projectService.importTable(selected as string);
+      const result = await projectService.importTable(selected as string);
       await refreshDatasets();
-      setActiveDataset(newId);
+      // Imported .sptb files may carry a folder hint (origin folder when the
+      // file was exported); honor it so the table lands in the expected
+      // location instead of always at root.
+      if (result.folder) {
+        fsSetTableFolder(result.id, result.folder);
+      }
+      setActiveDataset(result.id);
     } catch (e) {
       alert(t("alert.importTableFailed") + String(e));
     }
@@ -544,7 +606,17 @@ export function Workspace() {
   const handleSave = async () => {
     const { snapshots } = useHistoryStore.getState();
     const gbItems = useGraphBuilderStore.getState().items;
-    // History is session-only (not persisted); only snapshots are saved
+    // History is session-only (not persisted); only snapshots are saved.
+    // Graph folder assignment lives on each GraphBuilderItem.folder, so we
+    // bake it into the serialized body before passing graphs to the backend.
+    const gbItemsWithFolder = gbItems.map((g) => {
+      const f = graphFolders[g.id] ?? null;
+      return f ? { ...g, folder: f } : { ...g, folder: null };
+    });
+    const folderPayload = {
+      folders,
+      tableFolders,
+    };
     if (!project?.filePath) {
       const filePath = await save({
         title: t("welcome.saveProjectDialog"),
@@ -552,9 +624,9 @@ export function Workspace() {
         filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
       });
       if (!filePath) return; // User cancelled
-      await saveProject(filePath, [], snapshots, gbItems);
+      await saveProject(filePath, [], snapshots, gbItemsWithFolder, folderPayload);
     } else {
-      await saveProject(undefined, [], snapshots, gbItems);
+      await saveProject(undefined, [], snapshots, gbItemsWithFolder, folderPayload);
     }
     setSaveToast(true);
     setTimeout(() => setSaveToast(false), 1500);
@@ -566,6 +638,7 @@ export function Workspace() {
     setActiveGraphBuilderId(null);
     resetHistory();
     resetGraphBuilders();
+    fsReset();
     await initProject();
     await refreshDatasets();
     tableCounter.current = 0;
@@ -609,6 +682,14 @@ export function Workspace() {
         if (result.graphBuilders && result.graphBuilders.length > 0) {
           loadGraphBuildersFromProject(result.graphBuilders as GraphBuilderItem[]);
         }
+        // Restore folder tree + table/graph→folder assignments. We do this
+        // after datasets/graphs are loaded so a subsequent prune pass keeps
+        // assignments in sync with currently-existing items.
+        fsLoadFromProject({
+          folders: result.folders ?? [],
+          tableFolders: result.tableFolders ?? {},
+          graphFolders: result.graphFolders ?? {},
+        });
       } catch (e) {
         // Surface backend errors so the user isn't left staring at a screen
         // flash with no explanation when an .spprj fails to load.
@@ -618,6 +699,533 @@ export function Workspace() {
         setBusyMessage(null);
       }
     }
+  };
+
+  // ---- Folder-aware export helpers ----------------------------------------
+  // These functions all share the same naming convention so the user gets a
+  // predictable suggested filename in the OS save dialog:
+  //   `${projectName}-${folderName ?? ''}-${itemName}.ext`
+  // The middle segment collapses when the item is at the project root.
+
+  /** Build the `${project}-${folder}-${name}.ext` default filename. */
+  const suggestFilename = (folder: string | null | undefined, name: string, ext: string) => {
+    const proj = (project?.name ?? "project").trim() || "project";
+    const folderLabel = folder ? folderBaseName(folder) : "";
+    const parts = folderLabel ? [proj, folderLabel, name] : [proj, name];
+    // Per-segment cleanup so the dialog suggestion is friendly cross-platform;
+    // the user can still edit it before confirming the save.
+    const safe = parts
+      .map((p) => p.replace(/[\\/:*?"<>|]+/g, "_").trim())
+      .filter((p) => p.length > 0)
+      .join("-");
+    return `${safe || "export"}.${ext}`;
+  };
+
+  /** Return ids of all datasets that live under `folder` or any descendant. */
+  const datasetIdsUnderFolder = useCallback(
+    (folder: string | null): string[] => {
+      const allFolders = useFolderStore.getState().folders;
+      const allTableFolders = useFolderStore.getState().tableFolders;
+      const matchPrefix = folder === null
+        ? (_f: string) => true
+        : (f: string) => f === folder || f.startsWith(folder + "/");
+      // Subset of folders whose ids count: the folder itself plus any
+      // descendants. Null parent (root) matches everything.
+      const okFolders = new Set<string>(
+        folder === null ? allFolders : allFolders.filter(matchPrefix),
+      );
+      // A table is included if it is unassigned and we're exporting root, or
+      // assigned to one of the matching folders.
+      return datasets
+        .filter((ds) => {
+          const f = allTableFolders[ds.id];
+          if (!f) return folder === null;
+          return okFolders.has(f);
+        })
+        .map((ds) => ds.id);
+    },
+    [datasets],
+  );
+
+  /** Build a map of `datasetId → archive path` to mirror folder structure
+   *  inside a zip. `basePrefix` (e.g. the clicked folder) is stripped so the
+   *  paths inside the zip are relative to what the user selected. */
+  const buildArchivePaths = (
+    ids: string[],
+    basePrefix: string | null,
+    ext: "csv" | "sptb",
+  ): Record<string, string> => {
+    void ext; // Extension is appended by the backend; included here only to
+              // make call sites self-documenting at the type level.
+    const result: Record<string, string> = {};
+    const base = basePrefix ?? "";
+    for (const id of ids) {
+      const ds = datasets.find((d) => d.id === id);
+      if (!ds) continue;
+      const folder = tableFolders[id] ?? "";
+      // Make the folder path inside the zip relative to the user's chosen
+      // root. So if the user right-clicked `A/B` and a table lives in
+      // `A/B/C`, the zip path becomes `C/Table.csv`.
+      let relative = folder;
+      if (base && folder.startsWith(base + "/")) {
+        relative = folder.slice(base.length + 1);
+      } else if (base && folder === base) {
+        relative = "";
+      }
+      result[id] = relative ? `${relative}/${ds.name}` : ds.name;
+    }
+    return result;
+  };
+
+  /** Build a map of `datasetId → SQLite table name` per the user's spec of
+   *  `folder-tablename`, with `basePrefix` stripped. */
+  const buildSqliteNames = (
+    ids: string[],
+    basePrefix: string | null,
+  ): Record<string, string> => {
+    const result: Record<string, string> = {};
+    const base = basePrefix ?? "";
+    for (const id of ids) {
+      const ds = datasets.find((d) => d.id === id);
+      if (!ds) continue;
+      const folder = tableFolders[id] ?? "";
+      let relative = folder;
+      if (base && folder.startsWith(base + "/")) {
+        relative = folder.slice(base.length + 1);
+      } else if (base && folder === base) {
+        relative = "";
+      }
+      // Slash → dash so the assembled name is one flat SQLite identifier.
+      const flat = relative.replace(/\//g, "-");
+      result[id] = flat ? `${flat}-${ds.name}` : ds.name;
+    }
+    return result;
+  };
+
+  /** Export an individual table to a single .sptb (right-click on table). */
+  const handleExportTableSptbFromCtx = async (datasetId: string) => {
+    const ds = datasets.find((d) => d.id === datasetId);
+    if (!ds) return;
+    const folder = tableFolders[datasetId] ?? null;
+    const filePath = await save({
+      title: t("menu.exportSptb"),
+      defaultPath: suggestFilename(folder, ds.name, "sptb"),
+      filters: [{ name: "StatsPlayground Table", extensions: ["sptb"] }],
+    });
+    if (!filePath) return;
+    try {
+      await projectService.exportTable(ds.id, filePath as string);
+    } catch (e) {
+      alert(t("alert.exportTableFailed") + String(e));
+    }
+  };
+
+  /** Export an individual table to a single .csv (right-click on table). */
+  const handleExportTableCsvFromCtx = async (datasetId: string) => {
+    const ds = datasets.find((d) => d.id === datasetId);
+    if (!ds) return;
+    const folder = tableFolders[datasetId] ?? null;
+    const filePath = await save({
+      title: t("table.exportCsvSingle", { defaultValue: "Export as CSV" }),
+      defaultPath: suggestFilename(folder, ds.name, "csv"),
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (!filePath) return;
+    try {
+      await ioService.exportCsv(ds.id, filePath as string);
+    } catch (e) {
+      alert(t("alert.exportCsvFailed") + String(e));
+    }
+  };
+
+  /** Export an individual table into its own single-table .sqlite db. */
+  const handleExportTableSqliteFromCtx = async (datasetId: string) => {
+    const ds = datasets.find((d) => d.id === datasetId);
+    if (!ds) return;
+    const folder = tableFolders[datasetId] ?? null;
+    const filePath = await save({
+      title: t("table.exportSqliteSingle", { defaultValue: "Export as SQLite" }),
+      defaultPath: suggestFilename(folder, ds.name, "db"),
+      filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
+    });
+    if (!filePath) return;
+    try {
+      // Single-table export: just pass the one id, no name override needed.
+      await ioService.exportSqliteSubset(filePath as string, [ds.id], {});
+    } catch (e) {
+      alert(t("alert.exportSqliteFailed") + String(e));
+    }
+  };
+
+  /** Export every table under a folder as a zip of .sptb files. */
+  const handleExportFolderSptbZip = async (folderPath: string) => {
+    const ids = datasetIdsUnderFolder(folderPath);
+    if (ids.length === 0) return;
+    const folderName = folderBaseName(folderPath);
+    const filePath = await save({
+      title: t("folder.exportSptbZip", { defaultValue: "Export folder as .sptb (zip)" }),
+      defaultPath: suggestFilename(folderPath, folderName, "zip"),
+      filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
+    });
+    if (!filePath) return;
+    try {
+      await projectService.exportTablesSptbZip(
+        ids,
+        filePath as string,
+        buildArchivePaths(ids, folderPath, "sptb"),
+      );
+    } catch (e) {
+      alert(t("alert.exportTableFailed") + String(e));
+    }
+  };
+
+  /** Export every table under a folder as a zip of CSVs. */
+  const handleExportFolderCsvZip = async (folderPath: string) => {
+    const ids = datasetIdsUnderFolder(folderPath);
+    if (ids.length === 0) return;
+    const folderName = folderBaseName(folderPath);
+    const filePath = await save({
+      title: t("folder.exportCsvZip", { defaultValue: "Export folder as CSV (zip)" }),
+      defaultPath: suggestFilename(folderPath, folderName, "zip"),
+      filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
+    });
+    if (!filePath) return;
+    try {
+      await ioService.exportCsvZipSubset(
+        filePath as string,
+        ids,
+        buildArchivePaths(ids, folderPath, "csv"),
+      );
+    } catch (e) {
+      alert(t("alert.exportCsvFailed") + String(e));
+    }
+  };
+
+  /** Export every table under a folder into a single multi-table SQLite. */
+  const handleExportFolderSqlite = async (folderPath: string) => {
+    const ids = datasetIdsUnderFolder(folderPath);
+    if (ids.length === 0) return;
+    const folderName = folderBaseName(folderPath);
+    const filePath = await save({
+      title: t("folder.exportSqlite", { defaultValue: "Export folder as SQLite" }),
+      defaultPath: suggestFilename(folderPath, folderName, "db"),
+      filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
+    });
+    if (!filePath) return;
+    try {
+      await ioService.exportSqliteSubset(
+        filePath as string,
+        ids,
+        buildSqliteNames(ids, folderPath),
+      );
+    } catch (e) {
+      alert(t("alert.exportSqliteFailed") + String(e));
+    }
+  };
+
+  // ---- Folder mutation helpers wired to the side-panel UI ----------------
+
+  /** Prompt-less "New folder" handler. Creates a folder under `parent` with a
+   *  default localized name; the user can immediately rename it via F2 or by
+   *  double-clicking. */
+  const handleCreateFolder = (parent: string | null) => {
+    const baseName = t("folder.defaultName", { defaultValue: "New Folder" });
+    const newPath = fsCreateFolder(parent, baseName);
+    // Make sure the parent folder is expanded so the new child is visible.
+    if (parent && collapsedFolders[parent]) fsToggleCollapsed(parent);
+    // Drop straight into rename mode for the new folder so the user can name
+    // it without an extra click.
+    setRenamingFolder(newPath);
+    setFolderRenameValue(folderBaseName(newPath));
+    markDirty();
+  };
+
+  const handleFolderRenameSubmit = (oldPath: string) => {
+    const newBase = folderRenameValue.trim();
+    if (!newBase) {
+      setRenamingFolder(null);
+      return;
+    }
+    const err = validateFolderOrFileName(newBase);
+    if (err) {
+      alert(t(`alert.invalidName.${err}`, { defaultValue: "Invalid name." }));
+      return;
+    }
+    const newPath = fsRenameFolder(oldPath, newBase);
+    if (newPath) markDirty();
+    setRenamingFolder(null);
+  };
+
+  const handleDeleteFolder = (folderPath: string) => {
+    // Per user decision: child items are NEVER lost when a folder is deleted —
+    // they get promoted to the parent folder. No confirmation prompt is needed
+    // because nothing is actually destroyed.
+    fsDeleteFolder(folderPath);
+    markDirty();
+  };
+
+  // ---- Drag-and-drop wiring -----------------------------------------------
+  // We use the HTML5 DnD API with a tiny custom MIME-like JSON payload. The
+  // payload kind ('table' | 'graph' | 'folder') controls how `onDrop`
+  // dispatches into the folder store.
+  type DragPayload =
+    | { kind: "table"; id: string }
+    | { kind: "graph"; id: string }
+    | { kind: "folder"; path: string };
+
+  const handleDragStart = (e: React.DragEvent, payload: DragPayload) => {
+    e.dataTransfer.setData("application/x-sp-item", JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  /** True if dropping `payload` onto `target` is allowed.
+   *  Disallow dropping a folder onto itself or any of its descendants. */
+  const canDropOn = (payload: DragPayload, target: string | null): boolean => {
+    if (payload.kind === "folder") {
+      if (payload.path === target) return false;
+      if (target && target.startsWith(payload.path + "/")) return false;
+    }
+    return true;
+  };
+
+  const handleDropOnFolder = (e: React.DragEvent, target: string | null) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTarget(null);
+    const raw = e.dataTransfer.getData("application/x-sp-item");
+    if (!raw) return;
+    let payload: DragPayload;
+    try {
+      payload = JSON.parse(raw) as DragPayload;
+    } catch {
+      return;
+    }
+    if (!canDropOn(payload, target)) return;
+    if (payload.kind === "table") fsSetTableFolder(payload.id, target);
+    else if (payload.kind === "graph") fsSetGraphFolder(payload.id, target);
+    else if (payload.kind === "folder") fsMoveFolder(payload.path, target);
+    markDirty();
+  };
+
+  const handleDragOverFolder = (e: React.DragEvent, target: string | null) => {
+    // Allow drop visually. Note: we don't have access to the payload here
+    // (DataTransfer is restricted during dragover for security reasons), so
+    // we accept all targets and validate inside `handleDropOnFolder`.
+    if (e.dataTransfer.types.includes("application/x-sp-item")) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "move";
+      // Use a string key for highlight; null becomes "__root__" so React's
+      // equality check actually triggers a re-render.
+      const key = target ?? "__root__";
+      if (dropTarget !== key) setDropTarget(key);
+    }
+  };
+
+  // ---- Tree structure: group folders + items by parent --------------------
+  // Memoize on the (folders, tableFolders, graphFolders, datasets,
+  // graphBuilders) tuple so we only rebuild when something actually changed.
+  const tree = useMemo(() => {
+    // Children per parent path. Root parent is the magic key `__root__`.
+    const ROOT = "__root__";
+    const childFolders = new Map<string, string[]>();
+    for (const f of folders) {
+      const parent = folderParent(f) ?? ROOT;
+      const arr = childFolders.get(parent) ?? [];
+      arr.push(f);
+      childFolders.set(parent, arr);
+    }
+    // Sort each level alphabetically by basename for stable presentation.
+    for (const arr of childFolders.values()) {
+      arr.sort((a, b) => folderBaseName(a).localeCompare(folderBaseName(b)));
+    }
+    // Datasets per parent path.
+    const tablesByParent = new Map<string, typeof datasets>();
+    for (const ds of datasets) {
+      const p = tableFolders[ds.id] ?? ROOT;
+      const arr = tablesByParent.get(p) ?? [];
+      arr.push(ds);
+      tablesByParent.set(p, arr);
+    }
+    // Graphs per parent path.
+    const graphsByParent = new Map<string, GraphBuilderItem[]>();
+    for (const gb of graphBuilders) {
+      const p = graphFolders[gb.id] ?? ROOT;
+      const arr = graphsByParent.get(p) ?? [];
+      arr.push(gb);
+      graphsByParent.set(p, arr);
+    }
+    return { ROOT, childFolders, tablesByParent, graphsByParent };
+  }, [folders, tableFolders, graphFolders, datasets, graphBuilders]);
+
+  /** Recursively render one folder level. */
+  const renderFolderLevel = (parent: string | null, depth: number): React.ReactNode[] => {
+    const ROOT = tree.ROOT;
+    const key = parent ?? ROOT;
+    const out: React.ReactNode[] = [];
+    const folderChildren = tree.childFolders.get(key) ?? [];
+    const tableChildren = tree.tablesByParent.get(key) ?? [];
+    const graphChildren = tree.graphsByParent.get(key) ?? [];
+    // Folders first, then tables, then graphs, matching the prior visual order
+    // (tables-then-graphs at the root level).
+    for (const fp of folderChildren) {
+      const isCollapsed = !!collapsedFolders[fp];
+      const dropKey = fp;
+      const isDropTarget = dropTarget === dropKey;
+      out.push(
+        <div key={`folder:${fp}`} className={`sp-folder${isDropTarget ? " sp-folder-droptarget" : ""}`}>
+          <div
+            className="sp-folder-row"
+            style={{ paddingLeft: 8 + depth * 12 }}
+            draggable
+            onDragStart={(e) => handleDragStart(e, { kind: "folder", path: fp })}
+            onDragOver={(e) => handleDragOverFolder(e, fp)}
+            onDragLeave={() => setDropTarget((cur) => (cur === fp ? null : cur))}
+            onDrop={(e) => handleDropOnFolder(e, fp)}
+            onClick={() => fsToggleCollapsed(fp)}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              setRenamingFolder(fp);
+              setFolderRenameValue(folderBaseName(fp));
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setCtxMenu({ kind: "folder", path: fp, x: e.clientX, y: e.clientY });
+            }}
+          >
+            <svg
+              className={`sp-folder-chevron${isCollapsed ? "" : " sp-folder-chevron-open"}`}
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path d="M8 5l8 7-8 7V5z" />
+            </svg>
+            <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
+              <path d="M88 152C88 121 113 96 144 96L242 96C260 96 277 104 289 117L322 152L496 152C527 152 552 177 552 208L552 480C552 511 527 536 496 536L144 536C113 536 88 511 88 480L88 152z" />
+            </svg>
+            {renamingFolder === fp ? (
+              <input
+                className="ds-rename-input"
+                value={folderRenameValue}
+                onChange={(e) => setFolderRenameValue(e.target.value)}
+                onBlur={() => handleFolderRenameSubmit(fp)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleFolderRenameSubmit(fp);
+                  if (e.key === "Escape") setRenamingFolder(null);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                autoFocus
+              />
+            ) : (
+              <span className="ds-name">{folderBaseName(fp)}</span>
+            )}
+          </div>
+          {!isCollapsed && (
+            <div className="sp-folder-children">{renderFolderLevel(fp, depth + 1)}</div>
+          )}
+        </div>,
+      );
+    }
+    for (const ds of tableChildren) {
+      out.push(
+        <div
+          key={`table:${ds.id}`}
+          className={`dataset-item ${activeDatasetId === ds.id ? "active" : ""}`}
+          style={{ paddingLeft: 8 + depth * 12 + 12 }}
+          draggable
+          onDragStart={(e) => handleDragStart(e, { kind: "table", id: ds.id })}
+          onClick={() => {
+            setActiveGraphBuilderId(null);
+            setActiveDataset(ds.id);
+          }}
+          onDoubleClick={() => {
+            setRenamingId(ds.id);
+            setRenameValue(ds.name);
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setCtxMenu({ kind: "table", id: ds.id, x: e.clientX, y: e.clientY });
+          }}
+        >
+          <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
+            <path d="M480 96C515.3 96 544 124.7 544 160L544 480C544 515.3 515.3 544 480 544L160 544L153.5 543.7C121.2 540.4 96 513.1 96 480L96 160C96 124.7 124.7 96 160 96L480 96zM160 384L160 480L288 480L288 384L160 384zM352 384L352 480L480 480L480 384L352 384zM160 320L288 320L288 224L160 224L160 320zM352 320L480 320L480 224L352 224L352 320z" />
+          </svg>
+          {renamingId === ds.id ? (
+            <input
+              ref={renameInputRef}
+              className="ds-rename-input"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={() => handleRenameSubmit(ds.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRenameSubmit(ds.id);
+                if (e.key === "Escape") setRenamingId(null);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              autoFocus
+            />
+          ) : (
+            <span className="ds-name">{ds.name}</span>
+          )}
+          <span className="ds-info">{ds.rowCount}×{ds.colCount}</span>
+        </div>,
+      );
+    }
+    for (const gb of graphChildren) {
+      const sourceDs = datasets.find((d) => d.id === gb.sourceDatasetId);
+      out.push(
+        <div
+          key={`graph:${gb.id}`}
+          className={`dataset-item ${activeGraphBuilderId === gb.id ? "active" : ""}`}
+          style={{ paddingLeft: 8 + depth * 12 + 12 }}
+          draggable
+          onDragStart={(e) => handleDragStart(e, { kind: "graph", id: gb.id })}
+          onClick={() => {
+            setActiveDataset(null);
+            setActiveGraphBuilderId(gb.id);
+          }}
+          onDoubleClick={() => {
+            setRenamingId(gb.id);
+            setRenameValue(gb.name);
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setCtxMenu({ kind: "graph", id: gb.id, x: e.clientX, y: e.clientY });
+          }}
+          title={sourceDs ? t("workspace.datasourceLabel", { name: sourceDs.name }) : t("workspace.datasourceDeleted")}
+        >
+          <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
+            <path d="M96 96C113.7 96 128 110.3 128 128L128 480C128 488.8 135.2 496 144 496L544 496C561.7 496 576 510.3 576 528C576 545.7 561.7 560 544 560L144 560C99.8 560 64 524.2 64 480L64 128C64 110.3 78.3 96 96 96zM216 392C202.7 392 192 381.3 192 368C192 354.7 202.7 344 216 344L264 344C277.3 344 288 354.7 288 368L288 416C288 429.3 277.3 440 264 440C250.7 440 240 429.3 240 416L240 408L216 408L216 392zM320 200C320 186.7 330.7 176 344 176C357.3 176 368 186.7 368 200L368 416C368 429.3 357.3 440 344 440C330.7 440 320 429.3 320 416L320 200zM416 280C416 266.7 426.7 256 440 256C453.3 256 464 266.7 464 280L464 416C464 429.3 453.3 440 440 440C426.7 440 416 429.3 416 416L416 280zM512 320C525.3 320 536 330.7 536 344L536 416C536 429.3 525.3 440 512 440C498.7 440 488 429.3 488 416L488 344C488 330.7 498.7 320 512 320zM240 248C240 234.7 250.7 224 264 224C277.3 224 288 234.7 288 248L288 296C288 309.3 277.3 320 264 320C250.7 320 240 309.3 240 296L240 248z" />
+          </svg>
+          {renamingId === gb.id ? (
+            <input
+              ref={renameInputRef}
+              className="ds-rename-input"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={() => handleRenameSubmit(gb.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRenameSubmit(gb.id);
+                if (e.key === "Escape") setRenamingId(null);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              autoFocus
+            />
+          ) : (
+            <span className="ds-name">{gb.name}</span>
+          )}
+          <span className="ds-info gb-source-tag">
+            {sourceDs ? sourceDs.name : t("workspace.datasourceMissing")}
+          </span>
+        </div>,
+      );
+    }
+    return out;
   };
 
   return (
@@ -747,99 +1355,46 @@ export function Workspace() {
             <>
               <div className="panel-header">
                 <h3>{t("workspace.directory")}</h3>
+                <div className="panel-actions">
+                  <button
+                    className="panel-action-btn"
+                    title={t("menu.newFolder", { defaultValue: "New Folder" })}
+                    onClick={() => handleCreateFolder(null)}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M3 6.5C3 5.12 4.12 4 5.5 4h3.17c.66 0 1.3.26 1.77.73L11.83 6H18.5C19.88 6 21 7.12 21 8.5V18.5C21 19.88 19.88 21 18.5 21h-13C4.12 21 3 19.88 3 18.5V6.5zM13 11h-1.5V9.5a.5.5 0 1 0-1 0V11H9a.5.5 0 1 0 0 1h1.5v1.5a.5.5 0 1 0 1 0V12H13a.5.5 0 1 0 0-1z" />
+                    </svg>
+                  </button>
+                  <button
+                    className="panel-action-btn"
+                    title={t("menu.collapseAll", { defaultValue: "Collapse All" })}
+                    onClick={() => fsCollapseAll()}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M4 8h16v2H4zM4 14h16v2H4z" />
+                    </svg>
+                  </button>
+                </div>
               </div>
-              <div className="dataset-list">
-                {datasets.length === 0 && graphBuilders.length === 0 ? (
+              <div
+                className={`dataset-list${dropTarget === "__root__" ? " sp-droptarget-root" : ""}`}
+                onDragOver={(e) => handleDragOverFolder(e, null)}
+                onDragLeave={() => setDropTarget((cur) => (cur === "__root__" ? null : cur))}
+                onDrop={(e) => handleDropOnFolder(e, null)}
+                onContextMenu={(e) => {
+                  // Right-click on empty whitespace → create a root folder.
+                  // Only fire when the click target is the container itself
+                  // so it doesn't shadow per-item menus.
+                  if (e.target === e.currentTarget) {
+                    e.preventDefault();
+                    setCtxMenu({ kind: "empty", x: e.clientX, y: e.clientY });
+                  }
+                }}
+              >
+                {datasets.length === 0 && graphBuilders.length === 0 && folders.length === 0 ? (
                   <div className="empty-hint">{t("common.noContent")}</div>
                 ) : (
-                  <>
-                    {datasets.map((ds) => (
-                      <div
-                        key={ds.id}
-                        className={`dataset-item ${activeDatasetId === ds.id ? "active" : ""}`}
-                        onClick={() => {
-                          setActiveGraphBuilderId(null);
-                          setActiveDataset(ds.id);
-                        }}
-                        onDoubleClick={() => {
-                          setRenamingId(ds.id);
-                          setRenameValue(ds.name);
-                        }}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setDsMenu({ x: e.clientX, y: e.clientY, id: ds.id });
-                        }}
-                      >
-                        <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
-                          <path d="M480 96C515.3 96 544 124.7 544 160L544 480C544 515.3 515.3 544 480 544L160 544L153.5 543.7C121.2 540.4 96 513.1 96 480L96 160C96 124.7 124.7 96 160 96L480 96zM160 384L160 480L288 480L288 384L160 384zM352 384L352 480L480 480L480 384L352 384zM160 320L288 320L288 224L160 224L160 320zM352 320L480 320L480 224L352 224L352 320z"/>
-                        </svg>
-                        {renamingId === ds.id ? (
-                          <input
-                            ref={renameInputRef}
-                            className="ds-rename-input"
-                            value={renameValue}
-                            onChange={(e) => setRenameValue(e.target.value)}
-                            onBlur={() => handleRenameSubmit(ds.id)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleRenameSubmit(ds.id);
-                              if (e.key === "Escape") setRenamingId(null);
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            autoFocus
-                          />
-                        ) : (
-                          <span className="ds-name">{ds.name}</span>
-                        )}
-                        <span className="ds-info">{ds.rowCount}×{ds.colCount}</span>
-                      </div>
-                    ))}
-                    {graphBuilders.map((gb) => {
-                      const sourceDs = datasets.find((d) => d.id === gb.sourceDatasetId);
-                      return (
-                        <div
-                          key={gb.id}
-                          className={`dataset-item ${activeGraphBuilderId === gb.id ? "active" : ""}`}
-                          onClick={() => {
-                            setActiveDataset(null);
-                            setActiveGraphBuilderId(gb.id);
-                          }}
-                          onDoubleClick={() => {
-                            setRenamingId(gb.id);
-                            setRenameValue(gb.name);
-                          }}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            setDsMenu({ x: e.clientX, y: e.clientY, id: gb.id });
-                          }}
-                          title={sourceDs ? t("workspace.datasourceLabel", { name: sourceDs.name }) : t("workspace.datasourceDeleted")}
-                        >
-                          <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
-                            <path d="M96 96C113.7 96 128 110.3 128 128L128 480C128 488.8 135.2 496 144 496L544 496C561.7 496 576 510.3 576 528C576 545.7 561.7 560 544 560L144 560C99.8 560 64 524.2 64 480L64 128C64 110.3 78.3 96 96 96zM216 392C202.7 392 192 381.3 192 368C192 354.7 202.7 344 216 344L264 344C277.3 344 288 354.7 288 368L288 416C288 429.3 277.3 440 264 440C250.7 440 240 429.3 240 416L240 408L216 408L216 392zM320 200C320 186.7 330.7 176 344 176C357.3 176 368 186.7 368 200L368 416C368 429.3 357.3 440 344 440C330.7 440 320 429.3 320 416L320 200zM416 280C416 266.7 426.7 256 440 256C453.3 256 464 266.7 464 280L464 416C464 429.3 453.3 440 440 440C426.7 440 416 429.3 416 416L416 280zM512 320C525.3 320 536 330.7 536 344L536 416C536 429.3 525.3 440 512 440C498.7 440 488 429.3 488 416L488 344C488 330.7 498.7 320 512 320zM240 248C240 234.7 250.7 224 264 224C277.3 224 288 234.7 288 248L288 296C288 309.3 277.3 320 264 320C250.7 320 240 309.3 240 296L240 248z"/>
-                          </svg>
-                          {renamingId === gb.id ? (
-                            <input
-                              ref={renameInputRef}
-                              className="ds-rename-input"
-                              value={renameValue}
-                              onChange={(e) => setRenameValue(e.target.value)}
-                              onBlur={() => handleRenameSubmit(gb.id)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") handleRenameSubmit(gb.id);
-                                if (e.key === "Escape") setRenamingId(null);
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                              autoFocus
-                            />
-                          ) : (
-                            <span className="ds-name">{gb.name}</span>
-                          )}
-                          <span className="ds-info gb-source-tag">
-                            {sourceDs ? sourceDs.name : t("workspace.datasourceMissing")}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </>
+                  renderFolderLevel(null, 0)
                 )}
               </div>
             </>
@@ -964,38 +1519,75 @@ export function Workspace() {
         </div>
       )}
 
-      {dsMenu && (
+      {ctxMenu && (
         <div
           ref={ctxMenuRef}
           className="sp-ctx-menu"
-          style={{ left: dsMenu.x, top: dsMenu.y }}
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="sp-ctx-item" onClick={() => {
-            const gb = graphBuilders.find((g) => g.id === dsMenu.id);
-            if (gb) {
-              setRenamingId(gb.id);
-              setRenameValue(gb.name);
-              setActiveDataset(null);
-              setActiveGraphBuilderId(gb.id);
-            } else {
-              const ds = datasets.find((d) => d.id === dsMenu.id);
-              if (ds) {
-                setRenamingId(ds.id);
-                setRenameValue(ds.name);
-                setActiveGraphBuilderId(null);
-                setActiveDataset(ds.id);
-              }
-            }
-            setDsMenu(null);
-          }}>{t("common.rename")}</div>
-          <div className="sp-ctx-sep" />
-          <div className="sp-ctx-item sp-ctx-danger" onClick={() => {
-            const isGb = graphBuilders.some((g) => g.id === dsMenu.id);
-            if (isGb) handleDeleteGraphBuilder(dsMenu.id);
-            else handleDeleteDataset(dsMenu.id);
-            setDsMenu(null);
-          }}>{t("common.delete")}</div>
+          {ctxMenu.kind === "table" && (() => {
+            const id = ctxMenu.id;
+            const ds = datasets.find((d) => d.id === id);
+            if (!ds) return null;
+            return (
+              <>
+                <div className="sp-ctx-item" onClick={() => {
+                  setRenamingId(id);
+                  setRenameValue(ds.name);
+                  setActiveGraphBuilderId(null);
+                  setActiveDataset(id);
+                  setCtxMenu(null);
+                }}>{t("common.rename")}</div>
+                <div className="sp-ctx-sep" />
+                <div className="sp-ctx-item" onClick={() => { handleExportTableSptbFromCtx(id); setCtxMenu(null); }}>{t("menu.exportSptb")}</div>
+                <div className="sp-ctx-item" onClick={() => { handleExportTableCsvFromCtx(id); setCtxMenu(null); }}>{t("table.exportCsvSingle", { defaultValue: "Export as CSV" })}</div>
+                <div className="sp-ctx-item" onClick={() => { handleExportTableSqliteFromCtx(id); setCtxMenu(null); }}>{t("table.exportSqliteSingle", { defaultValue: "Export as SQLite" })}</div>
+                <div className="sp-ctx-sep" />
+                <div className="sp-ctx-item sp-ctx-danger" onClick={() => { handleDeleteDataset(id); setCtxMenu(null); }}>{t("common.delete")}</div>
+              </>
+            );
+          })()}
+          {ctxMenu.kind === "graph" && (() => {
+            const id = ctxMenu.id;
+            const gb = graphBuilders.find((g) => g.id === id);
+            if (!gb) return null;
+            return (
+              <>
+                <div className="sp-ctx-item" onClick={() => {
+                  setRenamingId(id);
+                  setRenameValue(gb.name);
+                  setActiveDataset(null);
+                  setActiveGraphBuilderId(id);
+                  setCtxMenu(null);
+                }}>{t("common.rename")}</div>
+                <div className="sp-ctx-sep" />
+                <div className="sp-ctx-item sp-ctx-danger" onClick={() => { handleDeleteGraphBuilder(id); setCtxMenu(null); }}>{t("common.delete")}</div>
+              </>
+            );
+          })()}
+          {ctxMenu.kind === "folder" && (() => {
+            const fp = ctxMenu.path;
+            return (
+              <>
+                <div className="sp-ctx-item" onClick={() => { handleCreateFolder(fp); setCtxMenu(null); }}>{t("folder.newSubfolder", { defaultValue: "New Subfolder" })}</div>
+                <div className="sp-ctx-item" onClick={() => {
+                  setRenamingFolder(fp);
+                  setFolderRenameValue(folderBaseName(fp));
+                  setCtxMenu(null);
+                }}>{t("common.rename")}</div>
+                <div className="sp-ctx-sep" />
+                <div className="sp-ctx-item" onClick={() => { handleExportFolderSptbZip(fp); setCtxMenu(null); }}>{t("folder.exportSptbZip", { defaultValue: "Export as .sptb (zip)" })}</div>
+                <div className="sp-ctx-item" onClick={() => { handleExportFolderCsvZip(fp); setCtxMenu(null); }}>{t("folder.exportCsvZip", { defaultValue: "Export as CSV (zip)" })}</div>
+                <div className="sp-ctx-item" onClick={() => { handleExportFolderSqlite(fp); setCtxMenu(null); }}>{t("folder.exportSqlite", { defaultValue: "Export as SQLite" })}</div>
+                <div className="sp-ctx-sep" />
+                <div className="sp-ctx-item sp-ctx-danger" onClick={() => { handleDeleteFolder(fp); setCtxMenu(null); }}>{t("common.delete")}</div>
+              </>
+            );
+          })()}
+          {ctxMenu.kind === "empty" && (
+            <div className="sp-ctx-item" onClick={() => { handleCreateFolder(null); setCtxMenu(null); }}>{t("menu.newFolder", { defaultValue: "New Folder" })}</div>
+          )}
         </div>
       )}
 
