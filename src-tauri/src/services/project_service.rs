@@ -10,9 +10,9 @@ pub struct ProjectService<'a> {
     state: &'a AppState,
 }
 
-/// Result of opening a project, including restored history/snapshot data and
-/// graph builder configurations. Field names mirror the legacy frontend API
-/// so this refactor is transparent to TypeScript callers.
+/// Result of opening a project, including restored history/snapshot data,
+/// graph builder configurations, and folder layout. Field names mirror the
+/// frontend API shape so this refactor is transparent to TypeScript callers.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenProjectResult {
@@ -23,9 +23,18 @@ pub struct OpenProjectResult {
     pub snapshots: Vec<serde_json::Value>,
     #[serde(default)]
     pub graph_builders: Vec<serde_json::Value>,
+    /// All folder paths that exist in the project (including empty ones).
+    #[serde(default)]
+    pub folders: Vec<String>,
+    /// `datasetId -> folder path` (root datasets are simply absent from the map).
+    #[serde(default)]
+    pub table_folders: std::collections::HashMap<String, String>,
+    /// `graphId -> folder path`.
+    #[serde(default)]
+    pub graph_folders: std::collections::HashMap<String, String>,
 }
 
-const SPPRJ_VERSION: &str = "1.0.0";
+const SPPRJ_VERSION: &str = "2.0.0";
 
 impl<'a> ProjectService<'a> {
     pub fn new(state: &'a AppState) -> Self {
@@ -66,7 +75,7 @@ impl<'a> ProjectService<'a> {
             name.to_string(),
             SPPRJ_VERSION.to_string(),
             now,
-            Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+            Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
         );
         spprj_archive::write_project_archive(&bundle, file_path)?;
 
@@ -105,13 +114,39 @@ impl<'a> ProjectService<'a> {
             .map_err(|e| AppError::Database(e.to_string()))?;
         *proj = Some(project.clone());
 
+        // Build folder maps from the manifest entries before we consume them.
+        let mut table_folders: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for entry in &bundle.manifest.tables {
+            if let Some(f) = &entry.folder {
+                if !f.is_empty() { table_folders.insert(entry.id.clone(), f.clone()); }
+            }
+        }
+        let mut graph_folders: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for entry in &bundle.manifest.graphs {
+            if let Some(f) = &entry.folder {
+                if !f.is_empty() { graph_folders.insert(entry.id.clone(), f.clone()); }
+            }
+        }
+        let folders = bundle.manifest.folders.clone();
+
         // Re-pack graph docs into the original opaque JSON shape the frontend
-        // already understands (full body including the `id` field). The body
-        // map stored on disk no longer carries `id` (it lives on GraphDoc
-        // itself to avoid duplicate JSON keys), so re-inject it here.
+        // already understands (full body including the `id` / `name` /
+        // `folder` fields). The body map stored on disk no longer carries
+        // these named keys (they live on GraphDoc itself to avoid duplicate
+        // JSON keys), so re-inject them here.
         let graph_builders = bundle.graphs.into_iter()
             .map(|mut g| {
                 g.body.insert("id".to_string(), serde_json::Value::String(g.id.clone()));
+                if !g.name.is_empty() {
+                    g.body.insert("name".to_string(), serde_json::Value::String(g.name.clone()));
+                }
+                if let Some(f) = &g.folder {
+                    if !f.is_empty() {
+                        g.body.insert("folder".to_string(), serde_json::Value::String(f.clone()));
+                    }
+                }
                 serde_json::Value::Object(g.body)
             })
             .collect();
@@ -121,6 +156,9 @@ impl<'a> ProjectService<'a> {
             history: bundle.history,
             snapshots: bundle.snapshots,
             graph_builders,
+            folders,
+            table_folders,
+            graph_folders,
         })
     }
 
@@ -131,6 +169,8 @@ impl<'a> ProjectService<'a> {
         history_data: Option<Vec<serde_json::Value>>,
         snapshots_data: Option<Vec<serde_json::Value>>,
         graph_builders_data: Option<Vec<serde_json::Value>>,
+        folders: Option<Vec<String>>,
+        table_folders: Option<std::collections::HashMap<String, String>>,
     ) -> Result<(), AppError> {
         let mut proj = self.state.project.write()
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -152,16 +192,23 @@ impl<'a> ProjectService<'a> {
         let save_created_at = project.created_at.clone();
         drop(proj);
 
-        // Compose every dataset into a TableDoc.
+        // Compose every dataset into a TableDoc, stamping the folder mapping
+        // (if any) onto each doc so the writer can derive its archive path.
         let datasets = {
             let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
             db.list_datasets()?
         };
+        let table_folders_map = table_folders.unwrap_or_default();
         let mut table_docs = Vec::with_capacity(datasets.len());
         for ds in &datasets {
-            table_docs.push(self.compose_table_doc(&ds.id)?);
+            let mut doc = self.compose_table_doc(&ds.id)?;
+            doc.folder = table_folders_map.get(&ds.id).cloned();
+            table_docs.push(doc);
         }
 
+        // Graph docs carry their own folder inside their opaque body (the
+        // frontend writes `folder` on each graph builder), so the helper
+        // already lifts it into GraphDoc.folder.
         let graph_docs = compose_graph_docs(graph_builders_data.unwrap_or_default());
 
         let bundle = spprj_archive::build_bundle(
@@ -170,6 +217,7 @@ impl<'a> ProjectService<'a> {
             save_created_at,
             table_docs,
             graph_docs,
+            folders.unwrap_or_default(),
             history_data.unwrap_or_default(),
             snapshots_data.unwrap_or_default(),
         );
@@ -254,6 +302,7 @@ impl<'a> ProjectService<'a> {
             id: dataset_id.to_string(),
             name: meta.name,
             source_type: meta.source_type,
+            folder: None,
             version: "1".to_string(),
             columns,
             rows,
@@ -346,14 +395,16 @@ impl<'a> ProjectService<'a> {
 
     /// Import a `.sptb` file from disk into the current project. Always
     /// allocates a fresh dataset id to avoid colliding with anything already
-    /// loaded; returns the new id.
-    pub fn import_table(&self, file_path: &str) -> Result<String, AppError> {
+    /// loaded; returns `(new_id, folder)` so the caller can place the new
+    /// dataset in the same folder the `.sptb` was exported from.
+    pub fn import_table(&self, file_path: &str) -> Result<(String, Option<String>), AppError> {
         let mut doc = spprj_archive::read_table_file(file_path)?;
+        let folder = doc.folder.clone();
         // Re-issue id to avoid collision with existing datasets in the project.
         let new_id = uuid::Uuid::new_v4().to_string();
         doc.id = new_id.clone();
         self.restore_table_doc(&doc)?;
-        Ok(new_id)
+        Ok((new_id, folder))
     }
 
     /// Export an arbitrary graph builder config (opaque to backend) as a
@@ -363,17 +414,26 @@ impl<'a> ProjectService<'a> {
         graph: serde_json::Value,
         file_path: &str,
     ) -> Result<(), AppError> {
-        let (id, body) = lift_graph_id(graph);
-        let doc = GraphDoc { id, version: "1".to_string(), body };
+        let (id, name, folder, body) = lift_graph_meta(graph);
+        let doc = GraphDoc { id, name, folder, version: "1".to_string(), body };
         spprj_archive::write_graph_file(&doc, file_path)
     }
 
     /// Read a `.spgh` file off disk and return its body as the same opaque
-    /// JSON shape the frontend uses for graph_builders (id is preserved).
+    /// JSON shape the frontend uses for graph_builders (id/name/folder are
+    /// preserved inside the body).
     pub fn import_graph(&self, file_path: &str) -> Result<serde_json::Value, AppError> {
         let doc = spprj_archive::read_graph_file(file_path)?;
         let mut body = doc.body;
         body.insert("id".to_string(), serde_json::Value::String(doc.id));
+        if !doc.name.is_empty() {
+            body.insert("name".to_string(), serde_json::Value::String(doc.name));
+        }
+        if let Some(f) = doc.folder {
+            if !f.is_empty() {
+                body.insert("folder".to_string(), serde_json::Value::String(f));
+            }
+        }
         Ok(serde_json::Value::Object(body))
     }
 }
@@ -398,20 +458,24 @@ fn duckdb_to_json(value: duckdb::types::Value) -> serde_json::Value {
 }
 
 /// Convert a list of opaque graph-builder JSON objects (frontend shape) into
-/// `GraphDoc`s suitable for the archive. Ensures every doc has a stable id.
+/// `GraphDoc`s suitable for the archive. Ensures every doc has a stable id
+/// and preserves the display name + folder so the writer can place files at
+/// the right paths inside the archive.
 fn compose_graph_docs(raw: Vec<serde_json::Value>) -> Vec<GraphDoc> {
     raw.into_iter().enumerate().map(|(idx, value)| {
-        let (id, body) = lift_graph_id(value);
+        let (id, name, folder, body) = lift_graph_meta(value);
         let id = if id.is_empty() { format!("graph_{}", idx) } else { id };
-        GraphDoc { id, version: "1".to_string(), body }
+        GraphDoc { id, name, folder, version: "1".to_string(), body }
     }).collect()
 }
 
-/// Pull `id` (or `builderId`) out of an opaque graph-builder object and
-/// return the body. Mirrors the same logic in spprj_archive's legacy reader.
-/// id and version are *removed* from the returned body so the GraphDoc that
-/// flattens it won't emit them twice on serialization.
-fn lift_graph_id(raw: serde_json::Value) -> (String, serde_json::Map<String, serde_json::Value>) {
+/// Pull `id` (or `builderId`), `name`, and `folder` out of an opaque
+/// graph-builder object. id / name / folder / version are *removed* from
+/// the returned body so the GraphDoc that flattens it won't emit duplicate
+/// JSON keys on serialization.
+fn lift_graph_meta(
+    raw: serde_json::Value,
+) -> (String, String, Option<String>, serde_json::Map<String, serde_json::Value>) {
     let mut map = match raw {
         serde_json::Value::Object(m) => m,
         _ => serde_json::Map::new(),
@@ -421,8 +485,18 @@ fn lift_graph_id(raw: serde_json::Value) -> (String, serde_json::Map<String, ser
         .and_then(|v| v.as_str().map(String::from))
         .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
         .unwrap_or_default();
+    let name = map
+        .remove("name")
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    let folder = map
+        .remove("folder")
+        .and_then(|v| match v {
+            serde_json::Value::String(s) if !s.is_empty() => Some(s),
+            _ => None,
+        });
     map.remove("version");
-    (id, map)
+    (id, name, folder, map)
 }
 
 fn chrono_now() -> String {

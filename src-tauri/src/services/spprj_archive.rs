@@ -1,22 +1,29 @@
 //! Spprj archive layer.
 //!
-//! New `.spprj` files are ZIP containers laid out as:
+//! v2 `.spprj` files are ZIP containers whose internal layout mirrors the
+//! user-facing folder tree inside the DIRECTORY tab. Each table and graph
+//! lives at the path the user sees in the UI:
+//!
 //! ```text
-//! manifest.json          ProjectManifest (project metadata + entry index)
-//! tables/<id>.sptb       TableDoc as JSON (one entry per dataset)
-//! graphs/<id>.spgh       GraphDoc as JSON (one entry per graph builder)
-//! history.json           opaque [HistoryEntry]    (optional)
-//! snapshots.json         opaque [Snapshot]        (optional)
+//! manifest.json                ProjectManifest (project metadata + index)
+//! <folder>/<name>.sptb         TableDoc as JSON (one per dataset)
+//! <folder>/<name>.spgh         GraphDoc as JSON (one per graph builder)
+//! .history.json                opaque [HistoryEntry]    (optional)
+//! .snapshots.json              opaque [Snapshot]        (optional)
 //! ```
 //!
-//! Each `.sptb` / `.spgh` entry is *also* a valid standalone file: extracting
-//! it from the archive produces a file the user can open by itself or share.
+//! Extracting the archive yields a tidy directory tree the user can browse
+//! with any zip tool — exactly what they see inside StatsPlayground.
 //!
-//! A small backward-compatibility path detects legacy single-file JSON
-//! (`.spprj` files written before this refactor) by sniffing the first byte
-//! and parses them via the same `LegacySpprj` shape that used to exist.
+//! v1 `.spprj` files (`tables/<uuid>.sptb`, `graphs/<uuid>.spgh`, no folders)
+//! still open: the reader does NOT migrate at read time. Migration to v2
+//! happens implicitly on the next save, when the writer re-derives filenames
+//! from display names and lays them out under the user's folder tree.
+//!
+//! Even older legacy single-file JSON `.spprj` documents are still detected
+//! via a first-byte sniff and parsed via `LegacySpprj`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Seek, Write};
 
 use serde::{Deserialize, Serialize};
@@ -46,6 +53,11 @@ pub struct ProjectManifest {
     /// Index of graph entries.
     #[serde(default)]
     pub graphs: Vec<GraphEntryRef>,
+    /// All folders that exist in the project, including empty ones.
+    /// Paths use `/` as the separator and never start or end with `/`.
+    /// Implicit ancestors (e.g. `a` for `a/b`) are still listed explicitly.
+    #[serde(default)]
+    pub folders: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -53,16 +65,27 @@ pub struct ProjectManifest {
 pub struct TableEntryRef {
     pub id: String,
     pub name: String,
-    /// Relative path inside the archive, e.g. `tables/<id>.sptb`.
+    /// Relative path inside the archive — for v2 this is `<folder>/<name>.sptb`
+    /// (or `<name>.sptb` at the root). For v1 reads this stays `tables/<id>.sptb`.
     pub file: String,
+    /// Folder the table belongs to (None / null = project root).
+    /// `None` rather than `""` to keep manifest JSON minimal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphEntryRef {
     pub id: String,
-    /// Relative path inside the archive, e.g. `graphs/<id>.spgh`.
+    /// Display name of the graph, used to derive the archive filename in v2.
+    /// v1 manifests didn't have this — defaults to empty string then.
+    #[serde(default)]
+    pub name: String,
+    /// Relative path inside the archive, e.g. `<folder>/<name>.spgh`.
     pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 /// One table file (`.sptb`). Self-contained: includes its own id/name so that
@@ -73,6 +96,10 @@ pub struct TableDoc {
     pub id: String,
     pub name: String,
     pub source_type: String,
+    /// Folder this table lives in (None = project root). Carried inside the
+    /// standalone `.sptb` so re-importing into a project preserves the layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     /// Doc format version — bump if the rows/columns shape changes.
     #[serde(default = "default_doc_version")]
     pub version: String,
@@ -105,15 +132,23 @@ pub struct TableColumnFormat {
 
 /// One graph file (`.spgh`). The body is opaque JSON owned by the frontend
 /// (graph builder config). We require an `id` field at the top level so the
-/// manifest can index it.
+/// manifest can index it; `name` and `folder` are pulled into the named
+/// fields so the writer can build the archive path.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphDoc {
     pub id: String,
+    /// Display name — used to derive the `<name>.spgh` filename in v2.
+    /// Defaults to empty (the writer falls back to the id then).
+    #[serde(default)]
+    pub name: String,
+    /// Folder this graph lives in (None = project root).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     /// Doc format version.
     #[serde(default = "default_doc_version")]
     pub version: String,
-    /// Frontend-owned opaque payload (everything except `id` / `version`).
+    /// Frontend-owned opaque payload (everything except the named fields).
     #[serde(flatten)]
     pub body: serde_json::Map<String, Value>,
 }
@@ -216,10 +251,12 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         graphs.push(doc);
     }
 
-    let history = read_entry_bytes(&mut zip, "history.json")
+    let history = read_entry_bytes(&mut zip, ".history.json")
+        .or_else(|| read_entry_bytes(&mut zip, "history.json"))
         .map(|b| serde_json::from_slice::<Vec<Value>>(&b).unwrap_or_default())
         .unwrap_or_default();
-    let snapshots = read_entry_bytes(&mut zip, "snapshots.json")
+    let snapshots = read_entry_bytes(&mut zip, ".snapshots.json")
+        .or_else(|| read_entry_bytes(&mut zip, "snapshots.json"))
         .map(|b| serde_json::from_slice::<Vec<Value>>(&b).unwrap_or_default())
         .unwrap_or_default();
 
@@ -247,11 +284,13 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
             id: ds.id.clone(),
             name: ds.name.clone(),
             file: format!("tables/{}.sptb", ds.id),
+            folder: None,
         });
         tables.push(TableDoc {
             id: ds.id,
             name: ds.name,
             source_type: ds.source_type,
+            folder: None,
             version: default_doc_version(),
             columns: ds.columns,
             rows: ds.rows,
@@ -259,17 +298,19 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
     }
 
     // Legacy graph builders had no top-level id field separate from the body.
-    // Try to lift `id`/`builderId` out for the manifest; otherwise synthesize.
+    // Try to lift `id`/`builderId`/`name` out for the manifest; otherwise synthesize.
     let mut graphs = Vec::new();
     let mut graph_refs = Vec::new();
     if let Some(gbs) = legacy.graph_builders {
         for (idx, raw) in gbs.into_iter().enumerate() {
-            let (id, body) = lift_id(raw, idx);
+            let (id, name, body) = lift_id_name(raw, idx);
             graph_refs.push(GraphEntryRef {
                 id: id.clone(),
+                name: name.clone(),
                 file: format!("graphs/{}.spgh", id),
+                folder: None,
             });
-            graphs.push(GraphDoc { id, version: default_doc_version(), body });
+            graphs.push(GraphDoc { id, name, folder: None, version: default_doc_version(), body });
         }
     }
 
@@ -279,6 +320,7 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         created_at: legacy.created_at,
         tables: table_refs,
         graphs: graph_refs,
+        folders: Vec::new(),
     };
 
     Ok(ProjectBundle {
@@ -290,11 +332,11 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
     })
 }
 
-/// Pull an `id`/`builderId` field out of an opaque graph builder JSON value
-/// for use in the manifest, returning the body as a Map. The id and version
-/// are *removed* from the returned body so the GraphDoc that flattens it
-/// won't emit them twice on serialization.
-fn lift_id(raw: Value, fallback_idx: usize) -> (String, serde_json::Map<String, Value>) {
+/// Pull `id`, `name`, and `builderId` out of an opaque graph builder JSON
+/// value for use in the manifest, returning `(id, name, body)`. The id, name,
+/// and version are *removed* from the returned body so the GraphDoc that
+/// flattens it won't emit them twice on serialization.
+fn lift_id_name(raw: Value, fallback_idx: usize) -> (String, String, serde_json::Map<String, Value>) {
     let mut map = match raw {
         Value::Object(m) => m,
         _ => serde_json::Map::new(),
@@ -304,39 +346,80 @@ fn lift_id(raw: Value, fallback_idx: usize) -> (String, serde_json::Map<String, 
         .and_then(|v| v.as_str().map(String::from))
         .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
         .unwrap_or_else(|| format!("graph_{}", fallback_idx));
+    let name = map
+        .remove("name")
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
     map.remove("version");
-    (id, map)
+    map.remove("folder");
+    (id, name, map)
 }
 
 // ----------------------------------------------------------------------------
 // Write API
 // ----------------------------------------------------------------------------
 
-/// Build a `ProjectBundle` from per-doc inputs. Fills in the manifest's table
-/// and graph entry refs from the docs themselves.
+/// Build a `ProjectBundle` from per-doc inputs. The writer derives each entry's
+/// archive path from its display name and folder (`<folder>/<name>.<ext>`),
+/// sanitizing the name and auto-suffixing `" (2)"`, `" (3)"`, … on collisions
+/// within the same folder + extension. The computed paths are then mirrored
+/// back into both the manifest's `TableEntryRef`/`GraphEntryRef.file` and each
+/// doc's own `file` placeholder is irrelevant — we only ever read the manifest
+/// `file` paths.
 pub fn build_bundle(
     name: String,
     version: String,
     created_at: String,
-    tables: Vec<TableDoc>,
-    graphs: Vec<GraphDoc>,
+    mut tables: Vec<TableDoc>,
+    mut graphs: Vec<GraphDoc>,
+    folders: Vec<String>,
     history: Vec<Value>,
     snapshots: Vec<Value>,
 ) -> ProjectBundle {
-    let table_refs: Vec<_> = tables.iter().map(|t| TableEntryRef {
-        id: t.id.clone(),
-        name: t.name.clone(),
-        file: format!("tables/{}.sptb", t.id),
-    }).collect();
-    let graph_refs: Vec<_> = graphs.iter().map(|g| GraphEntryRef {
-        id: g.id.clone(),
-        file: format!("graphs/{}.spgh", g.id),
-    }).collect();
+    // Track taken paths per-extension. `.sptb` and `.spgh` share the folder
+    // namespace, but their extensions are different so we let a table and a
+    // graph share the same display name without colliding.
+    let mut taken: HashSet<String> = HashSet::new();
+
+    let mut table_refs: Vec<TableEntryRef> = Vec::with_capacity(tables.len());
+    for t in tables.iter_mut() {
+        let folder_norm = normalize_folder(t.folder.as_deref());
+        let base = sanitize_name(&t.name, &t.id);
+        let path = unique_archive_path(&folder_norm, &base, "sptb", &mut taken);
+        table_refs.push(TableEntryRef {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            file: path,
+            folder: folder_norm,
+        });
+    }
+
+    let mut graph_refs: Vec<GraphEntryRef> = Vec::with_capacity(graphs.len());
+    for g in graphs.iter_mut() {
+        let folder_norm = normalize_folder(g.folder.as_deref());
+        // Graph name may be empty (legacy / synthesized); fall back to id.
+        let display_name = if g.name.is_empty() { g.id.clone() } else { g.name.clone() };
+        let base = sanitize_name(&display_name, &g.id);
+        let path = unique_archive_path(&folder_norm, &base, "spgh", &mut taken);
+        graph_refs.push(GraphEntryRef {
+            id: g.id.clone(),
+            name: g.name.clone(),
+            file: path,
+            folder: folder_norm,
+        });
+    }
+
+    // Collapse `folders` to a sorted, deduplicated, normalized list. Includes
+    // any implicit ancestor folders for completeness so an extractor sees the
+    // full tree even if the user only created `a/b/c` directly.
+    let normalized_folders = normalize_folder_list(folders);
+
     ProjectBundle {
         manifest: ProjectManifest {
             name, version, created_at,
             tables: table_refs,
             graphs: graph_refs,
+            folders: normalized_folders,
         },
         tables,
         graphs,
@@ -356,32 +439,68 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
         let mut zip = zip::ZipWriter::new(file);
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
+        let dir_opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
 
         let manifest_bytes = serde_json::to_vec_pretty(&bundle.manifest)
             .map_err(|e| AppError::FileIO(e.to_string()))?;
         write_zip_entry(&mut zip, "manifest.json", &manifest_bytes, opts)?;
 
-        for t in &bundle.tables {
-            let entry_path = format!("tables/{}.sptb", t.id);
-            let bytes = serde_json::to_vec(t)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
-            write_zip_entry(&mut zip, &entry_path, &bytes, opts)?;
+        // Emit explicit directory entries for every folder so extraction
+        // produces the full tree (including empty folders the user created).
+        // Also include implicit ancestors of any table/graph file path.
+        let mut all_dirs: HashSet<String> = HashSet::new();
+        for f in &bundle.manifest.folders {
+            for anc in folder_ancestors(f) { all_dirs.insert(anc); }
         }
-        for g in &bundle.graphs {
-            let entry_path = format!("graphs/{}.spgh", g.id);
-            let bytes = serde_json::to_vec(g)
+        for t in &bundle.manifest.tables {
+            if let Some(parent) = parent_folder(&t.file) {
+                for anc in folder_ancestors(&parent) { all_dirs.insert(anc); }
+            }
+        }
+        for g in &bundle.manifest.graphs {
+            if let Some(parent) = parent_folder(&g.file) {
+                for anc in folder_ancestors(&parent) { all_dirs.insert(anc); }
+            }
+        }
+        // Sort so the archive's central directory has a stable order.
+        let mut dirs_sorted: Vec<String> = all_dirs.into_iter().collect();
+        dirs_sorted.sort();
+        for d in &dirs_sorted {
+            zip.add_directory(format!("{}/", d), dir_opts)
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
-            write_zip_entry(&mut zip, &entry_path, &bytes, opts)?;
+        }
+
+        // Map each TableDoc / GraphDoc by id so we can pair them with the
+        // manifest entry that holds the authoritative archive path.
+        let table_by_id: HashMap<&str, &TableDoc> =
+            bundle.tables.iter().map(|t| (t.id.as_str(), t)).collect();
+        let graph_by_id: HashMap<&str, &GraphDoc> =
+            bundle.graphs.iter().map(|g| (g.id.as_str(), g)).collect();
+
+        for entry in &bundle.manifest.tables {
+            if let Some(doc) = table_by_id.get(entry.id.as_str()) {
+                let bytes = serde_json::to_vec(doc)
+                    .map_err(|e| AppError::FileIO(e.to_string()))?;
+                write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
+            }
+        }
+        for entry in &bundle.manifest.graphs {
+            if let Some(doc) = graph_by_id.get(entry.id.as_str()) {
+                let bytes = serde_json::to_vec(doc)
+                    .map_err(|e| AppError::FileIO(e.to_string()))?;
+                write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
+            }
         }
         if !bundle.history.is_empty() {
             let bytes = serde_json::to_vec(&bundle.history)
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
-            write_zip_entry(&mut zip, "history.json", &bytes, opts)?;
+            write_zip_entry(&mut zip, ".history.json", &bytes, opts)?;
         }
         if !bundle.snapshots.is_empty() {
             let bytes = serde_json::to_vec(&bundle.snapshots)
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
-            write_zip_entry(&mut zip, "snapshots.json", &bytes, opts)?;
+            write_zip_entry(&mut zip, ".snapshots.json", &bytes, opts)?;
         }
         zip.finish().map_err(|e| AppError::FileIO(e.to_string()))?;
     }
@@ -443,8 +562,9 @@ pub fn read_graph_file(path: &str) -> Result<GraphDoc, AppError> {
 /// top-level `id` key (one from the named struct field, one re-emitted by the
 /// flattened `body`) — still load. `serde_json::Map` keeps only the last value
 /// for duplicate keys, so the resulting map has a single `id` entry. We then
-/// lift `id` and `version` into the named struct fields so `body` no longer
-/// carries them. `fallback_id` is used when the file omits `id` entirely.
+/// lift `id`, `name`, `folder`, and `version` into the named struct fields so
+/// `body` no longer carries them. `fallback_id` is used when the file omits
+/// `id` entirely.
 fn parse_graph_doc(bytes: &[u8], fallback_id: &str) -> Result<GraphDoc, String> {
     let value: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let mut map = match value {
@@ -456,9 +576,113 @@ fn parse_graph_doc(bytes: &[u8], fallback_id: &str) -> Result<GraphDoc, String> 
         .and_then(|v| v.as_str().map(String::from))
         .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
         .unwrap_or_else(|| fallback_id.to_string());
+    let name = map
+        .remove("name")
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    let folder = map
+        .remove("folder")
+        .and_then(|v| match v {
+            Value::String(s) if !s.is_empty() => Some(s),
+            _ => None,
+        });
     let version = map
         .remove("version")
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_else(default_doc_version);
-    Ok(GraphDoc { id, version, body: map })
+    Ok(GraphDoc { id, name, folder, version, body: map })
+}
+
+// ----------------------------------------------------------------------------
+// Folder + name helpers
+// ----------------------------------------------------------------------------
+
+/// Characters disallowed inside a folder or file name segment. Matches the
+/// strictest cross-platform filesystem rules so that extracted archives are
+/// portable to any OS.
+const FORBIDDEN_NAME_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+
+/// Sanitize a user-visible name for use as an archive filename component.
+/// Replaces forbidden chars with `_`, trims leading/trailing whitespace and
+/// dots, and falls back to `fallback` (typically the entry id) if the result
+/// is empty.
+pub fn sanitize_name(name: &str, fallback: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if FORBIDDEN_NAME_CHARS.contains(&c) { '_' } else { c })
+        .collect();
+    let trimmed = cleaned.trim_matches(|c: char| c.is_whitespace() || c == '.');
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Normalize a folder path. Returns `None` for root (empty / `None` / `"/"`).
+/// Splits on `/` and `\`, sanitizes each segment, and rejoins with `/`.
+pub fn normalize_folder(folder: Option<&str>) -> Option<String> {
+    let raw = folder?.trim();
+    if raw.is_empty() { return None; }
+    let segs: Vec<String> = raw
+        .split(|c| c == '/' || c == '\\')
+        .filter(|s| !s.is_empty())
+        .map(|s| sanitize_name(s, "_"))
+        .collect();
+    if segs.is_empty() { None } else { Some(segs.join("/")) }
+}
+
+/// Normalize a list of folder paths and add implicit ancestors so the writer
+/// can emit a complete directory tree on extraction.
+fn normalize_folder_list(folders: Vec<String>) -> Vec<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    for f in folders {
+        if let Some(norm) = normalize_folder(Some(&f)) {
+            for anc in folder_ancestors(&norm) { out.insert(anc); }
+        }
+    }
+    let mut sorted: Vec<String> = out.into_iter().collect();
+    sorted.sort();
+    sorted
+}
+
+/// Build a unique archive path of the form `<folder>/<base>.<ext>` (or just
+/// `<base>.<ext>` at the root), auto-suffixing `" (2)"`, `" (3)"`, … until
+/// no collision exists in `taken` for the given extension namespace.
+fn unique_archive_path(
+    folder: &Option<String>,
+    base: &str,
+    ext: &str,
+    taken: &mut HashSet<String>,
+) -> String {
+    let prefix = match folder {
+        Some(f) => format!("{}/", f),
+        None => String::new(),
+    };
+    let mut candidate = format!("{}{}.{}", prefix, base, ext);
+    let mut n: u32 = 2;
+    while taken.contains(&candidate) {
+        candidate = format!("{}{} ({}).{}", prefix, base, n, ext);
+        n += 1;
+    }
+    taken.insert(candidate.clone());
+    candidate
+}
+
+/// Parent folder of an archive entry path, or `None` if at root.
+fn parent_folder(file: &str) -> Option<String> {
+    let idx = file.rfind('/')?;
+    Some(file[..idx].to_string())
+}
+
+/// All ancestor folder paths of `folder`, including `folder` itself, in
+/// shallow-to-deep order (e.g. `["a", "a/b", "a/b/c"]`). Returns empty vec
+/// when the input is empty.
+fn folder_ancestors(folder: &str) -> Vec<String> {
+    let parts: Vec<&str> = folder.split('/').filter(|s| !s.is_empty()).collect();
+    let mut out = Vec::with_capacity(parts.len());
+    for i in 1..=parts.len() {
+        out.push(parts[..i].join("/"));
+    }
+    out
 }
