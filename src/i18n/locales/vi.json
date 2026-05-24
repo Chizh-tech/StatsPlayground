@@ -41,6 +41,8 @@
     "exportSptb": "Xuất bảng hiện tại sang .sptb",
     "importSptb": "Nhập tệp bảng .sptb",
     "manageExtras": "Quản lý thuộc tính bổ sung",
+    "newFolder": "Thư mục mới",
+    "collapseAll": "Thu gọn tất cả",
     "graph": "Biểu đồ",
     "newGraph": "Trình tạo biểu đồ mới",
     "exportSpgh": "Xuất biểu đồ hiện tại sang .spgh",
@@ -69,7 +71,25 @@
     "exportTableFailed": "Xuất bảng thất bại: ",
     "importTableFailed": "Nhập bảng thất bại: ",
     "exportGraphFailed": "Xuất biểu đồ thất bại: ",
-    "importGraphFailed": "Nhập biểu đồ thất bại: "
+    "importGraphFailed": "Nhập biểu đồ thất bại: ",
+    "exportFolderFailed": "Xuất thư mục thất bại: ",
+    "openProjectFailed": "Mở dự án thất bại: ",
+    "invalidName": {
+      "empty": "Tên không được để trống.",
+      "invalidChars": "Tên chứa ký tự không hợp lệ: / \\ : * ? \" < > |",
+      "edgeDots": "Tên không được bắt đầu hoặc kết thúc bằng dấu chấm hoặc khoảng trắng."
+    }
+  },
+  "folder": {
+    "defaultName": "Thư mục mới",
+    "newSubfolder": "Thư mục con mới",
+    "exportSptbZip": "Xuất sang .sptb (zip)",
+    "exportCsvZip": "Xuất sang CSV (zip)",
+    "exportSqlite": "Xuất sang SQLite"
+  },
+  "table": {
+    "exportCsvSingle": "Xuất sang CSV",
+    "exportSqliteSingle": "Xuất sang SQLite"
   },
   "default": {
     "tableName": "Bảng{{n}}",

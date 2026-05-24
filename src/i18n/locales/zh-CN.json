@@ -41,6 +41,8 @@
     "exportSptb": "导出当前表为 .sptb",
     "importSptb": "导入 .sptb 表文件",
     "manageExtras": "管理附加属性",
+    "newFolder": "新建文件夹",
+    "collapseAll": "折叠全部",
     "graph": "图形",
     "newGraph": "新建图形构建器",
     "exportSpgh": "导出当前图形为 .spgh",
@@ -69,7 +71,25 @@
     "exportTableFailed": "导出表失败: ",
     "importTableFailed": "导入表失败: ",
     "exportGraphFailed": "导出图形失败: ",
-    "importGraphFailed": "导入图形失败: "
+    "importGraphFailed": "导入图形失败: ",
+    "exportFolderFailed": "导出文件夹失败: ",
+    "openProjectFailed": "打开项目失败: ",
+    "invalidName": {
+      "empty": "名称不能为空。",
+      "invalidChars": "名称包含非法字符: / \\ : * ? \" < > |",
+      "edgeDots": "名称首尾不能为点或空格。"
+    }
+  },
+  "folder": {
+    "defaultName": "新建文件夹",
+    "newSubfolder": "新建子文件夹",
+    "exportSptbZip": "导出为 .sptb (zip)",
+    "exportCsvZip": "导出为 CSV (zip)",
+    "exportSqlite": "导出为 SQLite"
+  },
+  "table": {
+    "exportCsvSingle": "导出为 CSV",
+    "exportSqliteSingle": "导出为 SQLite"
   },
   "default": {
     "tableName": "数据表{{n}}",
