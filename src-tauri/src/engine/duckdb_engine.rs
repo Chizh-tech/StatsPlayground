@@ -253,12 +253,40 @@ impl DuckDbEngine {
         Ok(())
     }
 
-    /// Export all datasets as CSV files packed into a ZIP archive
-    pub fn export_csv_zip(&self, output_path: &str) -> Result<(), AppError> {
+    /// Export all datasets as CSV files packed into a ZIP archive.
+    ///
+    /// This is the parameterized variant used both for "export everything"
+    /// and for folder-scoped exports from the UI.
+    ///
+    /// * `subset` — if `Some`, only datasets whose ids appear in the slice are
+    ///   exported; if `None`, all datasets are exported.
+    /// * `archive_paths` — optional `dataset_id → path inside the zip` map
+    ///   (without the `.csv` suffix). This is how the UI requests folder-aware
+    ///   layouts (e.g. `Folder1/Sub/Table.csv`). Datasets not present in the
+    ///   map fall back to a sanitized dataset name at the zip root.
+    ///
+    /// The path inside the zip is automatically suffixed with `.csv` and any
+    /// characters that are illegal on Windows are replaced with `_`. The
+    /// folder separator `/` is preserved so subfolder hierarchies survive.
+    pub fn export_csv_zip_subset(
+        &self,
+        output_path: &str,
+        subset: Option<&[String]>,
+        archive_paths: &std::collections::HashMap<String, String>,
+    ) -> Result<(), AppError> {
         use std::io::Write;
 
         let datasets = self.list_datasets()?;
-        if datasets.is_empty() {
+        // When a subset is requested, intersect with what actually exists so
+        // a stale id from the UI doesn't blow up the whole export.
+        let filtered: Vec<DatasetMeta> = match subset {
+            Some(ids) => {
+                let id_set: std::collections::HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
+                datasets.into_iter().filter(|d| id_set.contains(d.id.as_str())).collect()
+            }
+            None => datasets,
+        };
+        if filtered.is_empty() {
             return Err(AppError::InvalidParam("没有可导出的数据表".to_string()));
         }
 
@@ -266,8 +294,11 @@ impl DuckDbEngine {
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
+        // Track used archive paths so a (folder, name) clash inside the zip
+        // resolves to `name (2).csv`, `name (3).csv`, … instead of overwriting.
+        let mut used_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        for ds in &datasets {
+        for ds in &filtered {
             let table_name = format!("dataset_{}", ds.id.replace('-', "_"));
 
             // Get user column names (exclude _row_id)
@@ -318,8 +349,13 @@ impl DuckDbEngine {
                     .map_err(|e| AppError::FileIO(e.to_string()))?;
             }
 
-            // Sanitize file name
-            let file_name = format!("{}.csv", ds.name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
+            // Resolve the archive path. We sanitize each path segment so the
+            // resulting zip is portable across platforms (Windows is the
+            // strictest). Forward slashes between segments are intentionally
+            // preserved so subfolders remain.
+            let raw_path = archive_paths.get(&ds.id).cloned().unwrap_or_else(|| ds.name.clone());
+            let safe_base = sanitize_archive_path(&raw_path);
+            let file_name = dedupe_archive_path(&safe_base, "csv", &mut used_paths);
             zip.start_file(&file_name, options)
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
             zip.write_all(&csv_buf)
@@ -528,8 +564,27 @@ impl DuckDbEngine {
         }
     }
 
-    /// Export all datasets to a SQLite database file
-    pub fn export_sqlite(&self, output_path: &str) -> Result<(), AppError> {
+    /// Export datasets to a SQLite database file.
+    ///
+    /// This is the parameterized variant used both for "export everything"
+    /// and for folder-scoped exports from the UI.
+    ///
+    /// * `subset` — if `Some`, only datasets whose ids appear in the slice are
+    ///   exported; if `None`, all datasets are exported.
+    /// * `name_overrides` — `dataset_id → table name to use in the destination
+    ///   SQLite file`. Datasets not present in the map fall back to their
+    ///   regular `name`. Used by the UI to encode folder structure into the
+    ///   destination as `folder-tablename` (SQLite has no nested namespaces).
+    ///
+    /// If two datasets would map to the same SQLite table name (because they
+    /// share the same `folder-name` after override), the second one is
+    /// suffixed with ` (2)`, ` (3)`, … to avoid `CREATE TABLE` collisions.
+    pub fn export_sqlite_subset(
+        &self,
+        output_path: &str,
+        subset: Option<&[String]>,
+        name_overrides: &std::collections::HashMap<String, String>,
+    ) -> Result<(), AppError> {
         // Install and load the sqlite extension
         self.conn.execute_batch("INSTALL sqlite; LOAD sqlite;")?;
 
@@ -546,10 +601,23 @@ impl DuckDbEngine {
         )?;
 
         let result = (|| -> Result<(), AppError> {
-            // Get all datasets
             let datasets = self.list_datasets()?;
+            let filtered: Vec<DatasetMeta> = match subset {
+                Some(ids) => {
+                    let id_set: std::collections::HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
+                    datasets.into_iter().filter(|d| id_set.contains(d.id.as_str())).collect()
+                }
+                None => datasets,
+            };
+            if filtered.is_empty() {
+                return Err(AppError::InvalidParam("没有可导出的数据表".to_string()));
+            }
 
-            for ds in &datasets {
+            // Track which SQLite table names we've already emitted so the
+            // (folder, name) → table name collisions resolve deterministically.
+            let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            for ds in &filtered {
                 let table_name = format!("dataset_{}", ds.id.replace('-', "_"));
 
                 // Get user column names (exclude _row_id)
@@ -566,11 +634,17 @@ impl DuckDbEngine {
 
                 let select_cols = col_names.iter().map(|c| format!("\"{}\" ", c)).collect::<Vec<_>>().join(", ");
 
+                // Pick the destination table name, then dedupe within this run.
+                let base = name_overrides.get(&ds.id).cloned().unwrap_or_else(|| ds.name.clone());
+                let dst_name = dedupe_sqlite_table_name(&base, &mut used);
+
                 // Create the table in the destination SQLite database
                 self.conn.execute(
                     &format!(
                         "CREATE TABLE _sqlite_dst.\"{}\" AS SELECT {} FROM \"{}\"",
-                        ds.name, select_cols, table_name
+                        dst_name.replace('"', "\"\""),
+                        select_cols,
+                        table_name
                     ),
                     [],
                 )?;
@@ -1775,4 +1849,66 @@ impl DuckDbEngine {
             _ => format!("{:?}", v),
         }
     }
+}
+
+// ---- Free helpers for archive path / SQLite table name sanitization -------
+
+/// Sanitize a path destined for a ZIP archive. Each path segment is cleaned
+/// of characters that are illegal on Windows so the zip can be extracted
+/// anywhere; the `/` separator between segments is preserved so folder
+/// structure survives. Empty segments and leading/trailing whitespace are
+/// trimmed per segment.
+fn sanitize_archive_path(raw: &str) -> String {
+    let parts: Vec<String> = raw
+        .split('/')
+        .map(|seg| {
+            seg.replace(['\\', ':', '*', '?', '"', '<', '>', '|'], "_")
+                .trim()
+                .trim_matches('.')
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        "Untitled".to_string()
+    } else {
+        parts.join("/")
+    }
+}
+
+/// Suffix `base.ext` with ` (2)`, ` (3)`, … until the result is unique within
+/// `used`, then insert into `used` and return the chosen archive path.
+fn dedupe_archive_path(
+    base: &str,
+    ext: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    let mut candidate = format!("{}.{}", base, ext);
+    let mut n = 2;
+    while used.contains(&candidate) {
+        candidate = format!("{} ({}).{}", base, n, ext);
+        n += 1;
+    }
+    used.insert(candidate.clone());
+    candidate
+}
+
+/// Suffix a SQLite destination table name with ` (2)`, ` (3)`, … until the
+/// result is unique within `used`. SQLite table names allow most characters
+/// inside quoted identifiers, so we only enforce uniqueness — no character
+/// sanitization is applied (the UI passes `folder-tablename` style names
+/// that the user explicitly chose).
+fn dedupe_sqlite_table_name(
+    base: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    let safe_base = if base.trim().is_empty() { "Untitled" } else { base };
+    let mut candidate = safe_base.to_string();
+    let mut n = 2;
+    while used.contains(&candidate) {
+        candidate = format!("{} ({})", safe_base, n);
+        n += 1;
+    }
+    used.insert(candidate.clone());
+    candidate
 }

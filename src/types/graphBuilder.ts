@@ -37,6 +37,9 @@ export interface GraphBuilderItem {
    *  from the shared-axis range calculation, but keep their slot in
    *  globalGroupKeys so unhiding restores the same color. */
   hiddenGroups?: string[];
+  /** 所在文件夹路径（用 "/" 分隔），`null`/缺省表示位于项目根目录。
+   *  与数据表的 folder 共享同一名字空间，保存到 spprj 时决定归档内位置。 */
+  folder?: string | null;
   /** 创建时间 ISO 字符串 */
   createdAt: string;
 }

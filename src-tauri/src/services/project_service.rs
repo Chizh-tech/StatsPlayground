@@ -393,6 +393,52 @@ impl<'a> ProjectService<'a> {
         spprj_archive::write_table_file(&doc, file_path)
     }
 
+    /// Export multiple datasets as `.sptb` files packaged into a ZIP archive.
+    /// Each entry in `archive_paths` maps a dataset id to the `.sptb` file's
+    /// path inside the zip (the `.sptb` extension is added automatically and
+    /// duplicates are auto-suffixed with ` (2)`, ` (3)`, …). Datasets not
+    /// present in the map fall back to the dataset's plain name at the zip
+    /// root. The folder of each TableDoc is preserved so a re-import places
+    /// the table in the same folder it came from.
+    pub fn export_tables_sptb_zip(
+        &self,
+        dataset_ids: &[String],
+        archive_paths: &std::collections::HashMap<String, String>,
+        output_path: &str,
+    ) -> Result<(), AppError> {
+        use std::io::Write;
+
+        if dataset_ids.is_empty() {
+            return Err(AppError::InvalidParam("没有可导出的数据表".to_string()));
+        }
+        let file = std::fs::File::create(output_path)?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for id in dataset_ids {
+            // Skip silently if the id no longer exists rather than aborting
+            // the whole export — a half-stale UI list shouldn't lose the
+            // rest of the bundle.
+            let doc = match self.compose_table_doc(id) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let bytes = serde_json::to_vec_pretty(&doc)
+                .map_err(|e| AppError::FileIO(e.to_string()))?;
+            let raw = archive_paths.get(id).cloned().unwrap_or_else(|| doc.name.clone());
+            let safe = sanitize_zip_path(&raw);
+            let entry = dedupe_zip_path(&safe, "sptb", &mut used);
+            zip.start_file(&entry, options)
+                .map_err(|e| AppError::FileIO(e.to_string()))?;
+            zip.write_all(&bytes)
+                .map_err(|e| AppError::FileIO(e.to_string()))?;
+        }
+        zip.finish().map_err(|e| AppError::FileIO(e.to_string()))?;
+        Ok(())
+    }
+
     /// Import a `.sptb` file from disk into the current project. Always
     /// allocates a fresh dataset id to avoid colliding with anything already
     /// loaded; returns `(new_id, folder)` so the caller can place the new
@@ -513,3 +559,40 @@ fn chrono_now() -> String {
 // analysis when the export commands are pruned by feature flags.
 #[allow(dead_code)]
 fn _bundle_compile_check(_b: ProjectBundle) {}
+
+/// Sanitize a path destined for a ZIP archive. Forward slashes are kept as
+/// folder separators; per-segment characters illegal on Windows are replaced
+/// with `_`; leading/trailing dots and whitespace are trimmed per segment.
+fn sanitize_zip_path(raw: &str) -> String {
+    let parts: Vec<String> = raw
+        .split('/')
+        .map(|seg| {
+            seg.replace(['\\', ':', '*', '?', '"', '<', '>', '|'], "_")
+                .trim()
+                .trim_matches('.')
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        "Untitled".to_string()
+    } else {
+        parts.join("/")
+    }
+}
+
+/// Suffix `base.ext` with ` (2)`, ` (3)`, … until unique within `used`.
+fn dedupe_zip_path(
+    base: &str,
+    ext: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    let mut candidate = format!("{}.{}", base, ext);
+    let mut n = 2;
+    while used.contains(&candidate) {
+        candidate = format!("{} ({}).{}", base, n, ext);
+        n += 1;
+    }
+    used.insert(candidate.clone());
+    candidate
+}

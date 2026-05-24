@@ -81,6 +81,22 @@ pub fn export_table(
     service.export_table(&dataset_id, &file_path)
 }
 
+/// Export multiple datasets to a single `.zip` of `.sptb` files. The optional
+/// `archive_paths` map provides `dataset_id → path inside the zip` (without
+/// `.sptb`) so the UI can mirror its folder tree. Missing entries fall back
+/// to the dataset's plain name at the zip root.
+#[tauri::command(async)]
+pub fn export_tables_sptb_zip(
+    state: State<'_, AppState>,
+    dataset_ids: Vec<String>,
+    archive_paths: Option<std::collections::HashMap<String, String>>,
+    output_path: String,
+) -> Result<(), AppError> {
+    let service = ProjectService::new(&state);
+    let paths = archive_paths.unwrap_or_default();
+    service.export_tables_sptb_zip(&dataset_ids, &paths, &output_path)
+}
+
 /// Result of importing a standalone `.sptb` into the current project.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]

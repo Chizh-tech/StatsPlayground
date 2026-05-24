@@ -1,5 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ProjectInfo, OpenProjectResult } from "@/types/project";
+import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
+
+/** Optional folder payload accepted by the v2 save_project command. */
+export interface SaveProjectFolders {
+  /** All folder paths that exist in the project, including empty ones. */
+  folders: string[];
+  /** datasetId → folder path. Root datasets are simply absent. */
+  tableFolders: Record<string, string>;
+}
 
 export const projectService = {
   initProject: () =>
@@ -11,12 +19,20 @@ export const projectService = {
   openProject: (filePath: string) =>
     invoke<OpenProjectResult>("open_project", { filePath }),
 
-  saveProject: (filePath?: string, history?: unknown[], snapshots?: unknown[], graphBuilders?: unknown[]) =>
+  saveProject: (
+    filePath?: string,
+    history?: unknown[],
+    snapshots?: unknown[],
+    graphBuilders?: unknown[],
+    folders?: SaveProjectFolders,
+  ) =>
     invoke<ProjectInfo>("save_project", {
       filePath: filePath ?? null,
       history: history ?? null,
       snapshots: snapshots ?? null,
       graphBuilders: graphBuilders ?? null,
+      folders: folders?.folders ?? null,
+      tableFolders: folders?.tableFolders ?? null,
     }),
 
   getCurrentProject: () => invoke<ProjectInfo | null>("get_current_project"),
@@ -29,9 +45,25 @@ export const projectService = {
   exportTable: (datasetId: string, filePath: string) =>
     invoke<void>("export_table", { datasetId, filePath }),
 
-  /** Import a `.sptb` file. Returns the new dataset id assigned in the project. */
+  /** Export multiple datasets as `.sptb` files packed into a `.zip`.
+   *  `archivePaths` maps each dataset id to the file's path inside the zip
+   *  (without `.sptb`), so the UI can mirror its folder tree. */
+  exportTablesSptbZip: (
+    datasetIds: string[],
+    outputPath: string,
+    archivePaths?: Record<string, string>,
+  ) =>
+    invoke<void>("export_tables_sptb_zip", {
+      datasetIds,
+      outputPath,
+      archivePaths: archivePaths ?? null,
+    }),
+
+  /** Import a `.sptb` file. Returns the new dataset id assigned in the project
+   *  plus the folder the table was originally exported from (so the UI can
+   *  drop it into the same folder). */
   importTable: (filePath: string) =>
-    invoke<string>("import_table", { filePath }),
+    invoke<ImportTableResult>("import_table", { filePath }),
 
   /** Export an opaque graph builder config to a `.spgh` file. */
   exportGraph: (graph: unknown, filePath: string) =>

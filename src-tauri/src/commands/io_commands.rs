@@ -1,5 +1,6 @@
 use tauri::{AppHandle, Emitter, State};
 use serde::Serialize;
+use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::models::table::DatasetMeta;
@@ -59,4 +60,34 @@ pub fn export_csv_zip(
 ) -> Result<(), AppError> {
     let service = IoService::new(&state);
     service.export_csv_zip(&output_path)
+}
+
+/// Folder-aware CSV ZIP export. When `dataset_ids` is `Some` only those
+/// datasets are written. `archive_paths` maps `dataset_id → path inside the
+/// zip` (without the `.csv` suffix) so the UI can mirror its folder tree.
+#[tauri::command(async)]
+pub fn export_csv_zip_subset(
+    state: State<'_, AppState>,
+    output_path: String,
+    dataset_ids: Option<Vec<String>>,
+    archive_paths: Option<HashMap<String, String>>,
+) -> Result<(), AppError> {
+    let service = IoService::new(&state);
+    let paths = archive_paths.unwrap_or_default();
+    service.export_csv_zip_subset(&output_path, dataset_ids.as_deref(), &paths)
+}
+
+/// Folder-aware SQLite export. When `dataset_ids` is `Some` only those
+/// datasets are written. `name_overrides` maps `dataset_id → SQLite table
+/// name`; the UI uses this to encode folder structure as `folder-table`.
+#[tauri::command(async)]
+pub fn export_sqlite_subset(
+    state: State<'_, AppState>,
+    output_path: String,
+    dataset_ids: Option<Vec<String>>,
+    name_overrides: Option<HashMap<String, String>>,
+) -> Result<(), AppError> {
+    let service = IoService::new(&state);
+    let overrides = name_overrides.unwrap_or_default();
+    service.export_sqlite_subset(&output_path, dataset_ids.as_deref(), &overrides)
 }
