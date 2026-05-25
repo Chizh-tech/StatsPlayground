@@ -1250,11 +1250,6 @@ export function Workspace() {
               <div className="menu-sep" />
               <div className="menu-item" onClick={handleExportTableSptb}>{t("menu.exportSptb")}</div>
               <div className="menu-item" onClick={handleImportTableSptb}>{t("menu.importSptb")}</div>
-              <div className="menu-sep" />
-              <div
-                className="menu-item"
-                onClick={() => window.dispatchEvent(new CustomEvent("sp:open-manage-extras"))}
-              >{t("menu.manageExtras")}</div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.graph")}>
               <div className="menu-item" onClick={handleCreateGraphBuilder}>{t("menu.newGraph")}</div>

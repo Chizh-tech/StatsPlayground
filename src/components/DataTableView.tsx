@@ -1019,14 +1019,6 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     return () => document.removeEventListener("click", handler);
   }, [colMenu, rowMenu, cellMenu, cornerMenu]);
 
-  // Listen for the menu-bar "管理附加属性" trigger. Cross-component because
-  // DataTableView owns colExtras state but the menu lives in Workspace.
-  useEffect(() => {
-    const open = () => setShowManageExtras(true);
-    window.addEventListener("sp:open-manage-extras", open);
-    return () => window.removeEventListener("sp:open-manage-extras", open);
-  }, []);
-
   // Initialize colWidths and colFormats when columns change
   const visibleColCount = data ? data.columns.filter(c => c !== "_row_id").length : 0;
   useEffect(() => {
@@ -2948,6 +2940,15 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
           </button>
           <button className="sp-tb-btn" onClick={() => onTableOp("concatenate")}>
             {t("menu.opConcatenate")}
+          </button>
+          <div className="sp-tb-sep" />
+          {/* Column-level admin (not a row-level transform), so it lives
+              in its own trailing group separated by a divider. */}
+          <button
+            className="sp-tb-btn"
+            onClick={() => setShowManageExtras(true)}
+          >
+            {t("menu.manageExtras")}
           </button>
         </div>
       )}
