@@ -84,6 +84,31 @@ export type GroupStyleMap = Record<string, GroupStyle>;
  *  Color/Overlay split (single-series rendering). */
 export const DEFAULT_GROUP_KEY = "__default__";
 
+/** Line style for user-added Y-axis reference lines.
+ *  Matches ECharts' three core dash patterns; chosen as a closed enum
+ *  (instead of an arbitrary string) so the dropdown UI and the renderer
+ *  stay in sync. */
+export type RefLineStyle = "solid" | "dashed" | "dotted";
+
+/** User-defined horizontal reference line on the primary Y axis.
+ *  Rendered via ECharts `markLine` on an invisible carrier series so it
+ *  always appears regardless of which data series the user has enabled. */
+export interface RefLineY {
+  /** Stable id for React keys and updates. */
+  id: string;
+  /** Y-axis value the line is drawn at. */
+  y: number;
+  /** Free-form label text rendered at the right end of the line.
+   *  Empty string suppresses the label entirely. */
+  label: string;
+  /** Visual dash pattern. */
+  style: RefLineStyle;
+  /** Stroke color (any CSS color string; the UI emits hex). */
+  color: string;
+  /** Stroke width in CSS px. */
+  width: number;
+}
+
 /** 单个图形元素的配置 */
 export interface ChartElement {
   kind: ElementKind;
@@ -136,6 +161,11 @@ export interface GraphSpec {
    *  time and their rows are excluded from shared-axis range computation
    *  so visible data fills the chart area. */
   hiddenGroups?: string[];
+  /** User-added horizontal reference lines on the Y axis (e.g. spec
+   *  limits, target values, thresholds). Rendered as ECharts markLines
+   *  on an invisible carrier series so they appear independently of
+   *  which data series are toggled on. */
+  refLinesY?: RefLineY[];
 }
 
 /** 原始数据：列式 */

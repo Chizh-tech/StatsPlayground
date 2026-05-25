@@ -946,6 +946,123 @@
   color: var(--fg-secondary);
 }
 
+/* ===== Y-axis reference lines editor (bottom of right panel) ===== */
+.gb-refline-editor {
+  /* Same bleed trick as .gb-style-editor so the header bar matches the
+     LEGEND / STYLE headers above (flush left/right edges). */
+  margin: 8px -6px 0 -6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gb-refline-editor .sp-panel-header {
+  position: relative;
+}
+
+.gb-refline-add {
+  margin-left: auto;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  color: var(--fg-secondary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.gb-refline-add:hover {
+  background: var(--bg-cell-hover);
+  color: var(--fg-primary);
+}
+
+.gb-refline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 6px;
+}
+
+.gb-refline-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 6px;
+  background: var(--bg-cell-hover, rgba(0, 0, 0, 0.02));
+  border-radius: 4px;
+  border: 1px solid var(--border-main);
+}
+
+.gb-refline-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  min-height: 20px;
+}
+
+.gb-refline-mini-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.gb-refline-label-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 1px 4px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--fg-primary);
+}
+
+.gb-refline-num {
+  width: 60px;
+}
+
+.gb-refline-width {
+  width: 50px;
+}
+
+.gb-refline-style {
+  flex: 1;
+  min-width: 0;
+}
+
+.gb-refline-remove {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--fg-secondary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.gb-refline-remove:hover {
+  background: var(--bg-cell-hover);
+  border-color: var(--border-main);
+  color: var(--fg-primary);
+}
+
 /* ===== Custom theme palette (Add button + dialog) ===== */
 
 /* "+" swatch sitting at the end of the Theme picker. Dashed outline +

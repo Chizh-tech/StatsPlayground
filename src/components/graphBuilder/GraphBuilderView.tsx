@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } fr
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape } from "@/graphCore";
+import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineStyle } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -365,8 +365,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       elements: finalElements,
       styles: effectiveStyles,
       hiddenGroups: item.hiddenGroups,
+      refLinesY: item.refLinesY,
     };
-  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups]);
+  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -406,6 +407,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     updateItem(item.id, { groupStyles: {} });
     markDirty();
   }, [item.id, item.groupStyles, updateItem, markDirty]);
+
+  /** Replace the Y-axis reference-line list on this graph item. The
+   *  RefLinesEditor below builds the next array (immutable add / patch /
+   *  remove) and hands it in; we persist it to the project via the same
+   *  updateItem + markDirty pair used elsewhere. */
+  const setRefLinesY = useCallback(
+    (next: RefLineY[]) => {
+      updateItem(item.id, { refLinesY: next });
+      markDirty();
+    },
+    [item.id, updateItem, markDirty],
+  );
 
   // 拖放处理
   const onDragStart = (e: React.DragEvent, field: FieldRef) => {
@@ -713,6 +726,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           toggleGroupHidden={toggleGroupHidden}
           setGroupStyle={setGroupStyle}
           resetAllGroupStyles={resetAllGroupStyles}
+          refLinesY={item.refLinesY ?? []}
+          setRefLinesY={setRefLinesY}
           onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
           onClearOverlay={() => clearSlot("overlay")}
           width={rightWidth}
@@ -1261,12 +1276,16 @@ interface LegendStylePanelProps {
   /** Drop every per-group override and return the chart to factory
    *  defaults. Wired to the STYLE editor's Reset button. */
   resetAllGroupStyles: () => void;
+  /** User-defined Y-axis reference lines (rendered below the STYLE editor). */
+  refLinesY: RefLineY[];
+  /** Commit the new ref-line list (add / patch / remove). */
+  setRefLinesY: (next: RefLineY[]) => void;
   onDropOverlay: (e: React.DragEvent) => void;
   onClearOverlay: () => void;
   width: number;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, refLinesY, setRefLinesY, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // `data` and `elements` are still part of the public prop contract for
@@ -1577,6 +1596,11 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
             fields={["color", "opacity"]}
           />
         </div>
+
+        {/* Y-axis reference lines editor — a third section under STYLE.
+            Chart-level (not per-group) horizontal markers like spec
+            limits, target values, control thresholds, etc. */}
+        <RefLinesEditor refLines={refLinesY} setRefLines={setRefLinesY} />
       </div>
 
       {/* Add-theme dialog — rendered inside the panel; the .sp-dialog-overlay
@@ -1613,6 +1637,160 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
       )}
     </div>
   );
+}
+
+// ---- Y-axis reference lines editor -------------------------------------
+// Compact card-per-line editor sitting at the bottom of the right panel.
+// Each card lets the user pick the Y value, label text, line dash style,
+// color, and stroke width for one horizontal reference line. The chart
+// (transform.ts -> buildRefLinesCarrier) attaches the rendered markLines
+// to an invisible scatter series so every chart type benefits.
+
+interface RefLinesEditorProps {
+  refLines: RefLineY[];
+  setRefLines: (next: RefLineY[]) => void;
+}
+
+/** Mint a stable, collision-resistant id for a new ref line. Using a
+ *  timestamp + a per-render counter avoids the React-list-key churn we'd
+ *  see if we recycled array indexes. */
+let _refLineSeq = 0;
+function nextRefLineId(): string {
+  _refLineSeq += 1;
+  return `rl-${Date.now().toString(36)}-${_refLineSeq}`;
+}
+
+function RefLinesEditor({ refLines, setRefLines }: RefLinesEditorProps) {
+  const { t } = useTranslation();
+
+  const addLine = useCallback(() => {
+    const next: RefLineY = {
+      id: nextRefLineId(),
+      y: 0,
+      label: "",
+      style: "dashed",
+      color: "#888888",
+      width: 1,
+    };
+    setRefLines([...(refLines ?? []), next]);
+  }, [refLines, setRefLines]);
+
+  const updateLine = useCallback(
+    (id: string, patch: Partial<RefLineY>) => {
+      setRefLines((refLines ?? []).map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    },
+    [refLines, setRefLines],
+  );
+
+  const removeLine = useCallback(
+    (id: string) => {
+      setRefLines((refLines ?? []).filter((r) => r.id !== id));
+    },
+    [refLines, setRefLines],
+  );
+
+  return (
+    <div className="gb-refline-editor">
+      <div className="sp-panel-header">
+        <span className="sp-panel-header-title">
+          {t("graph.refLine.title", { defaultValue: "Reference Lines" })}
+        </span>
+        <button
+          type="button"
+          className="gb-refline-add"
+          onClick={addLine}
+          title={t("graph.refLine.add", { defaultValue: "Add reference line" })}
+          aria-label={t("graph.refLine.add", { defaultValue: "Add reference line" })}
+        >
+          +
+        </button>
+      </div>
+
+      <div className="gb-refline-list">
+        {(refLines ?? []).map((r) => (
+          <div key={r.id} className="gb-refline-card">
+            {/* Row 1: color swatch + label input + remove */}
+            <div className="gb-refline-row">
+              <input
+                type="color"
+                className="gb-style-color-picker"
+                value={normalizeHex(r.color)}
+                onChange={(e) => updateLine(r.id, { color: e.target.value })}
+                title={t("graph.refLine.color", { defaultValue: "Color" })}
+              />
+              <input
+                type="text"
+                className="gb-refline-label-input"
+                value={r.label}
+                placeholder={t("graph.refLine.label", { defaultValue: "Label" })}
+                onChange={(e) => updateLine(r.id, { label: e.target.value })}
+              />
+              <button
+                type="button"
+                className="gb-refline-remove"
+                onClick={() => removeLine(r.id)}
+                title={t("graph.refLine.remove", { defaultValue: "Remove" })}
+                aria-label={t("graph.refLine.remove", { defaultValue: "Remove" })}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Row 2: Y value + style dropdown + width */}
+            <div className="gb-refline-row">
+              <label className="gb-refline-mini-label">Y</label>
+              <input
+                type="number"
+                className="gb-style-number gb-refline-num"
+                value={Number.isFinite(r.y) ? r.y : 0}
+                step="any"
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  updateLine(r.id, { y: Number.isFinite(n) ? n : 0 });
+                }}
+              />
+              <select
+                className="gb-style-select gb-refline-style"
+                value={r.style}
+                onChange={(e) => updateLine(r.id, { style: e.target.value as RefLineStyle })}
+                title={t("graph.refLine.style", { defaultValue: "Line style" })}
+              >
+                <option value="solid">{t("graph.refLine.styleSolid", { defaultValue: "Solid" })}</option>
+                <option value="dashed">{t("graph.refLine.styleDashed", { defaultValue: "Dashed" })}</option>
+                <option value="dotted">{t("graph.refLine.styleDotted", { defaultValue: "Dotted" })}</option>
+              </select>
+              <label className="gb-refline-mini-label" title={t("graph.refLine.width", { defaultValue: "Width" })}>W</label>
+              <input
+                type="number"
+                className="gb-style-number gb-refline-width"
+                value={r.width}
+                min={1}
+                max={10}
+                step={0.5}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  updateLine(r.id, { width: Number.isFinite(n) && n > 0 ? n : 1 });
+                }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Coerce a stored color to a strict #RRGGBB form so <input type="color">
+ *  doesn't fall back to #000000 on shorthand / named colors. */
+function normalizeHex(c: string | undefined): string {
+  if (!c) return "#888888";
+  const s = c.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(s)) return s;
+  if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+    const r = s[1], g = s[2], b = s[3];
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  return "#888888";
 }
 
 /** Categorical palette for legend defaults — must match DEFAULT_CATEGORICAL

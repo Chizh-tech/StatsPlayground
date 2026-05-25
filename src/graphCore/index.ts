@@ -17,4 +17,6 @@ export {
   type GroupStyle,
   type GroupStyleMap,
   type MarkerShape,
+  type RefLineY,
+  type RefLineStyle,
 } from "./types";

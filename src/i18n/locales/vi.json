@@ -476,6 +476,19 @@
       "fill": "Tô",
       "point": "Điểm"
     },
+    "refLine": {
+      "title": "Đường tham chiếu",
+      "add": "Thêm đường tham chiếu",
+      "remove": "Xóa",
+      "y": "Y",
+      "label": "Nhãn",
+      "style": "Kiểu đường",
+      "color": "Màu",
+      "width": "Độ dày",
+      "styleSolid": "Liền",
+      "styleDashed": "Đứt",
+      "styleDotted": "Chấm"
+    },
     "style": {
       "color": "Màu",
       "marker": "Hình dạng",

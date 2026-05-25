@@ -476,6 +476,19 @@
       "fill": "Fill",
       "point": "Point"
     },
+    "refLine": {
+      "title": "Reference Lines",
+      "add": "Add reference line",
+      "remove": "Remove",
+      "y": "Y",
+      "label": "Label",
+      "style": "Line style",
+      "color": "Color",
+      "width": "Width",
+      "styleSolid": "Solid",
+      "styleDashed": "Dashed",
+      "styleDotted": "Dotted"
+    },
     "style": {
       "color": "Color",
       "marker": "Marker",

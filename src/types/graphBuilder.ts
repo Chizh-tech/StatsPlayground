@@ -4,7 +4,7 @@
  * 引用一个数据表作为数据源，自身仅保存编码与元素配置。
  */
 
-import type { ChartElement, FieldRef, GroupStyleMap } from "@/graphCore";
+import type { ChartElement, FieldRef, GroupStyleMap, RefLineY } from "@/graphCore";
 import type { FilterRuleItem } from "./filter";
 
 export type GraphSlotKey =
@@ -42,6 +42,11 @@ export interface GraphBuilderItem {
    *  expands (OR) the row set fed into the graph. Stored on the item so
    *  it persists with the project and survives reloads. */
   filters?: FilterRuleItem[];
+  /** User-defined horizontal reference lines on the primary Y axis
+   *  (spec limits, targets, thresholds). Each carries its own Y value,
+   *  label, color, dash style and stroke width. Persisted with the
+   *  project so annotations survive reloads. */
+  refLinesY?: RefLineY[];
   /** 创建时间 ISO 字符串。
  *
  *  注：图所属的文件夹不属于图本身的内禀属性——按 #7 设计，文件夹只

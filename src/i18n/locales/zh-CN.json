@@ -476,6 +476,19 @@
       "fill": "填充",
       "point": "点"
     },
+    "refLine": {
+      "title": "辅助线",
+      "add": "添加辅助线",
+      "remove": "删除",
+      "y": "Y",
+      "label": "标签",
+      "style": "线型",
+      "color": "颜色",
+      "width": "粗细",
+      "styleSolid": "实线",
+      "styleDashed": "虚线",
+      "styleDotted": "点线"
+    },
     "style": {
       "color": "颜色",
       "marker": "符号",

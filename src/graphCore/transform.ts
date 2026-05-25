@@ -6,7 +6,7 @@
  * 以及 X / Y / Color / Size / Overlay / GroupX / GroupY / Wrap 编码通道。
  */
 
-import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape } from "./types";
+import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineStyle } from "./types";
 import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
 import i18n from "@/i18n";
@@ -633,6 +633,76 @@ interface SharedAxisRanges {
   yMax?: number;
 }
 
+/** Map our `RefLineStyle` enum to ECharts' `lineStyle.type`. */
+function refDashFor(style: RefLineStyle): "solid" | "dashed" | "dotted" {
+  if (style === "dashed") return "dashed";
+  if (style === "dotted") return "dotted";
+  return "solid";
+}
+
+/** Build an invisible scatter "carrier" series whose only job is to host
+ *  user-defined Y-axis `markLine`s. We attach the markLines to a series
+ *  that has no data points so they always render regardless of which
+ *  data elements (points / line / boxplot …) the user has enabled or
+ *  hidden. Returns null when no reference lines are configured so we
+ *  avoid emitting a noise series.
+ *
+ *  Note: ECharts' markLine reads `data[i].yAxis` for a horizontal line;
+ *  `name` becomes the label text, and `lineStyle` / `label` override the
+ *  appearance. The `silent: true` flag prevents the markLine from
+ *  participating in tooltips or hover halos, which would distract from
+ *  the data series. */
+function buildRefLinesCarrier(refLines: RefLineY[] | undefined, theme: GraphTheme): any | null {
+  if (!refLines || refLines.length === 0) return null;
+  const valid = refLines.filter((r) => Number.isFinite(r.y));
+  if (valid.length === 0) return null;
+  return {
+    id: "__ref_lines_y__",
+    type: "scatter",
+    name: "",
+    data: [],
+    // Keep this series out of the legend the renderer might one day
+    // surface (we already disable the in-chart legend, but this is
+    // defensive in case that changes).
+    legendHoverLink: false,
+    silent: true,
+    z: 5,
+    markLine: {
+      symbol: ["none", "none"],
+      silent: true,
+      animation: false,
+      // Per-line styling is encoded into each data entry via `lineStyle`
+      // and `label`; the series-level defaults below are just fallbacks.
+      label: {
+        show: true,
+        position: "insideEndTop",
+        color: theme.fgPrimary,
+        fontSize: 11,
+      },
+      lineStyle: { color: theme.fgPrimary, width: 1, type: "dashed" },
+      data: valid.map((r) => {
+        const hasLabel = r.label != null && r.label !== "";
+        return {
+          yAxis: r.y,
+          name: r.label || "",
+          lineStyle: {
+            color: r.color,
+            width: r.width,
+            type: refDashFor(r.style),
+          },
+          label: {
+            show: hasLabel,
+            position: "insideEndTop",
+            formatter: r.label || "",
+            color: r.color,
+            fontSize: 11,
+          },
+        };
+      }),
+    },
+  };
+}
+
 /** 渲染一个单图（不分面）的 ECharts option
  *
  *  When called from the faceted path (`buildGraph` with `groupX`/`wrap`),
@@ -743,6 +813,8 @@ function buildSingleOption(
         barWidth: "99%",
         itemStyle: { color: theme.categorical[0] },
       });
+      const refCarrier = buildRefLinesCarrier(spec.refLinesY, theme);
+      if (refCarrier) series.push(refCarrier);
       return {
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
@@ -1041,6 +1113,14 @@ function buildSingleOption(
           ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
           ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
         };
+
+  // Append user-defined Y-axis reference lines (specs limits, target
+  // values, thresholds). Goes last so its z-index sits above the data
+  // series; the carrier itself is invisible — only the markLines render.
+  {
+    const refCarrier = buildRefLinesCarrier(spec.refLinesY, theme);
+    if (refCarrier) series.push(refCarrier);
+  }
 
   return {
     backgroundColor: "transparent",
