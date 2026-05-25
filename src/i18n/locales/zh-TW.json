@@ -487,7 +487,12 @@
       "width": "粗細",
       "styleSolid": "實線",
       "styleDashed": "虛線",
-      "styleDotted": "點線"
+      "styleDotted": "點線",
+      "empty": "尚未新增輔助線。點擊「新增輔助線」在 Y 軸上繪製一條水平輔助線。"
+    },
+    "yAxisSettings": {
+      "title": "Y 軸設定",
+      "categoryRefLines": "輔助線"
     },
     "style": {
       "color": "顏色",

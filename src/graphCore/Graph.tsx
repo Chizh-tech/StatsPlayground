@@ -28,9 +28,16 @@ interface GraphProps {
    * the end (see transform.ts `applyValueOrder`).
    */
   valueOrders?: Record<string, string[]>;
+  /**
+   * Fired when the user double-clicks anywhere inside the Y axis region
+   * (axis line, ticks, labels, or the title strip). The GraphBuilder
+   * opens its Y Axis settings dialog from here so users have a discoverable,
+   * direct-manipulation entry point next to the axis itself.
+   */
+  onYAxisDblClick?: () => void;
 }
 
-export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders }: GraphProps) {
+export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick }: GraphProps) {
   // 订阅主题变化以触发重渲染
   const themeMode = useThemeStore((s) => s.mode);
 
@@ -61,7 +68,13 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
       }}
     >
       {built.panels.map((p, i) => (
-        <GraphPanel key={i} title={p.title} option={p.option} minHeight={minPanelHeight} />
+        <GraphPanel
+          key={i}
+          title={p.title}
+          option={p.option}
+          minHeight={minPanelHeight}
+          onYAxisDblClick={onYAxisDblClick}
+        />
       ))}
     </div>
   );
@@ -71,11 +84,19 @@ interface GraphPanelProps {
   title: string;
   option: Record<string, unknown>;
   minHeight: number;
+  onYAxisDblClick?: () => void;
 }
 
-function GraphPanel({ title, option, minHeight }: GraphPanelProps) {
+function GraphPanel({ title, option, minHeight, onYAxisDblClick }: GraphPanelProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
+  // Keep the latest callback in a ref so the Zrender dblclick handler
+  // (which we register exactly once on mount) always sees the freshest
+  // closure without forcing a re-bind on every prop change.
+  const onYAxisDblClickRef = useRef(onYAxisDblClick);
+  useEffect(() => {
+    onYAxisDblClickRef.current = onYAxisDblClick;
+  }, [onYAxisDblClick]);
 
   // 初始化 / 销毁
   useEffect(() => {
@@ -84,7 +105,52 @@ function GraphPanel({ title, option, minHeight }: GraphPanelProps) {
     chartRef.current = inst;
     const ro = new ResizeObserver(() => inst.resize());
     ro.observe(ref.current);
+
+    // ----- Y-axis double-click ----------------------------------------
+    // ECharts' component-targeted `inst.on('dblclick', { componentType:
+    // 'yAxis' }, ...)` only fires when the user dblclicks an axis label
+    // or the axis line itself — empty space inside the axis strip (tick
+    // gaps, the title area) is missed. To make the gesture forgiving we
+    // also listen at the Zrender level: a dblclick that lands inside the
+    // Y-axis band (either reported by `containPixel({ yAxisIndex: 0 })`
+    // or anywhere in the left margin to the left of the grid) opens the
+    // settings dialog.
+    const zr = inst.getZr();
+    const zrHandler = (e: { offsetX: number; offsetY: number }) => {
+      const cb = onYAxisDblClickRef.current;
+      if (!cb) return;
+      const pt: [number, number] = [e.offsetX, e.offsetY];
+      let inYAxis = false;
+      try {
+        inYAxis = inst.containPixel({ yAxisIndex: 0 }, pt);
+      } catch {
+        // containPixel can throw if the chart hasn't laid out yet —
+        // ignore and fall through to the geometry-based fallback.
+      }
+      if (!inYAxis) {
+        // Fallback: treat the left margin (axis labels + axis title) as
+        // part of the Y-axis target. Conservative cap at 80px / 18% of
+        // panel width so the chart body itself never opens the dialog.
+        const el = ref.current;
+        if (el) {
+          const w = el.clientWidth;
+          const h = el.clientHeight;
+          if (
+            e.offsetX >= 0 &&
+            e.offsetX <= Math.min(80, w * 0.18) &&
+            e.offsetY >= 0 &&
+            e.offsetY <= h
+          ) {
+            inYAxis = true;
+          }
+        }
+      }
+      if (inYAxis) cb();
+    };
+    zr.on("dblclick", zrHandler);
+
     return () => {
+      zr.off("dblclick", zrHandler);
       ro.disconnect();
       inst.dispose();
       chartRef.current = null;

@@ -487,7 +487,12 @@
       "width": "Độ dày",
       "styleSolid": "Liền",
       "styleDashed": "Đứt",
-      "styleDotted": "Chấm"
+      "styleDotted": "Chấm",
+      "empty": "Chưa có đường tham chiếu nào. Nhấp “Thêm đường tham chiếu” để vẽ đường ngang trên trục Y."
+    },
+    "yAxisSettings": {
+      "title": "Cài đặt trục Y",
+      "categoryRefLines": "Đường tham chiếu"
     },
     "style": {
       "color": "Màu",

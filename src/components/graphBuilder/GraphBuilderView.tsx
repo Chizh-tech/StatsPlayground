@@ -88,6 +88,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Y-axis settings dialog open state. Opened by double-clicking the Y
+  // axis (or its label/title area) in <Graph>; closed via the dialog's
+  // Done button or overlay click.
+  const [yAxisDialogOpen, setYAxisDialogOpen] = useState(false);
   // Per-column user-defined value ordering, keyed by column name. Populated
   // from the dataset's `ColumnDisplayProps.extras.valueOrder.values`. Used
   // by <Graph> to reorder categorical X axes, legend entries, boxplot
@@ -677,7 +681,12 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 // `filteredData` is null iff `data` is null; the `!data`
                 // branch above already handled that, so `filteredData ?? data`
                 // is non-null here and just satisfies the type checker.
-                <Graph spec={spec} data={filteredData ?? data} valueOrders={valueOrders} />
+                <Graph
+                  spec={spec}
+                  data={filteredData ?? data}
+                  valueOrders={valueOrders}
+                  onYAxisDblClick={() => setYAxisDialogOpen(true)}
+                />
               )}
             </div>
             <Slot
@@ -726,13 +735,24 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           toggleGroupHidden={toggleGroupHidden}
           setGroupStyle={setGroupStyle}
           resetAllGroupStyles={resetAllGroupStyles}
-          refLinesY={item.refLinesY ?? []}
-          setRefLinesY={setRefLinesY}
           onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
           onClearOverlay={() => clearSlot("overlay")}
           width={rightWidth}
         />
       </div>
+
+      {/* Y-axis settings dialog. Opened by double-clicking the Y axis;
+          modeled after the system Preferences dialog (left categories
+          column + right detail pane) so adding future per-axis settings
+          (range, log scale, tick formatter, ...) is a one-line nav-item
+          addition. Today it has a single "Reference Lines" category. */}
+      {yAxisDialogOpen && (
+        <YAxisSettingsDialog
+          refLines={item.refLinesY ?? []}
+          setRefLines={setRefLinesY}
+          onClose={() => setYAxisDialogOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1276,16 +1296,12 @@ interface LegendStylePanelProps {
   /** Drop every per-group override and return the chart to factory
    *  defaults. Wired to the STYLE editor's Reset button. */
   resetAllGroupStyles: () => void;
-  /** User-defined Y-axis reference lines (rendered below the STYLE editor). */
-  refLinesY: RefLineY[];
-  /** Commit the new ref-line list (add / patch / remove). */
-  setRefLinesY: (next: RefLineY[]) => void;
   onDropOverlay: (e: React.DragEvent) => void;
   onClearOverlay: () => void;
   width: number;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, refLinesY, setRefLinesY, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // `data` and `elements` are still part of the public prop contract for
@@ -1596,11 +1612,6 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
             fields={["color", "opacity"]}
           />
         </div>
-
-        {/* Y-axis reference lines editor — a third section under STYLE.
-            Chart-level (not per-group) horizontal markers like spec
-            limits, target values, control thresholds, etc. */}
-        <RefLinesEditor refLines={refLinesY} setRefLines={setRefLinesY} />
       </div>
 
       {/* Add-theme dialog — rendered inside the panel; the .sp-dialog-overlay
@@ -1639,8 +1650,73 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
   );
 }
 
+// ---- Y-axis settings dialog --------------------------------------------
+// Opened by double-clicking the Y axis (or its label / title area) inside
+// <Graph>. Modelled after the system Preferences dialog: a fixed-width
+// categories nav on the left and a scrollable detail pane on the right.
+// Today there's one category — "Reference Lines" — but the structure
+// makes adding range / log-scale / tick-format settings later a one-line
+// nav-item addition.
+
+interface YAxisSettingsDialogProps {
+  refLines: RefLineY[];
+  setRefLines: (next: RefLineY[]) => void;
+  onClose: () => void;
+}
+
+type YAxisCategoryKey = "refLines";
+
+function YAxisSettingsDialog({ refLines, setRefLines, onClose }: YAxisSettingsDialogProps) {
+  const { t } = useTranslation();
+  const [active, setActive] = useState<YAxisCategoryKey>("refLines");
+
+  const categories: { key: YAxisCategoryKey; label: string }[] = [
+    {
+      key: "refLines",
+      label: t("graph.yAxisSettings.categoryRefLines", { defaultValue: "Reference Lines" }),
+    },
+  ];
+
+  return (
+    <div className="sp-dialog-overlay" onClick={onClose}>
+      <div
+        className="sp-dialog sp-dialog-wide pref-dialog"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sp-dialog-title">
+          {t("graph.yAxisSettings.title", { defaultValue: "Y Axis Settings" })}
+        </div>
+        <div className="sp-dialog-body pref-body">
+          <nav className="pref-nav">
+            {categories.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                className={`pref-nav-item${active === c.key ? " pref-nav-item-active" : ""}`}
+                onClick={() => setActive(c.key)}
+              >
+                {c.label}
+              </button>
+            ))}
+          </nav>
+          <div className="pref-pane">
+            {active === "refLines" && (
+              <RefLinesEditor refLines={refLines} setRefLines={setRefLines} />
+            )}
+          </div>
+        </div>
+        <div className="sp-dialog-actions">
+          <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={onClose}>
+            {t("prefs.done")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---- Y-axis reference lines editor -------------------------------------
-// Compact card-per-line editor sitting at the bottom of the right panel.
+// Card-per-line editor used inside the YAxisSettingsDialog's right pane.
 // Each card lets the user pick the Y value, label text, line dash style,
 // color, and stroke width for one horizontal reference line. The chart
 // (transform.ts -> buildRefLinesCarrier) attaches the rendered markLines
@@ -1689,31 +1765,49 @@ function RefLinesEditor({ refLines, setRefLines }: RefLinesEditorProps) {
     [refLines, setRefLines],
   );
 
+  const lines = refLines ?? [];
+
   return (
     <div className="gb-refline-editor">
-      <div className="sp-panel-header">
-        <span className="sp-panel-header-title">
+      {/* Section header: title + Add button. Title sits flush with the
+          pane padding so it reads as a normal settings-pane section. */}
+      <div className="gb-refline-header">
+        <span className="gb-refline-title">
           {t("graph.refLine.title", { defaultValue: "Reference Lines" })}
         </span>
         <button
           type="button"
           className="gb-refline-add"
           onClick={addLine}
-          title={t("graph.refLine.add", { defaultValue: "Add reference line" })}
-          aria-label={t("graph.refLine.add", { defaultValue: "Add reference line" })}
         >
-          +
+          + {t("graph.refLine.add", { defaultValue: "Add reference line" })}
         </button>
       </div>
 
-      <div className="gb-refline-list">
-        {(refLines ?? []).map((r) => (
-          <div key={r.id} className="gb-refline-card">
-            {/* Row 1: color swatch + label input + remove */}
-            <div className="gb-refline-row">
+      {lines.length === 0 ? (
+        <div className="gb-refline-empty">
+          {t("graph.refLine.empty", {
+            defaultValue: "No reference lines yet. Click \u201cAdd reference line\u201d to draw a horizontal marker on the Y axis.",
+          })}
+        </div>
+      ) : (
+        <div className="gb-refline-list">
+          {/* Column header row \u2014 helps users tell the input fields apart
+              once there are several lines stacked. */}
+          <div className="gb-refline-thead">
+            <span className="gb-refline-col gb-refline-col-color">{t("graph.refLine.color", { defaultValue: "Color" })}</span>
+            <span className="gb-refline-col gb-refline-col-label">{t("graph.refLine.label", { defaultValue: "Label" })}</span>
+            <span className="gb-refline-col gb-refline-col-y">{t("graph.refLine.y", { defaultValue: "Y" })}</span>
+            <span className="gb-refline-col gb-refline-col-style">{t("graph.refLine.style", { defaultValue: "Line style" })}</span>
+            <span className="gb-refline-col gb-refline-col-width">{t("graph.refLine.width", { defaultValue: "Width" })}</span>
+            <span className="gb-refline-col gb-refline-col-actions" />
+          </div>
+
+          {lines.map((r) => (
+            <div key={r.id} className="gb-refline-card">
               <input
                 type="color"
-                className="gb-style-color-picker"
+                className="gb-refline-color"
                 value={normalizeHex(r.color)}
                 onChange={(e) => updateLine(r.id, { color: e.target.value })}
                 title={t("graph.refLine.color", { defaultValue: "Color" })}
@@ -1725,6 +1819,37 @@ function RefLinesEditor({ refLines, setRefLines }: RefLinesEditorProps) {
                 placeholder={t("graph.refLine.label", { defaultValue: "Label" })}
                 onChange={(e) => updateLine(r.id, { label: e.target.value })}
               />
+              <input
+                type="number"
+                className="gb-refline-num"
+                value={Number.isFinite(r.y) ? r.y : 0}
+                step="any"
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  updateLine(r.id, { y: Number.isFinite(n) ? n : 0 });
+                }}
+              />
+              <select
+                className="gb-refline-style"
+                value={r.style}
+                onChange={(e) => updateLine(r.id, { style: e.target.value as RefLineStyle })}
+              >
+                <option value="solid">{t("graph.refLine.styleSolid", { defaultValue: "Solid" })}</option>
+                <option value="dashed">{t("graph.refLine.styleDashed", { defaultValue: "Dashed" })}</option>
+                <option value="dotted">{t("graph.refLine.styleDotted", { defaultValue: "Dotted" })}</option>
+              </select>
+              <input
+                type="number"
+                className="gb-refline-width"
+                value={r.width}
+                min={1}
+                max={10}
+                step={0.5}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  updateLine(r.id, { width: Number.isFinite(n) && n > 0 ? n : 1 });
+                }}
+              />
               <button
                 type="button"
                 className="gb-refline-remove"
@@ -1735,47 +1860,9 @@ function RefLinesEditor({ refLines, setRefLines }: RefLinesEditorProps) {
                 ×
               </button>
             </div>
-
-            {/* Row 2: Y value + style dropdown + width */}
-            <div className="gb-refline-row">
-              <label className="gb-refline-mini-label">Y</label>
-              <input
-                type="number"
-                className="gb-style-number gb-refline-num"
-                value={Number.isFinite(r.y) ? r.y : 0}
-                step="any"
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  updateLine(r.id, { y: Number.isFinite(n) ? n : 0 });
-                }}
-              />
-              <select
-                className="gb-style-select gb-refline-style"
-                value={r.style}
-                onChange={(e) => updateLine(r.id, { style: e.target.value as RefLineStyle })}
-                title={t("graph.refLine.style", { defaultValue: "Line style" })}
-              >
-                <option value="solid">{t("graph.refLine.styleSolid", { defaultValue: "Solid" })}</option>
-                <option value="dashed">{t("graph.refLine.styleDashed", { defaultValue: "Dashed" })}</option>
-                <option value="dotted">{t("graph.refLine.styleDotted", { defaultValue: "Dotted" })}</option>
-              </select>
-              <label className="gb-refline-mini-label" title={t("graph.refLine.width", { defaultValue: "Width" })}>W</label>
-              <input
-                type="number"
-                className="gb-style-number gb-refline-width"
-                value={r.width}
-                min={1}
-                max={10}
-                step={0.5}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  updateLine(r.id, { width: Number.isFinite(n) && n > 0 ? n : 1 });
-                }}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

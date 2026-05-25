@@ -487,7 +487,12 @@
       "width": "粗细",
       "styleSolid": "实线",
       "styleDashed": "虚线",
-      "styleDotted": "点线"
+      "styleDotted": "点线",
+      "empty": "暂无辅助线。点击“添加辅助线”在 Y 轴上绘制一条水平辅助线。"
+    },
+    "yAxisSettings": {
+      "title": "Y 轴设置",
+      "categoryRefLines": "辅助线"
     },
     "style": {
       "color": "颜色",

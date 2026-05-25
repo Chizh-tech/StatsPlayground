@@ -946,103 +946,132 @@
   color: var(--fg-secondary);
 }
 
-/* ===== Y-axis reference lines editor (bottom of right panel) ===== */
+/* ===== Y-axis reference lines editor (Y Axis Settings dialog pane) =====
+   Sits inside the right pane of the YAxisSettingsDialog (PreferencesDialog
+   style). Layout is row-per-line: color | label | Y | style | width | × */
 .gb-refline-editor {
-  /* Same bleed trick as .gb-style-editor so the header bar matches the
-     LEGEND / STYLE headers above (flush left/right edges). */
-  margin: 8px -6px 0 -6px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 
-.gb-refline-editor .sp-panel-header {
-  position: relative;
+.gb-refline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gb-refline-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-primary);
 }
 
 .gb-refline-add {
-  margin-left: auto;
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
+  appearance: none;
   border: 1px solid var(--border-main);
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: 12px;
+  padding: 3px 10px;
   border-radius: 3px;
-  color: var(--fg-secondary);
-  font-size: 14px;
-  line-height: 1;
   cursor: pointer;
-  padding: 0;
+  line-height: 1.4;
 }
 
 .gb-refline-add:hover {
   background: var(--bg-cell-hover);
-  color: var(--fg-primary);
+  border-color: var(--fg-accent);
+}
+
+.gb-refline-empty {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  padding: 16px 0;
+  text-align: center;
+  border: 1px dashed var(--border-main);
+  border-radius: 4px;
 }
 
 .gb-refline-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 0 6px;
 }
 
+/* Column header row sits above the cards so users can tell the input
+   columns apart once there are several lines stacked. */
+.gb-refline-thead,
 .gb-refline-card {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 4px 6px;
-  background: var(--bg-cell-hover, rgba(0, 0, 0, 0.02));
-  border-radius: 4px;
-  border: 1px solid var(--border-main);
-}
-
-.gb-refline-row {
-  display: flex;
+  display: grid;
+  grid-template-columns:
+    /* color */ 28px
+    /* label */ minmax(0, 1fr)
+    /* y     */ 88px
+    /* style */ 96px
+    /* width */ 64px
+    /* del   */ 28px;
+  gap: 6px;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  min-height: 20px;
 }
 
-.gb-refline-mini-label {
+.gb-refline-thead {
   font-size: 10px;
   font-weight: 600;
   color: var(--fg-secondary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  flex-shrink: 0;
+  padding: 0 4px;
 }
 
-.gb-refline-label-input {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  padding: 1px 4px;
+.gb-refline-col-color,
+.gb-refline-col-y,
+.gb-refline-col-width {
+  text-align: center;
+}
+
+.gb-refline-card {
+  padding: 4px;
+  background: var(--bg-cell-hover, rgba(0, 0, 0, 0.02));
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.gb-refline-color {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  justify-self: center;
+}
+
+.gb-refline-label-input,
+.gb-refline-num,
+.gb-refline-style,
+.gb-refline-width {
+  font-size: 12px;
+  padding: 3px 6px;
   border: 1px solid var(--border-main);
   border-radius: 3px;
   background: var(--bg-card);
   color: var(--fg-primary);
-}
-
-.gb-refline-num {
-  width: 60px;
-}
-
-.gb-refline-width {
-  width: 50px;
-}
-
-.gb-refline-style {
-  flex: 1;
   min-width: 0;
 }
 
+.gb-refline-num,
+.gb-refline-width {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .gb-refline-remove {
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1050,11 +1079,11 @@
   border: 1px solid transparent;
   border-radius: 3px;
   color: var(--fg-secondary);
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
   cursor: pointer;
   padding: 0;
-  flex-shrink: 0;
+  justify-self: center;
 }
 
 .gb-refline-remove:hover {
