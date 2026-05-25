@@ -165,11 +165,29 @@ function colIndex(data: GraphData, name: string | undefined): number {
   return data.columns.indexOf(name);
 }
 
-/** 数值化：null/undefined/空 -> NaN */
+/** 数值化：null/undefined/空/纯空白 -> NaN
+ *
+ *  Notably this guards against the silent `Number("")===0` and
+ *  `Number(" ")===0` traps in JavaScript: without the explicit
+ *  emptiness check below, a blank cell would be plotted at y=0 (or
+ *  bucketed into the "0" bin) instead of being dropped as missing.
+ *  We also `trim()` short strings to catch CSV imports that leave a
+ *  stray space/tab in cells the user perceives as empty. */
 function toNum(v: unknown): number {
-  if (v == null || v === "") return NaN;
+  if (v == null) return NaN;
+  if (typeof v === "string" && v.trim() === "") return NaN;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : NaN;
+}
+
+/** True when `v` should be treated as a missing observation (null,
+ *  undefined, empty string, or whitespace-only string). Centralises the
+ *  policy used by both numeric and categorical paths so the graph
+ *  doesn't render phantom "" categories alongside real ones. */
+function isMissing(v: unknown): boolean {
+  if (v == null) return true;
+  if (typeof v === "string" && v.trim() === "") return true;
+  return false;
 }
 
 /** 字符串化（用于分类轴 / 分组键） */
@@ -216,7 +234,14 @@ function reorderMapByValueOrder<V>(m: Map<string, V>, order: string[] | undefine
   return out;
 }
 
-/** 按字段对行进行分组 */
+/** 按字段对行进行分组
+ *
+ *  Rows whose grouping value is missing (null / undefined / blank
+ *  string) are excluded entirely instead of collapsing into a phantom
+ *  empty-string bucket. This keeps blanks out of the X axis, the
+ *  legend, and downstream aggregations such as the boxplot's per-X
+ *  cells, where they would otherwise have rendered as a category
+ *  labelled "" sitting next to a flat box at zero. */
 function groupBy(
   data: GraphData,
   field: FieldRef | undefined,
@@ -232,7 +257,9 @@ function groupBy(
     return out;
   }
   data.rows.forEach((row, i) => {
-    const key = toStr(row[idx]);
+    const raw = row[idx];
+    if (isMissing(raw)) return;
+    const key = toStr(raw);
     let arr = out.get(key);
     if (!arr) {
       arr = [];
@@ -453,6 +480,9 @@ function aggregatePoints(
   const map = new Map<string, { xv: unknown; ys: number[] }>();
   for (const i of rowIdxs) {
     const xv = data.rows[i][xIdx];
+    // Drop missing X up-front so blank cells don't all collapse into a
+    // phantom "NaN" / "" bucket that plots near zero on a value axis.
+    if (isMissing(xv)) continue;
     const yv = toNum(data.rows[i][yIdx]);
     if (!Number.isFinite(yv)) continue;
     const key = xIsCategory ? toStr(xv) : String(toNum(xv));
@@ -766,7 +796,10 @@ function buildSingleOption(
         if (groupRowSet) idxs = idxs.filter((i) => groupRowSet.has(i));
         const ys = idxs.map((i) => toNum(data.rows[i][yIdx])).filter(Number.isFinite);
         if (ys.length === 0) {
-          boxData.push([0, 0, 0, 0, 0]);
+          // Empty (X-category × overlay-group) cell: push a null marker
+          // so ECharts leaves the slot blank, instead of `[0,0,0,0,0]`
+          // which would render a phantom flat box pinned at y=0.
+          boxData.push(null as unknown as [number, number, number, number, number]);
           return;
         }
         const stats = boxStats(ys)!;
@@ -1106,6 +1139,10 @@ function buildElementSeries(
   const points: Array<{ x: unknown; y: number; size?: number }> = [];
   for (const i of rowIdxs) {
     const xv = useRowIdx ? SINGLE_X : data.rows[i][xIdx];
+    // When a real X column is bound, drop rows whose X is missing so
+    // they don't appear as a blank category (bar) or as NaN points
+    // (which ECharts plots at the axis origin on a value scale).
+    if (!useRowIdx && isMissing(xv)) continue;
     const yv = toNum(data.rows[i][yIdx]);
     if (!Number.isFinite(yv)) continue;
     const sv = sizeIdx >= 0 ? toNum(data.rows[i][sizeIdx]) : undefined;

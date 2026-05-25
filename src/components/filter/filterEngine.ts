@@ -107,7 +107,12 @@ function continuousPred(rule: FilterContinuousRule, idx: number) {
   if (lo == null && hi == null) return () => true;
   return (row: unknown[]) => {
     const v = row[idx];
+    // Treat null / undefined / blank string as missing so a numeric
+    // range filter doesn't silently keep rows whose cell is empty
+    // (Number("") === 0 would otherwise let them slip past a 0-anchored
+    // range like [-1, 1]).
     if (v == null) return false;
+    if (typeof v === "string" && v.trim() === "") return false;
     const n = typeof v === "number" ? v : Number(v);
     if (!Number.isFinite(n)) return false;
     if (lo != null && n < lo) return false;
@@ -204,6 +209,7 @@ export function numericColumnExtent(
   for (let r = 0; r < data.rows.length; r++) {
     const v = data.rows[r][idx];
     if (v == null) continue;
+    if (typeof v === "string" && v.trim() === "") continue;
     const n = typeof v === "number" ? v : Number(v);
     if (!Number.isFinite(n)) continue;
     any = true;
