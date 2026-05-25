@@ -506,7 +506,7 @@
       "decimals": "Decimals",
       "inverse": "Reverse axis direction",
       "minorTickCount": "Minor ticks",
-      "showAxisLine": "Show axis line",
+      "showAxisLine": "Show axis line & ticks",
       "tickPosition": "Tick position",
       "tickOutside": "Outside",
       "tickInside": "Inside",

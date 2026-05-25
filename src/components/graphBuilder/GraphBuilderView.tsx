@@ -1798,6 +1798,65 @@ function isGridLineStyleEmpty(s: GridLineStyle | undefined): boolean {
   return s.color === undefined && s.width === undefined && s.style === undefined;
 }
 
+/** Free-form decimal text input. Uses `type="text"` (rather than
+ *  `type="number"`) so the browser doesn't paint the spinner buttons
+ *  and so intermediate keystrokes like "1." or "0." aren't silently
+ *  rewritten back to the parsed integer by the controlled-input round
+ *  trip. We mirror the on-screen text locally and only push valid
+ *  positive numbers upstream; the upstream value is left untouched
+ *  while the user is mid-typing. */
+function DecimalTextInput({
+  value,
+  onChange,
+  placeholder,
+  className,
+  ariaLabel,
+}: {
+  value: number | undefined;
+  onChange: (n: number | undefined) => void;
+  placeholder: string;
+  className?: string;
+  ariaLabel?: string;
+}) {
+  const [text, setText] = useState(value !== undefined ? String(value) : "");
+  // Sync from the outside (e.g. Reset to auto wiping the parent value)
+  // only when the current text no longer parses to the parent value.
+  useEffect(() => {
+    const trimmed = text.trim();
+    const parsed = trimmed === "" ? undefined : Number(trimmed);
+    if (parsed !== value) {
+      setText(value !== undefined ? String(value) : "");
+    }
+    // We intentionally only react to external `value` changes; reading
+    // `text` here is a snapshot, not a dependency we want to track.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      className={className}
+      value={text}
+      placeholder={placeholder}
+      aria-label={ariaLabel}
+      onChange={(e) => {
+        const t = e.target.value;
+        setText(t);
+        const trimmed = t.trim();
+        if (trimmed === "") {
+          onChange(undefined);
+          return;
+        }
+        const n = Number(trimmed);
+        // Only push valid positive values upstream. Intermediate states
+        // like "1." or "-" leave the upstream value alone so the user
+        // can keep typing without their progress getting reset.
+        if (Number.isFinite(n) && n > 0) onChange(n);
+      }}
+    />
+  );
+}
+
 function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
   const { t } = useTranslation();
   const cfg = config ?? {};
@@ -1893,24 +1952,18 @@ function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
 
       {/* Tick density: ECharts `interval` (exact value distance between
           adjacent major ticks). Float-friendly so users can pick e.g.
-          0.5; we only require the value to be strictly positive. */}
+          0.5; we use a text-based input to avoid the spinner buttons
+          and to keep intermediate keystrokes like "0." intact. */}
       <div className="gb-axis-row">
         <label className="gb-axis-label">
           {t("graph.axis.tickInterval", { defaultValue: "Tick interval" })}
         </label>
-        <input
-          type="number"
+        <DecimalTextInput
           className="gb-axis-num gb-axis-num-narrow"
-          value={cfg.tickInterval ?? ""}
-          step="any"
-          min={0}
+          value={cfg.tickInterval}
           placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
-          onChange={(e) => {
-            const n = parseNum(e.target.value);
-            // Reject zero / negative values: ECharts would either
-            // ignore the option or loop forever generating ticks.
-            patch({ tickInterval: n !== undefined && n > 0 ? n : undefined });
-          }}
+          ariaLabel={t("graph.axis.tickInterval", { defaultValue: "Tick interval" })}
+          onChange={(n) => patch({ tickInterval: n })}
         />
       </div>
 
@@ -1971,10 +2024,12 @@ function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
         </label>
       </div>
 
-      {/* Axis boundary line: toggles the line drawn at the axis edge.
-          Theme default is "visible" — checking the box leaves it visible
-          and unlocks the Tick position selector below; unchecking
-          explicitly hides the line. */}
+      {/* Axis boundary line + tick marks: a single combined toggle.
+          Theme default is "visible" — checking the box leaves the line
+          AND the tick marks visible and unlocks the Tick position
+          selector below; unchecking hides both, since one without the
+          other would leave the user looking at a dangling frame or
+          floating tick marks. */}
       <div className="gb-axis-row">
         <label className="gb-axis-label gb-axis-label-checkbox">
           <input
@@ -1991,7 +2046,7 @@ function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
               })
             }
           />
-          <span>{t("graph.axis.showAxisLine", { defaultValue: "Show axis line" })}</span>
+          <span>{t("graph.axis.showAxisLine", { defaultValue: "Show axis line & ticks" })}</span>
         </label>
       </div>
 
@@ -2060,6 +2115,22 @@ interface GridSettingsEditorProps {
 const GRID_LINE_DEFAULT_COLOR = "#e2e2e2";
 const GRID_LINE_DEFAULT_WIDTH = 1;
 const GRID_LINE_DEFAULT_STYLE: RefLineStyle = "dashed";
+
+/** Preset color palette for gridlines. Gridlines are usually meant to
+ *  be quiet background structure, so the strip leads with the muted
+ *  grays (the theme default sits at index 0) and only then exposes a
+ *  handful of accent colors for users who want a more deliberate look.
+ *  A custom hex is still available via the trailing color picker. */
+const GRID_LINE_PRESETS: readonly string[] = [
+  "#e2e2e2", // light gray (theme default)
+  "#bdbdbd", // medium gray
+  "#757575", // dark gray
+  "#000000", // black
+  "#4a6cf7", // blue accent
+  "#2ca678", // green accent
+  "#ef8a3a", // orange accent
+  "#e74c3c", // red accent
+];
 
 function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
   const { t } = useTranslation();
@@ -2149,44 +2220,93 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
         </label>
 
         <div className="gb-grid-style-row">
-          <input
-            type="color"
-            className="gb-grid-color"
-            value={color}
-            disabled={!shown}
-            onChange={(e) => patchStyle(which, { color: e.target.value })}
-            title={t("graph.grid.color", { defaultValue: "Color" })}
-            aria-label={t("graph.grid.color", { defaultValue: "Color" })}
-          />
-          <select
-            className="gb-grid-dash"
-            value={dash}
-            disabled={!shown}
-            onChange={(e) => patchStyle(which, { style: e.target.value as RefLineStyle })}
-            title={t("graph.grid.style", { defaultValue: "Line style" })}
-            aria-label={t("graph.grid.style", { defaultValue: "Line style" })}
-          >
-            <option value="solid">{t("graph.refLine.styleSolid", { defaultValue: "Solid" })}</option>
-            <option value="dashed">{t("graph.refLine.styleDashed", { defaultValue: "Dashed" })}</option>
-            <option value="dotted">{t("graph.refLine.styleDotted", { defaultValue: "Dotted" })}</option>
-          </select>
-          <input
-            type="number"
-            className="gb-grid-width"
-            value={width}
-            disabled={!shown}
-            min={0.5}
-            max={5}
-            step={0.5}
-            onChange={(e) => {
-              const n = Number(e.target.value);
-              patchStyle(which, {
-                width: Number.isFinite(n) && n > 0 ? n : undefined,
-              });
-            }}
-            title={t("graph.grid.width", { defaultValue: "Width" })}
-            aria-label={t("graph.grid.width", { defaultValue: "Width" })}
-          />
+          {/* Preset color strip + custom picker. Muted grays up front
+              (gridlines should usually fade into the chrome) followed
+              by a few accent hues for users who want something bolder.
+              The trailing color picker is the escape hatch for any
+              exact hex. Mirrors the Reference Lines color UI so the
+              two editors feel consistent. */}
+          <div className="gb-refline-swatch-row gb-grid-swatch-row">
+            {GRID_LINE_PRESETS.map((preset) => {
+              const selected =
+                (style.color ?? GRID_LINE_DEFAULT_COLOR).toLowerCase() ===
+                preset.toLowerCase();
+              return (
+                <button
+                  key={preset}
+                  type="button"
+                  className={`gb-refline-swatch${selected ? " gb-refline-swatch-selected" : ""}`}
+                  style={{ background: preset }}
+                  disabled={!shown}
+                  // Storing the theme-default color back as `undefined`
+                  // keeps the persisted style minimal — picking the
+                  // first swatch effectively "resets" the color.
+                  onClick={() =>
+                    patchStyle(which, {
+                      color: preset === GRID_LINE_DEFAULT_COLOR ? undefined : preset,
+                    })
+                  }
+                  title={preset}
+                  aria-label={preset}
+                  aria-pressed={selected}
+                />
+              );
+            })}
+            <span className="gb-refline-swatch-divider" />
+            <input
+              type="color"
+              className={`gb-refline-color-picker${
+                !GRID_LINE_PRESETS.some(
+                  (p) => p.toLowerCase() === color.toLowerCase(),
+                )
+                  ? " gb-refline-color-picker-active"
+                  : ""
+              }`}
+              value={color}
+              disabled={!shown}
+              onChange={(e) =>
+                patchStyle(which, {
+                  color: e.target.value === GRID_LINE_DEFAULT_COLOR ? undefined : e.target.value,
+                })
+              }
+              title={t("graph.refLine.customColor", { defaultValue: "Custom color" })}
+              aria-label={t("graph.refLine.customColor", { defaultValue: "Custom color" })}
+            />
+          </div>
+
+          {/* Dash + width row: no color control here anymore — the swatch
+              strip above is the canonical color picker. */}
+          <div className="gb-grid-line-row">
+            <select
+              className="gb-grid-dash"
+              value={dash}
+              disabled={!shown}
+              onChange={(e) => patchStyle(which, { style: e.target.value as RefLineStyle })}
+              title={t("graph.grid.style", { defaultValue: "Line style" })}
+              aria-label={t("graph.grid.style", { defaultValue: "Line style" })}
+            >
+              <option value="solid">{t("graph.refLine.styleSolid", { defaultValue: "Solid" })}</option>
+              <option value="dashed">{t("graph.refLine.styleDashed", { defaultValue: "Dashed" })}</option>
+              <option value="dotted">{t("graph.refLine.styleDotted", { defaultValue: "Dotted" })}</option>
+            </select>
+            <input
+              type="number"
+              className="gb-grid-width"
+              value={width}
+              disabled={!shown}
+              min={0.5}
+              max={5}
+              step={0.5}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                patchStyle(which, {
+                  width: Number.isFinite(n) && n > 0 ? n : undefined,
+                });
+              }}
+              title={t("graph.grid.width", { defaultValue: "Width" })}
+              aria-label={t("graph.grid.width", { defaultValue: "Width" })}
+            />
+          </div>
         </div>
       </div>
     );

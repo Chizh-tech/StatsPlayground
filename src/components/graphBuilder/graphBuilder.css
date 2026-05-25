@@ -1104,23 +1104,24 @@
 
 .gb-grid-style-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding-left: 22px; /* indent under the checkbox label */
 }
 
-.gb-grid-color {
-  width: 26px;
-  height: 22px;
-  border: 1px solid var(--border-main);
-  border-radius: 3px;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
+/* Tighten the swatch row inside the grid editor: same swatch styling
+   as the Reference Lines editor, but no need for the wrapping flex
+   from the original ref-line layout (we're already inside a column
+   stack with controlled spacing). */
+.gb-grid-swatch-row {
+  gap: 6px;
 }
 
-.gb-grid-color:disabled {
-  cursor: not-allowed;
+/* Dash + width on one inline row directly under the color strip. */
+.gb-grid-line-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .gb-grid-dash {

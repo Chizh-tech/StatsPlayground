@@ -744,19 +744,19 @@ function buildYAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
   }
 
   // ----- Axis boundary line + tick orientation ------------------------
-  // axisLine.show toggles the line at the data edge of the plot area.
-  // axisTick.inside flips tick marks from "outside" (toward labels) to
-  // "inside" (into the plot area). We emit axisLine.show only when the
-  // user has explicitly toggled it so undefined still picks up the
-  // theme's defaults (no `show` field === ECharts default = visible).
+  // The single "Show axis line & ticks" checkbox in the dialog flips
+  // both the axis boundary line and the tick marks together: if either
+  // is hidden the user loses the visual frame, so we keep them as one
+  // toggle in the UI and mirror that here. axisTick.inside (tick
+  // position) still rides on top of show==true.
   if (cfg.showAxisLine !== undefined) {
     out.axisLine = { show: cfg.showAxisLine };
+    out.axisTick = { show: cfg.showAxisLine };
   }
-  // Tick position is only meaningful when the axis line is visible —
-  // but ECharts ignores `axisTick.inside` quietly if the line is hidden,
-  // so emitting it unconditionally is harmless. We still gate on the
-  // user actually selecting a non-default value to keep the option
-  // object minimal.
+  // Tick position is only meaningful when ticks are visible — ECharts
+  // ignores `axisTick.inside` quietly if the line is hidden, so emitting
+  // it unconditionally is harmless. We still gate on the user actually
+  // selecting a non-default value to keep the option object minimal.
   if (cfg.tickPosition === "inside") {
     out.axisTick = { ...(out.axisTick as object | undefined), inside: true };
   } else if (cfg.tickPosition === "outside") {
@@ -764,13 +764,18 @@ function buildYAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
   }
 
   // ----- Minor ticks --------------------------------------------------
-  // ECharts' minorTick.splitNumber is the count of minor *intervals*
-  // between two majors (so e.g. 5 yields 4 minor tick marks between
-  // each pair of majors). 0 / undefined → minor ticks stay hidden.
+  // The user-facing input means "how many visible minor tick marks sit
+  // between two adjacent major ticks". ECharts' `minorTick.splitNumber`
+  // is the number of *segments* the major interval is divided into,
+  // which renders splitNumber-1 visible minor ticks (the endpoints are
+  // already the majors). So we translate by adding 1, e.g. user N=2
+  // yields splitNumber=3 → exactly 2 minor ticks visible. 0/undefined
+  // → minor ticks stay hidden.
   if (Number.isFinite(cfg.minorTickCount as number) && (cfg.minorTickCount as number) > 0) {
+    const visible = Math.max(1, Math.round(cfg.minorTickCount as number));
     out.minorTick = {
       show: true,
-      splitNumber: Math.max(1, Math.round(cfg.minorTickCount as number)),
+      splitNumber: visible + 1,
     };
   }
 

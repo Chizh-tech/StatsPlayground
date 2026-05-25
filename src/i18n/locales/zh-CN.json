@@ -506,7 +506,7 @@
       "decimals": "小数位数",
       "inverse": "反转刻度方向",
       "minorTickCount": "子刻度数量",
-      "showAxisLine": "显示轴边界",
+      "showAxisLine": "显示轴线和刻度线",
       "tickPosition": "刻度位置",
       "tickOutside": "边界外",
       "tickInside": "边界内",

@@ -506,7 +506,7 @@
       "decimals": "Số chữ số thập phân",
       "inverse": "Đảo ngược hướng trục",
       "minorTickCount": "Vạch chia phụ",
-      "showAxisLine": "Hiển thị đường trục",
+      "showAxisLine": "Hiển thị đường trục và vạch chia",
       "tickPosition": "Vị trí vạch chia",
       "tickOutside": "Bên ngoài",
       "tickInside": "Bên trong",
