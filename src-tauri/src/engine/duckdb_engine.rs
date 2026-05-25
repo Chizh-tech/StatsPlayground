@@ -1070,7 +1070,11 @@ impl DuckDbEngine {
                     if name.is_empty() {
                         Self::generate_col_name(&all_col_names)
                     } else {
-                        name.to_string()
+                        // Auto-suffix _2/_3/... if the header collides with an
+                        // existing column (or with one created earlier in this
+                        // same paste). Avoids DuckDB Catalog Errors like
+                        // "Column with name X already exists!".
+                        Self::unique_col_name(name, &all_col_names, None)
                     }
                 } else {
                     Self::generate_col_name(&all_col_names)
@@ -1111,8 +1115,19 @@ impl DuckDbEngine {
                     let old_name = &paste_col_names[c];
                     let trimmed = new_name.trim();
                     if !trimmed.is_empty() && old_name != trimmed {
-                        self.rename_column(dataset_id, old_name, trimmed)?;
-                        paste_col_names[c] = trimmed.to_string();
+                        // Auto-suffix _2/_3/... if the proposed name collides
+                        // with any OTHER column. The column being renamed is
+                        // excluded so a no-op rename (which we already filter
+                        // above) wouldn't have been suffixed anyway.
+                        let unique = Self::unique_col_name(
+                            trimmed,
+                            &all_col_names,
+                            Some(target_idx),
+                        );
+                        let unique_owned = unique.clone();
+                        self.rename_column(dataset_id, old_name, &unique_owned)?;
+                        all_col_names[target_idx] = unique_owned.clone();
+                        paste_col_names[c] = unique_owned;
                     }
                 }
             }
@@ -1249,6 +1264,32 @@ impl DuckDbEngine {
             let name = format!("列{}", i);
             if !existing.contains(&name) {
                 return name;
+            }
+            i += 1;
+        }
+    }
+
+    /// Resolve a column name that may collide with existing ones.
+    ///
+    /// Returns `base` unchanged when it's free, otherwise appends `_2`, `_3`,
+    /// ... until a non-conflicting name is produced. `exclude_idx`, if given,
+    /// designates a slot in `existing` whose current name should NOT count as
+    /// a collision (used when renaming a column to a header value that may
+    /// equal its own current name).
+    fn unique_col_name(base: &str, existing: &[String], exclude_idx: Option<usize>) -> String {
+        let in_use = |candidate: &str| -> bool {
+            existing.iter().enumerate().any(|(i, n)| {
+                n == candidate && Some(i) != exclude_idx
+            })
+        };
+        if !in_use(base) {
+            return base.to_string();
+        }
+        let mut i = 2usize;
+        loop {
+            let candidate = format!("{}_{}", base, i);
+            if !in_use(&candidate) {
+                return candidate;
             }
             i += 1;
         }
