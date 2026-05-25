@@ -502,6 +502,9 @@
       "categoryTickGrid": "Tick Grid",
       "categoryRefLines": "Reference Lines"
     },
+    "xAxisSettings": {
+      "title": "X Axis Settings"
+    },
     "axis": {
       "title": "Axis",
       "range": "Range",

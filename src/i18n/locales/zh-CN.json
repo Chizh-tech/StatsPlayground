@@ -502,6 +502,9 @@
       "categoryTickGrid": "刻度网格",
       "categoryRefLines": "辅助线"
     },
+    "xAxisSettings": {
+      "title": "X 轴设置"
+    },
     "axis": {
       "title": "坐标轴",
       "range": "区间",

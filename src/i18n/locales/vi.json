@@ -502,6 +502,9 @@
       "categoryTickGrid": "Lưới vạch chia",
       "categoryRefLines": "Đường tham chiếu"
     },
+    "xAxisSettings": {
+      "title": "Cài đặt trục X"
+    },
     "axis": {
       "title": "Trục",
       "range": "Phạm vi",

@@ -92,6 +92,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // axis (or its label/title area) in <Graph>; closed via the dialog's
   // Done button or overlay click.
   const [yAxisDialogOpen, setYAxisDialogOpen] = useState(false);
+  // X-axis settings dialog open state. Mirrors `yAxisDialogOpen` —
+  // opened by double-clicking the X axis (or its label / title strip).
+  const [xAxisDialogOpen, setXAxisDialogOpen] = useState(false);
   // Per-column user-defined value ordering, keyed by column name. Populated
   // from the dataset's `ColumnDisplayProps.extras.valueOrder.values`. Used
   // by <Graph> to reorder categorical X axes, legend entries, boxplot
@@ -412,8 +415,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       refLinesY: item.refLinesY,
       autoSpec,
       yAxis: item.yAxis,
+      xAxis: item.xAxis,
     };
-  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.yAxis, item.autoSpecLines, specByCol]);
+  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.yAxis, item.xAxis, item.autoSpecLines, specByCol]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -483,11 +487,21 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   /** Replace the Y-axis configuration (range / tick density / decimals /
    *  inverse). Passing `undefined` (or all-undefined fields via the
    *  AxisSettingsEditor's Reset button) restores fully automatic
-   *  behavior — the renderer's `buildYAxisOverrides` emits an empty
+   *  behavior — the renderer's `buildAxisOverrides` emits an empty
    *  fragment when every field is undefined. */
   const setYAxisConfig = useCallback(
     (next: YAxisConfig | undefined) => {
       updateItem(item.id, { yAxis: next });
+      markDirty();
+    },
+    [item.id, updateItem, markDirty],
+  );
+
+  /** Replace the X-axis configuration. Mirrors `setYAxisConfig` — the
+   *  shape of the override config is identical for both axes. */
+  const setXAxisConfig = useCallback(
+    (next: YAxisConfig | undefined) => {
+      updateItem(item.id, { xAxis: next });
       markDirty();
     },
     [item.id, updateItem, markDirty],
@@ -755,6 +769,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   data={filteredData ?? data}
                   valueOrders={valueOrders}
                   onYAxisDblClick={() => setYAxisDialogOpen(true)}
+                  onXAxisDblClick={() => setXAxisDialogOpen(true)}
                 />
               )}
             </div>
@@ -814,19 +829,32 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           modeled after the system Preferences dialog (left categories
           column + right detail pane) so adding future per-axis settings
           (log scale, tick formatter, ...) is a one-line nav-item
-          addition. Today it has two categories: Axis (range / ticks /
-          decimals / inverse) and Reference Lines. */}
+          addition. Today it has three categories: Axis (range / ticks /
+          decimals / inverse), Tick Grid (major + minor gridlines),
+          and Reference Lines. */}
       {yAxisDialogOpen && (
-        <YAxisSettingsDialog
+        <AxisSettingsDialog
+          axis="y"
           refLines={item.refLinesY ?? []}
           setRefLines={setRefLinesY}
           autoSpecLines={!!item.autoSpecLines}
           setAutoSpecLines={setAutoSpecLines}
           resolvedAutoSpec={spec.autoSpec}
           autoSpecYColName={encoding.y?.name}
-          yAxisConfig={item.yAxis}
-          setYAxisConfig={setYAxisConfig}
+          axisConfig={item.yAxis}
+          setAxisConfig={setYAxisConfig}
           onClose={() => setYAxisDialogOpen(false)}
+        />
+      )}
+      {/* X-axis settings dialog. Opened by double-clicking the X axis.
+          Mirrors the Y dialog without the Reference Lines category —
+          the renderer only supports Y-axis reference lines today. */}
+      {xAxisDialogOpen && (
+        <AxisSettingsDialog
+          axis="x"
+          axisConfig={item.xAxis}
+          setAxisConfig={setXAxisConfig}
+          onClose={() => setXAxisDialogOpen(false)}
         />
       )}
     </div>
@@ -1726,56 +1754,75 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
   );
 }
 
-// ---- Y-axis settings dialog --------------------------------------------
-// Opened by double-clicking the Y axis (or its label / title area) inside
-// <Graph>. Modelled after the system Preferences dialog: a fixed-width
-// categories nav on the left and a scrollable detail pane on the right.
-// Today there's one category — "Reference Lines" — but the structure
-// makes adding range / log-scale / tick-format settings later a one-line
-// nav-item addition.
+// ---- Axis settings dialog ----------------------------------------------
+// Opened by double-clicking either axis (or its label / title strip)
+// inside <Graph>. Modelled after the system Preferences dialog: a
+// fixed-width categories nav on the left and a scrollable detail pane on
+// the right. The `axis` prop selects between Y (default categories: Axis
+// / Tick Grid / Reference Lines) and X (Axis / Tick Grid only — the
+// renderer does not support X reference lines today). Both axes share
+// the same `AxisSettingsEditor` and `GridSettingsEditor` since the
+// override config shape is identical between them; only the dialog
+// title and the optional Reference Lines tab differ.
 
-interface YAxisSettingsDialogProps {
-  refLines: RefLineY[];
-  setRefLines: (next: RefLineY[]) => void;
-  /** Whether the auto-spec-limits overlay is currently enabled. Passed
-   *  down to the RefLinesEditor so its header checkbox can render in the
-   *  correct state without round-tripping through the project store. */
-  autoSpecLines: boolean;
-  setAutoSpecLines: (next: boolean) => void;
-  /** Pre-resolved AutoSpec object for the active Y column — already
-   *  filtered to finite values by GraphBuilderView. `undefined` means
-   *  either the overlay is off, no Y is set, or the Y column has no
-   *  spec extras. The editor uses this to render the chip preview
-   *  showing exactly which limits the chart will draw. */
-  resolvedAutoSpec: import("@/graphCore").AutoSpec | undefined;
-  /** Name of the column currently bound to Y, purely for the editor's
-   *  hint copy ("Reading limits from <col>"). `undefined` when no Y is
-   *  bound. */
-  autoSpecYColName: string | undefined;
-  yAxisConfig: YAxisConfig | undefined;
-  setYAxisConfig: (next: YAxisConfig | undefined) => void;
+interface AxisSettingsDialogProps {
+  /** Which axis this dialog edits. Controls the title, the i18n key
+   *  prefix for category labels, and whether the Reference Lines tab
+   *  is present (Y only). */
+  axis: "x" | "y";
+  /** Y-only: existing manual reference lines on the Y axis. Required
+   *  when `axis === "y"`, ignored when `axis === "x"`. */
+  refLines?: RefLineY[];
+  setRefLines?: (next: RefLineY[]) => void;
+  /** Y-only: whether the auto-spec-limits overlay is currently
+   *  enabled. Passed down to the RefLinesEditor so its header checkbox
+   *  can render in the correct state without round-tripping through
+   *  the project store. */
+  autoSpecLines?: boolean;
+  setAutoSpecLines?: (next: boolean) => void;
+  /** Y-only: pre-resolved AutoSpec object for the active Y column —
+   *  already filtered to finite values by GraphBuilderView.
+   *  `undefined` means either the overlay is off, no Y is set, or the
+   *  Y column has no spec extras. */
+  resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
+  /** Y-only: name of the column currently bound to Y, purely for the
+   *  editor's hint copy ("Reading limits from <col>"). */
+  autoSpecYColName?: string | undefined;
+  /** Current axis-override config (range / ticks / decimals / inverse /
+   *  axis line / tick position / minor ticks / grid). Both axes use
+   *  the same `YAxisConfig` shape. */
+  axisConfig: YAxisConfig | undefined;
+  setAxisConfig: (next: YAxisConfig | undefined) => void;
   onClose: () => void;
 }
 
-type YAxisCategoryKey = "axis" | "tickGrid" | "refLines";
+type AxisCategoryKey = "axis" | "tickGrid" | "refLines";
 
-function YAxisSettingsDialog({
+function AxisSettingsDialog({
+  axis,
   refLines,
   setRefLines,
   autoSpecLines,
   setAutoSpecLines,
   resolvedAutoSpec,
   autoSpecYColName,
-  yAxisConfig,
-  setYAxisConfig,
+  axisConfig,
+  setAxisConfig,
   onClose,
-}: YAxisSettingsDialogProps) {
+}: AxisSettingsDialogProps) {
   const { t } = useTranslation();
   // Axis range / ticks / decimals / inverse is the more frequently
   // adjusted category, so it opens first.
-  const [active, setActive] = useState<YAxisCategoryKey>("axis");
+  const [active, setActive] = useState<AxisCategoryKey>("axis");
 
-  const categories: { key: YAxisCategoryKey; label: string }[] = [
+  // The Axis + Tick Grid category labels are axis-neutral copy ("Axis",
+  // "Tick Grid"), so we share the same translation keys under
+  // `graph.yAxisSettings.*`. Only the dialog title and (Y-only)
+  // Reference Lines label change with axis identity.
+  const titleKey = axis === "y" ? "graph.yAxisSettings.title" : "graph.xAxisSettings.title";
+  const titleFallback = axis === "y" ? "Y Axis Settings" : "X Axis Settings";
+
+  const categories: { key: AxisCategoryKey; label: string }[] = [
     {
       key: "axis",
       label: t("graph.yAxisSettings.categoryAxis", { defaultValue: "Axis" }),
@@ -1784,11 +1831,13 @@ function YAxisSettingsDialog({
       key: "tickGrid",
       label: t("graph.yAxisSettings.categoryTickGrid", { defaultValue: "Tick Grid" }),
     },
-    {
+  ];
+  if (axis === "y") {
+    categories.push({
       key: "refLines",
       label: t("graph.yAxisSettings.categoryRefLines", { defaultValue: "Reference Lines" }),
-    },
-  ];
+    });
+  }
 
   return (
     <div className="sp-dialog-overlay" onClick={onClose}>
@@ -1797,7 +1846,7 @@ function YAxisSettingsDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sp-dialog-title">
-          {t("graph.yAxisSettings.title", { defaultValue: "Y Axis Settings" })}
+          {t(titleKey, { defaultValue: titleFallback })}
         </div>
         <div className="sp-dialog-body pref-body">
           <nav className="pref-nav">
@@ -1814,16 +1863,16 @@ function YAxisSettingsDialog({
           </nav>
           <div className="pref-pane">
             {active === "axis" && (
-              <AxisSettingsEditor config={yAxisConfig} setConfig={setYAxisConfig} />
+              <AxisSettingsEditor config={axisConfig} setConfig={setAxisConfig} />
             )}
             {active === "tickGrid" && (
-              <GridSettingsEditor config={yAxisConfig} setConfig={setYAxisConfig} />
+              <GridSettingsEditor config={axisConfig} setConfig={setAxisConfig} />
             )}
-            {active === "refLines" && (
+            {active === "refLines" && axis === "y" && refLines && setRefLines && setAutoSpecLines && (
               <RefLinesEditor
                 refLines={refLines}
                 setRefLines={setRefLines}
-                autoSpecLines={autoSpecLines}
+                autoSpecLines={!!autoSpecLines}
                 setAutoSpecLines={setAutoSpecLines}
                 resolvedAutoSpec={resolvedAutoSpec}
                 autoSpecYColName={autoSpecYColName}
@@ -1841,12 +1890,13 @@ function YAxisSettingsDialog({
   );
 }
 
-// ---- Y-axis range / ticks / decimals / inverse editor ------------------
-// Form pane inside the YAxisSettingsDialog's "Axis" category. Each row is
+// ---- Axis range / ticks / decimals / inverse editor --------------------
+// Form pane inside the AxisSettingsDialog's "Axis" category. Each row is
 // label + value-input + auto-state indicator; an empty input means
 // "auto", letting ECharts derive the value from the data range. The
 // Reset to auto button clears every field in one click, restoring fully
-// automatic axis behavior.
+// automatic axis behavior. Axis-agnostic — the same editor backs both
+// the X and Y dialogs since the override config shape is identical.
 
 interface AxisSettingsEditorProps {
   config: YAxisConfig | undefined;
@@ -2179,10 +2229,10 @@ function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
   );
 }
 
-// ---- Y-axis grid (split-line) editor -----------------------------------
-// Form pane inside the YAxisSettingsDialog's "Tick Grid" category.
+// ---- Axis grid (split-line) editor -------------------------------------
+// Form pane inside the AxisSettingsDialog's "Tick Grid" category.
 // Controls both the major split-lines (rendered at major ticks — the
-// usual horizontal grid lines) and the minor split-lines (rendered at
+// usual gridlines) and the minor split-lines (rendered at
 // every minor tick when minor ticks are enabled in the Axis category).
 // Each row is a Show checkbox plus a small style strip: color picker,
 // dash dropdown, width input. Leaving the style fields empty means "use
@@ -2544,7 +2594,8 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
 }
 
 // ---- Y-axis reference lines editor -------------------------------------
-// Card-per-line editor used inside the YAxisSettingsDialog's right pane.
+// Card-per-line editor used inside the AxisSettingsDialog's right pane
+// (Y axis only — the renderer does not support X reference lines today).
 // Each card lets the user pick the Y value, label text, line dash style,
 // color, and stroke width for one horizontal reference line. The chart
 // (transform.ts -> buildRefLinesCarrier) attaches the rendered markLines

@@ -35,9 +35,16 @@ interface GraphProps {
    * direct-manipulation entry point next to the axis itself.
    */
   onYAxisDblClick?: () => void;
+  /**
+   * Fired when the user double-clicks anywhere inside the X axis region
+   * (axis line, ticks, labels, or the title strip at the bottom of the
+   * chart). Mirrors `onYAxisDblClick` — the GraphBuilder opens its
+   * X Axis settings dialog from here.
+   */
+  onXAxisDblClick?: () => void;
 }
 
-export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick }: GraphProps) {
+export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick, onXAxisDblClick }: GraphProps) {
   // 订阅主题变化以触发重渲染
   const themeMode = useThemeStore((s) => s.mode);
 
@@ -74,6 +81,7 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
           option={p.option}
           minHeight={minPanelHeight}
           onYAxisDblClick={onYAxisDblClick}
+          onXAxisDblClick={onXAxisDblClick}
         />
       ))}
     </div>
@@ -85,18 +93,23 @@ interface GraphPanelProps {
   option: Record<string, unknown>;
   minHeight: number;
   onYAxisDblClick?: () => void;
+  onXAxisDblClick?: () => void;
 }
 
-function GraphPanel({ title, option, minHeight, onYAxisDblClick }: GraphPanelProps) {
+function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick }: GraphPanelProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
-  // Keep the latest callback in a ref so the Zrender dblclick handler
+  // Keep the latest callbacks in refs so the Zrender dblclick handler
   // (which we register exactly once on mount) always sees the freshest
   // closure without forcing a re-bind on every prop change.
   const onYAxisDblClickRef = useRef(onYAxisDblClick);
+  const onXAxisDblClickRef = useRef(onXAxisDblClick);
   useEffect(() => {
     onYAxisDblClickRef.current = onYAxisDblClick;
   }, [onYAxisDblClick]);
+  useEffect(() => {
+    onXAxisDblClickRef.current = onXAxisDblClick;
+  }, [onXAxisDblClick]);
 
   // 初始化 / 销毁
   useEffect(() => {
@@ -106,7 +119,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick }: GraphPanelPro
     const ro = new ResizeObserver(() => inst.resize());
     ro.observe(ref.current);
 
-    // ----- Y-axis double-click ----------------------------------------
+    // ----- Y / X axis double-click -----------------------------------
     // ECharts' component-targeted `inst.on('dblclick', { componentType:
     // 'yAxis' }, ...)` only fires when the user dblclicks an axis label
     // or the axis line itself — empty space inside the axis strip (tick
@@ -114,38 +127,58 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick }: GraphPanelPro
     // also listen at the Zrender level: a dblclick that lands inside the
     // Y-axis band (either reported by `containPixel({ yAxisIndex: 0 })`
     // or anywhere in the left margin to the left of the grid) opens the
-    // settings dialog.
+    // Y settings dialog. The X axis uses the symmetrical bottom-margin
+    // fallback. When a click sits in the bottom-left corner of the chart
+    // (overlap between the two strips) we resolve it via `containPixel`
+    // first; only fall back to the geometric strip if both axis hit
+    // tests fail — then prefer Y (the historical default).
     const zr = inst.getZr();
     const zrHandler = (e: { offsetX: number; offsetY: number }) => {
-      const cb = onYAxisDblClickRef.current;
-      if (!cb) return;
+      const yCb = onYAxisDblClickRef.current;
+      const xCb = onXAxisDblClickRef.current;
+      if (!yCb && !xCb) return;
       const pt: [number, number] = [e.offsetX, e.offsetY];
       let inYAxis = false;
+      let inXAxis = false;
       try {
         inYAxis = inst.containPixel({ yAxisIndex: 0 }, pt);
       } catch {
         // containPixel can throw if the chart hasn't laid out yet —
         // ignore and fall through to the geometry-based fallback.
       }
-      if (!inYAxis) {
-        // Fallback: treat the left margin (axis labels + axis title) as
-        // part of the Y-axis target. Conservative cap at 80px / 18% of
-        // panel width so the chart body itself never opens the dialog.
-        const el = ref.current;
-        if (el) {
-          const w = el.clientWidth;
-          const h = el.clientHeight;
-          if (
-            e.offsetX >= 0 &&
-            e.offsetX <= Math.min(80, w * 0.18) &&
-            e.offsetY >= 0 &&
-            e.offsetY <= h
-          ) {
-            inYAxis = true;
-          }
-        }
+      try {
+        inXAxis = inst.containPixel({ xAxisIndex: 0 }, pt);
+      } catch {
+        // see above
       }
-      if (inYAxis) cb();
+      const el = ref.current;
+      if (!inYAxis && !inXAxis && el) {
+        // Geometric fallback: treat the left margin as Y and the bottom
+        // margin as X. Conservative caps (80px / 18%) keep the central
+        // chart body from triggering either dialog.
+        const w = el.clientWidth;
+        const h = el.clientHeight;
+        const inLeftMargin =
+          e.offsetX >= 0 &&
+          e.offsetX <= Math.min(80, w * 0.18) &&
+          e.offsetY >= 0 &&
+          e.offsetY <= h;
+        const inBottomMargin =
+          e.offsetY <= h &&
+          e.offsetY >= h - Math.min(60, h * 0.18) &&
+          e.offsetX >= 0 &&
+          e.offsetX <= w;
+        // Prefer Y when both strips overlap (bottom-left corner) so
+        // the existing behavior near the Y title block stays unchanged.
+        if (inLeftMargin) inYAxis = true;
+        else if (inBottomMargin) inXAxis = true;
+      }
+      // ECharts' axis hit regions can overlap inside the plot area for
+      // some chart types; if both report true, prefer the X axis here
+      // (the user clicked near the X tick row) only when Y wouldn't
+      // open a dialog — otherwise default to Y.
+      if (inYAxis && yCb) yCb();
+      else if (inXAxis && xCb) xCb();
     };
     zr.on("dblclick", zrHandler);
 

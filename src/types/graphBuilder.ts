@@ -60,6 +60,12 @@ export interface GraphBuilderItem {
    *  fully automatic. Edited from the Y Axis Settings dialog
    *  (double-click the Y axis). */
   yAxis?: YAxisConfig;
+  /** User overrides for the primary X axis — same shape as `yAxis`.
+   *  Edited from the X Axis Settings dialog (double-click the X
+   *  axis). Numeric fields only take effect on value-type X axes;
+   *  inverse / axis-line / tick-position / gridline settings apply
+   *  to category and time axes too. */
+  xAxis?: YAxisConfig;
   /** 创建时间 ISO 字符串。
  *
  *  注：图所属的文件夹不属于图本身的内禀属性——按 #7 设计，文件夹只

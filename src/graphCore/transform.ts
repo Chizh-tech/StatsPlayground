@@ -913,7 +913,25 @@ function buildYAxisRefLineExpand(refYs: number[]): EChartsOption {
  *  `scale: true` because it's incompatible with explicit bounds (ECharts
  *  would expand them outward). Leaving `scale` to the caller means our
  *  fragment only adds behavior, never silently removes it. */
-function buildYAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
+/** Build an ECharts axis-option fragment that materializes a user-defined
+ *  `YAxisConfig`. Axis-agnostic — used for BOTH the Y axis and the
+ *  primary X axis (the X dialog reuses the same config type). Returns
+ *  `{}` when no overrides are set so the caller can spread it
+ *  unconditionally without changing the auto-scaled default. Only
+ *  emits keys for fields the user has actually pinned — undefined
+ *  fields stay auto.
+ *
+ *  Numeric bounds (`min` / `max` / `interval`) only have an effect on
+ *  value-type axes — ECharts silently ignores them on category and
+ *  time axes, so emitting them unconditionally is safe. The decimal
+ *  formatter passes string axis values (category labels) through
+ *  unchanged so we never corrupt category fallbacks.
+ *
+ *  Notes on `scale`: when the user pins `min` or `max` we drop ECharts'
+ *  `scale: true` because it's incompatible with explicit bounds (ECharts
+ *  would expand them outward). Leaving `scale` to the caller means our
+ *  fragment only adds behavior, never silently removes it. */
+function buildAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
   if (!cfg) return {};
   const out: EChartsOption = {};
   if (Number.isFinite(cfg.min as number)) out.min = cfg.min;
@@ -1016,14 +1034,16 @@ function buildGridLineFragment(
   return out;
 }
 
-/** Shallow-merge the base ECharts yAxis option with a user-overrides
+/** Shallow-merge a base ECharts axis option with a user-overrides
  *  fragment, taking care to *deep-merge* the small set of nested
  *  objects that both sides can populate. Without this merge a user's
  *  `axisLine: { show: true }` would wipe out the base's
  *  `axisLine: { lineStyle: { color } }` and the axis would render in
  *  the wrong color; same hazard for `axisTick`, `axisLabel`,
- *  `splitLine`, and `minorSplitLine`. */
-function mergeYAxis(base: EChartsOption, userY: EChartsOption): EChartsOption {
+ *  `splitLine`, and `minorSplitLine`. Axis-agnostic — used for both
+ *  the X and Y axis literals (the override shape is identical for
+ *  the two axes). */
+function mergeAxis(base: EChartsOption, userY: EChartsOption): EChartsOption {
   const NESTED = ["axisLine", "axisTick", "axisLabel", "splitLine", "minorSplitLine"] as const;
   const merged: EChartsOption = { ...base, ...userY };
   for (const key of NESTED) {
@@ -1196,18 +1216,21 @@ function buildSingleOption(
         // edge); `confine` then keeps the tooltip inside the chart's
         // bounding box so it still visually anchors to the data point.
         tooltip: { trigger: "axis", confine: true, appendToBody: true },
-        xAxis: {
-          type: "value",
-          name: xField?.name,
-          nameLocation: "middle",
-          nameGap: 28,
-          ...axis,
-          // Faceted histograms still benefit from a shared X span so the
-          // bin centers are visually comparable across panels.
-          ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
-          ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
-        },
-        yAxis: mergeYAxis(
+        xAxis: mergeAxis(
+          {
+            type: "value",
+            name: xField?.name,
+            nameLocation: "middle",
+            nameGap: 28,
+            ...axis,
+            // Faceted histograms still benefit from a shared X span so the
+            // bin centers are visually comparable across panels.
+            ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
+            ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
+          },
+          buildAxisOverrides(spec.xAxis),
+        ),
+        yAxis: mergeAxis(
           {
             type: "value",
             name: i18n.t("graph.frequency"),
@@ -1216,10 +1239,10 @@ function buildSingleOption(
             ...axis,
             // Expand auto-fit so ref lines (manual or auto-spec) stay
             // visible on the frequency axis. User-pinned min/max from
-            // `buildYAxisOverrides` still wins via the merge spread.
+            // `buildAxisOverrides` still wins via the merge spread.
             ...buildYAxisRefLineExpand(collectRefLineYs(spec)),
           },
-          buildYAxisOverrides(spec.yAxis),
+          buildAxisOverrides(spec.yAxis),
         ),
         series,
         animationDuration: 250,
@@ -1504,7 +1527,7 @@ function buildSingleOption(
       xFinalBounds = { scale: true };
     }
   }
-  const xAxis = xIsCategory
+  const xAxisBase = xIsCategory
     ? {
         type: "category",
         // 收集所有 X 类目（按出现顺序）
@@ -1540,6 +1563,12 @@ function buildSingleOption(
           // would expand explicit bounds outward.
           ...xFinalBounds,
         };
+  // User overrides (range / ticks / decimals / inverse / grid …) come
+  // through `mergeAxis` so deep-nested keys like `axisLine.lineStyle`
+  // survive instead of being clobbered by the user's `axisLine.show`.
+  // The deep merge order is base → user, so user-pinned scalars (min,
+  // max, interval) win over the auto-fit values baked into the base.
+  const xAxis = mergeAxis(xAxisBase, buildAxisOverrides(spec.xAxis));
 
   // Append user-defined Y-axis reference lines (specs limits, target
   // values, thresholds). Goes last so its z-index sits above the data
@@ -1555,7 +1584,7 @@ function buildSingleOption(
   // labels (4.20 / 4.25 / 4.30 …) instead of the float-edge labels
   // (4.2228965400000001 at canvas edges) that the old callback-based
   // extension produced. User-pinned min/max/interval still win via
-  // `mergeYAxis` → `buildYAxisOverrides`'s spread further down.
+  // `mergeAxis` → `buildAxisOverrides`'s spread further down.
   let yFinalBounds: EChartsOption;
   if (sharedRanges?.yMin != null || sharedRanges?.yMax != null) {
     yFinalBounds = {};
@@ -1601,16 +1630,16 @@ function buildSingleOption(
     // Series still carry `name` so tooltips and exports stay labeled.
     legend: undefined,
     xAxis,
-    yAxis: mergeYAxis(
+    yAxis: mergeAxis(
       {
         type: "value",
         ...axis,
         // Pre-computed bounds (faceted shared OR local nice-snap fit).
-        // User-pinned overrides from `buildYAxisOverrides` still win
+        // User-pinned overrides from `buildAxisOverrides` still win
         // via the merge spread below.
         ...yFinalBounds,
       },
-      buildYAxisOverrides(spec.yAxis),
+      buildAxisOverrides(spec.yAxis),
     ),
     series,
     animationDuration: 250,

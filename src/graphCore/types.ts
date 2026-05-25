@@ -258,6 +258,16 @@ export interface GraphSpec {
    *  automatic behavior. Edited from the Y Axis Settings dialog
    *  (double-click the Y axis to open). */
   yAxis?: YAxisConfig;
+  /** X axis overrides — same shape as `yAxis` (range / tick density /
+   *  decimals / inverse / axis line / tick position / minor ticks /
+   *  major+minor gridlines). `undefined` / empty object means fully
+   *  automatic behavior. Edited from the X Axis Settings dialog
+   *  (double-click the X axis to open). Numeric fields like `min` /
+   *  `max` / `tickInterval` / `decimals` only take effect on value-type
+   *  X axes; ECharts silently ignores them on category / time axes,
+   *  but `inverse` / axis-line / tick-position / gridline settings
+   *  apply to all three. */
+  xAxis?: YAxisConfig;
 }
 
 /** 原始数据：列式 */
