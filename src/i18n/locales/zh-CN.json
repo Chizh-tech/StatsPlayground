@@ -533,6 +533,8 @@
       "searchValues": "搜索…",
       "selectAll": "全选",
       "clearAll": "全不选",
+      "clearAllRules": "清除全部",
+      "clearAllTitle": "移除所有筛选规则",
       "noMatches": "无匹配项"
     }
   }

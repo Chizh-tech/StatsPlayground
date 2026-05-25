@@ -1088,6 +1088,31 @@
   padding-right: 4px;
 }
 
+/* Right-aligned actions cluster (Clear all + close ×). */
+.gb-filter-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Small text button — only rendered when there's at least one rule.
+   Uses the muted secondary look so the close × stays the visual
+   primary action. */
+.gb-filter-clear-all {
+  border: 1px solid var(--border-input);
+  background: var(--bg-card);
+  color: var(--fg-muted);
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.gb-filter-clear-all:hover {
+  background: var(--bg-header);
+  color: var(--fg-primary);
+}
+
 .gb-filter-close {
   border: none;
   background: transparent;

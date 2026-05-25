@@ -533,6 +533,8 @@
       "searchValues": "Search…",
       "selectAll": "All",
       "clearAll": "None",
+      "clearAllRules": "Clear all",
+      "clearAllTitle": "Remove every filter rule",
       "noMatches": "No matches"
     }
   }

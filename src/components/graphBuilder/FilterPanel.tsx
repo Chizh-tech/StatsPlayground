@@ -115,13 +115,26 @@ export function FilterPanel({
         <span className="sp-panel-header-title">
           {t("graph.filter.title", { defaultValue: "Filters" })}
         </span>
-        <button
-          className="gb-filter-close"
-          onClick={onClose}
-          title={t("graph.filter.close", { defaultValue: "Hide filters" })}
-        >
-          ×
-        </button>
+        <div className="gb-filter-header-actions">
+          {filters.length > 0 && (
+            <button
+              className="gb-filter-clear-all"
+              onClick={() => onChange([])}
+              title={t("graph.filter.clearAllTitle", {
+                defaultValue: "Remove every filter rule",
+              })}
+            >
+              {t("graph.filter.clearAllRules", { defaultValue: "Clear all" })}
+            </button>
+          )}
+          <button
+            className="gb-filter-close"
+            onClick={onClose}
+            title={t("graph.filter.close", { defaultValue: "Hide filters" })}
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       <div className="gb-filter-body">

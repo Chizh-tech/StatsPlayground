@@ -532,6 +532,8 @@
       "searchValues": "Tìm kiếm…",
       "selectAll": "Tất cả",
       "clearAll": "Không chọn",
+      "clearAllRules": "Xoá tất cả",
+      "clearAllTitle": "Gỡ bỏ mọi quy tắc lọc",
       "noMatches": "Không có kết quả"    }
   }
 }
