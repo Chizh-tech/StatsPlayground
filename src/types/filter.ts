@@ -62,4 +62,12 @@ export interface FilterRuleItem {
   /** How this rule combines with the previous rule. Ignored for index 0. */
   op: FilterOp;
   rule: FilterRule;
+  /**
+   * Optional user-adjusted card height in pixels (persisted so a tall
+   * categorical list stays tall across project save/load). Unset =
+   * intrinsic height (the body sizes to its content / built-in default).
+   * Only meaningful for the categorical card today; continuous/date
+   * editors have a fixed two-row layout and ignore extra space.
+   */
+  height?: number;
 }

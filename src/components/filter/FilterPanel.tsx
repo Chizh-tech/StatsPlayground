@@ -18,7 +18,7 @@
  * names are preserved (see filter.css) to keep the diff bounded.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FieldRef, GraphData, FieldType } from "@/graphCore";
 import type {
@@ -209,6 +209,56 @@ function FilterCard({ index, item, data, onChange, onRemove }: FilterCardProps) 
   const { t } = useTranslation();
   const { rule } = item;
 
+  // Card height drag state. We track the in-progress pixel height in a
+  // ref so pointer-move can read/write without spamming React re-renders;
+  // a separate `liveHeight` state mirrors it so the DOM updates. On
+  // pointer-up we commit the final value back to `item.height` via
+  // `onChange`, so it persists in the project JSON.
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const [liveHeight, setLiveHeight] = useState<number | undefined>(item.height);
+
+  // Keep liveHeight in sync if the item's persisted height changes from
+  // the outside (e.g. project reload). Skipped while a drag is active.
+  if (!dragRef.current && liveHeight !== item.height) {
+    // Setting state during render is fine here because the comparison
+    // guarantees we only do it on an actual external change.
+    setLiveHeight(item.height);
+  }
+
+  const MIN_H = 80;
+  const MAX_H = 800;
+
+  const onResizeDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const cur = cardRef.current?.getBoundingClientRect().height ?? liveHeight ?? 220;
+    dragRef.current = { startY: e.clientY, startH: cur };
+    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+  };
+
+  const onResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const raw = drag.startH + (e.clientY - drag.startY);
+    const next = Math.round(Math.max(MIN_H, Math.min(MAX_H, raw)));
+    setLiveHeight(next);
+  };
+
+  const onResizeUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+    if (!drag) return;
+    const finalH = cardRef.current?.getBoundingClientRect().height ?? liveHeight;
+    if (finalH != null) onChange({ height: Math.round(finalH) });
+  };
+
+  // Double-click resets to intrinsic height (clears persisted override).
+  const onResizeDblClick = () => {
+    setLiveHeight(undefined);
+    onChange({ height: undefined });
+  };
+
   // Inline op toggle: first rule has no preceding rule to join with.
   const opBar =
     index === 0 ? null : (
@@ -233,7 +283,11 @@ function FilterCard({ index, item, data, onChange, onRemove }: FilterCardProps) 
   return (
     <>
       {opBar}
-      <div className="gb-filter-card">
+      <div
+        className={`gb-filter-card${liveHeight != null ? " gb-filter-card-sized" : ""}`}
+        ref={cardRef}
+        style={liveHeight != null ? { height: liveHeight } : undefined}
+      >
         <div className="gb-filter-card-head">
           <span className="gb-filter-card-name" title={rule.field.name}>
             {rule.field.name}
@@ -265,6 +319,21 @@ function FilterCard({ index, item, data, onChange, onRemove }: FilterCardProps) 
             />
           )}
         </div>
+        {/* Drag-to-resize handle. Pointer events are captured on the
+            handle itself so the drag survives pointer leaving the bar.
+            Double-click clears the persisted height so the card returns
+            to its intrinsic content-driven size. */}
+        <div
+          className="gb-filter-card-resize"
+          onPointerDown={onResizeDown}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeUp}
+          onPointerCancel={onResizeUp}
+          onDoubleClick={onResizeDblClick}
+          title={t("graph.filter.resizeCardTitle", {
+            defaultValue: "Drag to resize · double-click to reset",
+          })}
+        />
       </div>
     </>
   );

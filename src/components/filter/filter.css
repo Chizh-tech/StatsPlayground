@@ -145,6 +145,9 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* The drag-resize handle is positioned absolutely at the bottom so
+     we anchor it against the card. */
+  position: relative;
 }
 
 .gb-filter-card-head {
@@ -188,6 +191,54 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* When the card has a user-dragged height, the body must claim the
+     remaining space so the categorical list inside it can flex-fill
+     (instead of leaving empty space below the 180px-capped list). */
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Reserve a few pixels at the bottom for the resize handle so it
+     doesn't visually collide with the editor's last row. */
+  padding-bottom: 8px;
+}
+
+/* Drag-to-resize handle pinned to the card's bottom edge. Thin so it
+   doesn't add visual weight; cursor and a faint accent on hover signal
+   that it's interactive. */
+.gb-filter-card-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 6px;
+  cursor: ns-resize;
+  /* `touch-action: none` keeps mobile/stylus drags from being hijacked
+     by the browser's scroll/zoom gestures. */
+  touch-action: none;
+  /* Render a subtle bottom grip so the handle is discoverable. */
+  background:
+    linear-gradient(to bottom, transparent 0, transparent 2px,
+      var(--border-input) 2px, var(--border-input) 3px,
+      transparent 3px);
+}
+
+.gb-filter-card-resize:hover {
+  background:
+    linear-gradient(to bottom, transparent 0, transparent 2px,
+      var(--fg-accent) 2px, var(--fg-accent) 3px,
+      transparent 3px);
+}
+
+/* When the card has an explicit (dragged) height, the categorical list
+   should drop its 180px cap and flex-fill the remaining body space. */
+.gb-filter-card-sized .gb-filter-cats {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.gb-filter-card-sized .gb-filter-cats-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 /* Range editor (continuous + date share the layout). */
