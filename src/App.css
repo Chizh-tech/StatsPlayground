@@ -2333,6 +2333,11 @@
 
 .pref-body {
   display: flex;
+  /* Override .sp-dialog-body's `flex-direction: column` so the nav
+     (left) and the detail pane (right) sit side-by-side instead of
+     stacking vertically. Affects every dialog that reuses .pref-body
+     (Preferences + Y Axis Settings). */
+  flex-direction: row;
   gap: 0;
   padding: 0;
   min-height: 280px;
