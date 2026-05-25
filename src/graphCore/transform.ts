@@ -736,6 +736,12 @@ function buildAutoSpecMarkLineData(autoSpec: AutoSpec | undefined): any[] {
   const out: any[] = [];
   const push = (y: number | undefined, label: string, color: string) => {
     if (!Number.isFinite(y as number)) return;
+    // Append the numeric value to the label so the user can read the
+    // spec limit at a glance without hunting for a tooltip. Round to
+    // 10 significant digits to suppress IEEE-754 noise like
+    // `4.2228965400000001` while still preserving the natural
+    // representation of clean spec values (e.g. 4.5 stays "4.5").
+    const text = `${label} = ${Number((y as number).toPrecision(10)).toString()}`;
     out.push({
       yAxis: y,
       name: label,
@@ -743,7 +749,7 @@ function buildAutoSpecMarkLineData(autoSpec: AutoSpec | undefined): any[] {
       label: {
         show: true,
         position: "insideEndTop",
-        formatter: label,
+        formatter: text,
         color,
         fontSize: 11,
       },
