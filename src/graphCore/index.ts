@@ -21,4 +21,5 @@ export {
   type RefLineStyle,
   type YAxisConfig,
   type GridLineStyle,
+  type AutoSpec,
 } from "./types";

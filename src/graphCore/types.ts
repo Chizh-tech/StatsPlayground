@@ -166,6 +166,29 @@ export interface GridLineStyle {
   style?: RefLineStyle;
 }
 
+/** Auto-derived spec-limit reference lines for a single Y column.
+ *  Sourced from the column's `extras.spec = { lsl, target, usl }`.
+ *  Distinct from the user-editable `refLinesY` list so the auto lines
+ *  never pollute the per-line editor below the toggle — they're an
+ *  ambient, data-driven overlay that follows the Y encoding.
+ *
+ *  Future multi-column / facet-on-X support: when we eventually allow
+ *  several Y columns to share an axis (or facet on X), this single
+ *  object will be promoted to `Record<groupKey, AutoSpec>` so the
+ *  renderer can emit a different set of spec lines per X-group. The
+ *  current shape is the trivial single-group case of that future
+ *  generalization. */
+export interface AutoSpec {
+  /** Lower spec limit (rendered red). `undefined` skips the line. */
+  lsl?: number;
+  /** Target value (rendered green). `undefined` skips the line. */
+  target?: number;
+  /** Upper spec limit (rendered red). `undefined` skips the line. */
+  usl?: number;
+  /** Source column name, used purely for tooltip / debugging. */
+  colName?: string;
+}
+
 /** 单个图形元素的配置 */
 export interface ChartElement {
   kind: ElementKind;
@@ -223,6 +246,13 @@ export interface GraphSpec {
    *  on an invisible carrier series so they appear independently of
    *  which data series are toggled on. */
   refLinesY?: RefLineY[];
+  /** Auto-derived spec-limit lines pulled from the Y column's extras.
+   *  Rendered side-by-side with `refLinesY` on the same carrier series
+   *  but with hardcoded red/green coloring (red = USL/LSL, green =
+   *  Target). Kept off the user-editable list so the editor stays
+   *  focused on manually-added annotations. `undefined` skips the
+   *  overlay entirely. */
+  autoSpec?: AutoSpec;
   /** Y axis overrides — fixed range, tick density, decimal precision,
    *  reversed direction. `undefined` / empty object means fully
    *  automatic behavior. Edited from the Y Axis Settings dialog

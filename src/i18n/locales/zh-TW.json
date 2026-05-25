@@ -489,7 +489,12 @@
       "styleDashed": "虛線",
       "styleDotted": "點線",
       "customColor": "自訂顏色",
-      "empty": "尚未新增輔助線。點擊「新增輔助線」在 Y 軸上繪製一條水平輔助線。"
+      "empty": "尚未新增輔助線。點擊「新增輔助線」在 Y 軸上繪製一條水平輔助線。",
+      "autoSpec": "自動顯示規格限",
+      "autoSpecHint": "從 Y 欄的「規格限」附加屬性中讀取 LSL / Target / USL，以彩色輔助線疊加在圖上。",
+      "autoSpecActive": "已從 {{col}} 讀取規格限。",
+      "autoSpecMissing": "Y 欄「{{col}}」未設定規格限附加屬性（LSL / Target / USL）。",
+      "autoSpecNoY": "請先將欄拖入 Y 軸，以讀取其規格限。"
     },
     "yAxisSettings": {
       "title": "Y 軸設定",

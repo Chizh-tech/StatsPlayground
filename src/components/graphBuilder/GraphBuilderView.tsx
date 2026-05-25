@@ -100,6 +100,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // the graph tab.
   const [valueOrders, setValueOrders] = useState<Record<string, string[]>>({});
 
+  // Per-column spec limits (LSL / Target / USL) pulled from the dataset's
+  // `ColumnDisplayProps.extras.spec`. Keyed by column name so the auto
+  // spec-limit overlay can look up the active Y column's limits in O(1).
+  // Only columns with at least one finite limit are included; an empty
+  // map means "no auto-spec-line overlay possible". Reloaded together
+  // with `valueOrders` so DataTableView edits round-trip on tab switch.
+  // Future multi-Y / facet-on-X work will fan this out by group key
+  // instead of by column name.
+  const [specByCol, setSpecByCol] = useState<Record<string, { lsl?: number; target?: number; usl?: number }>>({});
+
   // Resizable side-rail widths. Mirror the Excel-grid splitter pattern
   // (DataTableView): clamp on drag and double-click to reset.
   const [leftWidth, setLeftWidth] = useState(220);
@@ -318,19 +328,39 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         // colIndex stored in ColumnDisplayProps is the visible-column
         // index, so it indexes directly into `cols`.
         const vo: Record<string, string[]> = {};
+        // Build the spec map in the same pass over displayProps so we
+        // only walk the array once. A column is added only if at least
+        // one of LSL / Target / USL is a finite number — columns whose
+        // spec extras are present but blank shouldn't trigger the auto
+        // overlay.
+        const sp: Record<string, { lsl?: number; target?: number; usl?: number }> = {};
         for (const p of displayProps) {
           const ex = p.extras as Record<string, unknown> | undefined;
           const node = ex?.valueOrder as { values?: unknown } | undefined;
           const vals = node?.values;
-          if (!Array.isArray(vals) || vals.length === 0) continue;
           const colName = cols[p.colIndex]?.[0];
-          if (!colName) continue;
-          vo[colName] = vals.map((v) => String(v));
+          if (colName && Array.isArray(vals) && vals.length > 0) {
+            vo[colName] = vals.map((v) => String(v));
+          }
+          const specExtra = ex?.spec as { lsl?: unknown; target?: unknown; usl?: unknown } | undefined;
+          if (colName && specExtra) {
+            const out: { lsl?: number; target?: number; usl?: number } = {};
+            const lsl = Number(specExtra.lsl);
+            const target = Number(specExtra.target);
+            const usl = Number(specExtra.usl);
+            if (Number.isFinite(lsl)) out.lsl = lsl;
+            if (Number.isFinite(target)) out.target = target;
+            if (Number.isFinite(usl)) out.usl = usl;
+            if (out.lsl !== undefined || out.target !== undefined || out.usl !== undefined) {
+              sp[colName] = out;
+            }
+          }
         }
         setColumns(fields);
         setColSqlTypes(sqlTypes);
         setData({ columns: result.columns, rows: result.rows });
         setValueOrders(vo);
+        setSpecByCol(sp);
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
@@ -362,6 +392,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       const v = encoding[k];
       if (v) (enc as any)[k] = v;
     });
+    // Resolve the auto spec-limit overlay: only contribute an AutoSpec
+    // when the user has opted in AND the current Y column has spec
+    // extras. When either condition fails we omit the field entirely so
+    // the renderer skips the overlay (and the transform never emits the
+    // carrier markLines for it).
+    const yName = encoding.y?.name;
+    const limits = item.autoSpecLines && yName ? specByCol[yName] : undefined;
+    const autoSpec = limits
+      ? { ...limits, colName: yName }
+      : undefined;
     return {
       datasetId: dataset.id,
       datasetName: dataset.name,
@@ -370,9 +410,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       styles: effectiveStyles,
       hiddenGroups: item.hiddenGroups,
       refLinesY: item.refLinesY,
+      autoSpec,
       yAxis: item.yAxis,
     };
-  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.yAxis]);
+  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.yAxis, item.autoSpecLines, specByCol]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -420,6 +461,20 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const setRefLinesY = useCallback(
     (next: RefLineY[]) => {
       updateItem(item.id, { refLinesY: next });
+      markDirty();
+    },
+    [item.id, updateItem, markDirty],
+  );
+
+  /** Toggle the "auto-show spec limits" overlay. When enabled, the
+   *  renderer pulls LSL / Target / USL out of the active Y column's
+   *  `spec` extras and draws them as red / green dashed reference
+   *  lines. The lines are NOT folded into `refLinesY` — the user
+   *  controls the overlay globally via this flag, leaving the
+   *  per-line editor below dedicated to manual annotations. */
+  const setAutoSpecLines = useCallback(
+    (next: boolean) => {
+      updateItem(item.id, { autoSpecLines: next });
       markDirty();
     },
     [item.id, updateItem, markDirty],
@@ -765,6 +820,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         <YAxisSettingsDialog
           refLines={item.refLinesY ?? []}
           setRefLines={setRefLinesY}
+          autoSpecLines={!!item.autoSpecLines}
+          setAutoSpecLines={setAutoSpecLines}
+          resolvedAutoSpec={spec.autoSpec}
+          autoSpecYColName={encoding.y?.name}
           yAxisConfig={item.yAxis}
           setYAxisConfig={setYAxisConfig}
           onClose={() => setYAxisDialogOpen(false)}
@@ -1678,6 +1737,21 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
 interface YAxisSettingsDialogProps {
   refLines: RefLineY[];
   setRefLines: (next: RefLineY[]) => void;
+  /** Whether the auto-spec-limits overlay is currently enabled. Passed
+   *  down to the RefLinesEditor so its header checkbox can render in the
+   *  correct state without round-tripping through the project store. */
+  autoSpecLines: boolean;
+  setAutoSpecLines: (next: boolean) => void;
+  /** Pre-resolved AutoSpec object for the active Y column — already
+   *  filtered to finite values by GraphBuilderView. `undefined` means
+   *  either the overlay is off, no Y is set, or the Y column has no
+   *  spec extras. The editor uses this to render the chip preview
+   *  showing exactly which limits the chart will draw. */
+  resolvedAutoSpec: import("@/graphCore").AutoSpec | undefined;
+  /** Name of the column currently bound to Y, purely for the editor's
+   *  hint copy ("Reading limits from <col>"). `undefined` when no Y is
+   *  bound. */
+  autoSpecYColName: string | undefined;
   yAxisConfig: YAxisConfig | undefined;
   setYAxisConfig: (next: YAxisConfig | undefined) => void;
   onClose: () => void;
@@ -1688,6 +1762,10 @@ type YAxisCategoryKey = "axis" | "tickGrid" | "refLines";
 function YAxisSettingsDialog({
   refLines,
   setRefLines,
+  autoSpecLines,
+  setAutoSpecLines,
+  resolvedAutoSpec,
+  autoSpecYColName,
   yAxisConfig,
   setYAxisConfig,
   onClose,
@@ -1742,7 +1820,14 @@ function YAxisSettingsDialog({
               <GridSettingsEditor config={yAxisConfig} setConfig={setYAxisConfig} />
             )}
             {active === "refLines" && (
-              <RefLinesEditor refLines={refLines} setRefLines={setRefLines} />
+              <RefLinesEditor
+                refLines={refLines}
+                setRefLines={setRefLines}
+                autoSpecLines={autoSpecLines}
+                setAutoSpecLines={setAutoSpecLines}
+                resolvedAutoSpec={resolvedAutoSpec}
+                autoSpecYColName={autoSpecYColName}
+              />
             )}
           </div>
         </div>
@@ -2468,6 +2553,24 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
 interface RefLinesEditorProps {
   refLines: RefLineY[];
   setRefLines: (next: RefLineY[]) => void;
+  /** When true, the chart auto-draws red (LSL/USL) and green (Target)
+   *  reference lines based on the active Y column's `spec` extras.
+   *  The toggle lives at the top of this editor as a single global
+   *  switch — the auto lines are intentionally kept OUT of the
+   *  per-line list below so the editor stays focused on manual
+   *  annotations. */
+  autoSpecLines: boolean;
+  setAutoSpecLines: (next: boolean) => void;
+  /** Pre-resolved spec snapshot for the active Y column, already
+   *  filtered to finite values by the parent. Used to render a small
+   *  preview row of colored chips showing exactly which limits will
+   *  draw on the chart right now. `undefined` means either the toggle
+   *  is off, no Y is bound, or the Y column has no spec extras. */
+  resolvedAutoSpec: import("@/graphCore").AutoSpec | undefined;
+  /** Name of the Y column — used in the helper hint to make it clear
+   *  *where* the limits are being pulled from. Falls back to a generic
+   *  message when undefined. */
+  autoSpecYColName: string | undefined;
 }
 
 /** Saturated / primary-color palette for reference lines. The chart's
@@ -2503,7 +2606,14 @@ function nextRefLineId(): string {
   return `rl-${Date.now().toString(36)}-${_refLineSeq}`;
 }
 
-function RefLinesEditor({ refLines, setRefLines }: RefLinesEditorProps) {
+function RefLinesEditor({
+  refLines,
+  setRefLines,
+  autoSpecLines,
+  setAutoSpecLines,
+  resolvedAutoSpec,
+  autoSpecYColName,
+}: RefLinesEditorProps) {
   const { t } = useTranslation();
 
   const addLine = useCallback(() => {
@@ -2534,8 +2644,75 @@ function RefLinesEditor({ refLines, setRefLines }: RefLinesEditorProps) {
 
   const lines = refLines ?? [];
 
+  // Auto-spec preview state. We render up to three chips (LSL / Target
+  // / USL) mirroring the colors the chart will use. When the toggle is
+  // on but no limits resolve, the hint copy explains why.
+  const autoChips: { key: "lsl" | "target" | "usl"; value: number; color: string; label: string }[] = [];
+  if (autoSpecLines && resolvedAutoSpec) {
+    if (resolvedAutoSpec.lsl !== undefined) {
+      autoChips.push({ key: "lsl", value: resolvedAutoSpec.lsl, color: "#E60000", label: "LSL" });
+    }
+    if (resolvedAutoSpec.target !== undefined) {
+      autoChips.push({ key: "target", value: resolvedAutoSpec.target, color: "#00C853", label: "Target" });
+    }
+    if (resolvedAutoSpec.usl !== undefined) {
+      autoChips.push({ key: "usl", value: resolvedAutoSpec.usl, color: "#E60000", label: "USL" });
+    }
+  }
+
   return (
     <div className="gb-refline-editor">
+      {/* Auto spec-limit toggle. Placed above the manual-list header so
+          it reads as a "global" switch that applies to the whole chart,
+          rather than another per-line setting. When on, the chart pulls
+          LSL / Target / USL from the active Y column's `spec` extras
+          and draws them as red / green dashed lines. The lines are
+          deliberately NOT added to the manual list below. */}
+      <div className="gb-refline-auto-block">
+        <label className="gb-refline-auto-toggle">
+          <input
+            type="checkbox"
+            checked={autoSpecLines}
+            onChange={(e) => setAutoSpecLines(e.target.checked)}
+          />
+          <span>{t("graph.refLine.autoSpec", { defaultValue: "Auto-show spec limits" })}</span>
+        </label>
+        <div className="gb-refline-auto-hint">
+          {autoSpecLines
+            ? autoChips.length > 0
+              ? t("graph.refLine.autoSpecActive", {
+                  defaultValue: "Reading limits from {{col}}.",
+                  col: autoSpecYColName ?? "",
+                })
+              : autoSpecYColName
+                ? t("graph.refLine.autoSpecMissing", {
+                    defaultValue: "The Y column \"{{col}}\" has no spec extras (LSL / Target / USL).",
+                    col: autoSpecYColName,
+                  })
+                : t("graph.refLine.autoSpecNoY", {
+                    defaultValue: "Drop a column on Y to read its spec limits.",
+                  })
+            : t("graph.refLine.autoSpecHint", {
+                defaultValue: "Read LSL / Target / USL from the Y column's spec extras and overlay them as colored reference lines.",
+              })}
+        </div>
+        {autoChips.length > 0 && (
+          <div className="gb-refline-auto-chips">
+            {autoChips.map((c) => (
+              <span
+                key={c.key}
+                className="gb-refline-auto-chip"
+                style={{ borderColor: c.color, color: c.color }}
+                title={`${c.label} = ${c.value}`}
+              >
+                <span className="gb-refline-auto-chip-dash" style={{ background: c.color }} />
+                {c.label} = {c.value}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Section header: title + Add button. Title sits flush with the
           pane padding so it reads as a normal settings-pane section. */}
       <div className="gb-refline-header">

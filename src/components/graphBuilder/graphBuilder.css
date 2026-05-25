@@ -1197,6 +1197,73 @@
   gap: 10px;
 }
 
+/* Auto-spec-limits block at the top of the RefLinesEditor. Sits in a
+   soft-bordered container so it reads as a distinct "global setting"
+   ahead of the per-line list below. The checkbox + label sit on the
+   first row, a small hint sentence below, and an optional row of
+   colored chips previews the resolved LSL / Target / USL values. */
+.gb-refline-auto-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  background: var(--bg-cell-hover);
+}
+
+.gb-refline-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.gb-refline-auto-toggle input[type="checkbox"] {
+  margin: 0;
+}
+
+.gb-refline-auto-hint {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  line-height: 1.45;
+}
+
+.gb-refline-auto-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* Each chip mirrors the on-chart line color via its border + text
+   color, with a short dashed segment on the left echoing the dashed
+   stroke the chart draws. Background stays transparent so the chip
+   reads as a tag rather than a button. */
+.gb-refline-auto-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: transparent;
+  line-height: 1.4;
+}
+
+.gb-refline-auto-chip-dash {
+  display: inline-block;
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+}
+
 .gb-refline-header {
   display: flex;
   align-items: center;

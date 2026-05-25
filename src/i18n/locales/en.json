@@ -489,7 +489,12 @@
       "styleDashed": "Dashed",
       "styleDotted": "Dotted",
       "customColor": "Custom color",
-      "empty": "No reference lines yet. Click “Add reference line” to draw a horizontal marker on the Y axis."
+      "empty": "No reference lines yet. Click “Add reference line” to draw a horizontal marker on the Y axis.",
+      "autoSpec": "Auto-show spec limits",
+      "autoSpecHint": "Read LSL / Target / USL from the Y column's spec extras and overlay them as colored reference lines.",
+      "autoSpecActive": "Reading limits from {{col}}.",
+      "autoSpecMissing": "The Y column \"{{col}}\" has no spec extras (LSL / Target / USL).",
+      "autoSpecNoY": "Drop a column on Y to read its spec limits."
     },
     "yAxisSettings": {
       "title": "Y Axis Settings",

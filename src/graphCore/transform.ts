@@ -6,7 +6,7 @@
  * 以及 X / Y / Color / Size / Overlay / GroupX / GroupY / Wrap 编码通道。
  */
 
-import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineStyle, YAxisConfig, GridLineStyle } from "./types";
+import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineStyle, YAxisConfig, GridLineStyle, AutoSpec } from "./types";
 import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
 import i18n from "@/i18n";
@@ -647,15 +647,29 @@ function refDashFor(style: RefLineStyle): "solid" | "dashed" | "dotted" {
  *  hidden. Returns null when no reference lines are configured so we
  *  avoid emitting a noise series.
  *
+ *  Auto spec-limit overlay: when `autoSpec` is non-null we append up to
+ *  three more markLines (LSL / Target / USL) with hardcoded red /
+ *  green / red coloring. These are merged into the SAME carrier so the
+ *  chart only ends up with one extra series no matter how many sources
+ *  contribute lines, and so a future tooltip / hover handler only has
+ *  one place to look. The auto lines are NOT folded back into the
+ *  user-editable `refLinesY` list — they're an ambient, data-driven
+ *  overlay that the user toggles globally via the Reference Lines
+ *  editor checkbox.
+ *
  *  Note: ECharts' markLine reads `data[i].yAxis` for a horizontal line;
  *  `name` becomes the label text, and `lineStyle` / `label` override the
  *  appearance. The `silent: true` flag prevents the markLine from
  *  participating in tooltips or hover halos, which would distract from
  *  the data series. */
-function buildRefLinesCarrier(refLines: RefLineY[] | undefined, theme: GraphTheme): any | null {
-  if (!refLines || refLines.length === 0) return null;
-  const valid = refLines.filter((r) => Number.isFinite(r.y));
-  if (valid.length === 0) return null;
+function buildRefLinesCarrier(
+  refLines: RefLineY[] | undefined,
+  autoSpec: AutoSpec | undefined,
+  theme: GraphTheme,
+): any | null {
+  const userValid = (refLines ?? []).filter((r) => Number.isFinite(r.y));
+  const autoEntries = buildAutoSpecMarkLineData(autoSpec);
+  if (userValid.length === 0 && autoEntries.length === 0) return null;
   return {
     id: "__ref_lines_y__",
     type: "scatter",
@@ -680,27 +694,67 @@ function buildRefLinesCarrier(refLines: RefLineY[] | undefined, theme: GraphThem
         fontSize: 11,
       },
       lineStyle: { color: theme.fgPrimary, width: 1, type: "dashed" },
-      data: valid.map((r) => {
-        const hasLabel = r.label != null && r.label !== "";
-        return {
-          yAxis: r.y,
-          name: r.label || "",
-          lineStyle: {
-            color: r.color,
-            width: r.width,
-            type: refDashFor(r.style),
-          },
-          label: {
-            show: hasLabel,
-            position: "insideEndTop",
-            formatter: r.label || "",
-            color: r.color,
-            fontSize: 11,
-          },
-        };
-      }),
+      data: [
+        ...userValid.map((r) => {
+          const hasLabel = r.label != null && r.label !== "";
+          return {
+            yAxis: r.y,
+            name: r.label || "",
+            lineStyle: {
+              color: r.color,
+              width: r.width,
+              type: refDashFor(r.style),
+            },
+            label: {
+              show: hasLabel,
+              position: "insideEndTop",
+              formatter: r.label || "",
+              color: r.color,
+              fontSize: 11,
+            },
+          };
+        }),
+        ...autoEntries,
+      ],
     },
   };
+}
+
+/** Hardcoded colors for auto spec-limit lines. Saturated red for the
+ *  pass/fail boundary (LSL / USL) and a vivid green for the target,
+ *  picked to read clearly against both light- and dark-theme grids
+ *  without colliding with any data-series color in our muted
+ *  categorical palette. */
+const AUTO_SPEC_LIMIT_COLOR = "#E60000";
+const AUTO_SPEC_TARGET_COLOR = "#00C853";
+
+/** Translate an `AutoSpec` into ECharts markLine data entries. Skips
+ *  any limit whose value isn't a finite number so a partially-filled
+ *  spec (e.g. only USL set) only emits the lines it can. */
+function buildAutoSpecMarkLineData(autoSpec: AutoSpec | undefined): any[] {
+  if (!autoSpec) return [];
+  const out: any[] = [];
+  const push = (y: number | undefined, label: string, color: string) => {
+    if (!Number.isFinite(y as number)) return;
+    out.push({
+      yAxis: y,
+      name: label,
+      lineStyle: { color, width: 1, type: "dashed" },
+      label: {
+        show: true,
+        position: "insideEndTop",
+        formatter: label,
+        color,
+        fontSize: 11,
+      },
+    });
+  };
+  // Render in LSL → Target → USL order so when limits sit close
+  // together the labels stack in a predictable vertical sequence.
+  push(autoSpec.lsl, "LSL", AUTO_SPEC_LIMIT_COLOR);
+  push(autoSpec.target, "Target", AUTO_SPEC_TARGET_COLOR);
+  push(autoSpec.usl, "USL", AUTO_SPEC_LIMIT_COLOR);
+  return out;
 }
 
 /** Build the ECharts yAxis-option fragment that materializes a
@@ -955,7 +1009,7 @@ function buildSingleOption(
         barWidth: "99%",
         itemStyle: { color: theme.categorical[0] },
       });
-      const refCarrier = buildRefLinesCarrier(spec.refLinesY, theme);
+      const refCarrier = buildRefLinesCarrier(spec.refLinesY, spec.autoSpec, theme);
       if (refCarrier) series.push(refCarrier);
       return {
         backgroundColor: "transparent",
@@ -1263,7 +1317,7 @@ function buildSingleOption(
   // values, thresholds). Goes last so its z-index sits above the data
   // series; the carrier itself is invisible — only the markLines render.
   {
-    const refCarrier = buildRefLinesCarrier(spec.refLinesY, theme);
+    const refCarrier = buildRefLinesCarrier(spec.refLinesY, spec.autoSpec, theme);
     if (refCarrier) series.push(refCarrier);
   }
 

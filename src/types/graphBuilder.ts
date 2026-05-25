@@ -47,6 +47,13 @@ export interface GraphBuilderItem {
    *  label, color, dash style and stroke width. Persisted with the
    *  project so annotations survive reloads. */
   refLinesY?: RefLineY[];
+  /** When true, the renderer auto-overlays spec-limit reference lines
+   *  (USL / LSL red, Target green) sourced from the Y column's
+   *  `extras.spec` metadata. These lines are NOT added to `refLinesY`
+   *  — they live as an ambient, data-driven overlay that follows the
+   *  current Y encoding (and, in a future multi-Y / facet-on-X build,
+   *  the per-group spec metadata). Defaults to off. */
+  autoSpecLines?: boolean;
   /** User overrides for the primary Y axis — fixed min/max range,
    *  tick density (splitNumber), decimal precision on tick labels,
    *  and reversed direction. `undefined` or an empty object means

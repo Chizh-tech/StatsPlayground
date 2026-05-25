@@ -489,7 +489,12 @@
       "styleDashed": "Đứt",
       "styleDotted": "Chấm",
       "customColor": "Màu tùy chỉnh",
-      "empty": "Chưa có đường tham chiếu nào. Nhấp “Thêm đường tham chiếu” để vẽ đường ngang trên trục Y."
+      "empty": "Chưa có đường tham chiếu nào. Nhấp “Thêm đường tham chiếu” để vẽ đường ngang trên trục Y.",
+      "autoSpec": "Tự động hiện giới hạn quy cách",
+      "autoSpecHint": "Đọc LSL / Target / USL từ thuộc tính mở rộng “quy cách” của cột Y và phủ chúng như các đường tham chiếu có màu.",
+      "autoSpecActive": "Đang đọc giới hạn từ {{col}}.",
+      "autoSpecMissing": "Cột Y \"{{col}}\" không có thuộc tính quy cách (LSL / Target / USL).",
+      "autoSpecNoY": "Kéo một cột vào Y để đọc giới hạn quy cách."
     },
     "yAxisSettings": {
       "title": "Cài đặt trục Y",
