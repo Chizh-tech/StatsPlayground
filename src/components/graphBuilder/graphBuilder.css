@@ -1321,15 +1321,27 @@
   padding: 2px 6px;
   cursor: pointer;
   font-size: 12px;
+  /* Suppress the native shift-click text-selection highlight so range
+     picks feel clean instead of leaving a blue selection trail. */
+  user-select: none;
 }
 
 .gb-filter-cat-item:hover {
   background: var(--bg-header);
 }
 
+/* Subtle marker for the row that's currently the shift-click anchor.
+   Helps the user see where a range pick will originate from. */
+.gb-filter-cat-item-anchor {
+  box-shadow: inset 2px 0 0 var(--fg-accent);
+}
+
 .gb-filter-cat-item input[type="checkbox"] {
   margin: 0;
   flex-shrink: 0;
+  /* The checkbox is purely visual — the row handles clicks. Block its
+     own pointer events so it can't intercept modifier keys. */
+  pointer-events: none;
 }
 
 .gb-filter-cat-label {

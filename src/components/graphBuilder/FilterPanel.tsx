@@ -355,6 +355,11 @@ function CategoricalEditor({
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
+  // Anchor for shift-click range selection. Indexes into the currently
+  // `visible` list. Reset to null whenever the visible list shifts (e.g.
+  // user types into the search box) so a stale index can't pick a wrong
+  // range.
+  const [anchorIdx, setAnchorIdx] = useState<number | null>(null);
 
   // Distinct values from the UN-filtered data (filterEngine helper) —
   // this list stays stable while the user toggles boxes within the rule.
@@ -371,16 +376,79 @@ function CategoricalEditor({
     return all.filter((v) => v.toLowerCase().includes(q));
   }, [all, query]);
 
+  // Commit a new Set as the rule's selection, preserving `all`'s order so
+  // re-renders are deterministic.
+  const commit = (next: Set<string>) => {
+    onChange({ ...rule, selected: all.filter((x) => next.has(x)) });
+  };
+
   const toggle = (v: string) => {
     const next = new Set(selectedSet);
     if (next.has(v)) next.delete(v);
     else next.add(v);
-    // Preserve `all`'s order so re-renders are deterministic.
-    onChange({ ...rule, selected: all.filter((x) => next.has(x)) });
+    commit(next);
   };
 
-  const selectAll = () => onChange({ ...rule, selected: all.slice() });
-  const clearAll = () => onChange({ ...rule, selected: [] });
+  /**
+   * Click handler with modifier support:
+   *   - plain click           → toggle this item, update anchor
+   *   - Ctrl/Cmd click        → toggle this item, update anchor (non-contiguous "skip-select")
+   *   - Shift click           → range select from anchor → current within
+   *                             the *visible* list; range items all take
+   *                             the *opposite* state of the clicked item
+   *                             before the click (matches the just-flipped
+   *                             state of the clicked item, so the whole
+   *                             range ends up uniform). Anchor is NOT
+   *                             advanced, so subsequent shift-clicks keep
+   *                             extending from the same origin.
+   *   - Ctrl+Shift click      → additive range select: range items set to
+   *                             selected (added) without touching items
+   *                             outside the range.
+   */
+  const handleRowClick = (
+    e: React.MouseEvent<HTMLDivElement>,
+    v: string,
+    idx: number,
+  ) => {
+    // Suppress accidental text selection when shift-clicking.
+    e.preventDefault();
+    const shift = e.shiftKey;
+    const ctrl = e.ctrlKey || e.metaKey;
+
+    if (shift && anchorIdx !== null && anchorIdx < visible.length) {
+      const [a, b] = anchorIdx <= idx ? [anchorIdx, idx] : [idx, anchorIdx];
+      const range = visible.slice(a, b + 1);
+      const next = new Set(selectedSet);
+      if (ctrl) {
+        // Ctrl+Shift: additive — always select the range.
+        for (const item of range) next.add(item);
+      } else {
+        // Plain shift: fill range to match the *flipped* state of the
+        // clicked anchor end (so a uniform block results).
+        const target = !selectedSet.has(v);
+        for (const item of range) {
+          if (target) next.add(item);
+          else next.delete(item);
+        }
+      }
+      commit(next);
+      // Keep anchor so further shift-clicks can extend/shrink the range.
+      return;
+    }
+
+    // Plain or Ctrl/Cmd click: toggle and (re)set anchor.
+    toggle(v);
+    setAnchorIdx(idx);
+  };
+
+  const selectAll = () => {
+    onChange({ ...rule, selected: all.slice() });
+    setAnchorIdx(null);
+  };
+  const clearAll = () => {
+    onChange({ ...rule, selected: [] });
+    setAnchorIdx(null);
+  };
 
   return (
     <div className="gb-filter-cats">
@@ -389,7 +457,12 @@ function CategoricalEditor({
         className="gb-filter-search"
         value={query}
         placeholder={t("graph.filter.searchValues", { defaultValue: "Search…" })}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          // Visible list is about to change — drop the anchor so a stale
+          // index can't pick a wrong range on the next shift-click.
+          setAnchorIdx(null);
+        }}
       />
       <div className="gb-filter-cats-actions">
         <button className="gb-filter-mini-btn" onClick={selectAll}>
@@ -408,17 +481,30 @@ function CategoricalEditor({
             {t("graph.filter.noMatches", { defaultValue: "No matches" })}
           </div>
         ) : (
-          visible.map((v) => (
-            <label key={v} className="gb-filter-cat-item">
+          visible.map((v, i) => (
+            <div
+              key={v}
+              className={`gb-filter-cat-item${anchorIdx === i ? " gb-filter-cat-item-anchor" : ""}`}
+              onClick={(e) => handleRowClick(e, v, i)}
+              onMouseDown={(e) => {
+                // Block the browser's native shift-click text-range
+                // selection before it starts.
+                if (e.shiftKey) e.preventDefault();
+              }}
+            >
               <input
                 type="checkbox"
                 checked={selectedSet.has(v)}
-                onChange={() => toggle(v)}
+                readOnly
+                tabIndex={-1}
+                // Stop propagation isn't needed — the row's onClick is the
+                // single source of truth — but readOnly + tabIndex=-1 keep
+                // the checkbox purely visual so we can't double-toggle.
               />
               <span className="gb-filter-cat-label" title={v}>
                 {v === "" ? <em>(blank)</em> : v}
               </span>
-            </label>
+            </div>
           ))
         )}
       </div>
