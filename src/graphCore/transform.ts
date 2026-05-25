@@ -1410,13 +1410,19 @@ function buildSingleOption(
   // measurements yet. Mirrors the legend's hide-empty-group behavior.
   const rawXCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx, yIdx) : [];
   const localXCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
-  // When the faceted caller forwards a global category union, use it as
-  // the axis spine instead of the panel-local list — keeps every panel
-  // aligned to the same X positions even when this subset is missing
-  // some categories. Tick label sizing (rotate/wrap) is still driven by
-  // the actual rendered category list so it accounts for the widest
-  // label that will appear.
-  const xCats = xIsCategory && sharedRanges?.xCats ? sharedRanges.xCats : localXCats;
+  // When the faceted caller forwards a global category union, intersect
+  // it with the panel-local list: the global union supplies the canonical
+  // ORDER (so cross-panel category positions stay consistent even when
+  // local row insertion order differs), and the intersection drops
+  // categories that have no rendered data in *this* panel — otherwise a
+  // category present elsewhere in the dataset (e.g. DV in another wrap
+  // panel) would reserve a blank slot here, which looks like a missing
+  // box rather than "no data". Tick label sizing (rotate/wrap) is still
+  // driven by the actual rendered category list so it accounts for the
+  // widest label that will appear.
+  const xCats = xIsCategory && sharedRanges?.xCats
+    ? sharedRanges.xCats.filter((c) => localXCats.includes(c))
+    : localXCats;
   // Compute rotation / wrap metrics first so the axis literal can reference them.
   const xMaxLines = xIsCategory ? maxWrapLines(xCats, 16) : 1;
   // Rotate only when wrapping doesn't already break long labels onto
