@@ -624,6 +624,13 @@ interface SharedAxisRanges {
   /** Forced numeric min/max for the X axis (value or time type). */
   xMin?: number;
   xMax?: number;
+  /** Nice-snapped tick interval matching xMin/xMax for VALUE-type X
+   *  axes (continuous numeric X — scatter / line / bar paths with a
+   *  quantitative X binding). Lets every faceted panel render the
+   *  same tick density even when local data ranges differ. Absent
+   *  for category / time axes (those don't go through the nice-fit
+   *  helper) and absent when no nice fit was produced. */
+  xInterval?: number;
   /** Union of all X categories across panels — used when xAxis.type ===
    *  "category" so missing categories still occupy the same slot on each
    *  panel's axis. */
@@ -810,28 +817,36 @@ function niceStep(range: number, targetTicks: number): number {
   return nice * exp;
 }
 
-/** Compute a nice-snapped {min, max, interval} for the Y axis from
- *  optional data extent plus any ref-line Y values. Returns null when
- *  there's nothing to fit (no data and no refs) so the caller can fall
- *  back to ECharts' auto-scale. A 2 % visual pad is applied BEFORE
- *  the snap so a ref line sitting at the exact data edge isn't flush
- *  against the axis frame.
+/** Compute a nice-snapped {min, max, interval} for a value axis from
+ *  optional data extent plus any reference values that must stay
+ *  visible (e.g. user / spec ref-line Ys on the Y axis). Axis-agnostic:
+ *  callers pass the data range and any reference values, get back a
+ *  fit that snaps to the {1, 2, 2.5, 5, 10} × 10^k tick family.
+ *  Returns null when there's nothing to fit (no data and no refs) so
+ *  the caller can fall back to ECharts' auto-scale. A 2 % visual pad
+ *  is applied BEFORE the snap so a reference value sitting at the
+ *  exact data edge isn't flush against the axis frame.
  *
  *  Why static instead of the older callback approach: passing
  *  `min`/`max` as functions to ECharts pinned the axis to raw float
  *  values, which then showed at the canvas edges as labels like
  *  "4.2228965400000001". Pre-snapping gives clean tick labels and
- *  also lets us emit a matching `interval` for predictable density. */
-function computeNiceYBounds(
+ *  also lets us emit a matching `interval` for predictable density.
+ *
+ *  Used for BOTH axes — Y (with refLinesY folded in) and value-type
+ *  X (no ref lines today, so callers pass `refs: []`). Keep this
+ *  function axis-neutral; if X ever grows ref lines, just pipe them
+ *  in through the same `refs` argument. */
+function computeNiceBounds(
   dataMin: number | undefined,
   dataMax: number | undefined,
-  refYs: number[],
+  refs: number[],
   targetTicks: number,
 ): { min: number; max: number; interval: number } | null {
   const all: number[] = [];
   if (Number.isFinite(dataMin)) all.push(dataMin as number);
   if (Number.isFinite(dataMax)) all.push(dataMax as number);
-  for (const y of refYs) if (Number.isFinite(y)) all.push(y);
+  for (const y of refs) if (Number.isFinite(y)) all.push(y);
   if (all.length === 0) return null;
   let lo = Math.min(...all);
   let hi = Math.max(...all);
@@ -870,7 +885,7 @@ function computeNiceYBounds(
  *  always win — this fragment only contributes to the truly-auto path.
  *
  *  Kept for the histogram path; the main (boxplot/scatter/line/bar)
- *  path uses `computeNiceYBounds` for snapped tick labels. */
+ *  path uses `computeNiceBounds` for snapped tick labels. */
 function buildYAxisRefLineExpand(refYs: number[]): EChartsOption {
   if (refYs.length === 0) return {};
   const expand = (v: { min: number; max: number }, dir: "min" | "max"): number => {
@@ -1446,6 +1461,49 @@ function buildSingleOption(
   const bottomGap = xIsCategory
     ? (xRotated ? 56 : 16) + Math.max(0, xMaxLines - 1) * 14
     : 28;
+
+  // Resolve final X-axis bounds + tick interval for the VALUE-type X
+  // branch (continuous numeric X — scatter / line / bar paths with a
+  // quantitative X binding). Mirrors the yFinalBounds block below so
+  // both axes get nice-snapped labels (e.g. 0.0 / 0.5 / 1.0 instead
+  // of 0.2228965400000001 at the canvas edge) and a denser default
+  // tick density (~8 ticks). Category and time axes keep their
+  // existing behavior — categories use the data list, time uses
+  // ECharts' built-in time picker plus any sharedRanges extent.
+  //   - Faceted: pin to sharedRanges.x{Min,Max,Interval}
+  //   - Single panel: nice-fit over visible (non-hidden) rows; falls
+  //     back to `scale: true` when there's no finite X data so ECharts
+  //     auto-fits without forcing the axis to include 0.
+  let xFinalBounds: EChartsOption = {};
+  if (!xIsCategory && !xIsTime && xField) {
+    if (sharedRanges?.xMin != null || sharedRanges?.xMax != null) {
+      if (sharedRanges.xMin != null) xFinalBounds.min = sharedRanges.xMin;
+      if (sharedRanges.xMax != null) xFinalBounds.max = sharedRanges.xMax;
+      if (sharedRanges.xInterval != null) xFinalBounds.interval = sharedRanges.xInterval;
+    } else if (xIdx >= 0) {
+      let dataMin = Infinity;
+      let dataMax = -Infinity;
+      for (const r of data.rows) {
+        if (isRowHidden(r)) continue;
+        const v = toNum(r[xIdx]);
+        if (Number.isFinite(v)) {
+          if (v < dataMin) dataMin = v;
+          if (v > dataMax) dataMax = v;
+        }
+      }
+      const fit = computeNiceBounds(
+        Number.isFinite(dataMin) ? dataMin : undefined,
+        Number.isFinite(dataMax) ? dataMax : undefined,
+        [],
+        8,
+      );
+      xFinalBounds = fit
+        ? { min: fit.min, max: fit.max, interval: fit.interval }
+        : { scale: true };
+    } else {
+      xFinalBounds = { scale: true };
+    }
+  }
   const xAxis = xIsCategory
     ? {
         type: "category",
@@ -1475,11 +1533,12 @@ function buildSingleOption(
         }
       : {
           type: "value",
-          scale: true,
           ...axis,
-          // Pin to shared bounds when faceted (see SharedAxisRanges).
-          ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
-          ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
+          // Pre-computed bounds (faceted shared OR local nice-snap fit).
+          // `scale: true` is encoded INSIDE xFinalBounds when no fit
+          // was produced; we don't emit it unconditionally because it
+          // would expand explicit bounds outward.
+          ...xFinalBounds,
         };
 
   // Append user-defined Y-axis reference lines (specs limits, target
@@ -1516,7 +1575,7 @@ function buildSingleOption(
         }
       }
     }
-    const fit = computeNiceYBounds(
+    const fit = computeNiceBounds(
       Number.isFinite(dataMin) ? dataMin : undefined,
       Number.isFinite(dataMax) ? dataMax : undefined,
       collectRefLineYs(spec),
@@ -2007,7 +2066,7 @@ function computeSharedRanges(
     // tick spacing. Folds ref-line Ys in so spec limits drawn off the
     // data extent (e.g. USL at 120 when data tops out at 95) still
     // render on every panel.
-    const fit = computeNiceYBounds(
+    const fit = computeNiceBounds(
       Number.isFinite(dataMin) ? dataMin : undefined,
       Number.isFinite(dataMax) ? dataMax : undefined,
       refYs ?? [],
@@ -2021,7 +2080,7 @@ function computeSharedRanges(
   } else if (refYs && refYs.length > 0) {
     // No Y data column but ref lines are configured: fit the axis
     // around just the ref lines so they still render predictably.
-    const fit = computeNiceYBounds(undefined, undefined, refYs, 8);
+    const fit = computeNiceBounds(undefined, undefined, refYs, 8);
     if (fit) {
       out.yMin = fit.min;
       out.yMax = fit.max;
@@ -2055,6 +2114,12 @@ function computeSharedRanges(
         }
         out.xCats = applyValueOrder(cats, valueOrders?.[xField.name]);
       } else {
+        // Value-type X (continuous numeric): run the same nice-snap
+        // fit we apply to Y so every faceted panel inherits identical
+        // X bounds AND identical tick spacing. Without `xInterval`
+        // ECharts could pick a different per-panel density even with
+        // identical bounds, breaking visual comparison across panels.
+        // No X ref-lines feature today, so pass an empty refs list.
         let xMin = Infinity;
         let xMax = -Infinity;
         for (const r of data.rows) {
@@ -2069,9 +2134,27 @@ function computeSharedRanges(
           }
         }
         if (Number.isFinite(xMin) && Number.isFinite(xMax)) {
-          const pad = (xMax - xMin) * 0.02 || Math.abs(xMax) * 0.02 || 1;
-          out.xMin = xMin - pad;
-          out.xMax = xMax + pad;
+          if (xField.type === "datetime") {
+            // Time axis: keep the legacy padded extent — ECharts'
+            // built-in time tick picker already produces clean labels
+            // (hours/days/months) and the nice-number families above
+            // wouldn't translate to time units cleanly without extra
+            // date math.
+            const pad = (xMax - xMin) * 0.02 || Math.abs(xMax) * 0.02 || 1;
+            out.xMin = xMin - pad;
+            out.xMax = xMax + pad;
+          } else {
+            const fit = computeNiceBounds(xMin, xMax, [], 8);
+            if (fit) {
+              out.xMin = fit.min;
+              out.xMax = fit.max;
+              out.xInterval = fit.interval;
+            } else {
+              const pad = (xMax - xMin) * 0.02 || Math.abs(xMax) * 0.02 || 1;
+              out.xMin = xMin - pad;
+              out.xMax = xMax + pad;
+            }
+          }
         }
       }
     }
