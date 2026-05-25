@@ -1070,7 +1070,7 @@ impl DuckDbEngine {
                     if name.is_empty() {
                         Self::generate_col_name(&all_col_names)
                     } else {
-                        // Auto-suffix _2/_3/... if the header collides with an
+                        // Auto-suffix -2/-3/... if the header collides with an
                         // existing column (or with one created earlier in this
                         // same paste). Avoids DuckDB Catalog Errors like
                         // "Column with name X already exists!".
@@ -1115,7 +1115,7 @@ impl DuckDbEngine {
                     let old_name = &paste_col_names[c];
                     let trimmed = new_name.trim();
                     if !trimmed.is_empty() && old_name != trimmed {
-                        // Auto-suffix _2/_3/... if the proposed name collides
+                        // Auto-suffix -2/-3/... if the proposed name collides
                         // with any OTHER column. The column being renamed is
                         // excluded so a no-op rename (which we already filter
                         // above) wouldn't have been suffixed anyway.
@@ -1271,7 +1271,7 @@ impl DuckDbEngine {
 
     /// Resolve a column name that may collide with existing ones.
     ///
-    /// Returns `base` unchanged when it's free, otherwise appends `_2`, `_3`,
+    /// Returns `base` unchanged when it's free, otherwise appends `-2`, `-3`,
     /// ... until a non-conflicting name is produced. `exclude_idx`, if given,
     /// designates a slot in `existing` whose current name should NOT count as
     /// a collision (used when renaming a column to a header value that may
@@ -1287,7 +1287,7 @@ impl DuckDbEngine {
         }
         let mut i = 2usize;
         loop {
-            let candidate = format!("{}_{}", base, i);
+            let candidate = format!("{}-{}", base, i);
             if !in_use(&candidate) {
                 return candidate;
             }
