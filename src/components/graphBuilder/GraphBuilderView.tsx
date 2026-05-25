@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } fr
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape } from "@/graphCore";
+import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -192,22 +192,39 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // so the parent can pre-compute effectiveStyles in the same single source
   // of truth that gets handed both to the renderer (via spec.styles) and to
   // the panel (for swatches and the editor's "default vs override" check).
+  //
+  // Two rules govern which group keys make the cut:
+  //   1. The group value itself must be non-missing (skip blanks/whitespace
+  //      so we don't surface a phantom "" legend entry).
+  //   2. After applying the user's filter rules the group must still have
+  //      at least one row that would actually plot something — i.e. every
+  //      encoded field in {x, y} is non-missing for that row. A group
+  //      whose Y is entirely null in the filtered region produces zero
+  //      marks and would otherwise leave a dead legend swatch behind.
   const groupKeys = useMemo<string[]>(() => {
     const groupField = encoding.overlay;
     if (!groupField || !filteredData) return [DEFAULT_GROUP_KEY];
     const colIdx = filteredData.columns.indexOf(groupField.name);
     if (colIdx < 0) return [DEFAULT_GROUP_KEY];
+    const xIdx = encoding.x ? filteredData.columns.indexOf(encoding.x.name) : -1;
+    const yIdx = encoding.y ? filteredData.columns.indexOf(encoding.y.name) : -1;
     const seen = new Set<string>();
     const out: string[] = [];
     for (const r of filteredData.rows) {
-      const v = r[colIdx];
-      const k = v == null ? "" : String(v);
+      const gv = r[colIdx];
+      if (isMissing(gv)) continue;
+      // Drop the row from the legend census if a bound encoding channel
+      // is missing on it — the renderer would skip it too, so it must
+      // not count toward "this group has data".
+      if (xIdx >= 0 && isMissing(r[xIdx])) continue;
+      if (yIdx >= 0 && isMissing(r[yIdx])) continue;
+      const k = String(gv);
       if (seen.has(k)) continue;
       seen.add(k);
       out.push(k);
     }
     return out.length > 0 ? out : [DEFAULT_GROUP_KEY];
-  }, [encoding.overlay, filteredData]);
+  }, [encoding.overlay, encoding.x, encoding.y, filteredData]);
 
   const effectiveStyles = useMemo<GroupStyleMap>(
     () =>

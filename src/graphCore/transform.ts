@@ -183,8 +183,12 @@ function toNum(v: unknown): number {
 /** True when `v` should be treated as a missing observation (null,
  *  undefined, empty string, or whitespace-only string). Centralises the
  *  policy used by both numeric and categorical paths so the graph
- *  doesn't render phantom "" categories alongside real ones. */
-function isMissing(v: unknown): boolean {
+ *  doesn't render phantom "" categories alongside real ones.
+ *
+ *  Exported because the legend builder in GraphBuilderView reuses the
+ *  same predicate to drop legend entries whose group has no plottable
+ *  rows (matches the per-element missing-data policy used here). */
+export function isMissing(v: unknown): boolean {
   if (v == null) return true;
   if (typeof v === "string" && v.trim() === "") return true;
   return false;
@@ -681,7 +685,31 @@ function buildSingleOption(
   // assignment follow the user-defined order. With no grouping field this
   // is a no-op (the map has a single "__all__" key).
   const groupingOrder = grouping ? valueOrders?.[grouping.name] : undefined;
-  const groups = reorderMapByValueOrder(rawGroups, groupingOrder);
+  let groups = reorderMapByValueOrder(rawGroups, groupingOrder);
+
+  // Drop groups with no plottable rows under the bound encodings — i.e.
+  // every row of the group has a missing value in some encoded channel
+  // ({x, y}). This keeps the legend, color indexing, and downstream
+  // series iteration in lock-step with GraphBuilderView.groupKeys, which
+  // applies the same predicate so an "all-Y-null" overlay value never
+  // produces a dead legend swatch with nothing on the canvas.
+  // We skip this prune when there is no grouping field (the lone
+  // "__all__" bucket must survive even if rows are missing some channel).
+  if (grouping) {
+    const xIdxCheck = colIndex(data, xField?.name);
+    const yIdxCheck = colIndex(data, yField?.name);
+    const pruned = new Map<string, number[]>();
+    for (const [k, idxs] of groups) {
+      const hasPlottable = idxs.some((i) => {
+        const row = data.rows[i];
+        if (xIdxCheck >= 0 && isMissing(row[xIdxCheck])) return false;
+        if (yIdxCheck >= 0 && isMissing(row[yIdxCheck])) return false;
+        return true;
+      });
+      if (hasPlottable) pruned.set(k, idxs);
+    }
+    groups = pruned;
+  }
   const groupKeys = Array.from(groups.keys());
 
   /** Stable color index for a group: prefers the global ordering passed
