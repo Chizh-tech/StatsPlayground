@@ -757,6 +757,59 @@ function buildAutoSpecMarkLineData(autoSpec: AutoSpec | undefined): any[] {
   return out;
 }
 
+/** Collect every finite reference-line Y value contributed by the
+ *  user-defined `refLinesY` list and the auto-spec overlay. Used by
+ *  the Y-axis auto-scale logic to guarantee that every ref line stays
+ *  visible — without this, a spec limit drawn well outside the data
+ *  range (e.g. USL at 120 when the column maxes out at 95) would be
+ *  clipped against the auto-fitted axis and the user wouldn't see
+ *  whether their data is even close to the limit. Returns an empty
+ *  array when no ref lines are configured. */
+function collectRefLineYs(spec: GraphSpec): number[] {
+  const out: number[] = [];
+  for (const r of spec.refLinesY ?? []) {
+    if (Number.isFinite(r.y)) out.push(r.y);
+  }
+  const a = spec.autoSpec;
+  if (a) {
+    if (Number.isFinite(a.lsl as number)) out.push(a.lsl as number);
+    if (Number.isFinite(a.target as number)) out.push(a.target as number);
+    if (Number.isFinite(a.usl as number)) out.push(a.usl as number);
+  }
+  return out;
+}
+
+/** Build a Y-axis option fragment that expands the auto-fitted range
+ *  to encompass every finite ref-line Y value. Returns `{}` when
+ *  there's nothing to expand for, so the caller can spread it
+ *  unconditionally without disturbing the default behavior.
+ *
+ *  Implementation: ECharts' `min` / `max` accept a function callback
+ *  that receives the data-derived `{min, max}` and returns the final
+ *  bound. We take min/max of the data extent unioned with the ref Ys,
+ *  then add a small (2 %) pad matching `computeSharedRanges`'s padding
+ *  so the line never sits flush against the axis edge.
+ *
+ *  Callsite contract: the caller spreads any `sharedRanges` /
+ *  user-pinned `min` / `max` AFTER this fragment so explicit bounds
+ *  always win — this fragment only contributes to the truly-auto path. */
+function buildYAxisRefLineExpand(refYs: number[]): EChartsOption {
+  if (refYs.length === 0) return {};
+  const expand = (v: { min: number; max: number }, dir: "min" | "max"): number => {
+    const m = Math.min(v.min, ...refYs);
+    const M = Math.max(v.max, ...refYs);
+    // Match computeSharedRanges' pad heuristic so the visual feel is
+    // identical whether the range was computed up-front (faceted) or
+    // resolved via this callback (single panel).
+    const span = M - m || Math.abs(dir === "min" ? m : M) * 0.02 || 1;
+    return dir === "min" ? m - span * 0.02 : M + span * 0.02;
+  };
+  return {
+    min: (v: { min: number; max: number }) => expand(v, "min"),
+    max: (v: { min: number; max: number }) => expand(v, "max"),
+  };
+}
+
 /** Build the ECharts yAxis-option fragment that materializes a
  *  user-defined `YAxisConfig`. Returns `{}` when no overrides are set
  *  so the caller can spread it unconditionally without changing the
@@ -1039,6 +1092,10 @@ function buildSingleOption(
             nameLocation: "middle",
             nameGap: 40,
             ...axis,
+            // Expand auto-fit so ref lines (manual or auto-spec) stay
+            // visible on the frequency axis. User-pinned min/max from
+            // `buildYAxisOverrides` still wins via the merge spread.
+            ...buildYAxisRefLineExpand(collectRefLineYs(spec)),
           },
           buildYAxisOverrides(spec.yAxis),
         ),
@@ -1341,6 +1398,14 @@ function buildSingleOption(
         type: "value",
         scale: true,
         ...axis,
+        // Expand auto-fit so ref lines stay visible. Only contributes
+        // when no shared bound is pinned (faceted path bakes refs into
+        // sharedRanges itself, so applying both would double-count).
+        // User-pinned overrides from `buildYAxisOverrides` still win
+        // via the merge spread below.
+        ...(sharedRanges?.yMin == null && sharedRanges?.yMax == null
+          ? buildYAxisRefLineExpand(collectRefLineYs(spec))
+          : {}),
         // Pin to shared bounds when faceted so every panel's Y axis covers
         // exactly the same range — the whole point of small multiples.
         ...(sharedRanges?.yMin != null ? { min: sharedRanges.yMin } : {}),
@@ -1748,6 +1813,11 @@ function computeSharedRanges(
   encoding: GraphSpec["encoding"],
   valueOrders?: Record<string, string[]>,
   hiddenGroups?: string[],
+  /** Extra finite Y values (e.g. spec-limit and user reference lines)
+   *  that must stay inside every faceted panel's Y range. Folded into
+   *  the data-derived bounds so panels keep their cross-comparable
+   *  shared scale AND the ref lines never get clipped. */
+  refYs?: number[],
 ): SharedAxisRanges {
   const out: SharedAxisRanges = {};
 
@@ -1787,6 +1857,22 @@ function computeSharedRanges(
         out.yMax = yMax + pad;
       }
     }
+  }
+
+  // Fold ref-line Y values into the shared Y bounds so faceted panels
+  // each include every horizontal reference (manual or auto-spec) on
+  // their pinned axis. Done after the data-pad so the pad doesn't
+  // accidentally shrink past a ref line that sat right on the edge.
+  if (refYs && refYs.length > 0) {
+    const refMin = Math.min(...refYs);
+    const refMax = Math.max(...refYs);
+    // Initialize from refs alone when there was no Y data to derive
+    // bounds from (e.g. all-null Y column) — better to pin to the ref
+    // lines than leave the axis un-pinned across panels.
+    if (out.yMin == null) out.yMin = refMin;
+    else if (refMin < out.yMin) out.yMin = refMin;
+    if (out.yMax == null) out.yMax = refMax;
+    else if (refMax > out.yMax) out.yMax = refMax;
   }
 
   const xField = encoding.x;
@@ -1884,7 +1970,7 @@ export function buildGraph(
     const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(wrapKeys.length))));
     const rows = Math.max(1, Math.ceil(wrapKeys.length / cols));
     // Pin every wrap panel to the same axis bounds for fair comparison.
-    const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups);
+    const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec));
     const panels = wrapKeys.map((key) => {
       const subRows = data.rows.filter((r) => toStr(r[wIdx]) === key);
       const subData: GraphData = { columns: data.columns, rows: subRows };
@@ -1915,7 +2001,7 @@ export function buildGraph(
   // tiling actually comparable ("完全相同的 Y 轴坐标"). Hidden legend
   // groups are excluded from the range calc so visible data fills the
   // chart area instead of being squashed by data that never renders.
-  const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups);
+  const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec));
   const panels: BuiltGraph["panels"] = [];
   // row-major: outer loop = Y (top → bottom rows), inner loop = X
   // (left → right within each row). Matches the CSS grid in <Graph>.
