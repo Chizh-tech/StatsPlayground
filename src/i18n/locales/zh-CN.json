@@ -502,7 +502,7 @@
       "range": "区间",
       "min": "最小值",
       "max": "最大值",
-      "tickCount": "刻度数量",
+      "tickInterval": "刻度间距",
       "decimals": "小数位数",
       "inverse": "反转刻度方向",
       "minorTickCount": "子刻度数量",

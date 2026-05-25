@@ -718,8 +718,12 @@ function buildYAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
   const out: EChartsOption = {};
   if (Number.isFinite(cfg.min as number)) out.min = cfg.min;
   if (Number.isFinite(cfg.max as number)) out.max = cfg.max;
-  if (Number.isFinite(cfg.tickCount as number) && (cfg.tickCount as number) > 0) {
-    out.splitNumber = Math.max(1, Math.round(cfg.tickCount as number));
+  // Tick increment: ECharts' `interval` is the exact value distance
+  // between adjacent major ticks. Floats are allowed (e.g. 0.5 ticks
+  // every half unit). We guard against non-positive values, which
+  // would either crash ECharts or produce an infinite tick loop.
+  if (Number.isFinite(cfg.tickInterval as number) && (cfg.tickInterval as number) > 0) {
+    out.interval = cfg.tickInterval;
   }
   if (cfg.inverse === true) out.inverse = true;
   // Decimal precision: format every numeric tick with the requested

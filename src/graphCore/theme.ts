@@ -70,8 +70,12 @@ export function getGraphTheme(): GraphTheme {
 export function buildAxisCommon(theme: GraphTheme) {
   return {
     nameTextStyle: { color: theme.fgSecondary, fontSize: 12 },
-    axisLine: { lineStyle: { color: theme.axisLine } },
-    axisTick: { lineStyle: { color: theme.axisLine } },
+    // Force axisLine / axisTick on. ECharts' value-type yAxis defaults
+    // to `axisLine.show = false` and `axisTick.show = false`, so the
+    // user-facing "Show axis line" / "Tick position" controls in the
+    // Y Axis Settings dialog would otherwise be no-ops out of the box.
+    axisLine: { show: true, lineStyle: { color: theme.axisLine } },
+    axisTick: { show: true, lineStyle: { color: theme.axisLine } },
     axisLabel: { color: theme.fgSecondary, fontSize: 11 },
     splitLine: { lineStyle: { color: theme.gridLine, type: "dashed" as const } },
   };

@@ -1777,7 +1777,7 @@ function isAxisConfigEmpty(c: YAxisConfig | undefined): boolean {
   return (
     c.min === undefined &&
     c.max === undefined &&
-    c.tickCount === undefined &&
+    c.tickInterval === undefined &&
     c.decimals === undefined &&
     (c.inverse === undefined || c.inverse === false) &&
     (c.minorTickCount === undefined || c.minorTickCount === 0) &&
@@ -1823,9 +1823,8 @@ function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
     return Number.isFinite(n) ? n : undefined;
   };
 
-  /** Same as parseNum but clamps to a non-negative integer — used by
-   *  Tick Count (splitNumber) and Decimals which only accept whole
-   *  non-negative values. */
+  /** Same as parseNum but clamps to an integer within [min, max] —
+   *  used by Decimals and Minor Ticks which only accept whole values. */
   const parseInt0 = (s: string, min: number, max: number): number | undefined => {
     const n = parseNum(s);
     if (n === undefined) return undefined;
@@ -1892,22 +1891,26 @@ function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
         </div>
       </div>
 
-      {/* Tick density: ECharts splitNumber. We cap at 50 because larger
-          values produce visually unreadable grids on the typical canvas
-          size; bottom at 1 because 0 would mean "no ticks at all". */}
+      {/* Tick density: ECharts `interval` (exact value distance between
+          adjacent major ticks). Float-friendly so users can pick e.g.
+          0.5; we only require the value to be strictly positive. */}
       <div className="gb-axis-row">
         <label className="gb-axis-label">
-          {t("graph.axis.tickCount", { defaultValue: "Tick count" })}
+          {t("graph.axis.tickInterval", { defaultValue: "Tick interval" })}
         </label>
         <input
           type="number"
           className="gb-axis-num gb-axis-num-narrow"
-          value={cfg.tickCount ?? ""}
-          step={1}
-          min={1}
-          max={50}
+          value={cfg.tickInterval ?? ""}
+          step="any"
+          min={0}
           placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
-          onChange={(e) => patch({ tickCount: parseInt0(e.target.value, 1, 50) })}
+          onChange={(e) => {
+            const n = parseNum(e.target.value);
+            // Reject zero / negative values: ECharts would either
+            // ignore the option or loop forever generating ticks.
+            patch({ tickInterval: n !== undefined && n > 0 ? n : undefined });
+          }}
         />
       </div>
 

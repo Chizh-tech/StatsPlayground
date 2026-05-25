@@ -119,9 +119,10 @@ export interface YAxisConfig {
   min?: number;
   /** Hard upper bound. `undefined` → auto (data-driven). */
   max?: number;
-  /** Approximate number of tick intervals (ECharts `splitNumber`).
-   *  `undefined` → ECharts picks based on chart height. */
-  tickCount?: number;
+  /** Increment between adjacent major ticks (ECharts `interval`).
+   *  e.g. `5` produces ticks at 0, 5, 10, ... `undefined` → ECharts
+   *  picks the spacing automatically based on chart height. */
+  tickInterval?: number;
   /** Number of decimal places to show on tick labels.
    *  `undefined` → use ECharts' default numeric formatting. */
   decimals?: number;

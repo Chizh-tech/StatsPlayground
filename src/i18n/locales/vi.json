@@ -502,7 +502,7 @@
       "range": "Phạm vi",
       "min": "Tối thiểu",
       "max": "Tối đa",
-      "tickCount": "Số vạch chia",
+      "tickInterval": "Khoảng cách vạch",
       "decimals": "Số chữ số thập phân",
       "inverse": "Đảo ngược hướng trục",
       "minorTickCount": "Vạch chia phụ",

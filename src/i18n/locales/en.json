@@ -502,7 +502,7 @@
       "range": "Range",
       "min": "Min",
       "max": "Max",
-      "tickCount": "Tick count",
+      "tickInterval": "Tick interval",
       "decimals": "Decimals",
       "inverse": "Reverse axis direction",
       "minorTickCount": "Minor ticks",
