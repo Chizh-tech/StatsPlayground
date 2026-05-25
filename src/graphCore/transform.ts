@@ -1138,6 +1138,25 @@ function buildSingleOption(
     return hiddenSet.has(v == null ? "" : String(v));
   };
 
+  // Resolve the X axis category list early so the boxplot path can
+  // iterate the *same* list ECharts will render — otherwise series
+  // data indices fall out of sync with the axis (e.g. an empty
+  // category EV2 dropped from xCats but still iterated by the box
+  // builder pushes a `{value:'-'}` marker into the slot that should
+  // belong to DV, blanking DV's box and orphaning DV's real stats at
+  // a non-existent axis index).
+  //   - rawXCats: panel-local cats whose Y is finite for at least
+  //     one row (mirrors the legend's hide-empty-group filter).
+  //   - localXCats: rawXCats reordered by the user's Value Order.
+  //   - xCats: when faceted, intersect with the global category union
+  //     so cross-panel category ORDER stays consistent but empty
+  //     local slots are still dropped.
+  const rawXCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx, yIdx) : [];
+  const localXCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
+  const xCats: string[] = xIsCategory && sharedRanges?.xCats
+    ? sharedRanges.xCats.filter((c) => localXCats.includes(c))
+    : localXCats;
+
   // —— 直方图：忽略 Y，仅 X 数值 ——
   if (enabledElements.some((e) => e.kind === "histogram")) {
     if (xIdx >= 0) {
@@ -1210,7 +1229,12 @@ function buildSingleOption(
     const widthProp = Math.max(0, Math.min(1, getOpt<number>(opts, "widthProportion", 0)));
 
     const xGroups = reorderMapByValueOrder(groupBy(data, xField), xField ? valueOrders?.[xField.name] : undefined);
-    const boxCats = Array.from(xGroups.keys());
+    // Iterate the AXIS category list (xCats) rather than xGroups.keys()
+    // so boxData indices line up with the axis slots. xCats already
+    // drops categories with zero finite-Y rows (EV2), which would
+    // otherwise push a `{value:'-'}` marker into the wrong slot and
+    // displace every subsequent box (e.g. DV → EV2's empty slot).
+    const boxCats = xCats;
 
     // JMP-style: boxes fill most of the category band by default. The pixel
     // cap below is generous (relative to a typical 80–150px bandwidth) so
@@ -1236,7 +1260,7 @@ function buildSingleOption(
       const labelMarks: Array<{ x: string; y: number; text: string }> = [];
 
       boxCats.forEach((cat) => {
-        let idxs = xGroups.get(cat)!;
+        let idxs = xGroups.get(cat) ?? [];
         if (groupRowSet) idxs = idxs.filter((i) => groupRowSet.has(i));
         const ys = idxs.map((i) => toNum(data.rows[i][yIdx])).filter(Number.isFinite);
         if (ys.length === 0) {
@@ -1246,6 +1270,12 @@ function buildSingleOption(
           // a phantom flat box pinned at y=0). NOTE: a plain `null`
           // crashes whiskerBoxCommon.js — it tries to read `.value` on
           // the data item — so we must keep the object wrapper.
+          //
+          // With the xCats-driven iteration above, this branch only
+          // fires when an overlay/color group has no data in a
+          // category that DOES have data globally (e.g. EV1 has DV
+          // rows but EV2 doesn't); never for cats that have no data
+          // anywhere — those are already gone from xCats.
           boxData.push({ value: "-" });
           return;
         }
@@ -1405,24 +1435,9 @@ function buildSingleOption(
 
   // The X/Y slot chips outside the canvas already label the axes, so we
   // intentionally omit `name` on the ECharts axes to avoid duplication.
-  // Pass yIdx so categories with zero finite-Y rows are dropped (see
-  // collectCategories) — keeps the axis tight when, e.g., EV2 has no
-  // measurements yet. Mirrors the legend's hide-empty-group behavior.
-  const rawXCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx, yIdx) : [];
-  const localXCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
-  // When the faceted caller forwards a global category union, intersect
-  // it with the panel-local list: the global union supplies the canonical
-  // ORDER (so cross-panel category positions stay consistent even when
-  // local row insertion order differs), and the intersection drops
-  // categories that have no rendered data in *this* panel — otherwise a
-  // category present elsewhere in the dataset (e.g. DV in another wrap
-  // panel) would reserve a blank slot here, which looks like a missing
-  // box rather than "no data". Tick label sizing (rotate/wrap) is still
-  // driven by the actual rendered category list so it accounts for the
-  // widest label that will appear.
-  const xCats = xIsCategory && sharedRanges?.xCats
-    ? sharedRanges.xCats.filter((c) => localXCats.includes(c))
-    : localXCats;
+  // xCats was computed early (just after isRowHidden) so the boxplot
+  // iteration above could use the same list — see the comment there
+  // for why that alignment matters.
   // Compute rotation / wrap metrics first so the axis literal can reference them.
   const xMaxLines = xIsCategory ? maxWrapLines(xCats, 16) : 1;
   // Rotate only when wrapping doesn't already break long labels onto
