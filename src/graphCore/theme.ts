@@ -14,8 +14,10 @@ export interface GraphTheme {
   fgDim: string;
   /** 强调色 */
   accent: string;
-  /** 网格线 */
+  /** 网格线（较浅，用于子刻度网格） */
   gridLine: string;
+  /** 主刻度网格线（较深，使主/子网格一眼可辨） */
+  gridLineMajor: string;
   /** 坐标轴线 */
   axisLine: string;
   /** 画布背景 */
@@ -59,6 +61,10 @@ export function getGraphTheme(): GraphTheme {
     fgDim: readCssVar("--fg-dim", "#999"),
     accent: readCssVar("--fg-accent", "#4a6cf7"),
     gridLine: readCssVar("--border-cell", "#e2e2e2"),
+    // Slightly darker than `gridLine` so major / minor split-lines are
+    // visually distinguishable when both are shown. Read from its own
+    // CSS var with a sensible fallback so themes can override it.
+    gridLineMajor: readCssVar("--border-grid-major", "#bdbdbd"),
     axisLine: readCssVar("--border-header", "#c0c0c0"),
     bgCanvas: readCssVar("--bg-card", "#ffffff"),
     categorical: DEFAULT_CATEGORICAL,
@@ -77,7 +83,11 @@ export function buildAxisCommon(theme: GraphTheme) {
     axisLine: { show: true, lineStyle: { color: theme.axisLine } },
     axisTick: { show: true, lineStyle: { color: theme.axisLine } },
     axisLabel: { color: theme.fgSecondary, fontSize: 11 },
-    splitLine: { lineStyle: { color: theme.gridLine, type: "dashed" as const } },
+    // Major gridlines pick the darker `gridLineMajor` so they stand
+    // apart from the lighter `gridLine` used by minor gridlines below;
+    // without that contrast a chart with both shown would look like a
+    // single uniform grid.
+    splitLine: { lineStyle: { color: theme.gridLineMajor, type: "dashed" as const } },
     // Mirror splitLine's dashed default for minor gridlines so the
     // Tick Grid editor's "Minor gridlines (Dashed)" preset actually
     // renders dashed. ECharts' minorSplitLine.lineStyle defaults to

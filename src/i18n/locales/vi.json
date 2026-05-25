@@ -522,6 +522,8 @@
       "color": "Màu sắc",
       "style": "Kiểu đường",
       "width": "Độ dày",
+      "theme": "Chủ đề",
+      "themeHint": "Đặt màu lưới chính và phụ cùng lúc",
       "resetHint": "Khôi phục hiển thị lưới mặc định",
       "minorHint": "Lưới vạch chia phụ cần ít nhất một vạch chia phụ. Hãy đặt Số vạch chia phụ trong tab Trục trước."
     },

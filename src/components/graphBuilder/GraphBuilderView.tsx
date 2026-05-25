@@ -2112,7 +2112,17 @@ interface GridSettingsEditorProps {
  *  hasn't customized that gridline yet. Pulled from CSS variables would
  *  be ideal, but we want stable hex values for the color picker so we
  *  hardcode the muted gray ECharts/our theme would use anyway. */
-const GRID_LINE_DEFAULT_COLOR = "#e2e2e2";
+// Per-section theme defaults. Must mirror buildAxisCommon() in
+// graphCore/theme.ts — the major split-line picks the darker shade
+// so it reads as more prominent than the lighter minor split-line.
+// We mirror the constants here (instead of importing from the theme
+// module) so the picker / preset comparison stays a pure constant
+// expression and doesn't depend on the live theme object the renderer
+// uses; the two defaults will normally be the same, but in a custom
+// theme override the picker still defaults to these well-known hexes
+// rather than a runtime CSS variable.
+const GRID_LINE_DEFAULT_COLOR_MAJOR = "#bdbdbd";
+const GRID_LINE_DEFAULT_COLOR_MINOR = "#e2e2e2";
 const GRID_LINE_DEFAULT_WIDTH = 1;
 const GRID_LINE_DEFAULT_STYLE: RefLineStyle = "dashed";
 
@@ -2130,6 +2140,29 @@ const GRID_LINE_PRESETS: readonly string[] = [
   "#2ca678", // green accent
   "#ef8a3a", // orange accent
   "#e74c3c", // red accent
+];
+
+/** Paired (major, minor) color themes for the gridline color theme
+ *  picker at the top of the Tick Grid editor. Each entry assigns a
+ *  darker shade to the major gridline and a lighter shade to the minor
+ *  one so a chart that shows both gridlines simultaneously reads as
+ *  two distinct grid layers instead of one uniform pattern.
+ *
+ *  Slot 0 MUST match the section defaults declared above so picking
+ *  the leading swatch effectively "resets" both colors back to the
+ *  theme default (we write `undefined` for both colors in that case
+ *  to keep the persisted config minimal). The rest run through a small
+ *  spectrum of useful accents — a click recolors both gridlines at
+ *  once while preserving the user's per-section width and dash. */
+const GRID_LINE_THEMES: readonly { major: string; minor: string }[] = [
+  { major: GRID_LINE_DEFAULT_COLOR_MAJOR, minor: GRID_LINE_DEFAULT_COLOR_MINOR }, // gray (default)
+  { major: "#757575", minor: "#bdbdbd" }, // dark gray
+  { major: "#455a64", minor: "#b0bec5" }, // slate
+  { major: "#1976d2", minor: "#bbdefb" }, // blue
+  { major: "#2e7d32", minor: "#c8e6c9" }, // green
+  { major: "#f57c00", minor: "#ffe0b2" }, // orange
+  { major: "#c62828", minor: "#ffcdd2" }, // red
+  { major: "#6a1b9a", minor: "#e1bee7" }, // purple
 ];
 
 function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
@@ -2170,6 +2203,34 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
     });
   }, [patch]);
 
+  /** Apply a paired (major, minor) color theme. Only the `color`
+   *  sub-field on each section is touched — width and dash overrides
+   *  the user picked earlier are preserved. Picking the default theme
+   *  collapses the color back to `undefined` so the persisted style
+   *  doesn't carry a redundant explicit hex. */
+  const applyGridTheme = useCallback(
+    (themeIdx: number) => {
+      const theme = GRID_LINE_THEMES[themeIdx];
+      if (!theme) return;
+      const isDefault = themeIdx === 0;
+      const writeColor = (
+        cur: GridLineStyle | undefined,
+        nextColor: string,
+      ): GridLineStyle | undefined => {
+        const merged: GridLineStyle = {
+          ...(cur ?? {}),
+          color: isDefault ? undefined : nextColor,
+        };
+        return isGridLineStyleEmpty(merged) ? undefined : merged;
+      };
+      patch({
+        majorGridStyle: writeColor(cfg.majorGridStyle, theme.major),
+        minorGridStyle: writeColor(cfg.minorGridStyle, theme.minor),
+      });
+    },
+    [cfg.majorGridStyle, cfg.minorGridStyle, patch],
+  );
+
   /** True when every grid-related override is back to default. Used to
    *  disable the Reset button — same UX pattern as the Axis editor. */
   const gridEmpty =
@@ -2189,7 +2250,15 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
       ? (cfg.showMajorGrid ?? true)
       : (cfg.showMinorGrid ?? false);
     const style = (isMajor ? cfg.majorGridStyle : cfg.minorGridStyle) ?? {};
-    const color = style.color ?? GRID_LINE_DEFAULT_COLOR;
+    // Per-section default color: major picks the darker swatch so the
+    // two sections are visually distinguishable when both are on. We
+    // capture the section's default here once and reuse it for the
+    // "swatch selected" check and the "persist as undefined when the
+    // user picks the default" logic below.
+    const defaultColor = isMajor
+      ? GRID_LINE_DEFAULT_COLOR_MAJOR
+      : GRID_LINE_DEFAULT_COLOR_MINOR;
+    const color = style.color ?? defaultColor;
     const width = style.width ?? GRID_LINE_DEFAULT_WIDTH;
     const dash = style.style ?? GRID_LINE_DEFAULT_STYLE;
     // When the section is hidden, the style controls are visually
@@ -2229,7 +2298,7 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
           <div className="gb-refline-swatch-row gb-grid-swatch-row">
             {GRID_LINE_PRESETS.map((preset) => {
               const selected =
-                (style.color ?? GRID_LINE_DEFAULT_COLOR).toLowerCase() ===
+                (style.color ?? defaultColor).toLowerCase() ===
                 preset.toLowerCase();
               return (
                 <button
@@ -2238,12 +2307,13 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
                   className={`gb-refline-swatch${selected ? " gb-refline-swatch-selected" : ""}`}
                   style={{ background: preset }}
                   disabled={!shown}
-                  // Storing the theme-default color back as `undefined`
-                  // keeps the persisted style minimal — picking the
-                  // first swatch effectively "resets" the color.
+                  // Storing the per-section default color back as
+                  // `undefined` keeps the persisted style minimal —
+                  // picking the section's default swatch effectively
+                  // "resets" the color.
                   onClick={() =>
                     patchStyle(which, {
-                      color: preset === GRID_LINE_DEFAULT_COLOR ? undefined : preset,
+                      color: preset === defaultColor ? undefined : preset,
                     })
                   }
                   title={preset}
@@ -2266,7 +2336,7 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
               disabled={!shown}
               onChange={(e) =>
                 patchStyle(which, {
-                  color: e.target.value === GRID_LINE_DEFAULT_COLOR ? undefined : e.target.value,
+                  color: e.target.value === defaultColor ? undefined : e.target.value,
                 })
               }
               title={t("graph.refLine.customColor", { defaultValue: "Custom color" })}
@@ -2329,6 +2399,50 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
         >
           {t("graph.axis.reset", { defaultValue: "Reset to auto" })}
         </button>
+      </div>
+
+      {/* Color theme — one-click recolor of both major and minor
+          gridlines. Each swatch is a 2-band horizontal gradient where
+          the left half is the major color and the right half is the
+          minor color, so users can preview the pair before applying.
+          Selection is detected against the resolved (override-or-
+          default) color of each section so the leading default swatch
+          highlights for a clean / unmodified config. */}
+      <div
+        className="gb-grid-theme-row"
+        title={t("graph.grid.themeHint", {
+          defaultValue: "Set major and minor gridline colors at once",
+        })}
+      >
+        <span className="gb-grid-theme-label">
+          {t("graph.grid.theme", { defaultValue: "Theme" })}
+        </span>
+        <div className="gb-grid-theme-swatches">
+          {GRID_LINE_THEMES.map((theme, i) => {
+            const majorCur = (
+              cfg.majorGridStyle?.color ?? GRID_LINE_DEFAULT_COLOR_MAJOR
+            ).toLowerCase();
+            const minorCur = (
+              cfg.minorGridStyle?.color ?? GRID_LINE_DEFAULT_COLOR_MINOR
+            ).toLowerCase();
+            const selected =
+              majorCur === theme.major.toLowerCase() &&
+              minorCur === theme.minor.toLowerCase();
+            const bg = `linear-gradient(90deg, ${theme.major} 0 50%, ${theme.minor} 50% 100%)`;
+            return (
+              <button
+                key={i}
+                type="button"
+                className={`gb-refline-swatch${selected ? " gb-refline-swatch-selected" : ""}`}
+                style={{ background: bg }}
+                title={`${theme.major} / ${theme.minor}`}
+                aria-label={`${theme.major} / ${theme.minor}`}
+                aria-pressed={selected}
+                onClick={() => applyGridTheme(i)}
+              />
+            );
+          })}
+        </div>
       </div>
 
       {renderGridSection("major")}

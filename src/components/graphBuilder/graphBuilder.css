@@ -1073,6 +1073,39 @@
   cursor: not-allowed;
 }
 
+/* ----- Grid color-theme picker --------------------------------------
+   Sits at the top of the Tick Grid editor (above the Major / Minor
+   sections). One click on a swatch sets both colors at once. Swatches
+   are 2-band horizontal gradients (left half = major, right half =
+   minor) so the pairing is visible before applying. Reuses the
+   `.gb-refline-swatch` styling so the look matches the per-section
+   color strips below. */
+.gb-grid-theme-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 2px;
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  background: var(--bg-cell-hover, rgba(0, 0, 0, 0.02));
+}
+
+.gb-grid-theme-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  flex-shrink: 0;
+}
+
+.gb-grid-theme-swatches {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
 /* ----- Grid (split-line) section -------------------------------------
    Each section pairs a Show checkbox with a style strip (color picker,
    dash dropdown, width input). When the section is off the style strip

@@ -522,6 +522,8 @@
       "color": "Color",
       "style": "Line style",
       "width": "Width",
+      "theme": "Theme",
+      "themeHint": "Set major and minor gridline colors at once",
       "resetHint": "Restore default grid display",
       "minorHint": "Minor gridlines require at least one minor tick. Set Minor ticks in the Axis tab first."
     },
