@@ -78,5 +78,13 @@ export function buildAxisCommon(theme: GraphTheme) {
     axisTick: { show: true, lineStyle: { color: theme.axisLine } },
     axisLabel: { color: theme.fgSecondary, fontSize: 11 },
     splitLine: { lineStyle: { color: theme.gridLine, type: "dashed" as const } },
+    // Mirror splitLine's dashed default for minor gridlines so the
+    // Tick Grid editor's "Minor gridlines (Dashed)" preset actually
+    // renders dashed. ECharts' minorSplitLine.lineStyle defaults to
+    // `type: "solid"` and does NOT inherit from splitLine, so without
+    // this override the user would see solid lines under a "Dashed"
+    // dropdown — a confusing mismatch we patched here in the theme so
+    // both the major and minor defaults match.
+    minorSplitLine: { lineStyle: { color: theme.gridLine, type: "dashed" as const } },
   };
 }
