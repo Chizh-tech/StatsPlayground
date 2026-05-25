@@ -1,49 +1,55 @@
 /**
- * Graph Builder — Local Data Filter panel.
+ * Local Data Filter panel (JMP-inspired).
  *
- * Renders the left-most vertical column when the Filter button is toggled
- * on. Each rule maps one source column to a type-appropriate selector:
+ * Renders the left-most vertical column when the host view's Filter
+ * button is toggled on. Each rule maps one source column to a
+ * type-appropriate selector:
  *
- *   - continuous (numeric)        → min / max number inputs
+ *   - continuous (numeric)             → min / max number inputs
  *   - categorical (ordinal/nominal/id) → search + scrollable checkbox list
- *   - datetime                    → start / end <input type="date">
+ *   - datetime                         → start / end <input type="date">
  *
  * Rules are joined with explicit AND/OR; the first rule's connector is
  * hidden. Combination is strict left-to-right (no precedence) — see
  * filterEngine.ts.
+ *
+ * Originally lived under graphBuilder/; now shared by GraphBuilderView
+ * and DataTableView via this module. The legacy `gb-filter-*` class
+ * names are preserved (see filter.css) to keep the diff bounded.
  */
 
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FieldRef, GraphData, FieldType } from "@/graphCore";
 import type {
-  GraphFilterCategorical,
-  GraphFilterContinuous,
-  GraphFilterDate,
-  GraphFilterRuleItem,
-  GraphFilterOp,
-  GraphFilterRule,
-} from "@/types/graphFilter";
+  FilterCategoricalRule,
+  FilterContinuousRule,
+  FilterDateRule,
+  FilterRuleItem,
+  FilterOp,
+  FilterRule,
+} from "@/types/filter";
 import { distinctColumnValues, numericColumnExtent } from "./filterEngine";
+import "./filter.css";
 
 interface FilterPanelProps {
   data: GraphData | null;
   columns: FieldRef[];
-  filters: GraphFilterRuleItem[];
-  onChange: (next: GraphFilterRuleItem[]) => void;
+  filters: FilterRuleItem[];
+  onChange: (next: FilterRuleItem[]) => void;
   onClose: () => void;
   width: number;
 }
 
 /** Map a column FieldType to the filter rule kind we render for it. */
-function ruleKindFor(t: FieldType): GraphFilterRule["kind"] {
+function ruleKindFor(t: FieldType): FilterRule["kind"] {
   if (t === "continuous") return "continuous";
   if (t === "datetime") return "date";
   return "categorical";
 }
 
 /** Seed a rule with sensible defaults for the column's data. */
-function makeRule(field: FieldRef, data: GraphData | null): GraphFilterRule {
+function makeRule(field: FieldRef, data: GraphData | null): FilterRule {
   const kind = ruleKindFor(field.type);
   if (kind === "continuous") {
     return { kind: "continuous", field, min: null, max: null };
@@ -92,7 +98,7 @@ export function FilterPanel({
   const addRule = (name: string) => {
     const field = columns.find((c) => c.name === name);
     if (!field) return;
-    const item: GraphFilterRuleItem = {
+    const item: FilterRuleItem = {
       id: nextRuleId(),
       op: filters.length === 0 ? "AND" : "AND",
       rule: makeRule(field, data),
@@ -101,7 +107,7 @@ export function FilterPanel({
     setPicked("");
   };
 
-  const updateRule = (id: string, patch: Partial<GraphFilterRuleItem>) => {
+  const updateRule = (id: string, patch: Partial<FilterRuleItem>) => {
     onChange(filters.map((f) => (f.id === id ? { ...f, ...patch } : f)));
   };
 
@@ -193,9 +199,9 @@ export function FilterPanel({
 
 interface FilterCardProps {
   index: number;
-  item: GraphFilterRuleItem;
+  item: FilterRuleItem;
   data: GraphData | null;
-  onChange: (patch: Partial<GraphFilterRuleItem>) => void;
+  onChange: (patch: Partial<FilterRuleItem>) => void;
   onRemove: () => void;
 }
 
@@ -216,7 +222,7 @@ function FilterCard({ index, item, data, onChange, onRemove }: FilterCardProps) 
         </button>
         <button
           className={`gb-filter-op-btn${item.op === "OR" ? " active" : ""}`}
-          onClick={() => onChange({ op: "OR" as GraphFilterOp })}
+          onClick={() => onChange({ op: "OR" as FilterOp })}
           title={t("graph.filter.orTitle", { defaultValue: "OR with previous" })}
         >
           OR
@@ -271,9 +277,9 @@ function ContinuousEditor({
   data,
   onChange,
 }: {
-  rule: GraphFilterContinuous;
+  rule: FilterContinuousRule;
   data: GraphData | null;
-  onChange: (next: GraphFilterContinuous) => void;
+  onChange: (next: FilterContinuousRule) => void;
 }) {
   const { t } = useTranslation();
   // Extent recomputed only when the data/column identity changes — the
@@ -325,8 +331,8 @@ function DateEditor({
   rule,
   onChange,
 }: {
-  rule: GraphFilterDate;
-  onChange: (next: GraphFilterDate) => void;
+  rule: FilterDateRule;
+  onChange: (next: FilterDateRule) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -362,9 +368,9 @@ function CategoricalEditor({
   data,
   onChange,
 }: {
-  rule: GraphFilterCategorical;
+  rule: FilterCategoricalRule;
   data: GraphData | null;
-  onChange: (next: GraphFilterCategorical) => void;
+  onChange: (next: FilterCategoricalRule) => void;
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");

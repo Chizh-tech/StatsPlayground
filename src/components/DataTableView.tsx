@@ -12,6 +12,9 @@ import { useHistoryStore } from "@/stores/useHistoryStore";
 import { useTableZoomStore } from "@/stores/useTableZoomStore";
 import { modKey, shiftKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
+import { inferFieldType, type FieldRef, type GraphData } from "@/graphCore";
+import { FilterPanel, applyFiltersWithIndex } from "@/components/filter";
+import type { FilterRuleItem } from "@/types/filter";
 
 interface DataTableViewProps {
   datasetId: string;
@@ -723,16 +726,16 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const [cornerSelected, setCornerSelected] = useState(false);
   const autoScrollRef = useRef<number | null>(null);
 
-  // Column filter state
-  type DiscreteFilter = { kind: "discrete"; selected: Set<string> };
-  type RangeFilter = { kind: "range"; min: string; max: string };
-  type ColumnFilterState = DiscreteFilter | RangeFilter;
-  const [columnFilters, setColumnFilters] = useState<Map<number, ColumnFilterState>>(new Map());
-  const [filterPopover, setFilterPopover] = useState<{ colIdx: number; anchorRect: DOMRect } | null>(null);
-  const [filterWorkingSet, setFilterWorkingSet] = useState<Set<string>>(new Set());
-  const [filterRangeMin, setFilterRangeMin] = useState("");
-  const [filterRangeMax, setFilterRangeMax] = useState("");
-  const filterLastClickRef = useRef<number>(-1);
+  // Local Data Filter (shared module). Replaces the old per-column
+  // popover filter. State held locally on the view; not persisted across
+  // sessions for now — the dataset can shift indices arbitrarily and the
+  // rules are cheap to re-add. Rule shape matches the Graph Builder so
+  // future cross-view sharing is just a state lift.
+  const [tableFilters, setTableFilters] = useState<FilterRuleItem[]>([]);
+  const [showTableFilters, setShowTableFilters] = useState(false);
+  // Width of the FilterPanel column. Clamped at render time by the
+  // splitter (see handler below). Same defaults as the Graph Builder.
+  const [tableFilterWidth, setTableFilterWidth] = useState(260);
 
   // Left "Columns" panel (collapsible)
   const [colsPanelCollapsed, setColsPanelCollapsed] = useState(false);
@@ -880,8 +883,8 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setShowInsertMultiCols(false);
     setRenameCol(null);
     setShowAddCol(false);
-    setColumnFilters(new Map());
-    setFilterPopover(null);
+    setTableFilters([]);
+    setShowTableFilters(false);
   }, [datasetId, load]);
 
   // Apply pending restore from history store (undo/redo/jumpTo)
@@ -1040,16 +1043,6 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const cols = useMemo(() => data ? data.columns.filter((_, i) => i !== rowIdIdx) : [], [data, rowIdIdx]);
   const colTypes = useMemo(() => data ? data.columnTypes.filter((_, i) => i !== rowIdIdx) : [], [data, rowIdIdx]);
 
-  // Clear filters when column count changes (add/delete column shifts indices)
-  const prevColCountRef = useRef<number>(0);
-  useEffect(() => {
-    if (prevColCountRef.current > 0 && cols.length !== prevColCountRef.current) {
-      setColumnFilters(new Map());
-      setFilterPopover(null);
-    }
-    prevColCountRef.current = cols.length;
-  }, [cols.length]);
-
   // All rows stripped of _row_id (used by filter popover for unique values)
   const allRows = useMemo(() =>
     data ? data.rows.map((raw) => (raw as unknown[]).filter((_, i) => i !== rowIdIdx)) : [],
@@ -1082,69 +1075,39 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     };
   }, [renameCol, allRows]);
 
-  // Filtered display rows + index mapping back to data.rows indices
+  // FieldRef metadata for each visible column. Used by FilterPanel to
+  // route each rule to the right editor (continuous / categorical /
+  // date) via `inferFieldType`. Recomputed only when names/types change.
+  const tableFilterFields = useMemo<FieldRef[]>(
+    () => cols.map((name, i) => ({ name, type: inferFieldType(colTypes[i] ?? "") })),
+    [cols, colTypes],
+  );
+
+  // GraphData adapter — the shared FilterPanel + applyFilters speak the
+  // graphCore { columns, rows } shape. `allRows` is already stripped of
+  // `_row_id`, so this is just a re-shape, not a copy of the row arrays.
+  const tableFilterData = useMemo<GraphData>(
+    () => ({ columns: cols, rows: allRows }),
+    [cols, allRows],
+  );
+
+  // Filtered display rows + index mapping back to `allRows` indices.
+  // Uses the shared filter engine — `applyFiltersWithIndex` returns both
+  // the kept rows AND their original positions, so `toDataIdx` can keep
+  // translating visible-row → `_row_id` for in-place edits.
   const { displayRows, displayIdxMap } = useMemo(() => {
-    if (columnFilters.size === 0) return { displayRows: allRows, displayIdxMap: null as number[] | null };
-    const rows: unknown[][] = [];
-    const map: number[] = [];
-    allRows.forEach((row, i) => {
-      for (const [ci, filter] of columnFilters) {
-        const val = row[ci];
-        const str = val == null ? "" : String(val);
-        if (filter.kind === "discrete") {
-          if (!filter.selected.has(str)) return;
-        } else {
-          const num = val == null ? NaN : Number(val);
-          if (filter.min !== "" && !isNaN(Number(filter.min)) && (isNaN(num) || num < Number(filter.min))) return;
-          if (filter.max !== "" && !isNaN(Number(filter.max)) && (isNaN(num) || num > Number(filter.max))) return;
-        }
-      }
-      rows.push(row);
-      map.push(i);
-    });
-    return { displayRows: rows, displayIdxMap: map };
-  }, [allRows, columnFilters]);
+    if (tableFilters.length === 0) {
+      return { displayRows: allRows, displayIdxMap: null as number[] | null };
+    }
+    const result = applyFiltersWithIndex(tableFilterData, tableFilters);
+    if (!result) return { displayRows: allRows, displayIdxMap: null as number[] | null };
+    return { displayRows: result.data.rows, displayIdxMap: result.indices };
+  }, [allRows, tableFilterData, tableFilters]);
 
   // Convert visible row index to data.rows index (for _row_id lookup)
   const toDataIdx = useCallback((vi: number): number =>
     displayIdxMap ? displayIdxMap[vi] : vi,
     [displayIdxMap]);
-
-  // Unique values for discrete filter popover (from unfiltered data)
-  const filterUniqueValues = useMemo(() => {
-    if (!filterPopover) return [];
-    const ci = filterPopover.colIdx;
-    const valSet = new Set<string>();
-    allRows.forEach(row => {
-      valSet.add(row[ci] == null ? "" : String(row[ci]));
-    });
-    return Array.from(valSet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  }, [filterPopover?.colIdx, allRows]);
-
-  // Initialize filter working state when popover opens
-  useEffect(() => {
-    if (!filterPopover) return;
-    const ci = filterPopover.colIdx;
-    const colType = colTypes[ci];
-    const existing = columnFilters.get(ci);
-    if (colType !== "DOUBLE") {
-      if (existing?.kind === "discrete") {
-        setFilterWorkingSet(new Set(existing.selected));
-      } else {
-        const values = new Set(allRows.map(row => row[ci] == null ? "" : String(row[ci])));
-        setFilterWorkingSet(values);
-      }
-    } else {
-      if (existing?.kind === "range") {
-        setFilterRangeMin(existing.min);
-        setFilterRangeMax(existing.max);
-      } else {
-        setFilterRangeMin("");
-        setFilterRangeMax("");
-      }
-    }
-    filterLastClickRef.current = -1;
-  }, [filterPopover?.colIdx]);
 
   // Sync status info to global status bar
   useEffect(() => {
@@ -1226,12 +1189,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setStatusInfo({
       cellLabel: activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "",
       selectionLabel: selLabel,
-      dimensions: columnFilters.size > 0
+      dimensions: tableFilters.length > 0
         ? t("dataTable.dimensionsFiltered", { shown: displayRows.length, total: data.totalRows, cols: visibleColCount })
         : t("dataTable.dimensions", { rows: data.totalRows, cols: visibleColCount }),
       selectionStats,
     });
-  }, [activeCell, selection, selectedRows, selectedCols, data, displayRows, cols, visibleColCount, setStatusInfo, columnFilters, t]);
+  }, [activeCell, selection, selectedRows, selectedCols, data, displayRows, cols, visibleColCount, setStatusInfo, tableFilters, t]);
 
   // Precompute active row/col ranges for className computation
   const activeRowRange = useMemo(() => {
@@ -2906,52 +2869,67 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     >
 
       {/* Table operations toolbar (formerly the menu-bar `Operations`
-          menu). Buttons fall back to wrap when the table is narrow.
-          Hidden in the unlikely case the parent didn't wire `onTableOp`
-          (e.g. an isolated render in tests). */}
-      {onTableOp && (
-        <div className="sp-table-toolbar">
-          <button className="sp-tb-btn" onClick={() => onTableOp("summary")}>
-            {t("menu.opSummary")}
-          </button>
-          <div className="sp-tb-sep" />
-          <button className="sp-tb-btn" onClick={() => onTableOp("subset")}>
-            {t("menu.opSubset")}
-          </button>
-          <button className="sp-tb-btn" onClick={() => onTableOp("sort")}>
-            {t("menu.opSort")}
-          </button>
-          <div className="sp-tb-sep" />
-          <button className="sp-tb-btn" onClick={() => onTableOp("stack")}>
-            {t("menu.opStack")}
-          </button>
-          <button className="sp-tb-btn" onClick={() => onTableOp("split")}>
-            {t("menu.opSplit")}
-          </button>
-          <button className="sp-tb-btn" onClick={() => onTableOp("transpose")}>
-            {t("menu.opTranspose")}
-          </button>
-          <div className="sp-tb-sep" />
-          <button className="sp-tb-btn" onClick={() => onTableOp("join")}>
-            {t("menu.opJoin")}
-          </button>
-          <button className="sp-tb-btn" onClick={() => onTableOp("update")}>
-            {t("menu.opUpdate")}
-          </button>
-          <button className="sp-tb-btn" onClick={() => onTableOp("concatenate")}>
-            {t("menu.opConcatenate")}
-          </button>
-          <div className="sp-tb-sep" />
-          {/* Column-level admin (not a row-level transform), so it lives
-              in its own trailing group separated by a divider. */}
-          <button
-            className="sp-tb-btn"
-            onClick={() => setShowManageExtras(true)}
-          >
-            {t("menu.manageExtras")}
-          </button>
-        </div>
-      )}
+          menu) + the local-data Filter toggle. The Filter button is
+          always rendered because it doesn't depend on `onTableOp`; the
+          ops buttons only render when the host wired the callback. */}
+      <div className="sp-table-toolbar">
+        {/* Local Data Filter toggle — opens the shared FilterPanel as a
+            left sidebar (same component the Graph Builder uses). */}
+        <button
+          className={`sp-tb-btn${showTableFilters ? " sp-tb-btn-active" : ""}`}
+          onClick={() => setShowTableFilters((v) => !v)}
+          title={t("graph.filter.toggleTitle", { defaultValue: "Show/Hide local data filter" })}
+        >
+          {t("graph.filter.toolbarBtn", { defaultValue: "Filter" })}
+          {tableFilters.length > 0 && (
+            <span className="sp-tb-badge">{tableFilters.length}</span>
+          )}
+        </button>
+        {onTableOp && (
+          <>
+            <div className="sp-tb-sep" />
+            <button className="sp-tb-btn" onClick={() => onTableOp("summary")}>
+              {t("menu.opSummary")}
+            </button>
+            <div className="sp-tb-sep" />
+            <button className="sp-tb-btn" onClick={() => onTableOp("subset")}>
+              {t("menu.opSubset")}
+            </button>
+            <button className="sp-tb-btn" onClick={() => onTableOp("sort")}>
+              {t("menu.opSort")}
+            </button>
+            <div className="sp-tb-sep" />
+            <button className="sp-tb-btn" onClick={() => onTableOp("stack")}>
+              {t("menu.opStack")}
+            </button>
+            <button className="sp-tb-btn" onClick={() => onTableOp("split")}>
+              {t("menu.opSplit")}
+            </button>
+            <button className="sp-tb-btn" onClick={() => onTableOp("transpose")}>
+              {t("menu.opTranspose")}
+            </button>
+            <div className="sp-tb-sep" />
+            <button className="sp-tb-btn" onClick={() => onTableOp("join")}>
+              {t("menu.opJoin")}
+            </button>
+            <button className="sp-tb-btn" onClick={() => onTableOp("update")}>
+              {t("menu.opUpdate")}
+            </button>
+            <button className="sp-tb-btn" onClick={() => onTableOp("concatenate")}>
+              {t("menu.opConcatenate")}
+            </button>
+            <div className="sp-tb-sep" />
+            {/* Column-level admin (not a row-level transform), so it lives
+                in its own trailing group separated by a divider. */}
+            <button
+              className="sp-tb-btn"
+              onClick={() => setShowManageExtras(true)}
+            >
+              {t("menu.manageExtras")}
+            </button>
+          </>
+        )}
+      </div>
 
       {/* Add column inline form */}
       {showAddCol && (
@@ -3058,8 +3036,46 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         </div>
       )}
 
-      {/* Spreadsheet table area: left columns panel + (formula bar + grid) */}
+      {/* Spreadsheet table area: filter panel + left columns panel +
+          (formula bar + grid). The optional filter panel sits as the
+          leftmost child when the toolbar Filter button is toggled on
+          (mirrors the Graph Builder layout). */}
       <div className="sp-table-area">
+        {/* Local Data Filter panel + splitter (leftmost, when toggled on).
+            Uses the shared FilterPanel component, so its width/behaviour
+            stays in sync with the Graph Builder's filter sidebar. */}
+        {showTableFilters && (
+          <>
+            <FilterPanel
+              data={tableFilterData}
+              columns={tableFilterFields}
+              filters={tableFilters}
+              onChange={setTableFilters}
+              onClose={() => setShowTableFilters(false)}
+              width={tableFilterWidth}
+            />
+            <div
+              className="sp-cols-panel-splitter"
+              title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                const startX = e.clientX;
+                const startW = tableFilterWidth;
+                const onMove = (ev: MouseEvent) => {
+                  const next = Math.max(200, Math.min(500, startW + (ev.clientX - startX)));
+                  setTableFilterWidth(next);
+                };
+                const onUp = () => {
+                  document.removeEventListener("mousemove", onMove);
+                  document.removeEventListener("mouseup", onUp);
+                };
+                document.addEventListener("mousemove", onMove);
+                document.addEventListener("mouseup", onUp);
+              }}
+              onDoubleClick={() => setTableFilterWidth(260)}
+            />
+          </>
+        )}
         {/* Left "Columns" panel */}
         {colsPanelCollapsed ? (
           <div className="sp-cols-panel sp-cols-panel-collapsed">
@@ -3177,17 +3193,6 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
                       <span className="sp-col-letter">{colLetter(ci)}</span>
                       <span className="sp-col-name">{col}</span>
                       <span className="sp-col-type">{labelOf(colTypes[ci])}</span>
-                      <span
-                        className={`sp-filter-icon${columnFilters.has(ci) ? " sp-filter-active" : ""}`}
-                        title={t("dataTable.filter")}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const rect = (e.target as HTMLElement).getBoundingClientRect();
-                          setFilterPopover(prev => prev?.colIdx === ci ? null : { colIdx: ci, anchorRect: rect });
-                        }}
-                      >
-                        ▼
-                      </span>
                     </div>
                     {/* Resize handle */}
                     <div
@@ -3467,123 +3472,6 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
             </div>
           )}
         </div>
-      )}
-
-      {/* Column filter popover */}
-      {filterPopover && (
-        <>
-          <div className="sp-filter-backdrop" onClick={() => setFilterPopover(null)} />
-          {(() => {
-            const ci = filterPopover.colIdx;
-            const colType = colTypes[ci];
-            const isDiscrete = colType !== "DOUBLE";
-            return (
-              <div
-                ref={ctxMenuRef}
-                className="sp-filter-popover"
-                style={{ position: "fixed", left: filterPopover.anchorRect.left, top: filterPopover.anchorRect.bottom + 2 }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="sp-filter-title">{t("dataTable.filterTitle", { col: cols[ci] })}</div>
-                {isDiscrete ? (
-                  <div className="sp-filter-body">
-                    <div className="sp-filter-toolbar">
-                      <button className="sp-filter-btn" onClick={() => setFilterWorkingSet(new Set(filterUniqueValues))}>{t("common.selectAll")}</button>
-                      <button className="sp-filter-btn" onClick={() => setFilterWorkingSet(new Set())}>{t("common.selectNone")}</button>
-                    </div>
-                    <div className="sp-filter-list">
-                      {filterUniqueValues.map((val, idx) => (
-                        <label
-                          key={idx}
-                          className={`sp-filter-item${filterWorkingSet.has(val) ? " sp-filter-item-checked" : ""}`}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            if (e.shiftKey && filterLastClickRef.current >= 0) {
-                              const from = Math.min(filterLastClickRef.current, idx);
-                              const to = Math.max(filterLastClickRef.current, idx);
-                              setFilterWorkingSet(prev => {
-                                const next = new Set(prev);
-                                for (let i = from; i <= to; i++) next.add(filterUniqueValues[i]);
-                                return next;
-                              });
-                            } else if (e.ctrlKey || e.metaKey) {
-                              setFilterWorkingSet(prev => {
-                                const next = new Set(prev);
-                                if (next.has(val)) next.delete(val); else next.add(val);
-                                return next;
-                              });
-                            } else {
-                              setFilterWorkingSet(prev => {
-                                const next = new Set(prev);
-                                if (next.has(val)) next.delete(val); else next.add(val);
-                                return next;
-                              });
-                            }
-                            filterLastClickRef.current = idx;
-                          }}
-                        >
-                          <input type="checkbox" checked={filterWorkingSet.has(val)} readOnly />
-                          <span className="sp-filter-val">{val === "" ? t("common.empty") : val}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="sp-filter-body">
-                    <div className="sp-filter-range">
-                      <label className="sp-filter-range-label">{t("dataTable.rangeMin")}</label>
-                      <input className="sp-filter-range-input" type="text" value={filterRangeMin} onChange={(e) => setFilterRangeMin(e.target.value)} />
-                      <label className="sp-filter-range-label">{t("dataTable.rangeMax")}</label>
-                      <input className="sp-filter-range-input" type="text" value={filterRangeMax} onChange={(e) => setFilterRangeMax(e.target.value)} />
-                    </div>
-                  </div>
-                )}
-                <div className="sp-filter-actions">
-                  <button className="sp-filter-btn" onClick={() => {
-                    setColumnFilters(prev => {
-                      const next = new Map(prev);
-                      next.delete(ci);
-                      return next;
-                    });
-                    setFilterPopover(null);
-                  }}>{t("dataTable.clearFilter")}</button>
-                  <button className="sp-filter-btn sp-filter-btn-primary" onClick={() => {
-                    if (isDiscrete) {
-                      if (filterWorkingSet.size < filterUniqueValues.length) {
-                        setColumnFilters(prev => {
-                          const next = new Map(prev);
-                          next.set(ci, { kind: "discrete", selected: new Set(filterWorkingSet) });
-                          return next;
-                        });
-                      } else {
-                        setColumnFilters(prev => {
-                          const next = new Map(prev);
-                          next.delete(ci);
-                          return next;
-                        });
-                      }
-                    } else {
-                      if (filterRangeMin !== "" || filterRangeMax !== "") {
-                        setColumnFilters(prev => {
-                          const next = new Map(prev);
-                          next.set(ci, { kind: "range", min: filterRangeMin, max: filterRangeMax });
-                          return next;
-                        });
-                      } else {
-                        setColumnFilters(prev => {
-                          const next = new Map(prev);
-                          next.delete(ci);
-                          return next;
-                        });
-                      }
-                    }
-                    setFilterPopover(null);
-                  }}>{t("common.confirm")}</button>
-                </div>
-              </div>
-            );
-          })()}
-        </>
       )}
 
       {/* Insert multi-rows dialog */}

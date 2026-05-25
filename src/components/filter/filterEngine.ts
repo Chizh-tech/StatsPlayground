@@ -1,5 +1,5 @@
 /**
- * Apply a list of GraphFilterRuleItems to a GraphData column-wise table.
+ * Apply a list of `FilterRuleItem`s to a GraphData column-wise table.
  *
  * Combination semantics: strict left-to-right with no precedence. The
  * first rule's `op` is ignored; subsequent rules combine via their own
@@ -13,20 +13,50 @@
 
 import type { GraphData } from "@/graphCore";
 import type {
-  GraphFilterCategorical,
-  GraphFilterContinuous,
-  GraphFilterDate,
-  GraphFilterRule,
-  GraphFilterRuleItem,
-} from "@/types/graphFilter";
+  FilterCategoricalRule,
+  FilterContinuousRule,
+  FilterDateRule,
+  FilterRule,
+  FilterRuleItem,
+} from "@/types/filter";
 
-export function applyGraphFilters(
+export function applyFilters(
   data: GraphData | null,
-  filters: GraphFilterRuleItem[] | undefined,
+  filters: FilterRuleItem[] | undefined,
 ): GraphData | null {
   if (!data) return null;
   if (!filters || filters.length === 0) return data;
+  const { rows } = runFilters(data, filters);
+  return { columns: data.columns, rows };
+}
 
+/**
+ * Same predicates as `applyFilters`, but also returns the kept-row indices
+ * (positions in the ORIGINAL `data.rows`). Callers that need to map a
+ * visible-row position back to the source row (e.g. the Data Table needs
+ * the underlying `_row_id` for in-place edits) use this variant. Returns
+ * `null` for null `data` and a pass-through (full indices) for empty
+ * filters so the caller doesn't need to special-case.
+ */
+export function applyFiltersWithIndex(
+  data: GraphData | null,
+  filters: FilterRuleItem[] | undefined,
+): { data: GraphData; indices: number[] } | null {
+  if (!data) return null;
+  if (!filters || filters.length === 0) {
+    const indices = new Array<number>(data.rows.length);
+    for (let i = 0; i < indices.length; i++) indices[i] = i;
+    return { data, indices };
+  }
+  const { rows, indices } = runFilters(data, filters);
+  return { data: { columns: data.columns, rows }, indices };
+}
+
+/** Shared core: returns kept rows AND their original indices. */
+function runFilters(
+  data: GraphData,
+  filters: FilterRuleItem[],
+): { rows: unknown[][]; indices: number[] } {
   // Pre-resolve each rule's column index and build a per-rule predicate.
   // Rules referencing a missing column become a constant-true predicate.
   const colIndex = new Map<string, number>();
@@ -42,7 +72,8 @@ export function applyGraphFilters(
   );
 
   // Iterate rows once; combine predicates strictly left-to-right.
-  const out: unknown[][] = [];
+  const outRows: unknown[][] = [];
+  const outIdx: number[] = [];
   for (let r = 0; r < data.rows.length; r++) {
     const row = data.rows[r];
     let pass = evaluators[0].pred(row);
@@ -50,12 +81,15 @@ export function applyGraphFilters(
       const v = evaluators[i].pred(row);
       pass = evaluators[i].op === "AND" ? pass && v : pass || v;
     }
-    if (pass) out.push(row);
+    if (pass) {
+      outRows.push(row);
+      outIdx.push(r);
+    }
   }
-  return { columns: data.columns, rows: out };
+  return { rows: outRows, indices: outIdx };
 }
 
-function buildPredicate(rule: GraphFilterRule, idx: number): (row: unknown[]) => boolean {
+function buildPredicate(rule: FilterRule, idx: number): (row: unknown[]) => boolean {
   switch (rule.kind) {
     case "continuous":
       return continuousPred(rule, idx);
@@ -66,7 +100,7 @@ function buildPredicate(rule: GraphFilterRule, idx: number): (row: unknown[]) =>
   }
 }
 
-function continuousPred(rule: GraphFilterContinuous, idx: number) {
+function continuousPred(rule: FilterContinuousRule, idx: number) {
   const lo = rule.min;
   const hi = rule.max;
   // Open on both ends — pass-through.
@@ -82,7 +116,7 @@ function continuousPred(rule: GraphFilterContinuous, idx: number) {
   };
 }
 
-function categoricalPred(rule: GraphFilterCategorical, idx: number) {
+function categoricalPred(rule: FilterCategoricalRule, idx: number) {
   // Note: an empty `selected` means "nothing passes". This mirrors the JMP
   // behaviour where unchecking every box hides every row.
   const allow = new Set(rule.selected);
@@ -93,7 +127,7 @@ function categoricalPred(rule: GraphFilterCategorical, idx: number) {
   };
 }
 
-function datePred(rule: GraphFilterDate, idx: number) {
+function datePred(rule: FilterDateRule, idx: number) {
   const start = rule.start;
   const end = rule.end;
   if (!start && !end) return () => true;

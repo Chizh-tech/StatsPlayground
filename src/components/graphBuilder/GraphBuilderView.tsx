@@ -23,14 +23,13 @@ import { dataService } from "@/services/dataService";
 import { Graph, inferFieldType, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
-import type { GraphFilterRuleItem } from "@/types/graphFilter";
+import type { FilterRuleItem } from "@/types/filter";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPaletteStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
-import { FilterPanel } from "./FilterPanel";
-import { applyGraphFilters } from "./filterEngine";
+import { FilterPanel, applyFilters } from "@/components/filter";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -180,7 +179,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // Everything downstream (groupKeys, the spec, the rendered Graph and
   // the legend's distinct-value enumeration) reads `filteredData`.
   const filteredData = useMemo(
-    () => applyGraphFilters(data, filters),
+    () => applyFilters(data, filters),
     [data, filters],
   );
 
@@ -258,7 +257,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     [item.id, updateItem, markDirty],
   );
   const setFilters = useCallback(
-    (next: GraphFilterRuleItem[]) => {
+    (next: FilterRuleItem[]) => {
       updateItem(item.id, { filters: next });
       markDirty();
     },
