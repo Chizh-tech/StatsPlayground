@@ -488,6 +488,7 @@
       "styleSolid": "Solid",
       "styleDashed": "Dashed",
       "styleDotted": "Dotted",
+      "customColor": "Custom color",
       "empty": "No reference lines yet. Click “Add reference line” to draw a horizontal marker on the Y axis."
     },
     "yAxisSettings": {

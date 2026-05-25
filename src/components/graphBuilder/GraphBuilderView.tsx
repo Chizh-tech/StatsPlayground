@@ -1727,6 +1727,30 @@ interface RefLinesEditorProps {
   setRefLines: (next: RefLineY[]) => void;
 }
 
+/** Saturated / primary-color palette for reference lines. The chart's
+ *  GROUP_COLORS palette intentionally uses *muted* hues so data series
+ *  read as natural; ref lines (spec limits, targets, control bounds)
+ *  need to *visually stand out* against that data, so we offer a parallel
+ *  palette of high-saturation pure-ish colors. Users can still pick any
+ *  custom color via the trailing color picker. */
+const REF_LINE_PRESETS: readonly string[] = [
+  "#E60000", // pure red
+  "#FF6F00", // vivid orange
+  "#FFC400", // amber / gold
+  "#76FF03", // lime
+  "#00C853", // vivid green
+  "#00B0FF", // vivid cyan
+  "#2962FF", // vivid blue
+  "#6200EA", // deep purple
+  "#D500F9", // vivid magenta
+  "#000000", // black
+];
+
+/** Default color for a freshly-added reference line. First preset \u2014
+ *  high-contrast red so the new line is immediately visible against any
+ *  background or chart palette. */
+const REF_LINE_DEFAULT_COLOR = REF_LINE_PRESETS[0];
+
 /** Mint a stable, collision-resistant id for a new ref line. Using a
  *  timestamp + a per-render counter avoids the React-list-key churn we'd
  *  see if we recycled array indexes. */
@@ -1745,7 +1769,7 @@ function RefLinesEditor({ refLines, setRefLines }: RefLinesEditorProps) {
       y: 0,
       label: "",
       style: "dashed",
-      color: "#888888",
+      color: REF_LINE_DEFAULT_COLOR,
       width: 1,
     };
     setRefLines([...(refLines ?? []), next]);
@@ -1792,75 +1816,100 @@ function RefLinesEditor({ refLines, setRefLines }: RefLinesEditorProps) {
         </div>
       ) : (
         <div className="gb-refline-list">
-          {/* Column header row \u2014 helps users tell the input fields apart
-              once there are several lines stacked. */}
-          <div className="gb-refline-thead">
-            <span className="gb-refline-col gb-refline-col-color">{t("graph.refLine.color", { defaultValue: "Color" })}</span>
-            <span className="gb-refline-col gb-refline-col-label">{t("graph.refLine.label", { defaultValue: "Label" })}</span>
-            <span className="gb-refline-col gb-refline-col-y">{t("graph.refLine.y", { defaultValue: "Y" })}</span>
-            <span className="gb-refline-col gb-refline-col-style">{t("graph.refLine.style", { defaultValue: "Line style" })}</span>
-            <span className="gb-refline-col gb-refline-col-width">{t("graph.refLine.width", { defaultValue: "Width" })}</span>
-            <span className="gb-refline-col gb-refline-col-actions" />
-          </div>
+          {lines.map((r) => {
+            const currentHex = normalizeHex(r.color);
+            // A color is "custom" when it doesn't match any preset — in
+            // that case we highlight the picker swatch instead of a
+            // preset chip so the user can see at a glance that this
+            // card is on a user-defined color.
+            const isCustom = !REF_LINE_PRESETS.some(
+              (p) => p.toLowerCase() === currentHex.toLowerCase(),
+            );
+            return (
+              <div key={r.id} className="gb-refline-card">
+                {/* Preset color strip + free color picker. Saturated
+                    presets up front so users get a one-click contrast
+                    choice; the picker at the end is the escape hatch
+                    for any exact hex. */}
+                <div className="gb-refline-swatch-row">
+                  {REF_LINE_PRESETS.map((preset) => {
+                    const selected = preset.toLowerCase() === currentHex.toLowerCase();
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        className={`gb-refline-swatch${selected ? " gb-refline-swatch-selected" : ""}`}
+                        style={{ background: preset }}
+                        onClick={() => updateLine(r.id, { color: preset })}
+                        title={preset}
+                        aria-label={preset}
+                        aria-pressed={selected}
+                      />
+                    );
+                  })}
+                  <span className="gb-refline-swatch-divider" />
+                  <input
+                    type="color"
+                    className={`gb-refline-color-picker${isCustom ? " gb-refline-color-picker-active" : ""}`}
+                    value={currentHex}
+                    onChange={(e) => updateLine(r.id, { color: e.target.value })}
+                    title={t("graph.refLine.customColor", { defaultValue: "Custom color" })}
+                  />
+                </div>
 
-          {lines.map((r) => (
-            <div key={r.id} className="gb-refline-card">
-              <input
-                type="color"
-                className="gb-refline-color"
-                value={normalizeHex(r.color)}
-                onChange={(e) => updateLine(r.id, { color: e.target.value })}
-                title={t("graph.refLine.color", { defaultValue: "Color" })}
-              />
-              <input
-                type="text"
-                className="gb-refline-label-input"
-                value={r.label}
-                placeholder={t("graph.refLine.label", { defaultValue: "Label" })}
-                onChange={(e) => updateLine(r.id, { label: e.target.value })}
-              />
-              <input
-                type="number"
-                className="gb-refline-num"
-                value={Number.isFinite(r.y) ? r.y : 0}
-                step="any"
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  updateLine(r.id, { y: Number.isFinite(n) ? n : 0 });
-                }}
-              />
-              <select
-                className="gb-refline-style"
-                value={r.style}
-                onChange={(e) => updateLine(r.id, { style: e.target.value as RefLineStyle })}
-              >
-                <option value="solid">{t("graph.refLine.styleSolid", { defaultValue: "Solid" })}</option>
-                <option value="dashed">{t("graph.refLine.styleDashed", { defaultValue: "Dashed" })}</option>
-                <option value="dotted">{t("graph.refLine.styleDotted", { defaultValue: "Dotted" })}</option>
-              </select>
-              <input
-                type="number"
-                className="gb-refline-width"
-                value={r.width}
-                min={1}
-                max={10}
-                step={0.5}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  updateLine(r.id, { width: Number.isFinite(n) && n > 0 ? n : 1 });
-                }}
-              />
-              <button
-                type="button"
-                className="gb-refline-remove"
-                onClick={() => removeLine(r.id)}
-                title={t("graph.refLine.remove", { defaultValue: "Remove" })}
-                aria-label={t("graph.refLine.remove", { defaultValue: "Remove" })}
-              >
-                ×
-              </button>
-            </div>
-          ))}
+                {/* Form row: label / Y / style / width / remove. */}
+                <div className="gb-refline-form-row">
+                  <input
+                    type="text"
+                    className="gb-refline-label-input"
+                    value={r.label}
+                    placeholder={t("graph.refLine.label", { defaultValue: "Label" })}
+                    onChange={(e) => updateLine(r.id, { label: e.target.value })}
+                  />
+                  <input
+                    type="number"
+                    className="gb-refline-num"
+                    value={Number.isFinite(r.y) ? r.y : 0}
+                    step="any"
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      updateLine(r.id, { y: Number.isFinite(n) ? n : 0 });
+                    }}
+                  />
+                  <select
+                    className="gb-refline-style"
+                    value={r.style}
+                    onChange={(e) => updateLine(r.id, { style: e.target.value as RefLineStyle })}
+                  >
+                    <option value="solid">{t("graph.refLine.styleSolid", { defaultValue: "Solid" })}</option>
+                    <option value="dashed">{t("graph.refLine.styleDashed", { defaultValue: "Dashed" })}</option>
+                    <option value="dotted">{t("graph.refLine.styleDotted", { defaultValue: "Dotted" })}</option>
+                  </select>
+                  <input
+                    type="number"
+                    className="gb-refline-width"
+                    value={r.width}
+                    min={1}
+                    max={10}
+                    step={0.5}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      updateLine(r.id, { width: Number.isFinite(n) && n > 0 ? n : 1 });
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="gb-refline-remove"
+                    onClick={() => removeLine(r.id)}
+                    title={t("graph.refLine.remove", { defaultValue: "Remove" })}
+                    aria-label={t("graph.refLine.remove", { defaultValue: "Remove" })}
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

@@ -948,7 +948,9 @@
 
 /* ===== Y-axis reference lines editor (Y Axis Settings dialog pane) =====
    Sits inside the right pane of the YAxisSettingsDialog (PreferencesDialog
-   style). Layout is row-per-line: color | label | Y | style | width | × */
+   style). Each card is two rows:
+     row 1: preset color swatches + free color picker
+     row 2: label | Y | line style | width | × (5-col grid) */
 .gb-refline-editor {
   display: flex;
   flex-direction: column;
@@ -997,16 +999,77 @@
 .gb-refline-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
-/* Column header row sits above the cards so users can tell the input
-   columns apart once there are several lines stacked. */
-.gb-refline-thead,
 .gb-refline-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-cell-hover, rgba(0, 0, 0, 0.02));
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+/* ----- Row 1: preset color swatches + custom color picker ------------- */
+.gb-refline-swatch-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.gb-refline-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  padding: 0;
+  cursor: pointer;
+  /* Inline `background` from JSX paints the actual swatch color. */
+}
+
+.gb-refline-swatch:hover {
+  transform: scale(1.08);
+}
+
+.gb-refline-swatch-selected {
+  outline: 2px solid var(--fg-accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+/* Slim vertical separator between the preset strip and the custom picker
+   so the picker reads as a distinct escape-hatch, not just one more
+   swatch. */
+.gb-refline-swatch-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border-main);
+  margin: 0 4px;
+}
+
+.gb-refline-color-picker {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.gb-refline-color-picker-active {
+  outline: 2px solid var(--fg-accent);
+  outline-offset: 1px;
+}
+
+/* ----- Row 2: label / Y / style / width / × --------------------------- */
+.gb-refline-form-row {
   display: grid;
   grid-template-columns:
-    /* color */ 28px
     /* label */ minmax(0, 1fr)
     /* y     */ 88px
     /* style */ 96px
@@ -1014,40 +1077,6 @@
     /* del   */ 28px;
   gap: 6px;
   align-items: center;
-}
-
-.gb-refline-thead {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--fg-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 0 4px;
-}
-
-.gb-refline-col-color,
-.gb-refline-col-y,
-.gb-refline-col-width {
-  text-align: center;
-}
-
-.gb-refline-card {
-  padding: 4px;
-  background: var(--bg-cell-hover, rgba(0, 0, 0, 0.02));
-  border: 1px solid var(--border-main);
-  border-radius: 4px;
-  font-size: 12px;
-}
-
-.gb-refline-color {
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border-main);
-  border-radius: 3px;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-  justify-self: center;
 }
 
 .gb-refline-label-input,
