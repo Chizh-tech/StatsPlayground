@@ -6,7 +6,7 @@
  * 以及 X / Y / Color / Size / Overlay / GroupX / GroupY / Wrap 编码通道。
  */
 
-import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineStyle, YAxisConfig } from "./types";
+import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineStyle, YAxisConfig, GridLineStyle } from "./types";
 import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
 import i18n from "@/i18n";
@@ -738,7 +738,102 @@ function buildYAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
   if (out.min !== undefined || out.max !== undefined) {
     out.scale = false;
   }
+
+  // ----- Axis boundary line + tick orientation ------------------------
+  // axisLine.show toggles the line at the data edge of the plot area.
+  // axisTick.inside flips tick marks from "outside" (toward labels) to
+  // "inside" (into the plot area). We emit axisLine.show only when the
+  // user has explicitly toggled it so undefined still picks up the
+  // theme's defaults (no `show` field === ECharts default = visible).
+  if (cfg.showAxisLine !== undefined) {
+    out.axisLine = { show: cfg.showAxisLine };
+  }
+  // Tick position is only meaningful when the axis line is visible —
+  // but ECharts ignores `axisTick.inside` quietly if the line is hidden,
+  // so emitting it unconditionally is harmless. We still gate on the
+  // user actually selecting a non-default value to keep the option
+  // object minimal.
+  if (cfg.tickPosition === "inside") {
+    out.axisTick = { ...(out.axisTick as object | undefined), inside: true };
+  } else if (cfg.tickPosition === "outside") {
+    out.axisTick = { ...(out.axisTick as object | undefined), inside: false };
+  }
+
+  // ----- Minor ticks --------------------------------------------------
+  // ECharts' minorTick.splitNumber is the count of minor *intervals*
+  // between two majors (so e.g. 5 yields 4 minor tick marks between
+  // each pair of majors). 0 / undefined → minor ticks stay hidden.
+  if (Number.isFinite(cfg.minorTickCount as number) && (cfg.minorTickCount as number) > 0) {
+    out.minorTick = {
+      show: true,
+      splitNumber: Math.max(1, Math.round(cfg.minorTickCount as number)),
+    };
+  }
+
+  // ----- Major / minor split lines (grid) -----------------------------
+  // Each branch only emits when the user has touched the toggle or
+  // styled the lines, so completely-unset configs preserve the theme's
+  // splitLine default (visible, dashed gray major; hidden minor).
+  if (cfg.showMajorGrid !== undefined || cfg.majorGridStyle) {
+    out.splitLine = buildGridLineFragment(cfg.showMajorGrid, cfg.majorGridStyle);
+  }
+  if (cfg.showMinorGrid !== undefined || cfg.minorGridStyle) {
+    out.minorSplitLine = buildGridLineFragment(cfg.showMinorGrid, cfg.minorGridStyle);
+  }
+
   return out;
+}
+
+/** Translate a (show, style) pair into an ECharts `splitLine`-shaped
+ *  fragment. When `show` is undefined the fragment omits the `show`
+ *  field so the caller's upstream defaults win; the style sub-fields
+ *  similarly only appear when the user has set them, so each lineStyle
+ *  key falls back to the theme. */
+function buildGridLineFragment(
+  show: boolean | undefined,
+  style: GridLineStyle | undefined,
+): EChartsOption {
+  const out: EChartsOption = {};
+  if (show !== undefined) out.show = show;
+  if (style) {
+    const ls: EChartsOption = {};
+    if (style.color) ls.color = style.color;
+    if (Number.isFinite(style.width as number) && (style.width as number) > 0) {
+      ls.width = style.width;
+    }
+    if (style.style) ls.type = refDashFor(style.style);
+    if (Object.keys(ls).length > 0) out.lineStyle = ls;
+  }
+  return out;
+}
+
+/** Shallow-merge the base ECharts yAxis option with a user-overrides
+ *  fragment, taking care to *deep-merge* the small set of nested
+ *  objects that both sides can populate. Without this merge a user's
+ *  `axisLine: { show: true }` would wipe out the base's
+ *  `axisLine: { lineStyle: { color } }` and the axis would render in
+ *  the wrong color; same hazard for `axisTick`, `axisLabel`,
+ *  `splitLine`, and `minorSplitLine`. */
+function mergeYAxis(base: EChartsOption, userY: EChartsOption): EChartsOption {
+  const NESTED = ["axisLine", "axisTick", "axisLabel", "splitLine", "minorSplitLine"] as const;
+  const merged: EChartsOption = { ...base, ...userY };
+  for (const key of NESTED) {
+    const b = base[key] as EChartsOption | undefined;
+    const u = userY[key] as EChartsOption | undefined;
+    if (b && u) {
+      // Deep-merge the immediate children; both sides typically only
+      // populate `show`, `inside`, and `lineStyle`, so a one-level deep
+      // merge of `lineStyle` is enough.
+      const childMerged: EChartsOption = { ...b, ...u };
+      const bls = (b as { lineStyle?: EChartsOption }).lineStyle;
+      const uls = (u as { lineStyle?: EChartsOption }).lineStyle;
+      if (bls && uls) {
+        (childMerged as { lineStyle?: EChartsOption }).lineStyle = { ...bls, ...uls };
+      }
+      merged[key] = childMerged;
+    }
+  }
+  return merged;
 }
 
 /** 渲染一个单图（不分面）的 ECharts option
@@ -874,22 +969,16 @@ function buildSingleOption(
           ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
           ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
         },
-        yAxis: {
-          type: "value",
-          name: i18n.t("graph.frequency"),
-          nameLocation: "middle",
-          nameGap: 40,
-          ...axis,
-          // User overrides last so an explicit min/max/tickCount/decimals/
-          // inverse beats the auto defaults above (incl. the spread of
-          // `axis`, which may carry its own `axisLabel`). decimals/
-          // axisLabel.formatter merging is handled below.
-          ...buildYAxisOverrides(spec.yAxis),
-          axisLabel: {
-            ...(axis.axisLabel as object),
-            ...((buildYAxisOverrides(spec.yAxis).axisLabel as object) ?? {}),
+        yAxis: mergeYAxis(
+          {
+            type: "value",
+            name: i18n.t("graph.frequency"),
+            nameLocation: "middle",
+            nameGap: 40,
+            ...axis,
           },
-        },
+          buildYAxisOverrides(spec.yAxis),
+        ),
         series,
         animationDuration: 250,
         _binWidth: width, // 调试用
@@ -1184,9 +1273,8 @@ function buildSingleOption(
     // Series still carry `name` so tooltips and exports stay labeled.
     legend: undefined,
     xAxis,
-    yAxis: (() => {
-      const userY = buildYAxisOverrides(spec.yAxis);
-      return {
+    yAxis: mergeYAxis(
+      {
         type: "value",
         scale: true,
         ...axis,
@@ -1194,20 +1282,9 @@ function buildSingleOption(
         // exactly the same range — the whole point of small multiples.
         ...(sharedRanges?.yMin != null ? { min: sharedRanges.yMin } : {}),
         ...(sharedRanges?.yMax != null ? { max: sharedRanges.yMax } : {}),
-        // User overrides last: an explicit pinned min/max beats both the
-        // auto default and the faceted shared range (user intent > shared
-        // auto). tickCount / decimals / inverse have no upstream so they
-        // just slot in.
-        ...userY,
-        // Merge axisLabel: spread the base (axis.axisLabel) then layer
-        // the user's formatter on top, so decimals don't clobber color/
-        // alignment defaults from `axis`.
-        axisLabel: {
-          ...(axis.axisLabel as object),
-          ...((userY.axisLabel as object) ?? {}),
-        },
-      };
-    })(),
+      },
+      buildYAxisOverrides(spec.yAxis),
+    ),
     series,
     animationDuration: 250,
   } as EChartsOption;

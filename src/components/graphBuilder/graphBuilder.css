@@ -1047,6 +1047,111 @@
   max-width: 110px;
 }
 
+/* Tick-position radio strip (sits next to "Outside" / "Inside" labels).
+   Inline so both options sit on one line of the form row. */
+.gb-axis-radio-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.gb-axis-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.gb-axis-radio input[type="radio"] {
+  margin: 0;
+}
+
+.gb-axis-radio-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ----- Grid (split-line) section -------------------------------------
+   Each section pairs a Show checkbox with a style strip (color picker,
+   dash dropdown, width input). When the section is off the style strip
+   dims so users can tell the controls have no effect. */
+.gb-grid-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  background: var(--bg-cell-hover, rgba(0, 0, 0, 0.02));
+}
+
+.gb-grid-section-off .gb-grid-style-row {
+  opacity: 0.45;
+}
+
+.gb-grid-section-toggle {
+  /* Override the .gb-axis-label-checkbox grid-column rule so the
+     toggle hugs its own row instead of spanning a 2-col grid. */
+  grid-column: auto;
+}
+
+.gb-grid-section-label {
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.gb-grid-style-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 22px; /* indent under the checkbox label */
+}
+
+.gb-grid-color {
+  width: 26px;
+  height: 22px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.gb-grid-color:disabled {
+  cursor: not-allowed;
+}
+
+.gb-grid-dash {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--fg-primary);
+  min-width: 80px;
+}
+
+.gb-grid-width {
+  width: 60px;
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--fg-primary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.gb-grid-hint {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  line-height: 1.4;
+  padding-top: 2px;
+}
+
 /* ===== Y-axis reference lines editor (Y Axis Settings dialog pane) =====
    Sits inside the right pane of the YAxisSettingsDialog (PreferencesDialog
    style). Each card is two rows:

@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } fr
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineStyle, type YAxisConfig } from "@/graphCore";
+import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineStyle, type YAxisConfig, type GridLineStyle } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -1683,7 +1683,7 @@ interface YAxisSettingsDialogProps {
   onClose: () => void;
 }
 
-type YAxisCategoryKey = "axis" | "refLines";
+type YAxisCategoryKey = "axis" | "tickGrid" | "refLines";
 
 function YAxisSettingsDialog({
   refLines,
@@ -1701,6 +1701,10 @@ function YAxisSettingsDialog({
     {
       key: "axis",
       label: t("graph.yAxisSettings.categoryAxis", { defaultValue: "Axis" }),
+    },
+    {
+      key: "tickGrid",
+      label: t("graph.yAxisSettings.categoryTickGrid", { defaultValue: "Tick Grid" }),
     },
     {
       key: "refLines",
@@ -1733,6 +1737,9 @@ function YAxisSettingsDialog({
           <div className="pref-pane">
             {active === "axis" && (
               <AxisSettingsEditor config={yAxisConfig} setConfig={setYAxisConfig} />
+            )}
+            {active === "tickGrid" && (
+              <GridSettingsEditor config={yAxisConfig} setConfig={setYAxisConfig} />
             )}
             {active === "refLines" && (
               <RefLinesEditor refLines={refLines} setRefLines={setRefLines} />
@@ -1772,8 +1779,23 @@ function isAxisConfigEmpty(c: YAxisConfig | undefined): boolean {
     c.max === undefined &&
     c.tickCount === undefined &&
     c.decimals === undefined &&
-    (c.inverse === undefined || c.inverse === false)
+    (c.inverse === undefined || c.inverse === false) &&
+    (c.minorTickCount === undefined || c.minorTickCount === 0) &&
+    c.showAxisLine === undefined &&
+    c.tickPosition === undefined &&
+    c.showMajorGrid === undefined &&
+    c.showMinorGrid === undefined &&
+    isGridLineStyleEmpty(c.majorGridStyle) &&
+    isGridLineStyleEmpty(c.minorGridStyle)
   );
+}
+
+/** A grid-line style is considered "empty" (= use theme default) when
+ *  every field is undefined. Lets us normalize `{ style: { } }` back
+ *  to `undefined` so the persisted state stays minimal. */
+function isGridLineStyleEmpty(s: GridLineStyle | undefined): boolean {
+  if (!s) return true;
+  return s.color === undefined && s.width === undefined && s.style === undefined;
 }
 
 function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
@@ -1907,6 +1929,31 @@ function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
         />
       </div>
 
+      {/* Minor tick count: number of sub-tick intervals between two
+          major ticks (ECharts minorTick.splitNumber). 0 / empty turns
+          minor ticks off — the default. Cap at 20 because any higher
+          and the ticks merge visually. */}
+      <div className="gb-axis-row">
+        <label className="gb-axis-label">
+          {t("graph.axis.minorTickCount", { defaultValue: "Minor ticks" })}
+        </label>
+        <input
+          type="number"
+          className="gb-axis-num gb-axis-num-narrow"
+          value={cfg.minorTickCount ?? ""}
+          step={1}
+          min={0}
+          max={20}
+          placeholder={t("graph.axis.none", { defaultValue: "None" })}
+          onChange={(e) => {
+            const n = parseInt0(e.target.value, 0, 20);
+            // 0 from the spinner means "off", same as empty — normalize
+            // to undefined so isAxisConfigEmpty correctly recognizes it.
+            patch({ minorTickCount: n && n > 0 ? n : undefined });
+          }}
+        />
+      </div>
+
       {/* Inverse: simple checkbox — flips the axis so larger values sit
           at the bottom (useful for ranking charts, downward-better KPIs,
           etc.). */}
@@ -1919,6 +1966,256 @@ function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
           />
           <span>{t("graph.axis.inverse", { defaultValue: "Reverse axis direction" })}</span>
         </label>
+      </div>
+
+      {/* Axis boundary line: toggles the line drawn at the axis edge.
+          Theme default is "visible" — checking the box leaves it visible
+          and unlocks the Tick position selector below; unchecking
+          explicitly hides the line. */}
+      <div className="gb-axis-row">
+        <label className="gb-axis-label gb-axis-label-checkbox">
+          <input
+            type="checkbox"
+            checked={cfg.showAxisLine !== false}
+            onChange={(e) =>
+              patch({
+                // Keep the field undefined when matching the theme default
+                // (visible), so we don't leave dead overrides on disk.
+                showAxisLine: e.target.checked ? undefined : false,
+                // Hiding the axis line also makes the tick position
+                // selector moot — clear it so it goes back to default.
+                tickPosition: e.target.checked ? cfg.tickPosition : undefined,
+              })
+            }
+          />
+          <span>{t("graph.axis.showAxisLine", { defaultValue: "Show axis line" })}</span>
+        </label>
+      </div>
+
+      {/* Tick position: only meaningful when the axis line is visible.
+          Disable the radios when the line is hidden so the UI doesn't
+          claim to do something it can't. */}
+      <div className="gb-axis-row">
+        <label className="gb-axis-label">
+          {t("graph.axis.tickPosition", { defaultValue: "Tick position" })}
+        </label>
+        <div className="gb-axis-radio-group">
+          {(["outside", "inside"] as const).map((pos) => {
+            const checked = (cfg.tickPosition ?? "outside") === pos;
+            const disabled = cfg.showAxisLine === false;
+            return (
+              <label
+                key={pos}
+                className={`gb-axis-radio${disabled ? " gb-axis-radio-disabled" : ""}`}
+              >
+                <input
+                  type="radio"
+                  name="gb-axis-tick-pos"
+                  value={pos}
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={() =>
+                    patch({
+                      // Outside is the theme default — store undefined for it
+                      // so all-default state collapses back to no override.
+                      tickPosition: pos === "outside" ? undefined : "inside",
+                    })
+                  }
+                />
+                <span>
+                  {pos === "outside"
+                    ? t("graph.axis.tickOutside", { defaultValue: "Outside" })
+                    : t("graph.axis.tickInside", { defaultValue: "Inside" })}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Y-axis grid (split-line) editor -----------------------------------
+// Form pane inside the YAxisSettingsDialog's "Tick Grid" category.
+// Controls both the major split-lines (rendered at major ticks — the
+// usual horizontal grid lines) and the minor split-lines (rendered at
+// every minor tick when minor ticks are enabled in the Axis category).
+// Each row is a Show checkbox plus a small style strip: color picker,
+// dash dropdown, width input. Leaving the style fields empty means "use
+// theme default" for that particular sub-field.
+
+interface GridSettingsEditorProps {
+  config: YAxisConfig | undefined;
+  setConfig: (next: YAxisConfig | undefined) => void;
+}
+
+/** Default style displayed in the picker / dropdowns when the user
+ *  hasn't customized that gridline yet. Pulled from CSS variables would
+ *  be ideal, but we want stable hex values for the color picker so we
+ *  hardcode the muted gray ECharts/our theme would use anyway. */
+const GRID_LINE_DEFAULT_COLOR = "#e2e2e2";
+const GRID_LINE_DEFAULT_WIDTH = 1;
+const GRID_LINE_DEFAULT_STYLE: RefLineStyle = "dashed";
+
+function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
+  const { t } = useTranslation();
+  const cfg = config ?? {};
+
+  /** Patch one or more fields on the root config, normalizing the
+   *  result back to `undefined` when it ends up fully empty. Used by
+   *  the Show checkboxes and by the per-style updater below. */
+  const patch = useCallback(
+    (next: Partial<YAxisConfig>) => {
+      const merged: YAxisConfig = { ...cfg, ...next };
+      setConfig(isAxisConfigEmpty(merged) ? undefined : merged);
+    },
+    [cfg, setConfig],
+  );
+
+  /** Patch a single sub-field on either `majorGridStyle` or
+   *  `minorGridStyle`. When the resulting style object is fully empty
+   *  we collapse it back to `undefined` so we don't leave dead
+   *  `{ }` style objects on the persisted config. */
+  const patchStyle = useCallback(
+    (which: "major" | "minor", next: Partial<GridLineStyle>) => {
+      const key = which === "major" ? "majorGridStyle" : "minorGridStyle";
+      const cur = (which === "major" ? cfg.majorGridStyle : cfg.minorGridStyle) ?? {};
+      const merged: GridLineStyle = { ...cur, ...next };
+      patch({ [key]: isGridLineStyleEmpty(merged) ? undefined : merged } as Partial<YAxisConfig>);
+    },
+    [cfg.majorGridStyle, cfg.minorGridStyle, patch],
+  );
+
+  const resetAll = useCallback(() => {
+    patch({
+      showMajorGrid: undefined,
+      showMinorGrid: undefined,
+      majorGridStyle: undefined,
+      minorGridStyle: undefined,
+    });
+  }, [patch]);
+
+  /** True when every grid-related override is back to default. Used to
+   *  disable the Reset button — same UX pattern as the Axis editor. */
+  const gridEmpty =
+    cfg.showMajorGrid === undefined &&
+    cfg.showMinorGrid === undefined &&
+    isGridLineStyleEmpty(cfg.majorGridStyle) &&
+    isGridLineStyleEmpty(cfg.minorGridStyle);
+
+  /** Render one (Show, style) section. Major and minor are visually
+   *  identical so we factor the section to avoid drift between them. */
+  const renderGridSection = (which: "major" | "minor") => {
+    const isMajor = which === "major";
+    // Theme defaults: major grid visible (dashed gray), minor grid
+    // hidden. Reflect that as the initial checkbox state when the user
+    // hasn't overridden it yet, so the UI matches what they see.
+    const shown = isMajor
+      ? (cfg.showMajorGrid ?? true)
+      : (cfg.showMinorGrid ?? false);
+    const style = (isMajor ? cfg.majorGridStyle : cfg.minorGridStyle) ?? {};
+    const color = style.color ?? GRID_LINE_DEFAULT_COLOR;
+    const width = style.width ?? GRID_LINE_DEFAULT_WIDTH;
+    const dash = style.style ?? GRID_LINE_DEFAULT_STYLE;
+    // When the section is hidden, the style controls are visually
+    // dimmed and disabled because they have no effect on a hidden grid.
+    return (
+      <div className={`gb-grid-section${shown ? "" : " gb-grid-section-off"}`}>
+        <label className="gb-axis-label-checkbox gb-grid-section-toggle">
+          <input
+            type="checkbox"
+            checked={shown}
+            onChange={(e) => {
+              // Theme default for major is shown, minor is hidden — write
+              // undefined when the new value matches default so we keep
+              // the persisted config minimal.
+              const defaultShown = isMajor ? true : false;
+              const nextShown = e.target.checked;
+              const fieldName = isMajor ? "showMajorGrid" : "showMinorGrid";
+              patch({
+                [fieldName]: nextShown === defaultShown ? undefined : nextShown,
+              } as Partial<YAxisConfig>);
+            }}
+          />
+          <span className="gb-grid-section-label">
+            {isMajor
+              ? t("graph.grid.showMajor", { defaultValue: "Major gridlines" })
+              : t("graph.grid.showMinor", { defaultValue: "Minor gridlines" })}
+          </span>
+        </label>
+
+        <div className="gb-grid-style-row">
+          <input
+            type="color"
+            className="gb-grid-color"
+            value={color}
+            disabled={!shown}
+            onChange={(e) => patchStyle(which, { color: e.target.value })}
+            title={t("graph.grid.color", { defaultValue: "Color" })}
+            aria-label={t("graph.grid.color", { defaultValue: "Color" })}
+          />
+          <select
+            className="gb-grid-dash"
+            value={dash}
+            disabled={!shown}
+            onChange={(e) => patchStyle(which, { style: e.target.value as RefLineStyle })}
+            title={t("graph.grid.style", { defaultValue: "Line style" })}
+            aria-label={t("graph.grid.style", { defaultValue: "Line style" })}
+          >
+            <option value="solid">{t("graph.refLine.styleSolid", { defaultValue: "Solid" })}</option>
+            <option value="dashed">{t("graph.refLine.styleDashed", { defaultValue: "Dashed" })}</option>
+            <option value="dotted">{t("graph.refLine.styleDotted", { defaultValue: "Dotted" })}</option>
+          </select>
+          <input
+            type="number"
+            className="gb-grid-width"
+            value={width}
+            disabled={!shown}
+            min={0.5}
+            max={5}
+            step={0.5}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              patchStyle(which, {
+                width: Number.isFinite(n) && n > 0 ? n : undefined,
+              });
+            }}
+            title={t("graph.grid.width", { defaultValue: "Width" })}
+            aria-label={t("graph.grid.width", { defaultValue: "Width" })}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="gb-axis-editor">
+      <div className="gb-axis-header">
+        <span className="gb-axis-title">
+          {t("graph.grid.title", { defaultValue: "Tick Grid" })}
+        </span>
+        <button
+          type="button"
+          className="gb-axis-reset"
+          onClick={resetAll}
+          disabled={gridEmpty}
+          title={t("graph.grid.resetHint", {
+            defaultValue: "Restore default grid display",
+          })}
+        >
+          {t("graph.axis.reset", { defaultValue: "Reset to auto" })}
+        </button>
+      </div>
+
+      {renderGridSection("major")}
+      {renderGridSection("minor")}
+
+      <div className="gb-grid-hint">
+        {t("graph.grid.minorHint", {
+          defaultValue:
+            "Minor gridlines require at least one minor tick. Set Minor ticks in the Axis tab first.",
+        })}
       </div>
     </div>
   );

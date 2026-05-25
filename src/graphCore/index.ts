@@ -20,4 +20,5 @@ export {
   type RefLineY,
   type RefLineStyle,
   type YAxisConfig,
+  type GridLineStyle,
 } from "./types";

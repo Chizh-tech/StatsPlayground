@@ -494,6 +494,7 @@
     "yAxisSettings": {
       "title": "Y Axis Settings",
       "categoryAxis": "Axis",
+      "categoryTickGrid": "Tick Grid",
       "categoryRefLines": "Reference Lines"
     },
     "axis": {
@@ -504,9 +505,25 @@
       "tickCount": "Tick count",
       "decimals": "Decimals",
       "inverse": "Reverse axis direction",
+      "minorTickCount": "Minor ticks",
+      "showAxisLine": "Show axis line",
+      "tickPosition": "Tick position",
+      "tickOutside": "Outside",
+      "tickInside": "Inside",
       "reset": "Reset to auto",
       "resetHint": "Restore fully automatic axis behavior",
-      "auto": "Auto"
+      "auto": "Auto",
+      "none": "None"
+    },
+    "grid": {
+      "title": "Tick Grid",
+      "showMajor": "Major gridlines",
+      "showMinor": "Minor gridlines",
+      "color": "Color",
+      "style": "Line style",
+      "width": "Width",
+      "resetHint": "Restore default grid display",
+      "minorHint": "Minor gridlines require at least one minor tick. Set Minor ticks in the Axis tab first."
     },
     "style": {
       "color": "Color",

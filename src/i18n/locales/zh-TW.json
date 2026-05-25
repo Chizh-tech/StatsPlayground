@@ -494,6 +494,7 @@
     "yAxisSettings": {
       "title": "Y 軸設定",
       "categoryAxis": "座標軸",
+      "categoryTickGrid": "刻度網格",
       "categoryRefLines": "輔助線"
     },
     "axis": {
@@ -504,9 +505,25 @@
       "tickCount": "刻度數量",
       "decimals": "小數位數",
       "inverse": "反轉刻度方向",
+      "minorTickCount": "子刻度數量",
+      "showAxisLine": "顯示軸邊界",
+      "tickPosition": "刻度位置",
+      "tickOutside": "邊界外",
+      "tickInside": "邊界內",
       "reset": "回復自動",
       "resetHint": "回復為完全自動的座標軸",
-      "auto": "自動"
+      "auto": "自動",
+      "none": "無"
+    },
+    "grid": {
+      "title": "刻度網格",
+      "showMajor": "主刻度網格",
+      "showMinor": "子刻度網格",
+      "color": "顏色",
+      "style": "線型",
+      "width": "粗細",
+      "resetHint": "回復預設網格顯示",
+      "minorHint": "子刻度網格需要至少設定一個子刻度。請先在「座標軸」選項卡中設定子刻度數量。"
     },
     "style": {
       "color": "顏色",

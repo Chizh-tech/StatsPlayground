@@ -494,6 +494,7 @@
     "yAxisSettings": {
       "title": "Cài đặt trục Y",
       "categoryAxis": "Trục",
+      "categoryTickGrid": "Lưới vạch chia",
       "categoryRefLines": "Đường tham chiếu"
     },
     "axis": {
@@ -504,9 +505,25 @@
       "tickCount": "Số vạch chia",
       "decimals": "Số chữ số thập phân",
       "inverse": "Đảo ngược hướng trục",
+      "minorTickCount": "Vạch chia phụ",
+      "showAxisLine": "Hiển thị đường trục",
+      "tickPosition": "Vị trí vạch chia",
+      "tickOutside": "Bên ngoài",
+      "tickInside": "Bên trong",
       "reset": "Khôi phục tự động",
       "resetHint": "Khôi phục trục về chế độ hoàn toàn tự động",
-      "auto": "Tự động"
+      "auto": "Tự động",
+      "none": "Không"
+    },
+    "grid": {
+      "title": "Lưới vạch chia",
+      "showMajor": "Lưới vạch chia chính",
+      "showMinor": "Lưới vạch chia phụ",
+      "color": "Màu sắc",
+      "style": "Kiểu đường",
+      "width": "Độ dày",
+      "resetHint": "Khôi phục hiển thị lưới mặc định",
+      "minorHint": "Lưới vạch chia phụ cần ít nhất một vạch chia phụ. Hãy đặt Số vạch chia phụ trong tab Trục trước."
     },
     "style": {
       "color": "Màu",

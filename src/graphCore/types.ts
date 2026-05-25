@@ -127,6 +127,42 @@ export interface YAxisConfig {
   decimals?: number;
   /** Reverse the axis direction (largest at the bottom). */
   inverse?: boolean;
+  /** Number of minor sub-ticks drawn between every pair of major
+   *  ticks. `undefined` (or 0) → no minor ticks (the default). */
+  minorTickCount?: number;
+  /** Whether to show the axis boundary line itself. `undefined` → use
+   *  theme default (currently visible). Set explicitly to `false` to
+   *  hide the axis line, or `true` to lock it on. */
+  showAxisLine?: boolean;
+  /** Where tick marks point relative to the axis line: `"outside"`
+   *  (toward the labels — the default) or `"inside"` (into the plot
+   *  area). Only meaningful when the axis line is visible. */
+  tickPosition?: "inside" | "outside";
+  /** Show major split-lines (gridlines at major ticks). `undefined` →
+   *  use theme default (currently visible, dashed). */
+  showMajorGrid?: boolean;
+  /** Show minor split-lines (gridlines at minor ticks). `undefined` →
+   *  use theme default (currently hidden). */
+  showMinorGrid?: boolean;
+  /** Styling for the major gridlines (color / width / dash). Any
+   *  unset sub-field falls back to the theme default. */
+  majorGridStyle?: GridLineStyle;
+  /** Styling for the minor gridlines (color / width / dash). Any
+   *  unset sub-field falls back to the theme default. */
+  minorGridStyle?: GridLineStyle;
+}
+
+/** Visual style for a major or minor gridline. Mirrors the small subset
+ *  of ECharts `lineStyle` options the user actually picks from. Reuses
+ *  `RefLineStyle` for the dash pattern so the UI dropdown stays in sync
+ *  across editors. Any field left `undefined` keeps the theme default. */
+export interface GridLineStyle {
+  /** Stroke color (CSS color string, typically a hex from the picker). */
+  color?: string;
+  /** Stroke width in CSS px. */
+  width?: number;
+  /** Dash pattern. */
+  style?: RefLineStyle;
 }
 
 /** 单个图形元素的配置 */

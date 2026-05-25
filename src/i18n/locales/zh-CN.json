@@ -494,6 +494,7 @@
     "yAxisSettings": {
       "title": "Y 轴设置",
       "categoryAxis": "坐标轴",
+      "categoryTickGrid": "刻度网格",
       "categoryRefLines": "辅助线"
     },
     "axis": {
@@ -504,9 +505,25 @@
       "tickCount": "刻度数量",
       "decimals": "小数位数",
       "inverse": "反转刻度方向",
+      "minorTickCount": "子刻度数量",
+      "showAxisLine": "显示轴边界",
+      "tickPosition": "刻度位置",
+      "tickOutside": "边界外",
+      "tickInside": "边界内",
       "reset": "恢复自动",
       "resetHint": "恢复为完全自动的坐标轴",
-      "auto": "自动"
+      "auto": "自动",
+      "none": "无"
+    },
+    "grid": {
+      "title": "刻度网格",
+      "showMajor": "主刻度网格",
+      "showMinor": "子刻度网格",
+      "color": "颜色",
+      "style": "线型",
+      "width": "粗细",
+      "resetHint": "恢复默认网格显示",
+      "minorHint": "子刻度网格需要至少设置一个子刻度。请先在“坐标轴”选项卡中设置子刻度数量。"
     },
     "style": {
       "color": "颜色",
