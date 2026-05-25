@@ -631,6 +631,11 @@ interface SharedAxisRanges {
   /** Forced numeric min/max for the Y axis (always value type). */
   yMin?: number;
   yMax?: number;
+  /** Nice-snapped tick interval matching yMin/yMax — emitted by
+   *  computeSharedRanges so every faceted panel uses the same tick
+   *  spacing (otherwise ECharts could re-pick density per panel even
+   *  with identical bounds). Absent when no nice fit was produced. */
+  yInterval?: number;
 }
 
 /** Map our `RefLineStyle` enum to ECharts' `lineStyle.type`. */
@@ -785,6 +790,70 @@ function collectRefLineYs(spec: GraphSpec): number[] {
   return out;
 }
 
+/** Snap a continuous range to a clean tick step from the
+ *  {1, 2, 2.5, 5, 10} × 10^k family. Classic "nice numbers for graph
+ *  labels" (Heckbert 1990): pick a base power of ten from the rough
+ *  step, then promote the fractional multiplier to a preferred set
+ *  so a data range like [4.22, 4.59] resolves to ticks at 4.20 /
+ *  4.25 / 4.30 / … instead of float-precision artifacts. */
+function niceStep(range: number, targetTicks: number): number {
+  if (!Number.isFinite(range) || range <= 0 || targetTicks <= 0) return 1;
+  const rough = range / targetTicks;
+  const exp = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / exp;
+  let nice: number;
+  if (norm < 1.5) nice = 1;
+  else if (norm < 2.25) nice = 2;
+  else if (norm < 3.5) nice = 2.5;
+  else if (norm < 7.5) nice = 5;
+  else nice = 10;
+  return nice * exp;
+}
+
+/** Compute a nice-snapped {min, max, interval} for the Y axis from
+ *  optional data extent plus any ref-line Y values. Returns null when
+ *  there's nothing to fit (no data and no refs) so the caller can fall
+ *  back to ECharts' auto-scale. A 2 % visual pad is applied BEFORE
+ *  the snap so a ref line sitting at the exact data edge isn't flush
+ *  against the axis frame.
+ *
+ *  Why static instead of the older callback approach: passing
+ *  `min`/`max` as functions to ECharts pinned the axis to raw float
+ *  values, which then showed at the canvas edges as labels like
+ *  "4.2228965400000001". Pre-snapping gives clean tick labels and
+ *  also lets us emit a matching `interval` for predictable density. */
+function computeNiceYBounds(
+  dataMin: number | undefined,
+  dataMax: number | undefined,
+  refYs: number[],
+  targetTicks: number,
+): { min: number; max: number; interval: number } | null {
+  const all: number[] = [];
+  if (Number.isFinite(dataMin)) all.push(dataMin as number);
+  if (Number.isFinite(dataMax)) all.push(dataMax as number);
+  for (const y of refYs) if (Number.isFinite(y)) all.push(y);
+  if (all.length === 0) return null;
+  let lo = Math.min(...all);
+  let hi = Math.max(...all);
+  if (lo === hi) {
+    // Degenerate single-point range — fan out symmetrically so
+    // niceStep doesn't divide by zero and the axis still shows ticks
+    // above/below the point.
+    const d = Math.abs(lo) * 0.05 || 1;
+    lo -= d;
+    hi += d;
+  }
+  const pad = (hi - lo) * 0.02;
+  lo -= pad;
+  hi += pad;
+  const interval = niceStep(hi - lo, targetTicks);
+  return {
+    min: Math.floor(lo / interval) * interval,
+    max: Math.ceil(hi / interval) * interval,
+    interval,
+  };
+}
+
 /** Build a Y-axis option fragment that expands the auto-fitted range
  *  to encompass every finite ref-line Y value. Returns `{}` when
  *  there's nothing to expand for, so the caller can spread it
@@ -798,7 +867,10 @@ function collectRefLineYs(spec: GraphSpec): number[] {
  *
  *  Callsite contract: the caller spreads any `sharedRanges` /
  *  user-pinned `min` / `max` AFTER this fragment so explicit bounds
- *  always win — this fragment only contributes to the truly-auto path. */
+ *  always win — this fragment only contributes to the truly-auto path.
+ *
+ *  Kept for the histogram path; the main (boxplot/scatter/line/bar)
+ *  path uses `computeNiceYBounds` for snapped tick labels. */
 function buildYAxisRefLineExpand(refYs: number[]): EChartsOption {
   if (refYs.length === 0) return {};
   const expand = (v: { min: number; max: number }, dir: "min" | "max"): number => {
@@ -1055,6 +1127,16 @@ function buildSingleOption(
   const hiddenSet = new Set(spec.hiddenGroups ?? []);
   const isHidden = (gKey: string): boolean =>
     !!grouping && hiddenSet.has(gKey);
+  // Row-level variant of `isHidden` for code paths that scan raw
+  // `data.rows` (axis bound fitting, empty-category filtering). Those
+  // need to know "is this row in a hidden group?" without going
+  // through the `groups` map. Returns false when no grouping is bound.
+  const groupingIdx = grouping ? colIndex(data, grouping.name) : -1;
+  const isRowHidden = (r: unknown[]): boolean => {
+    if (!grouping || groupingIdx < 0 || hiddenSet.size === 0) return false;
+    const v = r[groupingIdx];
+    return hiddenSet.has(v == null ? "" : String(v));
+  };
 
   // —— 直方图：忽略 Y，仅 X 数值 ——
   if (enabledElements.some((e) => e.kind === "histogram")) {
@@ -1323,7 +1405,10 @@ function buildSingleOption(
 
   // The X/Y slot chips outside the canvas already label the axes, so we
   // intentionally omit `name` on the ECharts axes to avoid duplication.
-  const rawXCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx) : [];
+  // Pass yIdx so categories with zero finite-Y rows are dropped (see
+  // collectCategories) — keeps the axis tight when, e.g., EV2 has no
+  // measurements yet. Mirrors the legend's hide-empty-group behavior.
+  const rawXCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx, yIdx) : [];
   const localXCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
   // When the faceted caller forwards a global category union, use it as
   // the axis spine instead of the panel-local list — keeps every panel
@@ -1384,6 +1469,43 @@ function buildSingleOption(
     if (refCarrier) series.push(refCarrier);
   }
 
+  // Resolve final Y-axis bounds + tick interval. Faceted callers force
+  // shared bounds via `sharedRanges`; the single-panel path runs a
+  // local nice-snap fit over data + ref-line Ys to produce clean tick
+  // labels (4.20 / 4.25 / 4.30 …) instead of the float-edge labels
+  // (4.2228965400000001 at canvas edges) that the old callback-based
+  // extension produced. User-pinned min/max/interval still win via
+  // `mergeYAxis` → `buildYAxisOverrides`'s spread further down.
+  let yFinalBounds: EChartsOption;
+  if (sharedRanges?.yMin != null || sharedRanges?.yMax != null) {
+    yFinalBounds = {};
+    if (sharedRanges.yMin != null) yFinalBounds.min = sharedRanges.yMin;
+    if (sharedRanges.yMax != null) yFinalBounds.max = sharedRanges.yMax;
+    if (sharedRanges.yInterval != null) yFinalBounds.interval = sharedRanges.yInterval;
+  } else {
+    let dataMin = Infinity;
+    let dataMax = -Infinity;
+    if (yIdx >= 0) {
+      for (const r of data.rows) {
+        if (isRowHidden(r)) continue;
+        const v = toNum(r[yIdx]);
+        if (Number.isFinite(v)) {
+          if (v < dataMin) dataMin = v;
+          if (v > dataMax) dataMax = v;
+        }
+      }
+    }
+    const fit = computeNiceYBounds(
+      Number.isFinite(dataMin) ? dataMin : undefined,
+      Number.isFinite(dataMax) ? dataMax : undefined,
+      collectRefLineYs(spec),
+      8,
+    );
+    yFinalBounds = fit
+      ? { min: fit.min, max: fit.max, interval: fit.interval }
+      : { scale: true };
+  }
+
   return {
     backgroundColor: "transparent",
     textStyle: { color: theme.fgPrimary },
@@ -1402,20 +1524,11 @@ function buildSingleOption(
     yAxis: mergeYAxis(
       {
         type: "value",
-        scale: true,
         ...axis,
-        // Expand auto-fit so ref lines stay visible. Only contributes
-        // when no shared bound is pinned (faceted path bakes refs into
-        // sharedRanges itself, so applying both would double-count).
+        // Pre-computed bounds (faceted shared OR local nice-snap fit).
         // User-pinned overrides from `buildYAxisOverrides` still win
         // via the merge spread below.
-        ...(sharedRanges?.yMin == null && sharedRanges?.yMax == null
-          ? buildYAxisRefLineExpand(collectRefLineYs(spec))
-          : {}),
-        // Pin to shared bounds when faceted so every panel's Y axis covers
-        // exactly the same range — the whole point of small multiples.
-        ...(sharedRanges?.yMin != null ? { min: sharedRanges.yMin } : {}),
-        ...(sharedRanges?.yMax != null ? { max: sharedRanges.yMax } : {}),
+        ...yFinalBounds,
       },
       buildYAxisOverrides(spec.yAxis),
     ),
@@ -1424,11 +1537,21 @@ function buildSingleOption(
   } as EChartsOption;
 }
 
-function collectCategories(data: GraphData, xIdx: number): string[] {
+function collectCategories(data: GraphData, xIdx: number, yIdx?: number): string[] {
   if (xIdx < 0) return [];
   const seen = new Set<string>();
   const out: string[] = [];
+  // When `yIdx` is supplied we drop rows whose Y value isn't finite
+  // before counting categories. This mirrors the legend's hide-empty-
+  // group behavior on the category axis: if EV2 has no plottable
+  // boxes/points it should disappear from the X axis entirely rather
+  // than reserve a blank slot between TC1.6 and DV.
+  const filterByY = yIdx != null && yIdx >= 0;
   for (const r of data.rows) {
+    if (filterByY) {
+      const v = toNum(r[yIdx as number]);
+      if (!Number.isFinite(v)) continue;
+    }
     const k = toStr(r[xIdx]);
     if (!seen.has(k)) {
       seen.add(k);
@@ -1844,41 +1967,45 @@ function computeSharedRanges(
   };
 
   const yField = encoding.y;
-  if (yField) {
-    const yIdx = colIndex(data, yField.name);
-    if (yIdx >= 0) {
-      let yMin = Infinity;
-      let yMax = -Infinity;
-      for (const r of data.rows) {
-        if (isRowHidden(r)) continue;
-        const v = toNum(r[yIdx]);
-        if (Number.isFinite(v)) {
-          if (v < yMin) yMin = v;
-          if (v > yMax) yMax = v;
-        }
-      }
-      if (Number.isFinite(yMin) && Number.isFinite(yMax)) {
-        const pad = (yMax - yMin) * 0.02 || Math.abs(yMax) * 0.02 || 1;
-        out.yMin = yMin - pad;
-        out.yMax = yMax + pad;
+  // Snapshot the Y field's column index here so the X branch below
+  // can reuse it for empty-category filtering without re-resolving.
+  const yIdxForCats = yField ? colIndex(data, yField.name) : -1;
+  if (yField && yIdxForCats >= 0) {
+    let dataMin = Infinity;
+    let dataMax = -Infinity;
+    for (const r of data.rows) {
+      if (isRowHidden(r)) continue;
+      const v = toNum(r[yIdxForCats]);
+      if (Number.isFinite(v)) {
+        if (v < dataMin) dataMin = v;
+        if (v > dataMax) dataMax = v;
       }
     }
-  }
-
-  // Fold ref-line Y values into the shared Y bounds so faceted panels
-  // each include every horizontal reference (manual or auto-spec) on
-  // their pinned axis. Done after the data-pad so the pad doesn't
-  // accidentally shrink past a ref line that sat right on the edge.
-  if (refYs && refYs.length > 0) {
-    const refMin = Math.min(...refYs);
-    const refMax = Math.max(...refYs);
-    // Initialize from refs alone when there was no Y data to derive
-    // bounds from (e.g. all-null Y column) — better to pin to the ref
-    // lines than leave the axis un-pinned across panels.
-    if (out.yMin == null) out.yMin = refMin;
-    else if (refMin < out.yMin) out.yMin = refMin;
-    if (out.yMax == null) out.yMax = refMax;
-    else if (refMax > out.yMax) out.yMax = refMax;
+    // Run the same nice-snap helper the single-panel path uses so
+    // every faceted panel inherits identical bounds AND identical
+    // tick spacing. Folds ref-line Ys in so spec limits drawn off the
+    // data extent (e.g. USL at 120 when data tops out at 95) still
+    // render on every panel.
+    const fit = computeNiceYBounds(
+      Number.isFinite(dataMin) ? dataMin : undefined,
+      Number.isFinite(dataMax) ? dataMax : undefined,
+      refYs ?? [],
+      8,
+    );
+    if (fit) {
+      out.yMin = fit.min;
+      out.yMax = fit.max;
+      out.yInterval = fit.interval;
+    }
+  } else if (refYs && refYs.length > 0) {
+    // No Y data column but ref lines are configured: fit the axis
+    // around just the ref lines so they still render predictably.
+    const fit = computeNiceYBounds(undefined, undefined, refYs, 8);
+    if (fit) {
+      out.yMin = fit.min;
+      out.yMax = fit.max;
+      out.yInterval = fit.interval;
+    }
   }
 
   const xField = encoding.x;
@@ -1889,8 +2016,16 @@ function computeSharedRanges(
       if (xIsCat) {
         const seen = new Set<string>();
         const cats: string[] = [];
+        // Drop rows with non-finite Y so categories with zero plottable
+        // data don't reserve a slot on the axis — matches the legend's
+        // hide-empty-group behavior and the local collectCategories
+        // filter further up.
         for (const r of data.rows) {
           if (isRowHidden(r)) continue;
+          if (yIdxForCats >= 0) {
+            const y = toNum(r[yIdxForCats]);
+            if (!Number.isFinite(y)) continue;
+          }
           const k = toStr(r[xIdx]);
           if (!seen.has(k)) {
             seen.add(k);
