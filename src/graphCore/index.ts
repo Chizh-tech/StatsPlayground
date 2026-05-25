@@ -19,4 +19,5 @@ export {
   type MarkerShape,
   type RefLineY,
   type RefLineStyle,
+  type YAxisConfig,
 } from "./types";

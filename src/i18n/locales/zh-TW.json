@@ -493,7 +493,20 @@
     },
     "yAxisSettings": {
       "title": "Y 軸設定",
+      "categoryAxis": "座標軸",
       "categoryRefLines": "輔助線"
+    },
+    "axis": {
+      "title": "座標軸",
+      "range": "區間",
+      "min": "最小值",
+      "max": "最大值",
+      "tickCount": "刻度數量",
+      "decimals": "小數位數",
+      "inverse": "反轉刻度方向",
+      "reset": "回復自動",
+      "resetHint": "回復為完全自動的座標軸",
+      "auto": "自動"
     },
     "style": {
       "color": "顏色",

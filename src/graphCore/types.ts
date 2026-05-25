@@ -109,6 +109,26 @@ export interface RefLineY {
   width: number;
 }
 
+/** User overrides for the primary Y axis. Every field is optional and
+ *  `undefined` means *auto* — i.e. let ECharts derive the value from the
+ *  data range. The whole object being `undefined` (or empty) restores
+ *  fully automatic behavior, which is what the "Reset to auto" button in
+ *  the Y Axis Settings dialog produces. */
+export interface YAxisConfig {
+  /** Hard lower bound. `undefined` → auto (data-driven). */
+  min?: number;
+  /** Hard upper bound. `undefined` → auto (data-driven). */
+  max?: number;
+  /** Approximate number of tick intervals (ECharts `splitNumber`).
+   *  `undefined` → ECharts picks based on chart height. */
+  tickCount?: number;
+  /** Number of decimal places to show on tick labels.
+   *  `undefined` → use ECharts' default numeric formatting. */
+  decimals?: number;
+  /** Reverse the axis direction (largest at the bottom). */
+  inverse?: boolean;
+}
+
 /** 单个图形元素的配置 */
 export interface ChartElement {
   kind: ElementKind;
@@ -166,6 +186,11 @@ export interface GraphSpec {
    *  on an invisible carrier series so they appear independently of
    *  which data series are toggled on. */
   refLinesY?: RefLineY[];
+  /** Y axis overrides — fixed range, tick density, decimal precision,
+   *  reversed direction. `undefined` / empty object means fully
+   *  automatic behavior. Edited from the Y Axis Settings dialog
+   *  (double-click the Y axis to open). */
+  yAxis?: YAxisConfig;
 }
 
 /** 原始数据：列式 */

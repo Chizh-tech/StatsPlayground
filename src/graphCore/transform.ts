@@ -6,7 +6,7 @@
  * 以及 X / Y / Color / Size / Overlay / GroupX / GroupY / Wrap 编码通道。
  */
 
-import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineStyle } from "./types";
+import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineStyle, YAxisConfig } from "./types";
 import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
 import i18n from "@/i18n";
@@ -703,6 +703,44 @@ function buildRefLinesCarrier(refLines: RefLineY[] | undefined, theme: GraphThem
   };
 }
 
+/** Build the ECharts yAxis-option fragment that materializes a
+ *  user-defined `YAxisConfig`. Returns `{}` when no overrides are set
+ *  so the caller can spread it unconditionally without changing the
+ *  auto-scaled default. Only emits keys for fields the user has
+ *  actually pinned — undefined fields stay auto.
+ *
+ *  Notes on `scale`: when the user pins `min` or `max` we drop ECharts'
+ *  `scale: true` because it's incompatible with explicit bounds (ECharts
+ *  would expand them outward). Leaving `scale` to the caller means our
+ *  fragment only adds behavior, never silently removes it. */
+function buildYAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
+  if (!cfg) return {};
+  const out: EChartsOption = {};
+  if (Number.isFinite(cfg.min as number)) out.min = cfg.min;
+  if (Number.isFinite(cfg.max as number)) out.max = cfg.max;
+  if (Number.isFinite(cfg.tickCount as number) && (cfg.tickCount as number) > 0) {
+    out.splitNumber = Math.max(1, Math.round(cfg.tickCount as number));
+  }
+  if (cfg.inverse === true) out.inverse = true;
+  // Decimal precision: format every numeric tick with the requested
+  // number of decimal places. Strings (rare on a value axis) pass
+  // through unchanged so we don't corrupt category fallbacks.
+  if (Number.isFinite(cfg.decimals as number) && (cfg.decimals as number) >= 0) {
+    const d = Math.max(0, Math.round(cfg.decimals as number));
+    out.axisLabel = {
+      formatter: (v: number | string) => (typeof v === "number" ? v.toFixed(d) : String(v)),
+    };
+  }
+  // When the user explicitly pins a bound, disable ECharts' `scale: true`
+  // so the pinned value isn't padded outward. The caller spreads our
+  // overrides AFTER its own defaults, so setting `scale: false` here
+  // correctly overrides the upstream `scale: true`.
+  if (out.min !== undefined || out.max !== undefined) {
+    out.scale = false;
+  }
+  return out;
+}
+
 /** 渲染一个单图（不分面）的 ECharts option
  *
  *  When called from the faceted path (`buildGraph` with `groupX`/`wrap`),
@@ -842,6 +880,15 @@ function buildSingleOption(
           nameLocation: "middle",
           nameGap: 40,
           ...axis,
+          // User overrides last so an explicit min/max/tickCount/decimals/
+          // inverse beats the auto defaults above (incl. the spread of
+          // `axis`, which may carry its own `axisLabel`). decimals/
+          // axisLabel.formatter merging is handled below.
+          ...buildYAxisOverrides(spec.yAxis),
+          axisLabel: {
+            ...(axis.axisLabel as object),
+            ...((buildYAxisOverrides(spec.yAxis).axisLabel as object) ?? {}),
+          },
         },
         series,
         animationDuration: 250,
@@ -1137,15 +1184,30 @@ function buildSingleOption(
     // Series still carry `name` so tooltips and exports stay labeled.
     legend: undefined,
     xAxis,
-    yAxis: {
-      type: "value",
-      scale: true,
-      ...axis,
-      // Pin to shared bounds when faceted so every panel's Y axis covers
-      // exactly the same range — the whole point of small multiples.
-      ...(sharedRanges?.yMin != null ? { min: sharedRanges.yMin } : {}),
-      ...(sharedRanges?.yMax != null ? { max: sharedRanges.yMax } : {}),
-    },
+    yAxis: (() => {
+      const userY = buildYAxisOverrides(spec.yAxis);
+      return {
+        type: "value",
+        scale: true,
+        ...axis,
+        // Pin to shared bounds when faceted so every panel's Y axis covers
+        // exactly the same range — the whole point of small multiples.
+        ...(sharedRanges?.yMin != null ? { min: sharedRanges.yMin } : {}),
+        ...(sharedRanges?.yMax != null ? { max: sharedRanges.yMax } : {}),
+        // User overrides last: an explicit pinned min/max beats both the
+        // auto default and the faceted shared range (user intent > shared
+        // auto). tickCount / decimals / inverse have no upstream so they
+        // just slot in.
+        ...userY,
+        // Merge axisLabel: spread the base (axis.axisLabel) then layer
+        // the user's formatter on top, so decimals don't clobber color/
+        // alignment defaults from `axis`.
+        axisLabel: {
+          ...(axis.axisLabel as object),
+          ...((userY.axisLabel as object) ?? {}),
+        },
+      };
+    })(),
     series,
     animationDuration: 250,
   } as EChartsOption;

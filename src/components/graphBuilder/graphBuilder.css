@@ -946,6 +946,107 @@
   color: var(--fg-secondary);
 }
 
+/* ===== Y-axis range / ticks / decimals / inverse editor ===============
+   Sits inside the right pane of the YAxisSettingsDialog under the "Axis"
+   category. Form rows are label-on-the-left, input-on-the-right; blank
+   inputs render as "Auto" so users can clear a field by erasing it. */
+.gb-axis-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gb-axis-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gb-axis-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.gb-axis-reset {
+  appearance: none;
+  border: 1px solid var(--border-main);
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.gb-axis-reset:hover:not(:disabled) {
+  background: var(--bg-cell-hover);
+  border-color: var(--fg-accent);
+}
+
+.gb-axis-reset:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.gb-axis-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.gb-axis-label {
+  color: var(--fg-secondary);
+}
+
+/* Checkbox row puts the box and its caption inline together, so the
+   left "label column" doubles as the clickable area. */
+.gb-axis-label-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  grid-column: 1 / -1;
+  cursor: pointer;
+  color: var(--fg-primary);
+}
+
+.gb-axis-label-checkbox input[type="checkbox"] {
+  margin: 0;
+}
+
+.gb-axis-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gb-axis-range-sep {
+  color: var(--fg-secondary);
+  font-size: 12px;
+  user-select: none;
+}
+
+.gb-axis-num {
+  width: 100%;
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--fg-primary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+
+.gb-axis-num-narrow {
+  max-width: 110px;
+}
+
 /* ===== Y-axis reference lines editor (Y Axis Settings dialog pane) =====
    Sits inside the right pane of the YAxisSettingsDialog (PreferencesDialog
    style). Each card is two rows:

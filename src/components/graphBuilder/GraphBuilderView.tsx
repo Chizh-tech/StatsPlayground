@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } fr
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineStyle } from "@/graphCore";
+import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineStyle, type YAxisConfig } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -370,8 +370,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       styles: effectiveStyles,
       hiddenGroups: item.hiddenGroups,
       refLinesY: item.refLinesY,
+      yAxis: item.yAxis,
     };
-  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY]);
+  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.yAxis]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -419,6 +420,19 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const setRefLinesY = useCallback(
     (next: RefLineY[]) => {
       updateItem(item.id, { refLinesY: next });
+      markDirty();
+    },
+    [item.id, updateItem, markDirty],
+  );
+
+  /** Replace the Y-axis configuration (range / tick density / decimals /
+   *  inverse). Passing `undefined` (or all-undefined fields via the
+   *  AxisSettingsEditor's Reset button) restores fully automatic
+   *  behavior — the renderer's `buildYAxisOverrides` emits an empty
+   *  fragment when every field is undefined. */
+  const setYAxisConfig = useCallback(
+    (next: YAxisConfig | undefined) => {
+      updateItem(item.id, { yAxis: next });
       markDirty();
     },
     [item.id, updateItem, markDirty],
@@ -744,12 +758,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       {/* Y-axis settings dialog. Opened by double-clicking the Y axis;
           modeled after the system Preferences dialog (left categories
           column + right detail pane) so adding future per-axis settings
-          (range, log scale, tick formatter, ...) is a one-line nav-item
-          addition. Today it has a single "Reference Lines" category. */}
+          (log scale, tick formatter, ...) is a one-line nav-item
+          addition. Today it has two categories: Axis (range / ticks /
+          decimals / inverse) and Reference Lines. */}
       {yAxisDialogOpen && (
         <YAxisSettingsDialog
           refLines={item.refLinesY ?? []}
           setRefLines={setRefLinesY}
+          yAxisConfig={item.yAxis}
+          setYAxisConfig={setYAxisConfig}
           onClose={() => setYAxisDialogOpen(false)}
         />
       )}
@@ -1661,16 +1678,30 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
 interface YAxisSettingsDialogProps {
   refLines: RefLineY[];
   setRefLines: (next: RefLineY[]) => void;
+  yAxisConfig: YAxisConfig | undefined;
+  setYAxisConfig: (next: YAxisConfig | undefined) => void;
   onClose: () => void;
 }
 
-type YAxisCategoryKey = "refLines";
+type YAxisCategoryKey = "axis" | "refLines";
 
-function YAxisSettingsDialog({ refLines, setRefLines, onClose }: YAxisSettingsDialogProps) {
+function YAxisSettingsDialog({
+  refLines,
+  setRefLines,
+  yAxisConfig,
+  setYAxisConfig,
+  onClose,
+}: YAxisSettingsDialogProps) {
   const { t } = useTranslation();
-  const [active, setActive] = useState<YAxisCategoryKey>("refLines");
+  // Axis range / ticks / decimals / inverse is the more frequently
+  // adjusted category, so it opens first.
+  const [active, setActive] = useState<YAxisCategoryKey>("axis");
 
   const categories: { key: YAxisCategoryKey; label: string }[] = [
+    {
+      key: "axis",
+      label: t("graph.yAxisSettings.categoryAxis", { defaultValue: "Axis" }),
+    },
     {
       key: "refLines",
       label: t("graph.yAxisSettings.categoryRefLines", { defaultValue: "Reference Lines" }),
@@ -1700,6 +1731,9 @@ function YAxisSettingsDialog({ refLines, setRefLines, onClose }: YAxisSettingsDi
             ))}
           </nav>
           <div className="pref-pane">
+            {active === "axis" && (
+              <AxisSettingsEditor config={yAxisConfig} setConfig={setYAxisConfig} />
+            )}
             {active === "refLines" && (
               <RefLinesEditor refLines={refLines} setRefLines={setRefLines} />
             )}
@@ -1710,6 +1744,181 @@ function YAxisSettingsDialog({ refLines, setRefLines, onClose }: YAxisSettingsDi
             {t("prefs.done")}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Y-axis range / ticks / decimals / inverse editor ------------------
+// Form pane inside the YAxisSettingsDialog's "Axis" category. Each row is
+// label + value-input + auto-state indicator; an empty input means
+// "auto", letting ECharts derive the value from the data range. The
+// Reset to auto button clears every field in one click, restoring fully
+// automatic axis behavior.
+
+interface AxisSettingsEditorProps {
+  config: YAxisConfig | undefined;
+  setConfig: (next: YAxisConfig | undefined) => void;
+}
+
+/** True when every field in the config is undefined — i.e. we're back to
+ *  fully automatic. Used to disable the Reset button and to short-circuit
+ *  the patch into a single `undefined` write (cleaner persisted state
+ *  than `{}` lingering on every graph item). */
+function isAxisConfigEmpty(c: YAxisConfig | undefined): boolean {
+  if (!c) return true;
+  return (
+    c.min === undefined &&
+    c.max === undefined &&
+    c.tickCount === undefined &&
+    c.decimals === undefined &&
+    (c.inverse === undefined || c.inverse === false)
+  );
+}
+
+function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
+  const { t } = useTranslation();
+  const cfg = config ?? {};
+
+  /** Patch one field at a time, then normalize an all-empty result back
+   *  to `undefined` so we don't leave dead config objects on disk. */
+  const patch = useCallback(
+    (next: Partial<YAxisConfig>) => {
+      const merged: YAxisConfig = { ...cfg, ...next };
+      setConfig(isAxisConfigEmpty(merged) ? undefined : merged);
+    },
+    [cfg, setConfig],
+  );
+
+  /** Translate the <input type="number"> string into either a finite
+   *  number or `undefined` (= auto). Empty / NaN / whitespace inputs all
+   *  collapse to undefined so users can clear a field by erasing the
+   *  number. */
+  const parseNum = (s: string): number | undefined => {
+    const trimmed = s.trim();
+    if (trimmed === "") return undefined;
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
+  /** Same as parseNum but clamps to a non-negative integer — used by
+   *  Tick Count (splitNumber) and Decimals which only accept whole
+   *  non-negative values. */
+  const parseInt0 = (s: string, min: number, max: number): number | undefined => {
+    const n = parseNum(s);
+    if (n === undefined) return undefined;
+    const i = Math.round(n);
+    if (i < min) return min;
+    if (i > max) return max;
+    return i;
+  };
+
+  const resetAll = useCallback(() => {
+    setConfig(undefined);
+  }, [setConfig]);
+
+  const empty = isAxisConfigEmpty(cfg);
+
+  return (
+    <div className="gb-axis-editor">
+      <div className="gb-axis-header">
+        <span className="gb-axis-title">
+          {t("graph.axis.title", { defaultValue: "Axis" })}
+        </span>
+        <button
+          type="button"
+          className="gb-axis-reset"
+          onClick={resetAll}
+          disabled={empty}
+          title={t("graph.axis.resetHint", {
+            defaultValue: "Restore fully automatic axis behavior",
+          })}
+        >
+          {t("graph.axis.reset", { defaultValue: "Reset to auto" })}
+        </button>
+      </div>
+
+      {/* Range: min + max on one row so users see them paired. Leaving
+          either field blank means "auto" for that bound — the other end
+          stays pinned. */}
+      <div className="gb-axis-row">
+        <label className="gb-axis-label">
+          {t("graph.axis.range", { defaultValue: "Range" })}
+        </label>
+        <div className="gb-axis-range">
+          <input
+            type="number"
+            className="gb-axis-num"
+            value={cfg.min ?? ""}
+            step="any"
+            placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
+            onChange={(e) => patch({ min: parseNum(e.target.value) })}
+            aria-label={t("graph.axis.min", { defaultValue: "Min" })}
+            title={t("graph.axis.min", { defaultValue: "Min" })}
+          />
+          <span className="gb-axis-range-sep">—</span>
+          <input
+            type="number"
+            className="gb-axis-num"
+            value={cfg.max ?? ""}
+            step="any"
+            placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
+            onChange={(e) => patch({ max: parseNum(e.target.value) })}
+            aria-label={t("graph.axis.max", { defaultValue: "Max" })}
+            title={t("graph.axis.max", { defaultValue: "Max" })}
+          />
+        </div>
+      </div>
+
+      {/* Tick density: ECharts splitNumber. We cap at 50 because larger
+          values produce visually unreadable grids on the typical canvas
+          size; bottom at 1 because 0 would mean "no ticks at all". */}
+      <div className="gb-axis-row">
+        <label className="gb-axis-label">
+          {t("graph.axis.tickCount", { defaultValue: "Tick count" })}
+        </label>
+        <input
+          type="number"
+          className="gb-axis-num gb-axis-num-narrow"
+          value={cfg.tickCount ?? ""}
+          step={1}
+          min={1}
+          max={50}
+          placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
+          onChange={(e) => patch({ tickCount: parseInt0(e.target.value, 1, 50) })}
+        />
+      </div>
+
+      {/* Decimal places: hard cap at 10 (more is meaningless on a chart
+          axis). 0 is a valid value — show integers only. */}
+      <div className="gb-axis-row">
+        <label className="gb-axis-label">
+          {t("graph.axis.decimals", { defaultValue: "Decimals" })}
+        </label>
+        <input
+          type="number"
+          className="gb-axis-num gb-axis-num-narrow"
+          value={cfg.decimals ?? ""}
+          step={1}
+          min={0}
+          max={10}
+          placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
+          onChange={(e) => patch({ decimals: parseInt0(e.target.value, 0, 10) })}
+        />
+      </div>
+
+      {/* Inverse: simple checkbox — flips the axis so larger values sit
+          at the bottom (useful for ranking charts, downward-better KPIs,
+          etc.). */}
+      <div className="gb-axis-row">
+        <label className="gb-axis-label gb-axis-label-checkbox">
+          <input
+            type="checkbox"
+            checked={cfg.inverse === true}
+            onChange={(e) => patch({ inverse: e.target.checked ? true : undefined })}
+          />
+          <span>{t("graph.axis.inverse", { defaultValue: "Reverse axis direction" })}</span>
+        </label>
       </div>
     </div>
   );

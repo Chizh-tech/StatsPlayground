@@ -4,7 +4,7 @@
  * 引用一个数据表作为数据源，自身仅保存编码与元素配置。
  */
 
-import type { ChartElement, FieldRef, GroupStyleMap, RefLineY } from "@/graphCore";
+import type { ChartElement, FieldRef, GroupStyleMap, RefLineY, YAxisConfig } from "@/graphCore";
 import type { FilterRuleItem } from "./filter";
 
 export type GraphSlotKey =
@@ -47,6 +47,12 @@ export interface GraphBuilderItem {
    *  label, color, dash style and stroke width. Persisted with the
    *  project so annotations survive reloads. */
   refLinesY?: RefLineY[];
+  /** User overrides for the primary Y axis — fixed min/max range,
+   *  tick density (splitNumber), decimal precision on tick labels,
+   *  and reversed direction. `undefined` or an empty object means
+   *  fully automatic. Edited from the Y Axis Settings dialog
+   *  (double-click the Y axis). */
+  yAxis?: YAxisConfig;
   /** 创建时间 ISO 字符串。
  *
  *  注：图所属的文件夹不属于图本身的内禀属性——按 #7 设计，文件夹只

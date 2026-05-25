@@ -493,7 +493,20 @@
     },
     "yAxisSettings": {
       "title": "Y Axis Settings",
+      "categoryAxis": "Axis",
       "categoryRefLines": "Reference Lines"
+    },
+    "axis": {
+      "title": "Axis",
+      "range": "Range",
+      "min": "Min",
+      "max": "Max",
+      "tickCount": "Tick count",
+      "decimals": "Decimals",
+      "inverse": "Reverse axis direction",
+      "reset": "Reset to auto",
+      "resetHint": "Restore fully automatic axis behavior",
+      "auto": "Auto"
     },
     "style": {
       "color": "Color",

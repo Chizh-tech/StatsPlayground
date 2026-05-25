@@ -493,7 +493,20 @@
     },
     "yAxisSettings": {
       "title": "Cài đặt trục Y",
+      "categoryAxis": "Trục",
       "categoryRefLines": "Đường tham chiếu"
+    },
+    "axis": {
+      "title": "Trục",
+      "range": "Phạm vi",
+      "min": "Tối thiểu",
+      "max": "Tối đa",
+      "tickCount": "Số vạch chia",
+      "decimals": "Số chữ số thập phân",
+      "inverse": "Đảo ngược hướng trục",
+      "reset": "Khôi phục tự động",
+      "resetHint": "Khôi phục trục về chế độ hoàn toàn tự động",
+      "auto": "Tự động"
     },
     "style": {
       "color": "Màu",
