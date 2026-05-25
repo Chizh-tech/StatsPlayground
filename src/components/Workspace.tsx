@@ -1262,20 +1262,6 @@ export function Workspace() {
               <div className="menu-item" onClick={handleExportGraphSpgh}>{t("menu.exportSpgh")}</div>
               <div className="menu-item" onClick={handleImportGraphSpgh}>{t("menu.importSpgh")}</div>
             </MenuDropdown>
-            <MenuDropdown label={t("menu.ops")}>
-              <div className="menu-item" onClick={() => setTableOp("summary")}>{t("menu.opSummary")}</div>
-              <div className="menu-sep" />
-              <div className="menu-item" onClick={() => setTableOp("subset")}>{t("menu.opSubset")}</div>
-              <div className="menu-item" onClick={() => setTableOp("sort")}>{t("menu.opSort")}</div>
-              <div className="menu-sep" />
-              <div className="menu-item" onClick={() => setTableOp("stack")}>{t("menu.opStack")}</div>
-              <div className="menu-item" onClick={() => setTableOp("split")}>{t("menu.opSplit")}</div>
-              <div className="menu-item" onClick={() => setTableOp("transpose")}>{t("menu.opTranspose")}</div>
-              <div className="menu-sep" />
-              <div className="menu-item" onClick={() => setTableOp("join")}>{t("menu.opJoin")}</div>
-              <div className="menu-item" onClick={() => setTableOp("update")}>{t("menu.opUpdate")}</div>
-              <div className="menu-item" onClick={() => setTableOp("concatenate")}>{t("menu.opConcatenate")}</div>
-            </MenuDropdown>
             <MenuDropdown label={t("menu.help")}>
               <div className="menu-item" onClick={() => setHelpDialog("about")}>{t("menu.about")}</div>
               <div className="menu-item" onClick={() => setHelpDialog("license")}>{t("menu.license")}</div>
@@ -1414,7 +1400,7 @@ export function Workspace() {
               return <GraphBuilderView item={item} dataset={ds} />;
             })()
           ) : activeDatasetId ? (
-            <DataTableView key={tableKey} datasetId={activeDatasetId} />
+            <DataTableView key={tableKey} datasetId={activeDatasetId} onTableOp={setTableOp} />
           ) : (
             <div className="main-content">
               <div className="workspace-empty">

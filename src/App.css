@@ -569,6 +569,53 @@
 
 /* Toolbar */
 
+/* Table operations toolbar — sits at the top of every spreadsheet view
+   and hosts the buttons that used to live under the menu-bar
+   `Operations` menu (Summary / Subset / Sort / Stack / Split / Transpose
+   / Join / Update / Concatenate). Looks intentionally identical to the
+   Graph Builder's `.gb-toolbar` so switching between table and graph
+   panes feels visually consistent. Wraps when the table is narrow so
+   buttons stay clickable instead of clipping. */
+.sp-table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-main);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+.sp-tb-btn {
+  background: var(--bg-btn-secondary);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sp-tb-btn:hover {
+  background: var(--bg-btn-secondary-hover);
+  color: var(--fg-primary);
+}
+
+/* Thin vertical divider between logical groups of buttons, e.g.
+   single-table ops vs multi-table ops. Mirrors the `menu-sep`
+   horizontal divider used inside dropdown menus. */
+.sp-tb-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border-main);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
 /* Add column / rename bar */
 .sp-add-col-bar {
   display: flex;

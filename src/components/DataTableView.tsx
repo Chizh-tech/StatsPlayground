@@ -5,6 +5,7 @@ import { dataService } from "@/services/dataService";
 import type { TableQueryResult, ColumnDisplayProps } from "@/types/data";
 import { EXTRA_DEFS, EXTRA_KINDS, type ExtraKind, summarizeExtraKinds, extraKindLabel, extraFieldLabel } from "@/types/columnExtras";
 import { ManageExtrasDialog } from "./ManageExtrasDialog";
+import type { TableOpType } from "./TableOpsDialog";
 import { useDataStore } from "@/stores/useDataStore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useHistoryStore } from "@/stores/useHistoryStore";
@@ -14,6 +15,14 @@ import { ctxMenuRef } from "@/utils/ctxMenu";
 
 interface DataTableViewProps {
   datasetId: string;
+  /**
+   * Open one of the JMP-style table operations (Summary / Subset / Sort /
+   * Stack / Split / Transpose / Join / Update / Concatenate). Wired by the
+   * Workspace so that the top-of-table toolbar can launch the same dialog
+   * the legacy `Operations` menu used to launch. Optional so unit tests
+   * and standalone renders still work without it.
+   */
+  onTableOp?: (op: TableOpType) => void;
 }
 
 const COLUMN_TYPE_VALUES = ["VARCHAR", "INTEGER", "BIGINT", "DOUBLE", "BOOLEAN", "DATE", "TIMESTAMP"] as const;
@@ -633,7 +642,7 @@ const FormulaBar = React.memo(function FormulaBar({
   );
 });
 
-export function DataTableView({ datasetId }: DataTableViewProps) {
+export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const { t } = useTranslation();
   const labelOf = useMemo(() => typeLabelOf(t), [t]);
   const [data, setData] = useState<TableQueryResult | null>(null);
@@ -2903,6 +2912,45 @@ export function DataTableView({ datasetId }: DataTableViewProps) {
       ref={containerRef}
       style={{ ["--sp-zoom" as string]: String(zoom) } as React.CSSProperties}
     >
+
+      {/* Table operations toolbar (formerly the menu-bar `Operations`
+          menu). Buttons fall back to wrap when the table is narrow.
+          Hidden in the unlikely case the parent didn't wire `onTableOp`
+          (e.g. an isolated render in tests). */}
+      {onTableOp && (
+        <div className="sp-table-toolbar">
+          <button className="sp-tb-btn" onClick={() => onTableOp("summary")}>
+            {t("menu.opSummary")}
+          </button>
+          <div className="sp-tb-sep" />
+          <button className="sp-tb-btn" onClick={() => onTableOp("subset")}>
+            {t("menu.opSubset")}
+          </button>
+          <button className="sp-tb-btn" onClick={() => onTableOp("sort")}>
+            {t("menu.opSort")}
+          </button>
+          <div className="sp-tb-sep" />
+          <button className="sp-tb-btn" onClick={() => onTableOp("stack")}>
+            {t("menu.opStack")}
+          </button>
+          <button className="sp-tb-btn" onClick={() => onTableOp("split")}>
+            {t("menu.opSplit")}
+          </button>
+          <button className="sp-tb-btn" onClick={() => onTableOp("transpose")}>
+            {t("menu.opTranspose")}
+          </button>
+          <div className="sp-tb-sep" />
+          <button className="sp-tb-btn" onClick={() => onTableOp("join")}>
+            {t("menu.opJoin")}
+          </button>
+          <button className="sp-tb-btn" onClick={() => onTableOp("update")}>
+            {t("menu.opUpdate")}
+          </button>
+          <button className="sp-tb-btn" onClick={() => onTableOp("concatenate")}>
+            {t("menu.opConcatenate")}
+          </button>
+        </div>
+      )}
 
       {/* Add column inline form */}
       {showAddCol && (
