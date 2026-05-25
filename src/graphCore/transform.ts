@@ -787,7 +787,7 @@ function buildSingleOption(
         : theme.categorical[0];
       const groupRowSet = grouping ? new Set(groups.get(gKey) ?? []) : null;
 
-      const boxData: Array<[number, number, number, number, number]> = [];
+      const boxData: Array<[number, number, number, number, number] | { value: string }> = [];
       const outlierPts: Array<[string, number]> = [];
       const labelMarks: Array<{ x: string; y: number; text: string }> = [];
 
@@ -796,10 +796,13 @@ function buildSingleOption(
         if (groupRowSet) idxs = idxs.filter((i) => groupRowSet.has(i));
         const ys = idxs.map((i) => toNum(data.rows[i][yIdx])).filter(Number.isFinite);
         if (ys.length === 0) {
-          // Empty (X-category × overlay-group) cell: push a null marker
-          // so ECharts leaves the slot blank, instead of `[0,0,0,0,0]`
-          // which would render a phantom flat box pinned at y=0.
-          boxData.push(null as unknown as [number, number, number, number, number]);
+          // Empty (X-category × overlay-group) cell: emit ECharts'
+          // documented missing-data marker `{value: '-'}` so the slot
+          // renders as a gap instead of `[0,0,0,0,0]` (which would draw
+          // a phantom flat box pinned at y=0). NOTE: a plain `null`
+          // crashes whiskerBoxCommon.js — it tries to read `.value` on
+          // the data item — so we must keep the object wrapper.
+          boxData.push({ value: "-" });
           return;
         }
         const stats = boxStats(ys)!;
