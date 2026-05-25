@@ -514,6 +514,26 @@
       "emptyDiamond": "菱形（空心）",
       "triangle": "三角（实心）",
       "emptyTriangle": "三角（空心）"
+    },
+    "filter": {
+      "toolbarBtn": "筛选",
+      "toggleTitle": "显示/隐藏本地数据筛选器",
+      "title": "筛选器",
+      "close": "隐藏筛选器",
+      "addPlaceholder": "添加筛选列…",
+      "allUsed": "所有列均已筛选",
+      "empty": "从上方选择一列以添加筛选规则。",
+      "removeRule": "移除规则",
+      "andTitle": "与上一条规则 AND",
+      "orTitle": "与上一条规则 OR",
+      "min": "最小",
+      "max": "最大",
+      "start": "起始",
+      "end": "结束",
+      "searchValues": "搜索…",
+      "selectAll": "全选",
+      "clearAll": "全不选",
+      "noMatches": "无匹配项"
     }
   }
 }

@@ -23,11 +23,14 @@ import { dataService } from "@/services/dataService";
 import { Graph, inferFieldType, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
+import type { GraphFilterRuleItem } from "@/types/graphFilter";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPaletteStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
+import { FilterPanel } from "./FilterPanel";
+import { applyGraphFilters } from "./filterEngine";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -98,21 +101,29 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // (DataTableView): clamp on drag and double-click to reset.
   const [leftWidth, setLeftWidth] = useState(220);
   const [rightWidth, setRightWidth] = useState(220);
+  // Local Data Filter panel (toggled by the toolbar Filter button).
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterWidth, setFilterWidth] = useState(240);
   // Vertical split inside the left rail: percentage of the rail's height
   // that goes to the column list, the rest to LAYERS. Mirrors the
   // history-divider pattern in HistoryPanel.
   const [leftTopPct, setLeftTopPct] = useState(50);
   const leftRailRef = useRef<HTMLDivElement>(null);
   const startSideResize = useCallback(
-    (side: "left" | "right") => (e: React.MouseEvent) => {
+    (side: "left" | "right" | "filter") => (e: React.MouseEvent) => {
       e.preventDefault();
       const startX = e.clientX;
-      const startW = side === "left" ? leftWidth : rightWidth;
-      const dir = side === "left" ? 1 : -1;
+      const startW =
+        side === "left" ? leftWidth : side === "right" ? rightWidth : filterWidth;
+      // Splitter on the right edge of a panel grows when dragged right (+1).
+      // The right rail splitter is to the LEFT of the right panel, so dragging
+      // right shrinks it (-1).
+      const dir = side === "right" ? -1 : 1;
       const onMove = (ev: MouseEvent) => {
         const next = Math.max(160, Math.min(500, startW + dir * (ev.clientX - startX)));
         if (side === "left") setLeftWidth(next);
-        else setRightWidth(next);
+        else if (side === "right") setRightWidth(next);
+        else setFilterWidth(next);
       };
       const onUp = () => {
         document.removeEventListener("mousemove", onMove);
@@ -125,7 +136,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
     },
-    [leftWidth, rightWidth],
+    [leftWidth, rightWidth, filterWidth],
   );
 
   // Vertical drag inside the left rail (between TABLE columns and LAYERS).
@@ -160,6 +171,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const encoding = item.encoding;
   const elements = item.elements;
   const smootherLambda = item.smootherLambda;
+  // Filter rules (JMP-style Local Data Filter). Persist on the item so
+  // they survive project save/load. `filteredData` below feeds the
+  // renderer instead of the raw `data`.
+  const filters = useMemo(() => item.filters ?? [], [item.filters]);
+
+  // Apply the user's filter rules to the raw data once per change.
+  // Everything downstream (groupKeys, the spec, the rendered Graph and
+  // the legend's distinct-value enumeration) reads `filteredData`.
+  const filteredData = useMemo(
+    () => applyGraphFilters(data, filters),
+    [data, filters],
+  );
 
   // User-saved CustomPalettes feed into legend default-color assignment:
   // when a group doesn't have an explicit style override yet, the renderer
@@ -172,12 +195,12 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // the panel (for swatches and the editor's "default vs override" check).
   const groupKeys = useMemo<string[]>(() => {
     const groupField = encoding.overlay;
-    if (!groupField || !data) return [DEFAULT_GROUP_KEY];
-    const colIdx = data.columns.indexOf(groupField.name);
+    if (!groupField || !filteredData) return [DEFAULT_GROUP_KEY];
+    const colIdx = filteredData.columns.indexOf(groupField.name);
     if (colIdx < 0) return [DEFAULT_GROUP_KEY];
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const r of data.rows) {
+    for (const r of filteredData.rows) {
       const v = r[colIdx];
       const k = v == null ? "" : String(v);
       if (seen.has(k)) continue;
@@ -185,7 +208,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       out.push(k);
     }
     return out.length > 0 ? out : [DEFAULT_GROUP_KEY];
-  }, [encoding.overlay, data]);
+  }, [encoding.overlay, filteredData]);
 
   const effectiveStyles = useMemo<GroupStyleMap>(
     () =>
@@ -230,6 +253,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const setSmootherLambda = useCallback(
     (v: number) => {
       updateItem(item.id, { smootherLambda: v });
+      markDirty();
+    },
+    [item.id, updateItem, markDirty],
+  );
+  const setFilters = useCallback(
+    (next: GraphFilterRuleItem[]) => {
+      updateItem(item.id, { filters: next });
       markDirty();
     },
     [item.id, updateItem, markDirty],
@@ -437,11 +467,41 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       <div className="gb-toolbar">
         <div className="gb-toolbar-left">
           <button className="gb-tb-btn" onClick={startOver}>{t("graph.startOver")}</button>
+          <button
+            className={`gb-tb-btn${showFilters ? " gb-tb-btn-active" : ""}`}
+            onClick={() => setShowFilters((v) => !v)}
+            title={t("graph.filter.toggleTitle", { defaultValue: "Show/Hide local data filter" })}
+          >
+            {t("graph.filter.toolbarBtn", { defaultValue: "Filter" })}
+            {filters.length > 0 && (
+              <span className="gb-tb-badge">{filters.length}</span>
+            )}
+          </button>
         </div>
         <div className="gb-toolbar-spacer" />
       </div>
 
       <div className="gb-body">
+        {/* Local Data Filter panel + splitter (leftmost, when toggled on). */}
+        {showFilters && (
+          <>
+            <FilterPanel
+              data={data}
+              columns={columns}
+              filters={filters}
+              onChange={setFilters}
+              onClose={() => setShowFilters(false)}
+              width={filterWidth}
+            />
+            <div
+              className="gb-splitter"
+              onMouseDown={startSideResize("filter")}
+              onDoubleClick={() => setFilterWidth(240)}
+              title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
+            />
+          </>
+        )}
+
         {/* 左栏 */}
         <div className="gb-left" style={{ width: leftWidth }} ref={leftRailRef}>
           {/* Reuse the same column-panel styling as the data table view so the
@@ -585,7 +645,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               ) : !encoding.y && !activeKinds.has("histogram") ? (
                 <div className="gb-empty">{t("graph.dragHint")}</div>
               ) : (
-                <Graph spec={spec} data={data} valueOrders={valueOrders} />
+                // `filteredData` is null iff `data` is null; the `!data`
+                // branch above already handled that, so `filteredData ?? data`
+                // is non-null here and just satisfies the type checker.
+                <Graph spec={spec} data={filteredData ?? data} valueOrders={valueOrders} />
               )}
             </div>
             <Slot

@@ -514,6 +514,26 @@
       "emptyDiamond": "Diamond (hollow)",
       "triangle": "Triangle (filled)",
       "emptyTriangle": "Triangle (hollow)"
+    },
+    "filter": {
+      "toolbarBtn": "Filter",
+      "toggleTitle": "Show/Hide local data filter",
+      "title": "Filters",
+      "close": "Hide filters",
+      "addPlaceholder": "Add filter column…",
+      "allUsed": "All columns already filtered",
+      "empty": "Pick a column above to add a filter rule.",
+      "removeRule": "Remove rule",
+      "andTitle": "AND with previous",
+      "orTitle": "OR with previous",
+      "min": "Min",
+      "max": "Max",
+      "start": "Start",
+      "end": "End",
+      "searchValues": "Search…",
+      "selectAll": "All",
+      "clearAll": "None",
+      "noMatches": "No matches"
     }
   }
 }

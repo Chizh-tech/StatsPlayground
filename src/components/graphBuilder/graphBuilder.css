@@ -1047,3 +1047,301 @@
   border-radius: 4px;
 }
 
+/* ========= Local Data Filter (JMP-style) ========= */
+
+/* Active state for the toolbar Filter button when the panel is open. */
+.gb-tb-btn-active {
+  background: var(--bg-cell-selected);
+  border-color: var(--fg-accent);
+  color: var(--fg-primary);
+}
+
+/* Tiny pill showing the number of active filter rules. */
+.gb-tb-badge {
+  display: inline-block;
+  margin-left: 6px;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--fg-accent);
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* The leftmost vertical column shown when Filter is toggled on. */
+.gb-filter-panel {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-main);
+  background: var(--bg-panel);
+  overflow: hidden;
+  flex: 0 0 auto;
+  min-width: 200px;
+}
+
+.gb-filter-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 4px;
+}
+
+.gb-filter-close {
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.gb-filter-close:hover {
+  background: var(--bg-btn-secondary-hover);
+  color: var(--fg-primary);
+}
+
+.gb-filter-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.gb-filter-add {
+  display: flex;
+  flex-direction: column;
+}
+
+.gb-filter-add-select {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font-size: 12px;
+}
+
+.gb-filter-empty {
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding: 12px 4px;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.gb-filter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Allow the inner cards to shrink past their content size when the panel
+     gets narrow, instead of forcing horizontal overflow. */
+  min-width: 0;
+}
+
+/* AND/OR connector bar between rule cards. */
+.gb-filter-op-bar {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  padding: 2px 0;
+}
+
+.gb-filter-op-btn {
+  border: 1px solid var(--border-input);
+  background: var(--bg-card);
+  color: var(--fg-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 1px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.gb-filter-op-btn:hover {
+  background: var(--bg-header);
+}
+
+.gb-filter-op-btn.active {
+  background: var(--fg-accent);
+  color: #fff;
+  border-color: var(--fg-accent);
+}
+
+/* One filter rule card. */
+.gb-filter-card {
+  border: 1px solid var(--border-main);
+  border-radius: 5px;
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.gb-filter-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-main);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-primary);
+  gap: 6px;
+}
+
+.gb-filter-card-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gb-filter-card-x {
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+.gb-filter-card-x:hover {
+  background: var(--bg-btn-secondary-hover);
+  color: var(--fg-primary);
+}
+
+.gb-filter-card-body {
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Range editor (continuous + date share the layout). */
+.gb-filter-range {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gb-filter-range-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gb-filter-range-label {
+  width: 40px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.gb-filter-num,
+.gb-filter-date {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font-size: 12px;
+}
+
+/* Categorical editor. */
+.gb-filter-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gb-filter-search {
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.gb-filter-cats-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gb-filter-mini-btn {
+  padding: 1px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--fg-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.gb-filter-mini-btn:hover {
+  background: var(--bg-header);
+}
+
+.gb-filter-cats-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+
+.gb-filter-cats-list {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-input);
+  padding: 2px 0;
+}
+
+.gb-filter-cat-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.gb-filter-cat-item:hover {
+  background: var(--bg-header);
+}
+
+.gb-filter-cat-item input[type="checkbox"] {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.gb-filter-cat-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gb-filter-cats-empty {
+  padding: 8px 6px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+

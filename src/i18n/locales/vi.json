@@ -513,7 +513,25 @@
       "diamond": "Thoi (đặc)",
       "emptyDiamond": "Thoi (rỗng)",
       "triangle": "Tam giác (đặc)",
-      "emptyTriangle": "Tam giác (rỗng)"
-    }
+      "emptyTriangle": "Tam giác (rỗng)"    },
+    "filter": {
+      "toolbarBtn": "Lọc",
+      "toggleTitle": "Hiện/Ẩn bộ lọc dữ liệu cục bộ",
+      "title": "Bộ lọc",
+      "close": "Ẩn bộ lọc",
+      "addPlaceholder": "Thêm cột lọc…",
+      "allUsed": "Tất cả cột đã được lọc",
+      "empty": "Chọn một cột ở trên để thêm quy tắc lọc.",
+      "removeRule": "Xoá quy tắc",
+      "andTitle": "AND với quy tắc trước",
+      "orTitle": "OR với quy tắc trước",
+      "min": "Tối thiểu",
+      "max": "Tối đa",
+      "start": "Bắt đầu",
+      "end": "Kết thúc",
+      "searchValues": "Tìm kiếm…",
+      "selectAll": "Tất cả",
+      "clearAll": "Không chọn",
+      "noMatches": "Không có kết quả"    }
   }
 }

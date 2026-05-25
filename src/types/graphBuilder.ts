@@ -5,6 +5,7 @@
  */
 
 import type { ChartElement, FieldRef, GroupStyleMap } from "@/graphCore";
+import type { GraphFilterRuleItem } from "./graphFilter";
 
 export type GraphSlotKey =
   | "x"
@@ -37,6 +38,10 @@ export interface GraphBuilderItem {
    *  from the shared-axis range calculation, but keep their slot in
    *  globalGroupKeys so unhiding restores the same color. */
   hiddenGroups?: string[];
+  /** JMP-style Local Data Filter rules. Each rule narrows (AND) or
+   *  expands (OR) the row set fed into the graph. Stored on the item so
+   *  it persists with the project and survives reloads. */
+  filters?: GraphFilterRuleItem[];
   /** 创建时间 ISO 字符串。
  *
  *  注：图所属的文件夹不属于图本身的内禀属性——按 #7 设计，文件夹只
