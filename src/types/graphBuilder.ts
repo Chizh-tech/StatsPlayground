@@ -59,11 +59,25 @@ export interface GraphBuilderItem {
    *  the same markers on the same axis as before the swap. */
   refLinesX?: RefLineX[];
   /** When true, the renderer auto-overlays spec-limit reference lines
-   *  (USL / LSL red, Target green) sourced from the Y column's
-   *  `extras.spec` metadata. These lines are NOT added to `refLinesY`
-   *  — they live as an ambient, data-driven overlay that follows the
-   *  current Y encoding (and, in a future multi-Y / facet-on-X build,
-   *  the per-group spec metadata). Defaults to off. */
+   *  (USL / LSL red, Target green) on the **Y axis**, sourced from
+   *  the Y column's `extras.spec` metadata. Per-axis flag — does NOT
+   *  affect X. Defaults to off.
+   *
+   *  These lines are NOT added to `refLinesY` — they live as an
+   *  ambient, data-driven overlay that follows the current Y
+   *  encoding. */
+  autoSpecLinesY?: boolean;
+  /** Mirror of `autoSpecLinesY` for the **X axis**. When true, the
+   *  renderer overlays spec-limit lines sourced from the X column's
+   *  `extras.spec` metadata. Independent of `autoSpecLinesY`: a chart
+   *  with both X and Y bound to value columns carrying spec extras
+   *  can show one, the other, or both overlays. Defaults to off. */
+  autoSpecLinesX?: boolean;
+  /** @deprecated Legacy single global flag (pre-symmetric build). Kept
+   *  only so existing .spgh projects keep working: on read, this
+   *  value is used as a fallback for whichever per-axis flag is
+   *  still `undefined`. Newer writes always set the per-axis fields
+   *  (`autoSpecLinesY` / `autoSpecLinesX`) directly and ignore this. */
   autoSpecLines?: boolean;
   /** User overrides for the primary Y axis — fixed min/max range,
    *  tick density (splitNumber), decimal precision on tick labels,

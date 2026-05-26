@@ -395,17 +395,22 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       const v = encoding[k];
       if (v) (enc as any)[k] = v;
     });
-    // Resolve the auto spec-limit overlay independently for each axis:
-    // contribute an AutoSpec for whichever bound column has spec extras
-    // (and only when the user has opted in via `autoSpecLines`). The
-    // toggle is global — enabling it tries both axes; if only one
-    // bound column carries `extras.spec` then only that axis renders
-    // the overlay. After a Swap X & Y the two snapshots flip with the
-    // encoding, so the limits keep following the column.
+    // Resolve the auto spec-limit overlay independently for each axis.
+    // X and Y each carry their OWN `autoSpecLinesX` / `autoSpecLinesY`
+    // flag, so a chart with two value columns (one on X, one on Y) can
+    // turn the overlay on for one axis, the other, or both —
+    // mirroring how each axis has its own ref-lines and axis-settings
+    // dialog. The legacy single `autoSpecLines` flag (pre-symmetric
+    // build) is used as a fallback for any per-axis field still
+    // `undefined`, so old projects keep their previous behavior on
+    // first load until the user touches either checkbox.
+    const legacy = item.autoSpecLines;
+    const onY = item.autoSpecLinesY ?? legacy ?? false;
+    const onX = item.autoSpecLinesX ?? legacy ?? false;
     const yName = encoding.y?.name;
     const xName = encoding.x?.name;
-    const yLimits = item.autoSpecLines && yName ? specByCol[yName] : undefined;
-    const xLimits = item.autoSpecLines && xName ? specByCol[xName] : undefined;
+    const yLimits = onY && yName ? specByCol[yName] : undefined;
+    const xLimits = onX && xName ? specByCol[xName] : undefined;
     const autoSpecY = yLimits ? { ...yLimits, colName: yName } : undefined;
     const autoSpecX = xLimits ? { ...xLimits, colName: xName } : undefined;
     return {
@@ -422,7 +427,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       yAxis: item.yAxis,
       xAxis: item.xAxis,
     };
-  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.refLinesX, item.yAxis, item.xAxis, item.autoSpecLines, specByCol]);
+  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.refLinesX, item.yAxis, item.xAxis, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, specByCol]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -489,15 +494,30 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     [item.id, updateItem, markDirty],
   );
 
-  /** Toggle the "auto-show spec limits" overlay. When enabled, the
-   *  renderer pulls LSL / Target / USL out of the active Y column's
-   *  `spec` extras and draws them as red / green dashed reference
-   *  lines. The lines are NOT folded into `refLinesY` — the user
-   *  controls the overlay globally via this flag, leaving the
+  /** Toggle the auto spec-limit overlay on the **Y axis** only.
+   *  When enabled, the renderer pulls LSL / Target / USL out of the
+   *  Y column's `spec` extras and draws them as red / green dashed
+   *  reference lines. X is unaffected — it has its own
+   *  `setAutoSpecLinesX` toggle. The flag is per-axis so a chart with
+   *  spec extras on both columns can show / hide each overlay
+   *  independently. The lines are NOT folded into `refLinesY` — the
+   *  user controls the overlay globally via this flag, leaving the
    *  per-line editor below dedicated to manual annotations. */
-  const setAutoSpecLines = useCallback(
+  const setAutoSpecLinesY = useCallback(
     (next: boolean) => {
-      updateItem(item.id, { autoSpecLines: next });
+      updateItem(item.id, { autoSpecLinesY: next });
+      markDirty();
+    },
+    [item.id, updateItem, markDirty],
+  );
+
+  /** Toggle the auto spec-limit overlay on the **X axis** only.
+   *  Mirror of `setAutoSpecLinesY` — reads the X column's `extras.spec`
+   *  metadata. Independent of the Y flag. The renderer silently skips
+   *  the overlay when X is bound to a category / row-index column. */
+  const setAutoSpecLinesX = useCallback(
+    (next: boolean) => {
+      updateItem(item.id, { autoSpecLinesX: next });
       markDirty();
     },
     [item.id, updateItem, markDirty],
@@ -605,10 +625,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  Intentionally NOT swapped:
    *    - color / size / overlay / wrap / elements / styles / hiddenGroups /
    *      filters / smootherLambda — these are orientation-agnostic.
-   *    - autoSpecLines — the global toggle stays as-is. The auto-spec
-   *      overlay reads each axis's bound column independently, so after
-   *      the swap the X / Y spec snapshots simply trade places along
-   *      with the encoding. No manual fix-up needed.
+   *    - autoSpecLinesY / autoSpecLinesX swap with each other (mirror
+   *      of refLinesY / refLinesX) so the rotated chart shows the same
+   *      spec overlay on the same column as before the swap.
    *
    *  Done as a single atomic `updateItem` so the encoding, axis configs,
    *  and ref lines re-render in lockstep — partial swaps would briefly
@@ -652,9 +671,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       yAxis: item.xAxis,
       refLinesX: nextRefLinesX,
       refLinesY: nextRefLinesY,
+      // Swap per-axis auto-spec flags too. We resolve the legacy
+      // `autoSpecLines` fallback at the read site so the swap stores
+      // explicit values — from this point on the per-axis fields are
+      // canonical (legacy field becomes shadowed).
+      autoSpecLinesY: item.autoSpecLinesX ?? item.autoSpecLines,
+      autoSpecLinesX: item.autoSpecLinesY ?? item.autoSpecLines,
     });
     markDirty();
-  }, [item.id, item.encoding, item.xAxis, item.yAxis, item.refLinesX, item.refLinesY, updateItem, markDirty]);
+  }, [item.id, item.encoding, item.xAxis, item.yAxis, item.refLinesX, item.refLinesY, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, updateItem, markDirty]);
 
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
@@ -943,8 +968,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           axis="y"
           refLines={item.refLinesY ?? []}
           setRefLines={setRefLinesY}
-          autoSpecLines={!!item.autoSpecLines}
-          setAutoSpecLines={setAutoSpecLines}
+          autoSpecLines={!!(item.autoSpecLinesY ?? item.autoSpecLines)}
+          setAutoSpecLines={setAutoSpecLinesY}
           resolvedAutoSpec={spec.autoSpecY}
           autoSpecColName={encoding.y?.name}
           axisConfig={item.yAxis}
@@ -954,19 +979,21 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       )}
       {/* X-axis settings dialog. Opened by double-clicking the X axis.
           Mirrors the Y dialog — including the Reference Lines category
-          AND the auto spec-limit overlay sourced from the X column's
-          `extras.spec` metadata. X and Y are fully symmetric: whichever
-          axis holds a value-type column with spec extras renders the
-          overlay when the toggle is on. The renderer silently skips X
-          ref lines when the X axis is categorical (no meaningful
-          position), so the editor stays available throughout. */}
+          AND its OWN independent auto spec-limit overlay sourced from
+          the X column's `extras.spec` metadata. X and Y are fully
+          symmetric: each axis has its own `autoSpecLinesX` /
+          `autoSpecLinesY` flag, so a chart with spec extras on both
+          columns can show / hide each overlay independently. The
+          renderer silently skips X ref lines when the X axis is
+          categorical (no meaningful position), so the editor stays
+          available throughout. */}
       {xAxisDialogOpen && (
         <AxisSettingsDialog
           axis="x"
           refLines={item.refLinesX ?? []}
           setRefLines={setRefLinesX}
-          autoSpecLines={!!item.autoSpecLines}
-          setAutoSpecLines={setAutoSpecLines}
+          autoSpecLines={!!(item.autoSpecLinesX ?? item.autoSpecLines)}
+          setAutoSpecLines={setAutoSpecLinesX}
           resolvedAutoSpec={spec.autoSpecX}
           autoSpecColName={encoding.x?.name}
           axisConfig={item.xAxis}
