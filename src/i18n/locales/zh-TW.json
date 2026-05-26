@@ -421,6 +421,10 @@
     },
     "frequency": "頻次",
     "startOver": "重新開始",
+    "swapXY": {
+      "label": "交換 X / Y",
+      "tooltip": "完全交換 X 軸與 Y 軸：編碼、分面槽位、軸設定都互換，如同把圖旋轉 90°。"
+    },
     "datasetHeader": "{{name}} · {{n}} 欄",
     "scatterSection": "散佈",
     "sizeEnc": "大小編碼",

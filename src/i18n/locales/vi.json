@@ -421,6 +421,10 @@
     },
     "frequency": "Tần suất",
     "startOver": "Bắt đầu lại",
+    "swapXY": {
+      "label": "Hoán đổi X & Y",
+      "tooltip": "Hoán đổi hoàn toàn trục X và Y (mã hóa, rãnh chia bảng, cài đặt trục) — như xoay biểu đồ 90°."
+    },
     "datasetHeader": "{{name}} · {{n}} cột",
     "scatterSection": "Điểm",
     "sizeEnc": "Mã hóa kích thước",

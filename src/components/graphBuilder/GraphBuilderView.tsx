@@ -573,6 +573,46 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     setElements([{ kind: "points", enabled: true }]);
   };
 
+  /** Swap X and Y completely — encoding (axis + facet) plus axis
+   *  settings. The chart should read as if it had been rotated 90°.
+   *
+   *  Swapped:
+   *    - encoding.x ↔ encoding.y          (axis content)
+   *    - encoding.groupX ↔ encoding.groupY (facet rails)
+   *    - xAxis ↔ yAxis                     (range / ticks / inverse / gridlines)
+   *
+   *  Intentionally NOT swapped:
+   *    - color / size / overlay / wrap / elements / styles / hiddenGroups /
+   *      filters / smootherLambda — these are orientation-agnostic.
+   *    - refLinesY / autoSpecLines — there is no `refLinesX` field, so the
+   *      reference lines stay on the Y axis (now showing the old X's data).
+   *      The user can manually delete or re-add them after a swap if the
+   *      old values no longer apply.
+   *
+   *  Done as a single atomic `updateItem` so the encoding and axis configs
+   *  re-render in lockstep — partial swaps would briefly mismatch and could
+   *  trigger an inverse / range guard from the wrong axis. */
+  const swapXY = useCallback(() => {
+    const enc = item.encoding;
+    const nextEncoding = { ...enc };
+    // x ↔ y
+    if (enc.x !== undefined) nextEncoding.y = enc.x;
+    else delete nextEncoding.y;
+    if (enc.y !== undefined) nextEncoding.x = enc.y;
+    else delete nextEncoding.x;
+    // groupX ↔ groupY
+    if (enc.groupX !== undefined) nextEncoding.groupY = enc.groupX;
+    else delete nextEncoding.groupY;
+    if (enc.groupY !== undefined) nextEncoding.groupX = enc.groupY;
+    else delete nextEncoding.groupX;
+    updateItem(item.id, {
+      encoding: nextEncoding,
+      xAxis: item.yAxis,
+      yAxis: item.xAxis,
+    });
+    markDirty();
+  }, [item.id, item.encoding, item.xAxis, item.yAxis, updateItem, markDirty]);
+
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
   );
@@ -583,6 +623,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       <div className="gb-toolbar">
         <div className="gb-toolbar-left">
           <button className="gb-tb-btn" onClick={startOver}>{t("graph.startOver")}</button>
+          <button
+            className="gb-tb-btn"
+            onClick={swapXY}
+            title={t("graph.swapXY.tooltip", {
+              defaultValue: "Swap the X and Y axes (encoding, facet rail, and axis settings) — like rotating the chart 90°.",
+            })}
+          >
+            {t("graph.swapXY.label", { defaultValue: "Swap X & Y" })}
+          </button>
           <button
             className={`gb-tb-btn${showFilters ? " gb-tb-btn-active" : ""}`}
             onClick={() => setShowFilters((v) => !v)}

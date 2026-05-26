@@ -421,6 +421,10 @@
     },
     "frequency": "频次",
     "startOver": "重新开始",
+    "swapXY": {
+      "label": "交换 X / Y",
+      "tooltip": "完全交换 X 轴与 Y 轴：编码、分面槽位、轴设置都互换，如同把图旋转 90°。"
+    },
     "datasetHeader": "{{name}} · {{n}} 列",
     "scatterSection": "散点",
     "sizeEnc": "尺寸编码",
