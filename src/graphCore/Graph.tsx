@@ -203,26 +203,39 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     };
     zr.on("dblclick", zrHandler);
 
-    // ----- Y / X axis drag-zoom & drag-pan ---------------------------
-    // JMP-style direct manipulation on the axis strip:
-    //   • grab the OUTER thirds of the axis (the two ends) and drag to
-    //     stretch/shrink that end of the range — zoom in/out from one
-    //     side without moving the other,
-    //   • grab the MIDDLE third and drag to pan: both bounds shift by
-    //     the same amount so the visible window scrolls.
-    // During the drag we preview by calling `setOption` directly on the
-    // ECharts instance (no React rerender per frame, so the gesture
-    // stays at 60fps); on mouseup we read the final bounds back from
-    // the chart and emit them through `onAxisRangeChange` so the
-    // builder pins them into project state and they survive future
-    // re-renders. Skipped on category axes (min/max don't apply) and
-    // on inverted axes (sign conventions would need flipping; rare
-    // enough to defer).
+    // ----- Drag-zoom / drag-pan via native pointer events ------------
+    // Mental model the user asked for: the canvas is a *viewport* onto
+    // an infinite graph. Grabbing the EDGE of the canvas (the axis
+    // strip) lets you stretch / shrink the visible range — the data
+    // point under your cursor follows your cursor outward. Grabbing
+    // the MIDDLE of the canvas (the chart body) pans both axes — the
+    // data slides under your cursor in the direction you drag. Within
+    // an axis strip the outer thirds are single-end zoom (one bound
+    // moves, the other is anchored) and the middle third pans that
+    // axis only.
     //
-    // The pixel-to-data sensitivity uses the GRID rect's width / height
-    // so the resulting drag matches what the user sees on screen —
-    // dragging one full grid-height vertically moves the Y range by
-    // exactly one full span.
+    // We use NATIVE PointerEvents on the container with
+    // `setPointerCapture` so the gesture survives the cursor leaving
+    // the chart and so `pointerup` always fires (the previous
+    // implementation used ZRender mousedown + window mouseup and would
+    // occasionally drop the release — "鼠标点击后无法释放"). Capture is
+    // only taken AFTER a 3-pixel movement threshold, so a click that
+    // doesn't move (the first half of a double-click, a series click,
+    // an ECharts tooltip hover) still propagates to ZRender normally.
+    //
+    // Sign convention follows the cursor: dragging an axis end OUTWARD
+    // (away from the chart center) is "拉大" → the visible range
+    // SHRINKS so each remaining unit takes more screen space (zoom in).
+    // Dragging the chart middle drags the data — the value under your
+    // cursor stays approximately under your cursor throughout.
+    //
+    // The pixel-to-data sensitivity uses the GRID rect's width / height,
+    // so a one-pixel drag changes the bound(s) by exactly one pixel's
+    // worth of data — the linearization of true "cursor-follow" math
+    // (which would explode near the anchored edge). Skipped on category
+    // axes (numeric min/max meaningless) and on inverted axes (sign
+    // flip not handled).
+    const el = ref.current;
     type GridLike = { x: number; y: number; width: number; height: number } | undefined;
     const getGridRect = (): GridLike => {
       try {
@@ -257,188 +270,258 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         return false;
       }
     };
-    type Grip = {
-      axis: "x" | "y";
-      mode: "min" | "max" | "pan";
-      startMin: number;
-      startMax: number;
-      axisPxRange: number;
-    };
-    /** Classify a panel-local pixel into which axis strip (if any) it
-     *  sits in and which third of that strip (min / pan / max). Returns
-     *  the sensitivity-calculation inputs the drag handler needs, or
-     *  null when the gesture doesn't apply (outside strips, category
-     *  axis, inverted axis, conversion failure). */
-    const getAxisGrip = (px: number, py: number): Grip | null => {
+    // Read current numeric bounds for one axis by sampling the data
+    // values at the two grid corners — works whether the user has
+    // pinned a manual min/max or is on auto-fit.
+    const readAxisBounds = (which: "x" | "y"): { min: number; max: number } | null => {
+      if (getAxisType(which) === "category") return null;
+      if (isAxisInverse(which)) return null;
       const r = getGridRect();
       if (!r) return null;
-      const el = ref.current;
-      const panelH = el?.clientHeight ?? 0;
-      // Y axis strip: LEFT of the grid (axis labels + line), vertically
-      // clamped to the grid so a click far above / below doesn't
-      // accidentally start a drag.
-      const inYStrip = px >= 0 && px < r.x && py >= r.y && py <= r.y + r.height;
-      // X axis strip: BELOW the grid (ticks + labels + optional name),
-      // horizontally clamped to the grid range.
-      const inXStrip = py > r.y + r.height && py <= panelH && px >= r.x && px <= r.x + r.width;
-      if (!inYStrip && !inXStrip) return null;
-      const which: "x" | "y" = inYStrip ? "y" : "x";
-      const axisType = getAxisType(which);
-      if (axisType === "category") return null;
-      if (isAxisInverse(which)) return null;
-      // Zone via screen-space position relative to the axis pixel
-      // extent. Outer 30% on each end = handle, inner 40% = pan.
-      const pxAlongAxis = which === "y" ? py - r.y : px - r.x;
-      const span = which === "y" ? r.height : r.width;
-      const t = pxAlongAxis / span; // 0..1
-      let mode: "min" | "max" | "pan";
-      if (which === "y") {
-        // Y screen: top = max, bottom = min.
-        if (t < 0.3) mode = "max";
-        else if (t > 0.7) mode = "min";
-        else mode = "pan";
-      } else {
-        // X screen: left = min, right = max.
-        if (t < 0.3) mode = "min";
-        else if (t > 0.7) mode = "max";
-        else mode = "pan";
-      }
-      // Read current data min/max via convertFromPixel at the grid
-      // corners. ECharts' single-axis finder accepts a number along
-      // that axis and returns the data value.
-      let topOrLeftVal: unknown;
-      let botOrRightVal: unknown;
       try {
-        if (which === "y") {
-          topOrLeftVal = inst.convertFromPixel({ yAxisIndex: 0 }, r.y);
-          botOrRightVal = inst.convertFromPixel({ yAxisIndex: 0 }, r.y + r.height);
-        } else {
-          topOrLeftVal = inst.convertFromPixel({ xAxisIndex: 0 }, r.x);
-          botOrRightVal = inst.convertFromPixel({ xAxisIndex: 0 }, r.x + r.width);
-        }
+        const finder = which === "y" ? { yAxisIndex: 0 } : { xAxisIndex: 0 };
+        const aPx = which === "y" ? r.y : r.x;
+        const bPx = which === "y" ? r.y + r.height : r.x + r.width;
+        const a = Number(inst.convertFromPixel(finder, aPx));
+        const b = Number(inst.convertFromPixel(finder, bPx));
+        // y: top pixel = max, bottom pixel = min. x: left = min, right = max.
+        const mx = which === "y" ? a : b;
+        const mn = which === "y" ? b : a;
+        if (!Number.isFinite(mn) || !Number.isFinite(mx) || mx <= mn) return null;
+        return { min: mn, max: mx };
       } catch {
         return null;
       }
-      const startMax = which === "y" ? Number(topOrLeftVal) : Number(botOrRightVal);
-      const startMin = which === "y" ? Number(botOrRightVal) : Number(topOrLeftVal);
-      if (!Number.isFinite(startMin) || !Number.isFinite(startMax) || startMax <= startMin) {
-        return null;
-      }
-      return { axis: which, mode, startMin, startMax, axisPxRange: span };
     };
 
-    // Drag state machine. The pointer-move and pointer-up handlers live
-    // on `window` while a drag is active so the gesture continues even
-    // if the cursor briefly leaves the chart panel.
-    type DragState = Grip & { startEventPx: number; moved: boolean; lastMin: number; lastMax: number };
-    let dragState: DragState | null = null;
-    const DRAG_THRESHOLD_PX = 3;
+    type DragMode =
+      | "y-min" | "y-max" | "y-pan"
+      | "x-min" | "x-max" | "x-pan"
+      | "xy-pan";
+    type Grip = {
+      mode: DragMode;
+      startXMin?: number; startXMax?: number; xPxRange?: number;
+      startYMin?: number; startYMax?: number; yPxRange?: number;
+    };
+    /** Classify a panel-local pixel into a drag mode. */
+    const getAxisGrip = (px: number, py: number): Grip | null => {
+      const r = getGridRect();
+      if (!r) return null;
+      const panelH = el?.clientHeight ?? 0;
+      const panelW = el?.clientWidth ?? 0;
+      const inYStrip = px >= 0 && px < r.x && py >= r.y && py <= r.y + r.height;
+      const inXStrip = py > r.y + r.height && py <= panelH && px >= r.x && px <= r.x + r.width;
+      const inBody = px >= r.x && px <= r.x + r.width && py >= r.y && py <= r.y + r.height && px <= panelW;
+      if (inYStrip) {
+        const yb = readAxisBounds("y");
+        if (!yb) return null;
+        const t = (py - r.y) / r.height;
+        // y screen: top (t≈0) = max end, bottom (t≈1) = min end
+        const mode: DragMode = t < 0.25 ? "y-max" : t > 0.75 ? "y-min" : "y-pan";
+        return { mode, startYMin: yb.min, startYMax: yb.max, yPxRange: r.height };
+      }
+      if (inXStrip) {
+        const xb = readAxisBounds("x");
+        if (!xb) return null;
+        const t = (px - r.x) / r.width;
+        const mode: DragMode = t < 0.25 ? "x-min" : t > 0.75 ? "x-max" : "x-pan";
+        return { mode, startXMin: xb.min, startXMax: xb.max, xPxRange: r.width };
+      }
+      if (inBody) {
+        const xb = readAxisBounds("x");
+        const yb = readAxisBounds("y");
+        if (!xb || !yb) return null;
+        return {
+          mode: "xy-pan",
+          startXMin: xb.min, startXMax: xb.max, xPxRange: r.width,
+          startYMin: yb.min, startYMax: yb.max, yPxRange: r.height,
+        };
+      }
+      return null;
+    };
 
-    const zrMouseDown = (e: { offsetX: number; offsetY: number; event?: { preventDefault?: () => void } }) => {
+    const DRAG_THRESHOLD_PX = 3;
+    type DragState = Grip & {
+      startPx: number; startPy: number;
+      pointerId: number;
+      moved: boolean;
+      captured: boolean;
+      lastXMin?: number; lastXMax?: number;
+      lastYMin?: number; lastYMax?: number;
+    };
+    let dragState: DragState | null = null;
+
+    const cursorForMode = (mode: DragMode, active: boolean): string => {
+      switch (mode) {
+        case "y-min":
+        case "y-max":
+          return "row-resize";
+        case "x-min":
+        case "x-max":
+          return "col-resize";
+        case "y-pan":
+        case "x-pan":
+        case "xy-pan":
+          return active ? "grabbing" : "grab";
+      }
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
       if (!onAxisRangeChangeRef.current) return;
-      const grip = getAxisGrip(e.offsetX, e.offsetY);
+      const rect = el.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      const grip = getAxisGrip(px, py);
       if (!grip) return;
       dragState = {
         ...grip,
-        startEventPx: grip.axis === "y" ? e.offsetY : e.offsetX,
+        startPx: px,
+        startPy: py,
+        pointerId: e.pointerId,
         moved: false,
-        lastMin: grip.startMin,
-        lastMax: grip.startMax,
+        captured: false,
+        lastXMin: grip.startXMin,
+        lastXMax: grip.startXMax,
+        lastYMin: grip.startYMin,
+        lastYMax: grip.startYMax,
       };
-      // Avoid the browser highlighting page text while the mouse moves
-      // across the chart strip during a drag.
-      e.event?.preventDefault?.();
-      window.addEventListener("mousemove", onWinMove);
-      window.addEventListener("mouseup", onWinUp);
+      // Don't preventDefault or capture yet — wait until threshold is
+      // crossed so a stationary click still flows through to ECharts
+      // (tooltip dwell, series click, dblclick-to-open-dialog).
     };
 
-    const onWinMove = (e: MouseEvent) => {
+    const onPointerMove = (e: PointerEvent) => {
+      // Hover cursor when not dragging — gives the user a hint about
+      // what mode the next mousedown will start.
+      if (!dragState) {
+        const rect = el.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+        const g = getAxisGrip(px, py);
+        el.style.cursor = g ? cursorForMode(g.mode, false) : "";
+        return;
+      }
+      const st = dragState;
+      if (e.pointerId !== st.pointerId) return;
+      const rect = el.getBoundingClientRect();
+      const curPx = e.clientX - rect.left;
+      const curPy = e.clientY - rect.top;
+      const dx = curPx - st.startPx;
+      const dy = curPy - st.startPy;
+      if (!st.moved && Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
+        st.moved = true;
+        el.style.cursor = cursorForMode(st.mode, true);
+        // Once we know it's a drag (not a click), claim the pointer so
+        // pointerup fires on us even if the cursor leaves the panel.
+        try { el.setPointerCapture(st.pointerId); st.captured = true; } catch { /* ignore */ }
+        e.preventDefault();
+      }
+      if (!st.moved) return;
+      // Sign convention: cursor-follow. Dragging right pulls the X
+      // values left under the cursor (so xmin/xmax DECREASE on right
+      // drag). Dragging down pulls the Y values up (so ymin/ymax
+      // INCREASE on down drag because data-y increases upward).
+      // For single-end handles, only the named bound moves; the
+      // OPPOSITE end stays anchored. This is what makes outward drag
+      // feel like "拉大 / stretch the graph outward" → fewer units
+      // visible → zoom in.
+      const patch: { xAxis?: Record<string, unknown>; yAxis?: Record<string, unknown> } = {};
+      const isYMode = st.mode === "y-min" || st.mode === "y-max" || st.mode === "y-pan" || st.mode === "xy-pan";
+      const isXMode = st.mode === "x-min" || st.mode === "x-max" || st.mode === "x-pan" || st.mode === "xy-pan";
+      if (isYMode && st.startYMin !== undefined && st.startYMax !== undefined && st.yPxRange) {
+        const ySpan = st.startYMax - st.startYMin;
+        const ySf = ySpan / st.yPxRange;
+        const yDelta = dy * ySf; // drag DOWN → both bounds increase
+        let newYMin = st.startYMin;
+        let newYMax = st.startYMax;
+        if (st.mode === "y-min") newYMin = st.startYMin + yDelta;
+        else if (st.mode === "y-max") newYMax = st.startYMax + yDelta;
+        else { newYMin = st.startYMin + yDelta; newYMax = st.startYMax + yDelta; }
+        const floor = Math.abs(ySpan) * 0.001;
+        if (newYMax - newYMin < floor) {
+          if (st.mode === "y-min") newYMin = newYMax - floor;
+          else if (st.mode === "y-max") newYMax = newYMin + floor;
+        }
+        st.lastYMin = newYMin;
+        st.lastYMax = newYMax;
+        patch.yAxis = { min: newYMin, max: newYMax, scale: false };
+      }
+      if (isXMode && st.startXMin !== undefined && st.startXMax !== undefined && st.xPxRange) {
+        const xSpan = st.startXMax - st.startXMin;
+        const xSf = xSpan / st.xPxRange;
+        const xDelta = -dx * xSf; // drag RIGHT → both bounds decrease
+        let newXMin = st.startXMin;
+        let newXMax = st.startXMax;
+        if (st.mode === "x-min") newXMin = st.startXMin + xDelta;
+        else if (st.mode === "x-max") newXMax = st.startXMax + xDelta;
+        else { newXMin = st.startXMin + xDelta; newXMax = st.startXMax + xDelta; }
+        const floor = Math.abs(xSpan) * 0.001;
+        if (newXMax - newXMin < floor) {
+          if (st.mode === "x-min") newXMin = newXMax - floor;
+          else if (st.mode === "x-max") newXMax = newXMin + floor;
+        }
+        st.lastXMin = newXMin;
+        st.lastXMax = newXMax;
+        patch.xAxis = { min: newXMin, max: newXMax, scale: false };
+      }
+      if (patch.xAxis || patch.yAxis) inst.setOption(patch);
+    };
+
+    const finishDrag = (commit: boolean) => {
       const st = dragState;
       if (!st) return;
-      const el = ref.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const curPx = st.axis === "y" ? e.clientY - rect.top : e.clientX - rect.left;
-      const pixelDelta = curPx - st.startEventPx;
-      if (!st.moved && Math.abs(pixelDelta) >= DRAG_THRESHOLD_PX) st.moved = true;
-      if (!st.moved) return;
-      const span = st.startMax - st.startMin;
-      const sf = span / st.axisPxRange;
-      let newMin = st.startMin;
-      let newMax = st.startMax;
-      if (st.axis === "y") {
-        // Y screen: top = max, bottom = min. Drag DOWN = +pixelDelta.
-        if (st.mode === "min") {
-          // Bottom (min) handle: drag DOWN → stretches axis to lower
-          // values → min decreases.
-          newMin = st.startMin - pixelDelta * sf;
-        } else if (st.mode === "max") {
-          // Top (max) handle: drag DOWN → shrinks axis from top → max
-          // decreases. Drag UP → max increases.
-          newMax = st.startMax - pixelDelta * sf;
-        } else {
-          // Pan: content follows finger → dragging DOWN shows higher
-          // values at the top → both bounds INCREASE.
-          newMin = st.startMin + pixelDelta * sf;
-          newMax = st.startMax + pixelDelta * sf;
-        }
-      } else {
-        // X screen: left = min, right = max. Drag RIGHT = +pixelDelta.
-        if (st.mode === "min") {
-          // Left (min) handle: drag RIGHT (inward) → min increases
-          // (zoom in from left). Drag LEFT (outward) → min decreases.
-          newMin = st.startMin + pixelDelta * sf;
-        } else if (st.mode === "max") {
-          // Right (max) handle: drag RIGHT (outward) → max increases.
-          newMax = st.startMax + pixelDelta * sf;
-        } else {
-          // Pan: content follows finger → dragging RIGHT shows lower
-          // values on the right → both bounds DECREASE.
-          newMin = st.startMin - pixelDelta * sf;
-          newMax = st.startMax - pixelDelta * sf;
-        }
-      }
-      // Block over-compression: don't let either handle cross over the
-      // other. Snap to a tiny floor at 0.1% of the original span so the
-      // chart never tries to render an inverted / collapsed range.
-      const minSpan = Math.abs(span) * 0.001;
-      if (newMax - newMin < minSpan) {
-        if (st.mode === "min") newMin = newMax - minSpan;
-        else if (st.mode === "max") newMax = newMin + minSpan;
-        else return; // pan can't collapse; skip the no-op frame.
-      }
-      st.lastMin = newMin;
-      st.lastMax = newMax;
-      // Live preview — setOption merges (default) so we keep all the
-      // other axis settings (lineStyle, splitLine, …) untouched.
-      // `scale: false` keeps ECharts from padding the bounds outward.
-      if (st.axis === "y") {
-        inst.setOption({ yAxis: { min: newMin, max: newMax, scale: false } });
-      } else {
-        inst.setOption({ xAxis: { min: newMin, max: newMax, scale: false } });
-      }
-    };
-
-    const onWinUp = () => {
-      const st = dragState;
       dragState = null;
-      window.removeEventListener("mousemove", onWinMove);
-      window.removeEventListener("mouseup", onWinUp);
-      // Don't commit if the user clicked but didn't drag (e.g., the
-      // gesture was actually the first half of a double-click that
-      // opens the dialog). Pixel-threshold guard above keeps `moved`
-      // false in that case.
-      if (!st || !st.moved) return;
-      onAxisRangeChangeRef.current?.(st.axis, st.lastMin, st.lastMax);
+      if (st.captured) {
+        try { el.releasePointerCapture(st.pointerId); } catch { /* ignore */ }
+      }
+      el.style.cursor = "";
+      if (!commit || !st.moved) return;
+      const cb = onAxisRangeChangeRef.current;
+      if (!cb) return;
+      const emitsY = st.mode === "y-min" || st.mode === "y-max" || st.mode === "y-pan" || st.mode === "xy-pan";
+      const emitsX = st.mode === "x-min" || st.mode === "x-max" || st.mode === "x-pan" || st.mode === "xy-pan";
+      if (emitsX && st.lastXMin !== undefined && st.lastXMax !== undefined) {
+        cb("x", st.lastXMin, st.lastXMax);
+      }
+      if (emitsY && st.lastYMin !== undefined && st.lastYMax !== undefined) {
+        cb("y", st.lastYMin, st.lastYMax);
+      }
     };
 
-    zr.on("mousedown", zrMouseDown);
+    const onPointerUp = (e: PointerEvent) => {
+      if (!dragState || e.pointerId !== dragState.pointerId) return;
+      finishDrag(true);
+    };
+    const onPointerCancel = (e: PointerEvent) => {
+      if (!dragState || e.pointerId !== dragState.pointerId) return;
+      finishDrag(false);
+    };
+    const onPointerLeave = () => {
+      if (!dragState) el.style.cursor = "";
+    };
+    // Global safety net: if for any reason we miss the pointerup
+    // (window blur, devtools steal, etc.), end the drag on the next
+    // global mouseup so the cursor never gets "stuck".
+    const onWindowMouseUpSafety = () => {
+      if (dragState && !dragState.captured) finishDrag(true);
+    };
+
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerCancel);
+    el.addEventListener("pointerleave", onPointerLeave);
+    window.addEventListener("mouseup", onWindowMouseUpSafety);
 
     return () => {
       zr.off("dblclick", zrHandler);
-      zr.off("mousedown", zrMouseDown);
-      window.removeEventListener("mousemove", onWinMove);
-      window.removeEventListener("mouseup", onWinUp);
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerCancel);
+      el.removeEventListener("pointerleave", onPointerLeave);
+      window.removeEventListener("mouseup", onWindowMouseUpSafety);
       ro.disconnect();
       inst.dispose();
       chartRef.current = null;
