@@ -9,6 +9,7 @@
 - [1. `Math.min/max(...arr)` 在大数组上抛 RangeError 并白屏](#1-mathminmaxarr-在大数组上抛-rangeerror-并白屏)
 - [2. DualListPicker Shift 多选会单选 / 越界 / 白屏](#2-duallistpicker-shift-多选会单选--越界--白屏)
 - [3. React Hooks 顺序 —— `if (!data) return` 之后不能再放 hook](#3-react-hooks-顺序--if-data-return-之后不能再放-hook)
+- [4. ECharts axis drag-zoom：从"飞走"到"丝滑"踩到的几个坑](#4-echarts-axis-drag-zoom从飞走到丝滑踩到的几个坑)
 - [附录：通用排查思路](#附录通用排查思路)
 
 ---
@@ -138,6 +139,84 @@ if (!data) return <div>{t("dataTable.loading")}</div>;
 > 在 `if (!data) return ...` 这一行**之前**，必须把所有 hook 调用全部声明好。条件返回之后**一行 hook 都不能加**。
 
 历史上这个 bug 已经在 `useRef` / `useEffect` / `useMemo` 上各重犯过一次，**编辑 `DataTableView.tsx` 时务必检查**。
+
+---
+
+## 4. ECharts axis drag-zoom：从"飞走"到"丝滑"踩到的几个坑
+
+JMP 风格的"在轴上拖拽缩放 / 平移"看起来就是几行 `setOption`，但实现过程中陆续踩了 5 个坑。每个症状都很相似（**不跟手 / 跳变 / 卡顿**），根因却各不一样，按以下顺序排查最高效。
+
+### 4.1 ZRender 事件不可靠 → 用原生 PointerEvent + setPointerCapture
+
+**现象**：拖到一半松开鼠标，画布以为还在拖；或者拖出画布外再松开，事件丢失，光标"卡住"在 `grabbing`。
+
+**根因**：`inst.getZr().on("mousedown", ...)` 在跨 iframe / 失焦 / DevTools 偷焦时会丢 `mouseup`。
+
+**修复**：直接在容器 DOM 上注册 `pointerdown / pointermove / pointerup / pointercancel`，跨过 3 px 阈值后调用 `el.setPointerCapture(pointerId)`。再加一道 `window` 级 `mouseup` 兜底，即便 capture 失败也能正常释放。
+
+### 4.2 残留的显式 `interval` 让刻度密度左右不对称
+
+**现象**：往一个方向拖只有 5 条刻度线，反方向拖突然变成 30+ 条。
+
+**根因**：基础 option 里写了 `interval: fit.interval`（按**原始数据范围**算出的步长）。`setOption` 的 merge 会保留这个 `interval`，但 `min/max` 已经被拖到新范围 —— 范围放大时 step 太小、缩小时 step 太大。
+
+**修复**：基础 option **不要写 `interval`**，让 ECharts 在每次 `min/max` 变化时自动重算"漂亮"的 tick step。只有用户在对话框里显式指定 `tickInterval` 时才下发 `interval`。
+
+### 4.3 Snap-to-grid 让画面只在跨过刻度线时才动
+
+**现象**：鼠标连续移动，画面却一段一段地跳；像卡顿其实是离散步进。
+
+**根因**：为了让 tick label 永远落在"漂亮"的数字（0.1, 0.2, 0.3）上，把 `min` 也四舍五入到 step 的倍数。结果只有当鼠标跨过半个 step（~20 px）时画面才更新。
+
+**修复**：根本不用 snap —— ECharts 的 auto-tick 已经会在 `[min, max]` 里挑漂亮位置（`{1, 2, 5} × 10^k` 的倍数），跟 `min` 是不是整数无关。bounds 连续跟随光标即可。
+
+### 4.4 120 Hz pointer 事件把 setOption 压垮
+
+**现象**：拖动手感整体偏黏，越快越糊。
+
+**根因**：高刷鼠标 `pointermove` 触发 120-240 次/秒，每次都同步 `setOption`，ECharts 来不及合帧。
+
+**修复**：用 `requestAnimationFrame` 合并到每帧最多一次 `setOption`，再加 `{ lazyUpdate: true, silent: true }`：
+
+```ts
+let pendingPatch = null, scheduledFrame = 0;
+const flushPatch = () => {
+  scheduledFrame = 0;
+  if (!pendingPatch) return;
+  inst.setOption({ ...pendingPatch, animation: false }, { lazyUpdate: true, silent: true });
+  pendingPatch = null;
+};
+// pointermove handler:
+pendingPatch = patch;
+if (!scheduledFrame) scheduledFrame = requestAnimationFrame(flushPatch);
+```
+
+记得在 `finishDrag` / `useEffect` cleanup 里 `cancelAnimationFrame` 并 flush 最后一帧，否则提交的 bounds 会比最后渲染的差一帧。
+
+### 4.5 ECharts 默认的 update tween 让形状滞后游标 ~300 ms
+
+**现象**：折线图的折线实时跟手，但同一张图里的散点、箱线图矩形、坐标轴标签全部慢半拍 —— 给人"画面比鼠标慢半秒"的错觉。
+
+**根因**：`animationDurationUpdate` 默认 ~300 ms。每帧 `setOption` 重新触发一次 300 ms 的 tween：每个形状还在补完上一帧的 tween，又被告知去新的目标 → 永远在追逐光标。折线之所以例外，是因为 ECharts 直接根据投影点重画 path 的 `d`，**没有 per-shape transform 动画**。
+
+**诊断技巧**：如果**只有 line 类系列跟手、其它形状滞后**，几乎可以肯定是 update animation 在作祟，**不要先去找 setOption 性能问题**。
+
+**修复**：拖动时 patch 里加 `animation: false`（见 4.4 代码）。松手后父组件触发的 `setOption(option, true)`（`notMerge=true`）会把 `animation` 恢复到默认值，正常的对话框编辑还是带动画的。
+
+### 4.6 附带的相关坑：`axisLine.onZero` 让坐标轴跟着数据 0 漂
+
+**现象**：把 0 拖到画面上方后，X 轴轴线也跟着浮到了中间，整张图的"边框"在数据里乱串。
+
+**根因**：ECharts 的 `xAxis.axisLine.onZero` 默认 `true` —— 把 X 轴线钉在数据 `y=0`，可见范围里有 0 时就跟 0 走（`yAxis` 同理）。
+
+**修复**：`buildAxisCommon` 里给 `axisLine` 加 `onZero: false`，把坐标轴线永远固定在 grid 的下边 / 左边（chart-frame 风格，跟 JMP / Plotly / matplotlib 一致）。
+
+### 通用经验
+
+- 任何"自动布局"的库（ECharts、AG-Grid …）在**高频实时交互**场景下，都要专门检查它的 **animation / batching / event-dispatch** 开关；默认值往往是为"低频更新 + 漂亮过渡"调的。
+- 排查"画面跟不上"的标准顺序：① 是不是离散步进？② 是不是事件被压垮？③ 是不是有看不见的 tween？前两条治输入，第三条治输出。
+- 不同系列类型对动画的敏感度差很多 —— **拿 line 当对照组**最容易区分"渲染慢"和"动画慢"。
+- 不要在 base option 里塞计算出来的"派生值"（`interval`、`onZero` 隐式默认、tick 起点等）—— `setOption` 的 merge 语义会让这些值在用户改了上游 bounds 之后继续存活，制造一类很难被一眼看出来的"幽灵设置"。
 
 ---
 

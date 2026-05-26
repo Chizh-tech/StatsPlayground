@@ -80,7 +80,15 @@ export function buildAxisCommon(theme: GraphTheme) {
     // to `axisLine.show = false` and `axisTick.show = false`, so the
     // user-facing "Show axis line" / "Tick position" controls in the
     // Y Axis Settings dialog would otherwise be no-ops out of the box.
-    axisLine: { show: true, lineStyle: { color: theme.axisLine } },
+    //
+    // `onZero: false` pins the axis line to the bottom/left edge of
+    // the grid (chart-frame style) instead of ECharts' default
+    // behavior of drawing the X-axis line at data y=0 and the Y-axis
+    // line at data x=0. Without this, panning the visible range so
+    // that 0 moves into the middle of the chart drags the axis line
+    // along with the zero gridline — the user sees the "frame"
+    // wandering through the plot area. Matches JMP / Plotly / matplotlib.
+    axisLine: { show: true, onZero: false, lineStyle: { color: theme.axisLine } },
     axisTick: { show: true, lineStyle: { color: theme.axisLine } },
     // Hide the bookend boundary labels on value-type axes — ECharts
     // otherwise stamps the EXACT min and max above/below the nice
