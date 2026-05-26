@@ -466,6 +466,27 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
           if (st.mode === "y-min") newYMin = newYMax - floor;
           else if (st.mode === "y-max") newYMax = newYMin + floor;
         }
+        // Snap bounds onto the nice-step grid so tick labels stay at
+        // clean values (0.1, 0.2, 0.3 …) regardless of where the
+        // cursor happens to be. Without this the bounds drift to
+        // weird offsets (0.12, 0.22, 0.32 …) because every pointer
+        // move adds a fractional pixel-derived delta.
+        //   PAN: snap the moving min to the nearest grid line and
+        //   carry max by the same shift — span is preserved exactly,
+        //   so the data window doesn't pulse during the drag.
+        //   HANDLE: snap the moving end to the nearest grid line;
+        //   the anchored end stays put.
+        const yIvl = niceInterval(Math.max(newYMax - newYMin, 1e-12), 8);
+        if (st.mode === "y-pan" || st.mode === "xy-pan") {
+          const snappedMin = Math.round(newYMin / yIvl) * yIvl;
+          const shift = snappedMin - newYMin;
+          newYMin = snappedMin;
+          newYMax = newYMax + shift;
+        } else if (st.mode === "y-min") {
+          newYMin = Math.round(newYMin / yIvl) * yIvl;
+        } else if (st.mode === "y-max") {
+          newYMax = Math.round(newYMax / yIvl) * yIvl;
+        }
         st.lastYMin = newYMin;
         st.lastYMax = newYMax;
         // Recompute interval every frame from the new span so the
@@ -493,6 +514,18 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         if (newXMax - newXMin < floor) {
           if (st.mode === "x-min") newXMin = newXMax - floor;
           else if (st.mode === "x-max") newXMax = newXMin + floor;
+        }
+        // Same snap-to-grid logic as Y above — see comment there.
+        const xIvl = niceInterval(Math.max(newXMax - newXMin, 1e-12), 8);
+        if (st.mode === "x-pan" || st.mode === "xy-pan") {
+          const snappedMin = Math.round(newXMin / xIvl) * xIvl;
+          const shift = snappedMin - newXMin;
+          newXMin = snappedMin;
+          newXMax = newXMax + shift;
+        } else if (st.mode === "x-min") {
+          newXMin = Math.round(newXMin / xIvl) * xIvl;
+        } else if (st.mode === "x-max") {
+          newXMax = Math.round(newXMax / xIvl) * xIvl;
         }
         st.lastXMin = newXMin;
         st.lastXMax = newXMax;
