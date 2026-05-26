@@ -294,6 +294,29 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       }
     };
 
+    // Inline {1, 2, 2.5, 5, 10}×10^k tick-step picker — duplicated
+    // from transform.ts's `niceStep` so the in-drag preview can
+    // recompute a fresh interval for every (min, max) frame. Without
+    // this, ECharts keeps whatever interval the option last had, and
+    // dragging the range BIGGER leaves too small a step (30+ tick
+    // labels cramming the axis) while dragging it SMALLER leaves too
+    // large a step. That's the asymmetric "刻度尺会发生变化" the user
+    // observed between drag-down (shrinks the range) and drag-up
+    // (grows it).
+    const niceInterval = (range: number, targetTicks = 8): number => {
+      if (!Number.isFinite(range) || range <= 0) return 1;
+      const rough = range / targetTicks;
+      const exp = Math.pow(10, Math.floor(Math.log10(rough)));
+      const norm = rough / exp;
+      let nice: number;
+      if (norm < 1.5) nice = 1;
+      else if (norm < 2.25) nice = 2;
+      else if (norm < 3.5) nice = 2.5;
+      else if (norm < 7.5) nice = 5;
+      else nice = 10;
+      return nice * exp;
+    };
+
     type DragMode =
       | "y-min" | "y-max" | "y-pan"
       | "x-min" | "x-max" | "x-pan"
@@ -445,7 +468,17 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         }
         st.lastYMin = newYMin;
         st.lastYMax = newYMax;
-        patch.yAxis = { min: newYMin, max: newYMax, scale: false };
+        // Recompute interval every frame from the new span so the
+        // tick density stays roughly constant regardless of drag
+        // direction. Without this, ECharts keeps the previously-set
+        // interval through the setOption merge and the ruler density
+        // looks asymmetric (drag-up vs drag-down).
+        patch.yAxis = {
+          min: newYMin,
+          max: newYMax,
+          scale: false,
+          interval: niceInterval(newYMax - newYMin, 8),
+        };
       }
       if (isXMode && st.startXMin !== undefined && st.startXMax !== undefined && st.xPxRange) {
         const xSpan = st.startXMax - st.startXMin;
@@ -463,7 +496,12 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         }
         st.lastXMin = newXMin;
         st.lastXMax = newXMax;
-        patch.xAxis = { min: newXMin, max: newXMax, scale: false };
+        patch.xAxis = {
+          min: newXMin,
+          max: newXMax,
+          scale: false,
+          interval: niceInterval(newXMax - newXMin, 8),
+        };
       }
       if (patch.xAxis || patch.yAxis) inst.setOption(patch);
     };
