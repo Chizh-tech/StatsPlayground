@@ -294,15 +294,11 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       }
     };
 
-    // Inline {1, 2, 2.5, 5, 10}×10^k tick-step picker — duplicated
-    // from transform.ts's `niceStep` so the in-drag preview can
-    // recompute a fresh interval for every (min, max) frame. Without
-    // this, ECharts keeps whatever interval the option last had, and
-    // dragging the range BIGGER leaves too small a step (30+ tick
-    // labels cramming the axis) while dragging it SMALLER leaves too
-    // large a step. That's the asymmetric "刻度尺会发生变化" the user
-    // observed between drag-down (shrinks the range) and drag-up
-    // (grows it).
+    // Inline {1, 2, 2.5, 5, 10}×10^k tick-step picker — retained for
+    // potential reuse but currently unused: we let ECharts auto-tick
+    // for both pinned-bound and dragged ranges so tick labels stay
+    // clean (e.g. 0.1, 0.2, 0.3 …) at any min/max without us having
+    // to pin an explicit step or snap bounds to a grid.
     const niceInterval = (range: number, targetTicks = 8): number => {
       if (!Number.isFinite(range) || range <= 0) return 1;
       const rough = range / targetTicks;
@@ -316,6 +312,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       else nice = 10;
       return nice * exp;
     };
+    void niceInterval;
 
     type DragMode =
       | "y-min" | "y-max" | "y-pan"
@@ -373,6 +370,29 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       lastYMin?: number; lastYMax?: number;
     };
     let dragState: DragState | null = null;
+
+    // requestAnimationFrame-coalesced setOption pump. Pointermove on
+    // a high-end mouse fires at 120-240 Hz; ECharts can't keep up if
+    // we call setOption that often, which is felt as "the picture
+    // pauses while the mouse moves and only catches up when I stop".
+    // Instead, every pointermove just updates `pendingPatch`, and a
+    // single rAF flush calls setOption once per frame with the latest
+    // bounds. `lazyUpdate` + `silent` skip the dispatch/render work
+    // ECharts does for tooltip events we don't care about during a
+    // drag.
+    let pendingPatch: { xAxis?: Record<string, unknown>; yAxis?: Record<string, unknown> } | null = null;
+    let scheduledFrame = 0;
+    const flushPatch = () => {
+      scheduledFrame = 0;
+      const p = pendingPatch;
+      pendingPatch = null;
+      if (!p || (!p.xAxis && !p.yAxis)) return;
+      inst.setOption(p as echarts.EChartsCoreOption, { lazyUpdate: true, silent: true });
+    };
+    const schedulePatch = (p: { xAxis?: Record<string, unknown>; yAxis?: Record<string, unknown> }) => {
+      pendingPatch = p;
+      if (!scheduledFrame) scheduledFrame = requestAnimationFrame(flushPatch);
+    };
 
     const cursorForMode = (mode: DragMode, active: boolean): string => {
       switch (mode) {
@@ -466,39 +486,17 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
           if (st.mode === "y-min") newYMin = newYMax - floor;
           else if (st.mode === "y-max") newYMax = newYMin + floor;
         }
-        // Snap bounds onto the nice-step grid so tick labels stay at
-        // clean values (0.1, 0.2, 0.3 …) regardless of where the
-        // cursor happens to be. Without this the bounds drift to
-        // weird offsets (0.12, 0.22, 0.32 …) because every pointer
-        // move adds a fractional pixel-derived delta.
-        //   PAN: snap the moving min to the nearest grid line and
-        //   carry max by the same shift — span is preserved exactly,
-        //   so the data window doesn't pulse during the drag.
-        //   HANDLE: snap the moving end to the nearest grid line;
-        //   the anchored end stays put.
-        const yIvl = niceInterval(Math.max(newYMax - newYMin, 1e-12), 8);
-        if (st.mode === "y-pan" || st.mode === "xy-pan") {
-          const snappedMin = Math.round(newYMin / yIvl) * yIvl;
-          const shift = snappedMin - newYMin;
-          newYMin = snappedMin;
-          newYMax = newYMax + shift;
-        } else if (st.mode === "y-min") {
-          newYMin = Math.round(newYMin / yIvl) * yIvl;
-        } else if (st.mode === "y-max") {
-          newYMax = Math.round(newYMax / yIvl) * yIvl;
-        }
         st.lastYMin = newYMin;
         st.lastYMax = newYMax;
-        // Recompute interval every frame from the new span so the
-        // tick density stays roughly constant regardless of drag
-        // direction. Without this, ECharts keeps the previously-set
-        // interval through the setOption merge and the ruler density
-        // looks asymmetric (drag-up vs drag-down).
+        // No explicit `interval` in the patch — ECharts auto-ticks for
+        // the new range and picks clean positions (0.1, 0.2, 0.3 …)
+        // within [min, max] regardless of whether min lands on a
+        // round grid line. This removes the snap-to-grid stepped feel
+        // and gives smooth cursor-following motion.
         patch.yAxis = {
           min: newYMin,
           max: newYMax,
           scale: false,
-          interval: niceInterval(newYMax - newYMin, 8),
         };
       }
       if (isXMode && st.startXMin !== undefined && st.startXMax !== undefined && st.xPxRange) {
@@ -515,34 +513,30 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
           if (st.mode === "x-min") newXMin = newXMax - floor;
           else if (st.mode === "x-max") newXMax = newXMin + floor;
         }
-        // Same snap-to-grid logic as Y above — see comment there.
-        const xIvl = niceInterval(Math.max(newXMax - newXMin, 1e-12), 8);
-        if (st.mode === "x-pan" || st.mode === "xy-pan") {
-          const snappedMin = Math.round(newXMin / xIvl) * xIvl;
-          const shift = snappedMin - newXMin;
-          newXMin = snappedMin;
-          newXMax = newXMax + shift;
-        } else if (st.mode === "x-min") {
-          newXMin = Math.round(newXMin / xIvl) * xIvl;
-        } else if (st.mode === "x-max") {
-          newXMax = Math.round(newXMax / xIvl) * xIvl;
-        }
         st.lastXMin = newXMin;
         st.lastXMax = newXMax;
         patch.xAxis = {
           min: newXMin,
           max: newXMax,
           scale: false,
-          interval: niceInterval(newXMax - newXMin, 8),
         };
       }
-      if (patch.xAxis || patch.yAxis) inst.setOption(patch);
+      if (patch.xAxis || patch.yAxis) schedulePatch(patch);
     };
 
     const finishDrag = (commit: boolean) => {
       const st = dragState;
       if (!st) return;
       dragState = null;
+      // Flush any pending rAF patch so the final position is rendered
+      // before we hand the bounds off to the parent for persistence —
+      // otherwise a fast release could leave the canvas one frame
+      // behind the committed state.
+      if (scheduledFrame) {
+        cancelAnimationFrame(scheduledFrame);
+        scheduledFrame = 0;
+        flushPatch();
+      }
       if (st.captured) {
         try { el.releasePointerCapture(st.pointerId); } catch { /* ignore */ }
       }
@@ -593,6 +587,10 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       el.removeEventListener("pointercancel", onPointerCancel);
       el.removeEventListener("pointerleave", onPointerLeave);
       window.removeEventListener("mouseup", onWindowMouseUpSafety);
+      if (scheduledFrame) {
+        cancelAnimationFrame(scheduledFrame);
+        scheduledFrame = 0;
+      }
       ro.disconnect();
       inst.dispose();
       chartRef.current = null;

@@ -941,21 +941,15 @@ function buildAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
   // every half unit). We guard against non-positive values, which
   // would either crash ECharts or produce an infinite tick loop.
   //
-  // When the user pins BOTH min and max (which always happens after a
-  // drag-zoom or drag-pan commit) but does NOT pin an interval, we
-  // recompute a nice tick step for the new pinned range. Otherwise
-  // the caller's BASE option keeps `interval: fit.interval` from the
-  // data-extent auto-fit, which is wrong for the user's new range:
-  // dragging the range BIGGER would leave too small an interval (too
-  // many ticks crammed in) while dragging it SMALLER would leave too
-  // large an interval (too few ticks). That's the source of the
-  // "刻度尺会发生变化" asymmetry between drag-down (range shrinks → nice)
-  // and drag-up (range grows → suddenly 30+ tick labels) on the Y axis.
+  // Only emit `interval` when the user has explicitly pinned one in
+  // the dialog. When the user only pins min/max (e.g. via the drag
+  // gesture), we deliberately leave interval AUTO so ECharts picks a
+  // nice step that lands on round values within the new range. This
+  // is what keeps drag-zoom smooth (no snap-to-grid needed) AND the
+  // tick labels clean (0.1, 0.2, 0.3 … not 0.12, 0.22, 0.32 …) at
+  // every cursor position.
   if (Number.isFinite(cfg.tickInterval as number) && (cfg.tickInterval as number) > 0) {
     out.interval = cfg.tickInterval;
-  } else if (Number.isFinite(cfg.min as number) && Number.isFinite(cfg.max as number)) {
-    const span = (cfg.max as number) - (cfg.min as number);
-    if (span > 0) out.interval = niceStep(span, 8);
   }
   if (cfg.inverse === true) out.inverse = true;
   // Decimal precision: format every numeric tick with the requested
@@ -1534,8 +1528,15 @@ function buildSingleOption(
         [],
         8,
       );
+      // Emit only the snapped min/max bounds — let ECharts auto-pick
+      // the tick interval. Pinning `fit.interval` here baked a stale
+      // step into the option that survived setOption merges when the
+      // user dragged to a new range, producing the asymmetric and
+      // mis-aligned tick labels seen in earlier rounds. With min/max
+      // already on a clean grid via computeNiceBounds, ECharts'
+      // auto-tick picks identical positions on initial render.
       xFinalBounds = fit
-        ? { min: fit.min, max: fit.max, interval: fit.interval }
+        ? { min: fit.min, max: fit.max }
         : { scale: true };
     } else {
       xFinalBounds = { scale: true };
@@ -1630,8 +1631,9 @@ function buildSingleOption(
       collectRefLineYs(spec),
       8,
     );
+    // See xFinalBounds above: emit min/max only so ECharts auto-ticks.
     yFinalBounds = fit
-      ? { min: fit.min, max: fit.max, interval: fit.interval }
+      ? { min: fit.min, max: fit.max }
       : { scale: true };
   }
 
