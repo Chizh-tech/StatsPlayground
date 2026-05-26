@@ -1543,6 +1543,12 @@ function buildSingleOption(
           // Wrap long labels onto multiple lines instead of truncating with "…".
           formatter: (v: string) => wrapLabel(v, 16),
           lineHeight: 13,
+          // The shared `axis.axisLabel` default hides min/max labels for
+          // value-type axes (to suppress ugly float boundary values).
+          // On a category axis those would silently drop the first AND
+          // last category labels — restore them here.
+          showMinLabel: true,
+          showMaxLabel: true,
         },
       }
     : xIsTime

@@ -82,7 +82,13 @@ export function buildAxisCommon(theme: GraphTheme) {
     // Y Axis Settings dialog would otherwise be no-ops out of the box.
     axisLine: { show: true, lineStyle: { color: theme.axisLine } },
     axisTick: { show: true, lineStyle: { color: theme.axisLine } },
-    axisLabel: { color: theme.fgSecondary, fontSize: 11 },
+    // Hide the bookend boundary labels on value-type axes — ECharts
+    // otherwise stamps the EXACT min and max above/below the nice
+    // round tick labels (e.g. `4.9100341933248375` on top of the
+    // `4.8958 / 4.8458 / …` strip), which looks like noise. The
+    // category xAxis path overrides these back to `true` so its
+    // first/last category labels still render.
+    axisLabel: { color: theme.fgSecondary, fontSize: 11, showMinLabel: false, showMaxLabel: false },
     // Major gridlines pick the darker `gridLineMajor` so they stand
     // apart from the lighter `gridLine` used by minor gridlines below;
     // without that contrast a chart with both shown would look like a
