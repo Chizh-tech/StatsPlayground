@@ -1484,11 +1484,21 @@ function buildSingleOption(
   // xCats was computed early (just after isRowHidden) so the boxplot
   // iteration above could use the same list — see the comment there
   // for why that alignment matters.
-  // Compute rotation / wrap metrics first so the axis literal can reference them.
-  const xMaxLines = xIsCategory ? maxWrapLines(xCats, 16) : 1;
+  //
+  // Rotation / wrap / bottom-gap metrics MUST be computed off the
+  // cross-panel category UNION when faceted (sharedRanges.xCats), not
+  // off the per-panel xCats. Otherwise each panel makes its own
+  // rotate/wrap decision against its own (often single-element) local
+  // list — panels with longer labels rotate, the others don't, and
+  // bottomGap diverges. The result is different plot-area heights
+  // across faceted panels, which breaks side-by-side Y-axis
+  // comparison (the same bug class as the per-panel auto Y range
+  // we already guard against in computeSharedRanges).
+  const xDecisionCats = (xIsCategory && sharedRanges?.xCats) ? sharedRanges.xCats : xCats;
+  const xMaxLines = xIsCategory ? maxWrapLines(xDecisionCats, 16) : 1;
   // Rotate only when wrapping doesn't already break long labels onto
   // multiple lines — wrapped labels read better horizontally.
-  const xRotated = xIsCategory && xMaxLines === 1 && needsRotation(xCats);
+  const xRotated = xIsCategory && xMaxLines === 1 && needsRotation(xDecisionCats);
   const bottomGap = xIsCategory
     ? (xRotated ? 56 : 16) + Math.max(0, xMaxLines - 1) * 14
     : 28;
