@@ -10,6 +10,7 @@
 - [2. DualListPicker Shift 多选会单选 / 越界 / 白屏](#2-duallistpicker-shift-多选会单选--越界--白屏)
 - [3. React Hooks 顺序 —— `if (!data) return` 之后不能再放 hook](#3-react-hooks-顺序--if-data-return-之后不能再放-hook)
 - [4. ECharts axis drag-zoom：从"飞走"到"丝滑"踩到的几个坑](#4-echarts-axis-drag-zoom从飞走到丝滑踩到的几个坑)
+- [5. `findIndex((c) => c.name === ...)` 在 `string[]` 上静默返回 -1](#5-findindexc--cname----在-string-上静默返回--1)
 - [附录：通用排查思路](#附录通用排查思路)
 
 ---
@@ -217,6 +218,93 @@ if (!scheduledFrame) scheduledFrame = requestAnimationFrame(flushPatch);
 - 排查"画面跟不上"的标准顺序：① 是不是离散步进？② 是不是事件被压垮？③ 是不是有看不见的 tween？前两条治输入，第三条治输出。
 - 不同系列类型对动画的敏感度差很多 —— **拿 line 当对照组**最容易区分"渲染慢"和"动画慢"。
 - 不要在 base option 里塞计算出来的"派生值"（`interval`、`onZero` 隐式默认、tick 起点等）—— `setOption` 的 merge 语义会让这些值在用户改了上游 bounds 之后继续存活，制造一类很难被一眼看出来的"幽灵设置"。
+
+---
+
+## 5. `findIndex((c) => c.name === ...)` 在 `string[]` 上静默返回 -1
+
+### 现象
+
+修了一发"facet 时丢掉完全空的子面板"（commit `662bd38`），跑起来**完全没生效**：`Build=EV2` 的子面板 Y 全是 NaN，但还是占着一格网格、把其它面板挤窄。`vite build` 没报错，TS 没报错，但功能就是不工作 —— 滤掉空面板的代码像没执行一样。
+
+### 根因
+
+辅助函数原本写成：
+
+```ts
+function hasPlottableRows(
+  rows: GraphData["rows"],
+  encoding: GraphSpec["encoding"],
+  columns: GraphData["columns"],   // ← string[]，不是 {name}[]
+): boolean {
+  if (rows.length === 0) return false;
+  const yIdx = encoding.y
+    ? columns.findIndex((c) => c.name === encoding.y!.name)   // ← 永远 -1
+    : -1;
+  if (yIdx >= 0) {
+    return rows.some((r) => Number.isFinite(toNum(r[yIdx])));
+  }
+  // …xIdx 同理…
+  return true;   // ← 永远走这里
+}
+```
+
+`GraphData.columns` 定义是 `string[]`（[`types.ts`](../src/graphCore/types.ts) 里那一行），不是 `{name: string}[]`。但：
+
+- `findIndex` 接受**任意**谓词函数，类型不会报错；
+- 谓词体内 `c` 类型是 `string`，读 `c.name` —— JS 允许在任意 string / Number / Boolean 上读不存在的属性，**返回 `undefined`，不抛错**；
+- `undefined === "EV2"` 永远 `false` → `findIndex` 返回 `-1`；
+- `yIdx === -1`，跳过那个分支；`xIdx` 同样 `-1`；
+- 最后命中 fallback `return true` —— **任何**非空 row 子集都被判为 "有数据"，空面板永远不会被滤掉。
+
+整个滤空函数变成了一个昂贵的 no-op。TS 看不出来 ——`c.name` 在 `string` 上的访问是合法语法（任意 JS 值都能读属性），编译器不会拦。
+
+### 修复
+
+工程里**早就**有一个正确的列查找助手 `colIndex(data, name)`（[`transform.ts`](../src/graphCore/transform.ts) 里），内部就是 `data.columns.indexOf(name)`。换成它即可：
+
+```ts
+function hasPlottableRows(
+  rows: GraphData["rows"],
+  encoding: GraphSpec["encoding"],
+  data: GraphData,   // ← 整个 data，方便用 colIndex
+): boolean {
+  if (rows.length === 0) return false;
+  // NOTE: GraphData.columns 是 string[]，不是 {name}[] —— 必须用
+  // colIndex（基于字符串相等），不能 inline 写 findIndex(c => c.name…)，
+  // 那样在 string 数组上永远返回 -1，整个 helper 就变成 no-op。
+  const yIdx = encoding.y ? colIndex(data, encoding.y.name) : -1;
+  if (yIdx >= 0) {
+    return rows.some((r) => Number.isFinite(toNum(r[yIdx])));
+  }
+  const xIdx = encoding.x ? colIndex(data, encoding.x.name) : -1;
+  if (xIdx >= 0) {
+    return rows.some((r) => Number.isFinite(toNum(r[xIdx])));
+  }
+  return true;
+}
+```
+
+对应提交：`9bf5434`。
+
+### 教训 / 规则
+
+- **针对 `GraphData` 找列，永远先看有没有现成的 `colIndex(data, name)`**，不要 inline 写 `findIndex`。`columns` 是扁平 `string[]`，约定如此。
+- **TS 不会替你抓"读不存在的属性"**。`obj.foo` 在 `obj` 类型为 `string | number | boolean` 时是合法的（值类型都有原型方法），编译器只在显式 `never`、`null`、`undefined` 上才会报错。
+- 谓词函数对 `findIndex` / `filter` / `some` 永远返回 boolean，**找不到目标"看起来是空集合"和"谓词永远 false"完全等价**。这意味着：写法上出错的过滤器会安静退化成"全保留"或"全丢弃"，需要的是单元测试或在 helper 顶上加一条断言（"yIdx 必须 >=0，否则警告"）才能立刻发现。
+- 写完一个**应该会滤掉东西**的函数后，最简单的回归就是手动找一个**已知应被滤掉**的输入，确认它真的被滤掉 —— 而不是只看 build 通过和大致跑起来。
+
+### 同类风险
+
+整段代码库里所有针对 `GraphData.columns` 的查找都应该用 `colIndex`。复查命令：
+
+```powershell
+# 任何在 .columns 上 inline 写 findIndex(c => c.name === ...) 的地方都要警惕
+Select-String -Path src/graphCore/*.ts,src/components/**/*.tsx `
+  -Pattern 'columns\.findIndex\([^)]*\.name'
+```
+
+如果命中**任何**结果，立刻换成 `colIndex(data, name)`。
 
 ---
 
