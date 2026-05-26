@@ -522,7 +522,7 @@
       "tickPosition": "刻度位置",
       "tickOutside": "边界外",
       "tickInside": "边界内",
-      "reset": "恢复自动",
+      "reset": "恢复默认",
       "resetHint": "恢复为完全自动的坐标轴",
       "auto": "自动",
       "none": "无"

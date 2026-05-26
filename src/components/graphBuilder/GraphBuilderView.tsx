@@ -2229,7 +2229,7 @@ function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
             defaultValue: "Restore fully automatic axis behavior",
           })}
         >
-          {t("graph.axis.reset", { defaultValue: "Reset to auto" })}
+          {t("graph.axis.reset", { defaultValue: "Reset to default" })}
         </button>
       </div>
 
@@ -2719,7 +2719,7 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
             defaultValue: "Restore default grid display",
           })}
         >
-          {t("graph.axis.reset", { defaultValue: "Reset to auto" })}
+          {t("graph.axis.reset", { defaultValue: "Reset to default" })}
         </button>
       </div>
 

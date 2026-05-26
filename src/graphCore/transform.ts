@@ -1127,7 +1127,22 @@ function buildAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
   if (cfg.showMajorGrid !== undefined || cfg.majorGridStyle) {
     out.splitLine = buildGridLineFragment(cfg.showMajorGrid, cfg.majorGridStyle);
   }
-  if (cfg.showMinorGrid !== undefined || cfg.minorGridStyle) {
+  // Minor gridlines additionally REQUIRE at least one minor tick.
+  // ECharts decouples `minorSplitLine.show` from `minorTick.show` and
+  // will happily render minor gridlines at its built-in default of 5
+  // sub-segments per major tick whenever `minorSplitLine.show: true`
+  // — even with `minorTick.show: false`. That produces the confusing
+  // "minor gridlines without minor ticks" state the editor's hint
+  // explicitly warns against. Mirror that contract here: a stored
+  // `showMinorGrid: true` (e.g. left over from a session where the
+  // user previously had minor ticks set) is silently a no-op until
+  // the user actually configures `minorTickCount > 0`. The persisted
+  // flag stays so re-enabling minor ticks immediately brings the
+  // lines back without an extra click.
+  const hasMinorTicks =
+    Number.isFinite(cfg.minorTickCount as number) &&
+    (cfg.minorTickCount as number) > 0;
+  if (hasMinorTicks && (cfg.showMinorGrid !== undefined || cfg.minorGridStyle)) {
     out.minorSplitLine = buildGridLineFragment(cfg.showMinorGrid, cfg.minorGridStyle);
   }
 

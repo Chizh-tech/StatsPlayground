@@ -522,7 +522,7 @@
       "tickPosition": "Tick position",
       "tickOutside": "Outside",
       "tickInside": "Inside",
-      "reset": "Reset to auto",
+      "reset": "Reset to default",
       "resetHint": "Restore fully automatic axis behavior",
       "auto": "Auto",
       "none": "None"

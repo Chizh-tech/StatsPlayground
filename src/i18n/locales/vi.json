@@ -522,7 +522,7 @@
       "tickPosition": "Vị trí vạch chia",
       "tickOutside": "Bên ngoài",
       "tickInside": "Bên trong",
-      "reset": "Khôi phục tự động",
+      "reset": "Khôi phục mặc định",
       "resetHint": "Khôi phục trục về chế độ hoàn toàn tự động",
       "auto": "Tự động",
       "none": "Không"
