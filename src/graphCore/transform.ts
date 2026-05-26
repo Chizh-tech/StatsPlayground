@@ -1672,6 +1672,31 @@ function buildSingleOption(
       : { scale: true };
   }
 
+  // Horizontal-strip mode: no Y column bound, X is the quantitative axis.
+  // The yAxis becomes a single empty category so points emitted by
+  // `buildElementSeries` (which collapse to `[xValue, ""]` in this mode)
+  // align on one row. Hide tick / label / split-line — the strip
+  // intentionally has no Y dimension to label. The axis line itself is
+  // kept (the existing onZero:false fix pins it to the grid edge).
+  const useRowIdxY = !yField;
+  const yAxisBase = useRowIdxY
+    ? {
+        type: "category",
+        data: [""],
+        ...axis,
+        axisTick: { show: false },
+        axisLabel: { show: false },
+        splitLine: { show: false },
+      }
+    : {
+        type: "value",
+        ...axis,
+        // Pre-computed bounds (faceted shared OR local nice-snap fit).
+        // User-pinned overrides from `buildAxisOverrides` still win
+        // via the merge spread below.
+        ...yFinalBounds,
+      };
+
   return {
     backgroundColor: "transparent",
     textStyle: { color: theme.fgPrimary },
@@ -1687,17 +1712,7 @@ function buildSingleOption(
     // Series still carry `name` so tooltips and exports stay labeled.
     legend: undefined,
     xAxis,
-    yAxis: mergeAxis(
-      {
-        type: "value",
-        ...axis,
-        // Pre-computed bounds (faceted shared OR local nice-snap fit).
-        // User-pinned overrides from `buildAxisOverrides` still win
-        // via the merge spread below.
-        ...yFinalBounds,
-      },
-      buildAxisOverrides(spec.yAxis),
-    ),
+    yAxis: mergeAxis(yAxisBase, buildAxisOverrides(spec.yAxis)),
     series,
     animationDuration: 250,
   } as EChartsOption;
@@ -1801,23 +1816,49 @@ function buildElementSeries(
   ctx: BuildCtx,
 ): any[] | null {
   const { xIdx, yIdx, sizeIdx, xIsCategory, seriesName, style } = ctx;
-  if (yIdx < 0) return null;
 
   // When no X column is bound, collapse all points onto a single category
   // so the user sees the Y distribution as a strip / single column.
   const useRowIdx = xIdx < 0;
   const SINGLE_X = "";
+  // Mirror case: when no Y column is bound but X is, treat the chart
+  // as a HORIZONTAL strip — X is the quantitative axis, every point sits
+  // on a single empty Y category (yAxis is set up as `type: "category",
+  // data: [""]` in the option builder). The user explicitly asked for
+  // this: "图形生成器不规定用户用 Y 还是 X 作为变量轴". Only the
+  // `points` element makes sense in this mode for now — boxplot/line/bar
+  // rely on a numeric Y for their summary geometry and are left as a
+  // follow-up.
+  const useColIdx = yIdx < 0;
+  const SINGLE_Y = "";
+  if (useColIdx) {
+    if (el.kind !== "points") return null;
+    if (useRowIdx) return null;        // no X AND no Y → nothing to plot
+    if (xIsCategory) return null;       // X-category + no Y degenerates to a single dot per cat
+  }
 
   // 取 (x, y[, size]) 数组
-  const points: Array<{ x: unknown; y: number; size?: number }> = [];
+  // y is `number` in the normal vertical case, or the empty-string
+  // SINGLE_Y placeholder when running in horizontal-strip mode (useColIdx).
+  const points: Array<{ x: unknown; y: number | string; size?: number }> = [];
   for (const i of rowIdxs) {
     const xv = useRowIdx ? SINGLE_X : data.rows[i][xIdx];
     // When a real X column is bound, drop rows whose X is missing so
     // they don't appear as a blank category (bar) or as NaN points
     // (which ECharts plots at the axis origin on a value scale).
     if (!useRowIdx && isMissing(xv)) continue;
-    const yv = toNum(data.rows[i][yIdx]);
-    if (!Number.isFinite(yv)) continue;
+    // Horizontal mode (no Y bound): X IS the value axis — drop rows
+    // whose X doesn't parse to a finite number so they don't sit on
+    // the axis origin. Then collapse Y to the single empty category.
+    let yv: number | string;
+    if (useColIdx) {
+      if (!Number.isFinite(toNum(xv))) continue;
+      yv = SINGLE_Y;
+    } else {
+      const n = toNum(data.rows[i][yIdx]);
+      if (!Number.isFinite(n)) continue;
+      yv = n;
+    }
     const sv = sizeIdx >= 0 ? toNum(data.rows[i][sizeIdx]) : undefined;
     points.push({ x: xv, y: yv, size: sv });
   }
@@ -1832,7 +1873,10 @@ function buildElementSeries(
 
       // Aggregated mode: collapse repeated X values to a single summary point
       // (mean/median/sum) plus optional error interval.
-      if (summaryStat !== "none" && !useRowIdx && xIdx >= 0) {
+      // Skipped in horizontal-strip mode (useColIdx): the summary stat
+      // aggregates Y values per X bucket, which has no meaning when Y
+      // isn't bound.
+      if (summaryStat !== "none" && !useRowIdx && !useColIdx && xIdx >= 0) {
         const agg = aggregatePoints(
           rowIdxs, data, xIdx, yIdx, xIsCategory, summaryStat, errorInterval,
         );
@@ -1888,9 +1932,15 @@ function buildElementSeries(
       //   by side around the X position). Best for reading every point.
       // "uniform" / "normal" → random pixel offset of the requested span.
       // "none" → no offset (points overlap).
-      const jitterMode = getOpt<string>(opts, "jitter", "auto");
+      // Horizontal-strip mode (useColIdx) has all points on a single Y
+      // category, so the stack-by-Y-bin logic is degenerate; disable
+      // jitter for now (a follow-up could add an X-binned vertical
+      // jitter for symmetry).
+      const jitterMode = useColIdx ? "none" : getOpt<string>(opts, "jitter", "auto");
       const jitterLimit = Math.max(0, Math.min(1, getOpt<number>(opts, "jitterLimit", 0.5)));
-      const offsets = computeJitterOffsets(points, jitterMode, jitterLimit);
+      const offsets = useColIdx
+        ? null
+        : computeJitterOffsets(points as Array<{ x: unknown; y: number }>, jitterMode, jitterLimit);
 
       const sym = markerToSymbol(style.point.marker);
       return [
