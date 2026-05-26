@@ -6,7 +6,7 @@
  * 以及 X / Y / Color / Size / Overlay / GroupX / GroupY / Wrap 编码通道。
  */
 
-import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineStyle, YAxisConfig, GridLineStyle, AutoSpec } from "./types";
+import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineX, RefLineStyle, YAxisConfig, GridLineStyle, AutoSpec } from "./types";
 import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
 import i18n from "@/i18n";
@@ -681,16 +681,70 @@ function refDashFor(style: RefLineStyle): "solid" | "dashed" | "dotted" {
  *  appearance. The `silent: true` flag prevents the markLine from
  *  participating in tooltips or hover halos, which would distract from
  *  the data series. */
+/** Orientation-agnostic snapshot of one reference line. `RefLineY` and
+ *  `RefLineX` are normalized to this shape at the call boundary so
+ *  `buildRefLinesCarrier` can emit either a horizontal markLine
+ *  (`yAxis: value`) or a vertical markLine (`xAxis: value`) from a
+ *  single code path — only the markLine field name flips with `axis`.
+ *  Keeping a single carrier keeps the rendered series count low and
+ *  centralizes the dash / label / color rendering logic. */
+interface RefLineNorm {
+  id: string;
+  value: number;
+  label: string;
+  style: RefLineStyle;
+  color: string;
+  width: number;
+}
+
+function normalizeRefLinesY(arr: RefLineY[] | undefined): RefLineNorm[] {
+  return (arr ?? []).map((r) => ({
+    id: r.id,
+    value: r.y,
+    label: r.label,
+    style: r.style,
+    color: r.color,
+    width: r.width,
+  }));
+}
+
+function normalizeRefLinesX(arr: RefLineX[] | undefined): RefLineNorm[] {
+  return (arr ?? []).map((r) => ({
+    id: r.id,
+    value: r.x,
+    label: r.label,
+    style: r.style,
+    color: r.color,
+    width: r.width,
+  }));
+}
+
 function buildRefLinesCarrier(
-  refLines: RefLineY[] | undefined,
+  refLines: RefLineNorm[],
   autoSpec: AutoSpec | undefined,
   theme: GraphTheme,
+  axis: "x" | "y",
 ): any | null {
-  const userValid = (refLines ?? []).filter((r) => Number.isFinite(r.y));
-  const autoEntries = buildAutoSpecMarkLineData(autoSpec);
+  const userValid = refLines.filter((r) => Number.isFinite(r.value));
+  // Auto-spec limits are Y-only today — column metadata lives on the
+  // Y-bound column and the rendered lines are conceptually "spec
+  // limits on the response variable". An X-axis variant is a logical
+  // follow-up once we can resolve spec extras from either axis's
+  // column binding; until then `axis === "x"` simply skips auto-spec.
+  const autoEntries = axis === "y" ? buildAutoSpecMarkLineData(autoSpec) : [];
   if (userValid.length === 0 && autoEntries.length === 0) return null;
+  const axisField = axis === "y" ? "yAxis" : "xAxis";
+  // Position the label so it sits inside the chart area at the
+  // *near* end of the line: top for horizontal (Y) lines and left for
+  // vertical (X) lines. ECharts' positional vocabulary uses
+  // "insideEndTop" for horizontal lines (the line runs left→right, so
+  // the "end" of the run is the right edge) and "insideStartTop" for
+  // vertical lines (which run top→bottom, so the "start" is the top
+  // edge). Picking these so X-axis lines stay readable when several
+  // are stacked along the bottom of the plot.
+  const labelPosition = axis === "y" ? "insideEndTop" : "insideStartTop";
   return {
-    id: "__ref_lines_y__",
+    id: axis === "y" ? "__ref_lines_y__" : "__ref_lines_x__",
     type: "scatter",
     name: "",
     data: [],
@@ -708,7 +762,7 @@ function buildRefLinesCarrier(
       // and `label`; the series-level defaults below are just fallbacks.
       label: {
         show: true,
-        position: "insideEndTop",
+        position: labelPosition,
         color: theme.fgPrimary,
         fontSize: 11,
       },
@@ -717,7 +771,7 @@ function buildRefLinesCarrier(
         ...userValid.map((r) => {
           const hasLabel = r.label != null && r.label !== "";
           return {
-            yAxis: r.y,
+            [axisField]: r.value,
             name: r.label || "",
             lineStyle: {
               color: r.color,
@@ -726,7 +780,7 @@ function buildRefLinesCarrier(
             },
             label: {
               show: hasLabel,
-              position: "insideEndTop",
+              position: labelPosition,
               formatter: r.label || "",
               color: r.color,
               fontSize: 11,
@@ -800,6 +854,21 @@ function collectRefLineYs(spec: GraphSpec): number[] {
     if (Number.isFinite(a.lsl as number)) out.push(a.lsl as number);
     if (Number.isFinite(a.target as number)) out.push(a.target as number);
     if (Number.isFinite(a.usl as number)) out.push(a.usl as number);
+  }
+  return out;
+}
+
+/** Collect every finite reference-line X value contributed by the
+ *  user-defined `refLinesX` list. Mirrors `collectRefLineYs` for the
+ *  X axis. Auto-spec is Y-only today so this only sources from the
+ *  user-editable list. Used by the X-axis auto-scale logic so a
+ *  vertical reference line drawn outside the data extent (e.g. a
+ *  spec limit at X = 120 when the column maxes out at 95) is still
+ *  rendered inside the visible chart area. */
+function collectRefLineXs(spec: GraphSpec): number[] {
+  const out: number[] = [];
+  for (const r of spec.refLinesX ?? []) {
+    if (Number.isFinite(r.x)) out.push(r.x);
   }
   return out;
 }
@@ -901,6 +970,26 @@ function buildYAxisRefLineExpand(refYs: number[]): EChartsOption {
     // Match computeSharedRanges' pad heuristic so the visual feel is
     // identical whether the range was computed up-front (faceted) or
     // resolved via this callback (single panel).
+    const span = M - m || Math.abs(dir === "min" ? m : M) * 0.02 || 1;
+    return dir === "min" ? m - span * 0.02 : M + span * 0.02;
+  };
+  return {
+    min: (v: { min: number; max: number }) => expand(v, "min"),
+    max: (v: { min: number; max: number }) => expand(v, "max"),
+  };
+}
+
+/** Build the ECharts xAxis-option fragment that expands the auto-fit
+ *  range to keep every X-axis reference line inside the visible area.
+ *  Mirrors `buildYAxisRefLineExpand` — used by the histogram path
+ *  (and any future X-value path that goes through the auto-callback
+ *  range) so a vertical spec limit at X = 120 stays on-screen when
+ *  the data tops out at 95. */
+function buildXAxisRefLineExpand(refXs: number[]): EChartsOption {
+  if (refXs.length === 0) return {};
+  const expand = (v: { min: number; max: number }, dir: "min" | "max"): number => {
+    const m = Math.min(v.min, ...refXs);
+    const M = Math.max(v.max, ...refXs);
     const span = M - m || Math.abs(dir === "min" ? m : M) * 0.02 || 1;
     return dir === "min" ? m - span * 0.02 : M + span * 0.02;
   };
@@ -1300,10 +1389,34 @@ function buildSingleOption(
       xAxis: spec.yAxis,
       yAxis: spec.xAxis,
       // Reference lines are anchored to the value axis. In horizontal
-      // mode the value axis becomes the rendered X; pass them through
-      // as `refLinesY` of the swapped spec so the internal vertical
+      // mode the value axis becomes the rendered X; pass the user's
+      // X-axis ref lines through as `refLinesY` of the swapped spec
+      // (with the `{x}` → `{y}` field rename) so the internal vertical
       // build emits them on its (numeric) Y, then `transposeMarkData`
-      // flips each `{ yAxis: v }` to `{ xAxis: v }` on the way out.
+      // flips each `{ yAxis: v }` to `{ xAxis: v }` on the way out and
+      // they render as vertical lines on the user's rendered X axis.
+      // Original `refLinesY` is dropped on the floor here: post-swap
+      // it would feed the inner build's X axis which is the user's
+      // categorical Y — lines on a categorical axis have no meaningful
+      // position so the inner build's own gating skips them anyway,
+      // but clearing them here keeps the swapped spec self-consistent.
+      refLinesY: (spec.refLinesX ?? []).map((r) => ({
+        id: r.id,
+        y: r.x,
+        label: r.label,
+        style: r.style,
+        color: r.color,
+        width: r.width,
+      })),
+      refLinesX: undefined,
+      // Auto-spec is Y-only today and reads from the active Y
+      // column's metadata. After swap the inner build's Y is the
+      // user's X column — reading spec extras off the wrong column
+      // would surface unrelated limits, so the overlay is suppressed
+      // in horizontal mode. A follow-up that resolves auto-spec from
+      // the column matching the value axis (either axis) will lift
+      // this restriction.
+      autoSpec: undefined,
     };
     const swappedShared = sharedRanges ? swapSharedRanges(sharedRanges) : undefined;
     const verticalOpt = buildSingleOption(
@@ -1439,8 +1552,12 @@ function buildSingleOption(
         barWidth: "99%",
         itemStyle: { color: theme.categorical[0] },
       });
-      const refCarrier = buildRefLinesCarrier(spec.refLinesY, spec.autoSpec, theme);
-      if (refCarrier) series.push(refCarrier);
+      const refCarrierY = buildRefLinesCarrier(normalizeRefLinesY(spec.refLinesY), spec.autoSpec, theme, "y");
+      if (refCarrierY) series.push(refCarrierY);
+      // Histogram X is always a value-type axis (binned numeric data),
+      // so any user-defined X ref lines render here as vertical markers.
+      const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), undefined, theme, "x");
+      if (refCarrierX) series.push(refCarrierX);
       return {
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
@@ -1462,6 +1579,13 @@ function buildSingleOption(
             // bin centers are visually comparable across panels.
             ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
             ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
+            // Single-panel: expand auto-fit so vertical ref lines drawn
+            // outside the data extent stay visible. The shared-range
+            // spreads above already include refXs via computeSharedRanges,
+            // so this only matters when those are absent.
+            ...(sharedRanges?.xMin == null && sharedRanges?.xMax == null
+              ? buildXAxisRefLineExpand(collectRefLineXs(spec))
+              : {}),
           },
           buildAxisOverrides(spec.xAxis),
         ),
@@ -1769,7 +1893,7 @@ function buildSingleOption(
       const fit = computeNiceBounds(
         Number.isFinite(dataMin) ? dataMin : undefined,
         Number.isFinite(dataMax) ? dataMax : undefined,
-        [],
+        collectRefLineXs(spec),
         8,
       );
       // Emit only the snapped min/max bounds — let ECharts auto-pick
@@ -1835,12 +1959,37 @@ function buildSingleOption(
   // max, interval) win over the auto-fit values baked into the base.
   const xAxis = mergeAxis(xAxisBase, buildAxisOverrides(spec.xAxis));
 
-  // Append user-defined Y-axis reference lines (specs limits, target
-  // values, thresholds). Goes last so its z-index sits above the data
-  // series; the carrier itself is invisible — only the markLines render.
+  // Append user-defined reference line carriers. Two separate carriers
+  // (one per axis) so each can be silently skipped when its axis isn't
+  // value-type:
+  //   - Y carrier: always safe here — the horizontal-mode short-circuit
+  //     above has already redirected the build when Y is categorical,
+  //     so any code path that reaches this point has a value-type Y.
+  //   - X carrier: only emit when the rendered X is value-type. Skipping
+  //     for category / row-index / boxplot-forced category axes; ECharts
+  //     would still try to render a markLine at xAxis: numeric on a
+  //     category axis (silently aligning to the wrong band or to the
+  //     leftmost slot) and the visual result is misleading rather than
+  //     informative.
   {
-    const refCarrier = buildRefLinesCarrier(spec.refLinesY, spec.autoSpec, theme);
-    if (refCarrier) series.push(refCarrier);
+    const refCarrierY = buildRefLinesCarrier(
+      normalizeRefLinesY(spec.refLinesY),
+      spec.autoSpec,
+      theme,
+      "y",
+    );
+    if (refCarrierY) series.push(refCarrierY);
+    const xIsValueType = !useRowIdxX && !hasBoxplot && !!xField &&
+      (xField.type === "continuous" || xField.type === "datetime");
+    if (xIsValueType) {
+      const refCarrierX = buildRefLinesCarrier(
+        normalizeRefLinesX(spec.refLinesX),
+        undefined,
+        theme,
+        "x",
+      );
+      if (refCarrierX) series.push(refCarrierX);
+    }
   }
 
   // Resolve final Y-axis bounds + tick interval. Faceted callers force
@@ -2391,6 +2540,11 @@ function computeSharedRanges(
    *  the data-derived bounds so panels keep their cross-comparable
    *  shared scale AND the ref lines never get clipped. */
   refYs?: number[],
+  /** Extra finite X values (user reference lines on a value-type X
+   *  axis). Mirrors `refYs` for the X branch — folded into the
+   *  numeric X bounds so vertical reference lines drawn outside the
+   *  data extent still render on every faceted panel. */
+  refXs?: number[],
 ): SharedAxisRanges {
   const out: SharedAxisRanges = {};
 
@@ -2526,7 +2680,9 @@ function computeSharedRanges(
         // X bounds AND identical tick spacing. Without `xInterval`
         // ECharts could pick a different per-panel density even with
         // identical bounds, breaking visual comparison across panels.
-        // No X ref-lines feature today, so pass an empty refs list.
+        // Fold X ref-lines in so vertical spec limits drawn outside
+        // the data extent (e.g. USL at 120 when data tops out at 95)
+        // still render on every panel.
         let xMin = Infinity;
         let xMax = -Infinity;
         for (const r of data.rows) {
@@ -2551,7 +2707,7 @@ function computeSharedRanges(
             out.xMin = xMin - pad;
             out.xMax = xMax + pad;
           } else {
-            const fit = computeNiceBounds(xMin, xMax, [], 8);
+            const fit = computeNiceBounds(xMin, xMax, refXs ?? [], 8);
             if (fit) {
               out.xMin = fit.min;
               out.xMax = fit.max;
@@ -2561,6 +2717,15 @@ function computeSharedRanges(
               out.xMin = xMin - pad;
               out.xMax = xMax + pad;
             }
+          }
+        } else if (refXs && refXs.length > 0) {
+          // No finite X data but X ref lines configured: fit just
+          // around the ref lines so they still render predictably.
+          const fit = computeNiceBounds(undefined, undefined, refXs, 8);
+          if (fit) {
+            out.xMin = fit.min;
+            out.xMax = fit.max;
+            out.xInterval = fit.interval;
           }
         }
       }
@@ -2620,7 +2785,7 @@ export function buildGraph(
     }
     const wIdx = colIndex(data, fw.name);
     // Pin every wrap panel to the same axis bounds for fair comparison.
-    const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec));
+    const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec), collectRefLineXs(spec));
     // Drop wrap keys whose subset has no plottable rows so we don't
     // render an empty panel taking up grid space (e.g. Build=EV2 with
     // every Y NaN). Bug fix: previously these blank panels still
@@ -2667,7 +2832,7 @@ export function buildGraph(
   // tiling actually comparable ("完全相同的 Y 轴坐标"). Hidden legend
   // groups are excluded from the range calc so visible data fills the
   // chart area instead of being squashed by data that never renders.
-  const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec));
+  const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec), collectRefLineXs(spec));
   // Drop facet keys whose ENTIRE row / column has no plottable rows.
   // Works the same in 1D (only groupX or only groupY) and 2D Trellis:
   //   • If every row in the Y stripe `Build=EV2` is non-plottable,

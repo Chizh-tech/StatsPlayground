@@ -109,6 +109,33 @@ export interface RefLineY {
   width: number;
 }
 
+/** User-defined vertical reference line on the primary X axis.
+ *  Symmetric to `RefLineY` — the renderer only draws these when the X
+ *  axis is value-type (continuous or datetime). When X is categorical
+ *  the lines are silently skipped (drawing a vertical marker between
+ *  unrelated category bands has no meaningful position), but they
+ *  remain in the spec so toggling axis bindings is non-destructive.
+ *
+ *  Shape mirrors `RefLineY` exactly except the value field is named
+ *  `x` instead of `y` so each interface stays self-describing. Swap
+ *  X / Y in the UI converts `{y}` ↔ `{x}` while preserving every
+ *  other field. */
+export interface RefLineX {
+  /** Stable id for React keys and updates. */
+  id: string;
+  /** X-axis value the line is drawn at. */
+  x: number;
+  /** Free-form label text rendered at the line. Empty string
+   *  suppresses the label entirely. */
+  label: string;
+  /** Visual dash pattern. */
+  style: RefLineStyle;
+  /** Stroke color (any CSS color string; the UI emits hex). */
+  color: string;
+  /** Stroke width in CSS px. */
+  width: number;
+}
+
 /** User overrides for the primary Y axis. Every field is optional and
  *  `undefined` means *auto* — i.e. let ECharts derive the value from the
  *  data range. The whole object being `undefined` (or empty) restores
@@ -245,7 +272,18 @@ export interface GraphSpec {
    *  limits, target values, thresholds). Rendered as ECharts markLines
    *  on an invisible carrier series so they appear independently of
    *  which data series are toggled on. */
+  /** User-added horizontal reference lines on the Y axis (e.g. spec
+   *  limits, target values, thresholds). Rendered as ECharts markLines
+   *  on an invisible carrier series so they appear independently of
+   *  which data series are toggled on. Only drawn when the Y axis is
+   *  value-type — lines on a categorical Y are silently skipped
+   *  because a numeric marker between unrelated category bands has
+   *  no meaningful position. */
   refLinesY?: RefLineY[];
+  /** User-added vertical reference lines on the X axis. Mirror of
+   *  `refLinesY` for the X axis. Only drawn when the X axis is
+   *  value-type — lines on a categorical X are silently skipped. */
+  refLinesX?: RefLineX[];
   /** Auto-derived spec-limit lines pulled from the Y column's extras.
    *  Rendered side-by-side with `refLinesY` on the same carrier series
    *  but with hardcoded red/green coloring (red = USL/LSL, green =

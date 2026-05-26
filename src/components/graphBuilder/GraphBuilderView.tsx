@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } fr
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineStyle, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type YAxisConfig, type GridLineStyle } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -413,11 +413,12 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       styles: effectiveStyles,
       hiddenGroups: item.hiddenGroups,
       refLinesY: item.refLinesY,
+      refLinesX: item.refLinesX,
       autoSpec,
       yAxis: item.yAxis,
       xAxis: item.xAxis,
     };
-  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.yAxis, item.xAxis, item.autoSpecLines, specByCol]);
+  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.refLinesX, item.yAxis, item.xAxis, item.autoSpecLines, specByCol]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -465,6 +466,20 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const setRefLinesY = useCallback(
     (next: RefLineY[]) => {
       updateItem(item.id, { refLinesY: next });
+      markDirty();
+    },
+    [item.id, updateItem, markDirty],
+  );
+
+  /** Replace the X-axis reference-line list on this graph item. Mirror
+   *  of `setRefLinesY` for the X axis — same store-write pattern. The
+   *  renderer silently drops X ref lines when the X axis is categorical
+   *  (they have no meaningful position there), so the editor stays
+   *  available even on categorical-X charts and the lines come back
+   *  the moment X is rebound to a value column or the axes are swapped. */
+  const setRefLinesX = useCallback(
+    (next: RefLineX[]) => {
+      updateItem(item.id, { refLinesX: next });
       markDirty();
     },
     [item.id, updateItem, markDirty],
@@ -574,24 +589,27 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   };
 
   /** Swap X and Y completely — encoding (axis + facet) plus axis
-   *  settings. The chart should read as if it had been rotated 90°.
+   *  settings and reference lines. The chart should read as if it had
+   *  been rotated 90°.
    *
    *  Swapped:
    *    - encoding.x ↔ encoding.y          (axis content)
    *    - encoding.groupX ↔ encoding.groupY (facet rails)
    *    - xAxis ↔ yAxis                     (range / ticks / inverse / gridlines)
+   *    - refLinesX ↔ refLinesY            (with `{x}` ↔ `{y}` field rename)
    *
    *  Intentionally NOT swapped:
    *    - color / size / overlay / wrap / elements / styles / hiddenGroups /
    *      filters / smootherLambda — these are orientation-agnostic.
-   *    - refLinesY / autoSpecLines — there is no `refLinesX` field, so the
-   *      reference lines stay on the Y axis (now showing the old X's data).
-   *      The user can manually delete or re-add them after a swap if the
-   *      old values no longer apply.
+   *    - autoSpecLines — the auto-spec overlay still reads from the Y
+   *      column's spec extras. After a swap the user's old X becomes the
+   *      new Y, so the auto-spec lines naturally retarget. The toggle
+   *      itself is preserved (still on / off as before).
    *
-   *  Done as a single atomic `updateItem` so the encoding and axis configs
-   *  re-render in lockstep — partial swaps would briefly mismatch and could
-   *  trigger an inverse / range guard from the wrong axis. */
+   *  Done as a single atomic `updateItem` so the encoding, axis configs,
+   *  and ref lines re-render in lockstep — partial swaps would briefly
+   *  mismatch and could trigger an inverse / range guard from the wrong
+   *  axis. */
   const swapXY = useCallback(() => {
     const enc = item.encoding;
     const nextEncoding = { ...enc };
@@ -605,13 +623,34 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     else delete nextEncoding.groupY;
     if (enc.groupY !== undefined) nextEncoding.groupX = enc.groupY;
     else delete nextEncoding.groupX;
+    // refLinesY ↔ refLinesX, with the field-name flip. Keep the same id
+    // on each line so React's list-key stays stable across the swap and
+    // any in-flight edit focus doesn't churn.
+    const nextRefLinesX: RefLineX[] | undefined = item.refLinesY?.map((r) => ({
+      id: r.id,
+      x: r.y,
+      label: r.label,
+      style: r.style,
+      color: r.color,
+      width: r.width,
+    }));
+    const nextRefLinesY: RefLineY[] | undefined = item.refLinesX?.map((r) => ({
+      id: r.id,
+      y: r.x,
+      label: r.label,
+      style: r.style,
+      color: r.color,
+      width: r.width,
+    }));
     updateItem(item.id, {
       encoding: nextEncoding,
       xAxis: item.yAxis,
       yAxis: item.xAxis,
+      refLinesX: nextRefLinesX,
+      refLinesY: nextRefLinesY,
     });
     markDirty();
-  }, [item.id, item.encoding, item.xAxis, item.yAxis, updateItem, markDirty]);
+  }, [item.id, item.encoding, item.xAxis, item.yAxis, item.refLinesX, item.refLinesY, updateItem, markDirty]);
 
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
@@ -910,11 +949,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         />
       )}
       {/* X-axis settings dialog. Opened by double-clicking the X axis.
-          Mirrors the Y dialog without the Reference Lines category —
-          the renderer only supports Y-axis reference lines today. */}
+          Mirrors the Y dialog — including the Reference Lines category,
+          since X and Y are fully symmetric. The renderer silently skips
+          X ref lines when the X axis is categorical (they have no
+          meaningful position), so the editor stays available even on
+          categorical-X charts. */}
       {xAxisDialogOpen && (
         <AxisSettingsDialog
           axis="x"
+          refLines={item.refLinesX ?? []}
+          setRefLines={setRefLinesX}
           axisConfig={item.xAxis}
           setAxisConfig={setXAxisConfig}
           onClose={() => setXAxisDialogOpen(false)}
@@ -1822,21 +1866,24 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
 // inside <Graph>. Modelled after the system Preferences dialog: a
 // fixed-width categories nav on the left and a scrollable detail pane on
 // the right. The `axis` prop selects between Y (default categories: Axis
-// / Tick Grid / Reference Lines) and X (Axis / Tick Grid only — the
-// renderer does not support X reference lines today). Both axes share
-// the same `AxisSettingsEditor` and `GridSettingsEditor` since the
-// override config shape is identical between them; only the dialog
-// title and the optional Reference Lines tab differ.
+// / Tick Grid / Reference Lines) and X (Axis / Tick Grid / Reference
+// Lines). Both axes share the same `AxisSettingsEditor`,
+// `GridSettingsEditor`, AND `RefLinesEditor` since the override config
+// shape is identical between them; only the dialog title, the absence
+// of the Y-only auto-spec block, and the X/Y value-field name differ.
 
 interface AxisSettingsDialogProps {
   /** Which axis this dialog edits. Controls the title, the i18n key
-   *  prefix for category labels, and whether the Reference Lines tab
-   *  is present (Y only). */
+   *  prefix for category labels, and whether the auto-spec block is
+   *  present (Y only — spec extras live on the response variable). */
   axis: "x" | "y";
-  /** Y-only: existing manual reference lines on the Y axis. Required
-   *  when `axis === "y"`, ignored when `axis === "x"`. */
-  refLines?: RefLineY[];
-  setRefLines?: (next: RefLineY[]) => void;
+  /** Existing manual reference lines on this axis. Y dialog passes
+   *  `RefLineY[]`, X dialog passes `RefLineX[]`. The dialog itself
+   *  never reads the value field — it just forwards the array to
+   *  `RefLinesEditor`, which knows which field to address based on
+   *  the `axis` prop. */
+  refLines?: RefLineY[] | RefLineX[];
+  setRefLines?: (next: RefLineY[] | RefLineX[]) => void;
   /** Y-only: whether the auto-spec-limits overlay is currently
    *  enabled. Passed down to the RefLinesEditor so its header checkbox
    *  can render in the correct state without round-tripping through
@@ -1894,13 +1941,11 @@ function AxisSettingsDialog({
       key: "tickGrid",
       label: t("graph.yAxisSettings.categoryTickGrid", { defaultValue: "Tick Grid" }),
     },
-  ];
-  if (axis === "y") {
-    categories.push({
+    {
       key: "refLines",
       label: t("graph.yAxisSettings.categoryRefLines", { defaultValue: "Reference Lines" }),
-    });
-  }
+    },
+  ];
 
   return (
     <div className="sp-dialog-overlay" onClick={onClose}>
@@ -1931,8 +1976,9 @@ function AxisSettingsDialog({
             {active === "tickGrid" && (
               <GridSettingsEditor config={axisConfig} setConfig={setAxisConfig} />
             )}
-            {active === "refLines" && axis === "y" && refLines && setRefLines && setAutoSpecLines && (
+            {active === "refLines" && refLines && setRefLines && (
               <RefLinesEditor
+                axis={axis}
                 refLines={refLines}
                 setRefLines={setRefLines}
                 autoSpecLines={!!autoSpecLines}
@@ -2656,35 +2702,37 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
   );
 }
 
-// ---- Y-axis reference lines editor -------------------------------------
-// Card-per-line editor used inside the AxisSettingsDialog's right pane
-// (Y axis only — the renderer does not support X reference lines today).
-// Each card lets the user pick the Y value, label text, line dash style,
-// color, and stroke width for one horizontal reference line. The chart
-// (transform.ts -> buildRefLinesCarrier) attaches the rendered markLines
-// to an invisible scatter series so every chart type benefits.
+// ---- Reference lines editor -------------------------------------------
+// Card-per-line editor used inside the AxisSettingsDialog's right pane.
+// Axis-agnostic: the `axis` prop picks whether each card edits the Y
+// value (`RefLineY.y`, horizontal marker on the Y axis) or the X value
+// (`RefLineX.x`, vertical marker on the X axis). The auto-spec block is
+// Y-only because spec extras (LSL / Target / USL) live on the response
+// variable column bound to Y. The chart (transform.ts -> buildRefLines-
+// Carrier) attaches the rendered markLines to an invisible scatter
+// series so every chart type benefits, and silently skips lines whose
+// axis is currently categorical (no meaningful position there — the
+// lines are preserved in the spec and reappear when the axis becomes
+// value-type again, e.g. after a Swap X & Y).
 
 interface RefLinesEditorProps {
-  refLines: RefLineY[];
-  setRefLines: (next: RefLineY[]) => void;
-  /** When true, the chart auto-draws red (LSL/USL) and green (Target)
-   *  reference lines based on the active Y column's `spec` extras.
-   *  The toggle lives at the top of this editor as a single global
-   *  switch — the auto lines are intentionally kept OUT of the
-   *  per-line list below so the editor stays focused on manual
-   *  annotations. */
-  autoSpecLines: boolean;
-  setAutoSpecLines: (next: boolean) => void;
-  /** Pre-resolved spec snapshot for the active Y column, already
-   *  filtered to finite values by the parent. Used to render a small
-   *  preview row of colored chips showing exactly which limits will
-   *  draw on the chart right now. `undefined` means either the toggle
-   *  is off, no Y is bound, or the Y column has no spec extras. */
-  resolvedAutoSpec: import("@/graphCore").AutoSpec | undefined;
-  /** Name of the Y column — used in the helper hint to make it clear
-   *  *where* the limits are being pulled from. Falls back to a generic
-   *  message when undefined. */
-  autoSpecYColName: string | undefined;
+  /** Which axis this editor targets. Picks the value-field name
+   *  (`y` or `x`) used to read / write each card, the i18n copy
+   *  (horizontal vs. vertical marker), and whether the Y-only
+   *  auto-spec-limits block is rendered. */
+  axis: "x" | "y";
+  refLines: RefLineY[] | RefLineX[];
+  setRefLines: (next: RefLineY[] | RefLineX[]) => void;
+  /** Y-only: when true, the chart auto-draws red (LSL/USL) and green
+   *  (Target) reference lines based on the active Y column's `spec`
+   *  extras. The toggle is hidden for the X editor since spec extras
+   *  are response-variable metadata. */
+  autoSpecLines?: boolean;
+  setAutoSpecLines?: (next: boolean) => void;
+  /** Y-only: pre-resolved spec snapshot for the active Y column. */
+  resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
+  /** Y-only: name of the Y column — used in the helper hint. */
+  autoSpecYColName?: string | undefined;
 }
 
 /** Saturated / primary-color palette for reference lines. The chart's
@@ -2721,6 +2769,7 @@ function nextRefLineId(): string {
 }
 
 function RefLinesEditor({
+  axis,
   refLines,
   setRefLines,
   autoSpecLines,
@@ -2729,40 +2778,62 @@ function RefLinesEditor({
   autoSpecYColName,
 }: RefLinesEditorProps) {
   const { t } = useTranslation();
+  // Axis indirection: `valueField` picks which field on each card we
+  // read / write. Kept as a single source of truth so the rest of this
+  // component never branches on `axis` for data access — only for copy
+  // (horizontal vs. vertical marker) and for the Y-only auto-spec block.
+  const valueField: "x" | "y" = axis === "x" ? "x" : "y";
+  // Cast helpers: at runtime each line is either RefLineY (axis="y")
+  // or RefLineX (axis="x"); we treat them uniformly via the indirection.
+  // The cast keeps the read/write call sites concise without leaking
+  // `any` through the public API surface.
+  const readValue = (r: RefLineY | RefLineX): number =>
+    (r as Record<string, number>)[valueField];
+  const writeValue = (n: number): Record<string, number> => ({ [valueField]: n });
 
   const addLine = useCallback(() => {
-    const next: RefLineY = {
+    // Build the new line using the axis-appropriate value field so
+    // RefLineY gets `{y:0}` and RefLineX gets `{x:0}`. Cast to the
+    // declared union after construction.
+    const next = {
       id: nextRefLineId(),
-      y: 0,
+      [valueField]: 0,
       label: "",
-      style: "dashed",
+      style: "dashed" as RefLineStyle,
       color: REF_LINE_DEFAULT_COLOR,
       width: 1,
-    };
-    setRefLines([...(refLines ?? []), next]);
-  }, [refLines, setRefLines]);
+    } as RefLineY | RefLineX;
+    setRefLines([...(refLines ?? []), next] as RefLineY[] | RefLineX[]);
+  }, [refLines, setRefLines, valueField]);
 
   const updateLine = useCallback(
-    (id: string, patch: Partial<RefLineY>) => {
-      setRefLines((refLines ?? []).map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    (id: string, patch: Partial<RefLineY> | Partial<RefLineX>) => {
+      setRefLines(
+        ((refLines ?? []) as (RefLineY | RefLineX)[]).map((r) =>
+          r.id === id ? ({ ...r, ...patch } as RefLineY | RefLineX) : r,
+        ) as RefLineY[] | RefLineX[],
+      );
     },
     [refLines, setRefLines],
   );
 
   const removeLine = useCallback(
     (id: string) => {
-      setRefLines((refLines ?? []).filter((r) => r.id !== id));
+      setRefLines(
+        ((refLines ?? []) as (RefLineY | RefLineX)[]).filter((r) => r.id !== id) as RefLineY[] | RefLineX[],
+      );
     },
     [refLines, setRefLines],
   );
 
-  const lines = refLines ?? [];
+  const lines = (refLines ?? []) as (RefLineY | RefLineX)[];
 
   // Auto-spec preview state. We render up to three chips (LSL / Target
   // / USL) mirroring the colors the chart will use. When the toggle is
-  // on but no limits resolve, the hint copy explains why.
+  // on but no limits resolve, the hint copy explains why. Y-axis only:
+  // spec extras live on the response-variable column bound to Y.
   const autoChips: { key: "lsl" | "target" | "usl"; value: number; color: string; label: string }[] = [];
-  if (autoSpecLines && resolvedAutoSpec) {
+  if (axis === "y" && autoSpecLines && resolvedAutoSpec) {
     if (resolvedAutoSpec.lsl !== undefined) {
       autoChips.push({ key: "lsl", value: resolvedAutoSpec.lsl, color: "#E60000", label: "LSL" });
     }
@@ -2776,56 +2847,56 @@ function RefLinesEditor({
 
   return (
     <div className="gb-refline-editor">
-      {/* Auto spec-limit toggle. Placed above the manual-list header so
-          it reads as a "global" switch that applies to the whole chart,
-          rather than another per-line setting. When on, the chart pulls
-          LSL / Target / USL from the active Y column's `spec` extras
-          and draws them as red / green dashed lines. The lines are
-          deliberately NOT added to the manual list below. */}
-      <div className="gb-refline-auto-block">
-        <label className="gb-refline-auto-toggle">
-          <input
-            type="checkbox"
-            checked={autoSpecLines}
-            onChange={(e) => setAutoSpecLines(e.target.checked)}
-          />
-          <span>{t("graph.refLine.autoSpec", { defaultValue: "Auto-show spec limits" })}</span>
-        </label>
-        <div className="gb-refline-auto-hint">
-          {autoSpecLines
-            ? autoChips.length > 0
-              ? t("graph.refLine.autoSpecActive", {
-                  defaultValue: "Reading limits from {{col}}.",
-                  col: autoSpecYColName ?? "",
-                })
-              : autoSpecYColName
-                ? t("graph.refLine.autoSpecMissing", {
-                    defaultValue: "The Y column \"{{col}}\" has no spec extras (LSL / Target / USL).",
-                    col: autoSpecYColName,
+      {/* Auto spec-limit toggle (Y axis only). Spec extras (LSL /
+          Target / USL) are response-variable metadata so they only
+          apply when the editor is targeting Y. For the X-axis editor
+          this block is omitted entirely. */}
+      {axis === "y" && setAutoSpecLines && (
+        <div className="gb-refline-auto-block">
+          <label className="gb-refline-auto-toggle">
+            <input
+              type="checkbox"
+              checked={!!autoSpecLines}
+              onChange={(e) => setAutoSpecLines(e.target.checked)}
+            />
+            <span>{t("graph.refLine.autoSpec", { defaultValue: "Auto-show spec limits" })}</span>
+          </label>
+          <div className="gb-refline-auto-hint">
+            {autoSpecLines
+              ? autoChips.length > 0
+                ? t("graph.refLine.autoSpecActive", {
+                    defaultValue: "Reading limits from {{col}}.",
+                    col: autoSpecYColName ?? "",
                   })
-                : t("graph.refLine.autoSpecNoY", {
-                    defaultValue: "Drop a column on Y to read its spec limits.",
-                  })
-            : t("graph.refLine.autoSpecHint", {
-                defaultValue: "Read LSL / Target / USL from the Y column's spec extras and overlay them as colored reference lines.",
-              })}
-        </div>
-        {autoChips.length > 0 && (
-          <div className="gb-refline-auto-chips">
-            {autoChips.map((c) => (
-              <span
-                key={c.key}
-                className="gb-refline-auto-chip"
-                style={{ borderColor: c.color, color: c.color }}
-                title={`${c.label} = ${c.value}`}
-              >
-                <span className="gb-refline-auto-chip-dash" style={{ background: c.color }} />
-                {c.label} = {c.value}
-              </span>
-            ))}
+                : autoSpecYColName
+                  ? t("graph.refLine.autoSpecMissing", {
+                      defaultValue: "The Y column \"{{col}}\" has no spec extras (LSL / Target / USL).",
+                      col: autoSpecYColName,
+                    })
+                  : t("graph.refLine.autoSpecNoY", {
+                      defaultValue: "Drop a column on Y to read its spec limits.",
+                    })
+              : t("graph.refLine.autoSpecHint", {
+                  defaultValue: "Read LSL / Target / USL from the Y column's spec extras and overlay them as colored reference lines.",
+                })}
           </div>
-        )}
-      </div>
+          {autoChips.length > 0 && (
+            <div className="gb-refline-auto-chips">
+              {autoChips.map((c) => (
+                <span
+                  key={c.key}
+                  className="gb-refline-auto-chip"
+                  style={{ borderColor: c.color, color: c.color }}
+                  title={`${c.label} = ${c.value}`}
+                >
+                  <span className="gb-refline-auto-chip-dash" style={{ background: c.color }} />
+                  {c.label} = {c.value}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Section header: title + Add button. Title sits flush with the
           pane padding so it reads as a normal settings-pane section. */}
@@ -2844,9 +2915,13 @@ function RefLinesEditor({
 
       {lines.length === 0 ? (
         <div className="gb-refline-empty">
-          {t("graph.refLine.empty", {
-            defaultValue: "No reference lines yet. Click \u201cAdd reference line\u201d to draw a horizontal marker on the Y axis.",
-          })}
+          {axis === "y"
+            ? t("graph.refLine.emptyY", {
+                defaultValue: "No reference lines yet. Click \u201cAdd reference line\u201d to draw a horizontal marker on the Y axis.",
+              })
+            : t("graph.refLine.emptyX", {
+                defaultValue: "No reference lines yet. Click \u201cAdd reference line\u201d to draw a vertical marker on the X axis.",
+              })}
         </div>
       ) : (
         <div className="gb-refline-list">
@@ -2903,11 +2978,11 @@ function RefLinesEditor({
                   <input
                     type="number"
                     className="gb-refline-num"
-                    value={Number.isFinite(r.y) ? r.y : 0}
+                    value={Number.isFinite(readValue(r)) ? readValue(r) : 0}
                     step="any"
                     onChange={(e) => {
                       const n = Number(e.target.value);
-                      updateLine(r.id, { y: Number.isFinite(n) ? n : 0 });
+                      updateLine(r.id, writeValue(Number.isFinite(n) ? n : 0));
                     }}
                   />
                   <select

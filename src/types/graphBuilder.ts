@@ -4,7 +4,7 @@
  * 引用一个数据表作为数据源，自身仅保存编码与元素配置。
  */
 
-import type { ChartElement, FieldRef, GroupStyleMap, RefLineY, YAxisConfig } from "@/graphCore";
+import type { ChartElement, FieldRef, GroupStyleMap, RefLineY, RefLineX, YAxisConfig } from "@/graphCore";
 import type { FilterRuleItem } from "./filter";
 
 export type GraphSlotKey =
@@ -45,8 +45,19 @@ export interface GraphBuilderItem {
   /** User-defined horizontal reference lines on the primary Y axis
    *  (spec limits, targets, thresholds). Each carries its own Y value,
    *  label, color, dash style and stroke width. Persisted with the
-   *  project so annotations survive reloads. */
+   *  project so annotations survive reloads. Only drawn when Y is
+   *  bound to a value-type column — lines on a categorical Y are
+   *  silently skipped (they remain in the spec, so re-binding Y to a
+   *  numeric column restores them). */
   refLinesY?: RefLineY[];
+  /** User-defined vertical reference lines on the primary X axis.
+   *  Mirror of `refLinesY` — only drawn when X is bound to a
+   *  value-type column. Together with `refLinesY`, these stay in
+   *  lock-step with the Swap X / Y toolbar button: swapping the
+   *  encoding also swaps `refLinesX` ↔ `refLinesY` (with the
+   *  per-row `{x}` ↔ `{y}` field rename) so the rotated chart shows
+   *  the same markers on the same axis as before the swap. */
+  refLinesX?: RefLineX[];
   /** When true, the renderer auto-overlays spec-limit reference lines
    *  (USL / LSL red, Target green) sourced from the Y column's
    *  `extras.spec` metadata. These lines are NOT added to `refLinesY`

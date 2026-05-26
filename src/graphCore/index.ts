@@ -18,6 +18,7 @@ export {
   type GroupStyleMap,
   type MarkerShape,
   type RefLineY,
+  type RefLineX,
   type RefLineStyle,
   type YAxisConfig,
   type GridLineStyle,
