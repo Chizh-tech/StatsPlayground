@@ -193,18 +193,25 @@ export interface GridLineStyle {
   style?: RefLineStyle;
 }
 
-/** Auto-derived spec-limit reference lines for a single Y column.
- *  Sourced from the column's `extras.spec = { lsl, target, usl }`.
- *  Distinct from the user-editable `refLinesY` list so the auto lines
- *  never pollute the per-line editor below the toggle — they're an
- *  ambient, data-driven overlay that follows the Y encoding.
+/** Auto-derived spec-limit reference lines for a single value-axis
+ *  column. Sourced from the column's `extras.spec = { lsl, target,
+ *  usl }`. Distinct from the user-editable `refLinesY` / `refLinesX`
+ *  lists so the auto lines never pollute the per-line editor —
+ *  they're an ambient, data-driven overlay that follows the X / Y
+ *  encoding.
  *
- *  Future multi-column / facet-on-X support: when we eventually allow
- *  several Y columns to share an axis (or facet on X), this single
- *  object will be promoted to `Record<groupKey, AutoSpec>` so the
- *  renderer can emit a different set of spec lines per X-group. The
- *  current shape is the trivial single-group case of that future
- *  generalization. */
+ *  Both axes carry the same shape (`autoSpecY` + `autoSpecX` on
+ *  `GraphSpec`): whichever value-type column the user binds to an axis
+ *  contributes its own spec extras to that axis. After a Swap X & Y
+ *  the two snapshots flip with the encoding, so the limits always
+ *  follow the column — not the axis label.
+ *
+ *  Future multi-column / facet support: when we eventually allow
+ *  several columns to share a value axis (or facet on that axis),
+ *  these single objects will be promoted to `Record<groupKey,
+ *  AutoSpec>` so the renderer can emit a different set of spec lines
+ *  per group. The current shape is the trivial single-group case of
+ *  that future generalization. */
 export interface AutoSpec {
   /** Lower spec limit (rendered red). `undefined` skips the line. */
   lsl?: number;
@@ -290,7 +297,12 @@ export interface GraphSpec {
    *  Target). Kept off the user-editable list so the editor stays
    *  focused on manually-added annotations. `undefined` skips the
    *  overlay entirely. */
-  autoSpec?: AutoSpec;
+  autoSpecY?: AutoSpec;
+  /** Auto-derived spec-limit lines pulled from the X column's extras.
+   *  Mirror of `autoSpecY` for the X axis — lets the renderer emit
+   *  vertical spec / target lines when a value-type X column has
+   *  `extras.spec` metadata. `undefined` skips the overlay. */
+  autoSpecX?: AutoSpec;
   /** Y axis overrides — fixed range, tick density, decimal precision,
    *  reversed direction. `undefined` / empty object means fully
    *  automatic behavior. Edited from the Y Axis Settings dialog

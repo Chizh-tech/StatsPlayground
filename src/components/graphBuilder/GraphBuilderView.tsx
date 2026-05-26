@@ -395,16 +395,19 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       const v = encoding[k];
       if (v) (enc as any)[k] = v;
     });
-    // Resolve the auto spec-limit overlay: only contribute an AutoSpec
-    // when the user has opted in AND the current Y column has spec
-    // extras. When either condition fails we omit the field entirely so
-    // the renderer skips the overlay (and the transform never emits the
-    // carrier markLines for it).
+    // Resolve the auto spec-limit overlay independently for each axis:
+    // contribute an AutoSpec for whichever bound column has spec extras
+    // (and only when the user has opted in via `autoSpecLines`). The
+    // toggle is global — enabling it tries both axes; if only one
+    // bound column carries `extras.spec` then only that axis renders
+    // the overlay. After a Swap X & Y the two snapshots flip with the
+    // encoding, so the limits keep following the column.
     const yName = encoding.y?.name;
-    const limits = item.autoSpecLines && yName ? specByCol[yName] : undefined;
-    const autoSpec = limits
-      ? { ...limits, colName: yName }
-      : undefined;
+    const xName = encoding.x?.name;
+    const yLimits = item.autoSpecLines && yName ? specByCol[yName] : undefined;
+    const xLimits = item.autoSpecLines && xName ? specByCol[xName] : undefined;
+    const autoSpecY = yLimits ? { ...yLimits, colName: yName } : undefined;
+    const autoSpecX = xLimits ? { ...xLimits, colName: xName } : undefined;
     return {
       datasetId: dataset.id,
       datasetName: dataset.name,
@@ -414,7 +417,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       hiddenGroups: item.hiddenGroups,
       refLinesY: item.refLinesY,
       refLinesX: item.refLinesX,
-      autoSpec,
+      autoSpecY,
+      autoSpecX,
       yAxis: item.yAxis,
       xAxis: item.xAxis,
     };
@@ -601,10 +605,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  Intentionally NOT swapped:
    *    - color / size / overlay / wrap / elements / styles / hiddenGroups /
    *      filters / smootherLambda — these are orientation-agnostic.
-   *    - autoSpecLines — the auto-spec overlay still reads from the Y
-   *      column's spec extras. After a swap the user's old X becomes the
-   *      new Y, so the auto-spec lines naturally retarget. The toggle
-   *      itself is preserved (still on / off as before).
+   *    - autoSpecLines — the global toggle stays as-is. The auto-spec
+   *      overlay reads each axis's bound column independently, so after
+   *      the swap the X / Y spec snapshots simply trade places along
+   *      with the encoding. No manual fix-up needed.
    *
    *  Done as a single atomic `updateItem` so the encoding, axis configs,
    *  and ref lines re-render in lockstep — partial swaps would briefly
@@ -941,24 +945,30 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           setRefLines={setRefLinesY}
           autoSpecLines={!!item.autoSpecLines}
           setAutoSpecLines={setAutoSpecLines}
-          resolvedAutoSpec={spec.autoSpec}
-          autoSpecYColName={encoding.y?.name}
+          resolvedAutoSpec={spec.autoSpecY}
+          autoSpecColName={encoding.y?.name}
           axisConfig={item.yAxis}
           setAxisConfig={setYAxisConfig}
           onClose={() => setYAxisDialogOpen(false)}
         />
       )}
       {/* X-axis settings dialog. Opened by double-clicking the X axis.
-          Mirrors the Y dialog — including the Reference Lines category,
-          since X and Y are fully symmetric. The renderer silently skips
-          X ref lines when the X axis is categorical (they have no
-          meaningful position), so the editor stays available even on
-          categorical-X charts. */}
+          Mirrors the Y dialog — including the Reference Lines category
+          AND the auto spec-limit overlay sourced from the X column's
+          `extras.spec` metadata. X and Y are fully symmetric: whichever
+          axis holds a value-type column with spec extras renders the
+          overlay when the toggle is on. The renderer silently skips X
+          ref lines when the X axis is categorical (no meaningful
+          position), so the editor stays available throughout. */}
       {xAxisDialogOpen && (
         <AxisSettingsDialog
           axis="x"
           refLines={item.refLinesX ?? []}
           setRefLines={setRefLinesX}
+          autoSpecLines={!!item.autoSpecLines}
+          setAutoSpecLines={setAutoSpecLines}
+          resolvedAutoSpec={spec.autoSpecX}
+          autoSpecColName={encoding.x?.name}
           axisConfig={item.xAxis}
           setAxisConfig={setXAxisConfig}
           onClose={() => setXAxisDialogOpen(false)}
@@ -1884,20 +1894,23 @@ interface AxisSettingsDialogProps {
    *  the `axis` prop. */
   refLines?: RefLineY[] | RefLineX[];
   setRefLines?: (next: RefLineY[] | RefLineX[]) => void;
-  /** Y-only: whether the auto-spec-limits overlay is currently
-   *  enabled. Passed down to the RefLinesEditor so its header checkbox
-   *  can render in the correct state without round-tripping through
-   *  the project store. */
+  /** Whether the auto-spec-limits overlay is currently enabled. The
+   *  toggle is global (one flag covers both axes) — the renderer
+   *  contributes spec lines on whichever axis has a value-type column
+   *  with `extras.spec` metadata. Passed down to the RefLinesEditor so
+   *  its header checkbox renders the correct state without round-
+   *  tripping through the project store. */
   autoSpecLines?: boolean;
   setAutoSpecLines?: (next: boolean) => void;
-  /** Y-only: pre-resolved AutoSpec object for the active Y column —
-   *  already filtered to finite values by GraphBuilderView.
-   *  `undefined` means either the overlay is off, no Y is set, or the
-   *  Y column has no spec extras. */
+  /** Pre-resolved AutoSpec snapshot for the column currently bound to
+   *  THIS axis — already filtered to finite values by
+   *  GraphBuilderView. `undefined` means either the overlay is off,
+   *  this axis has no bound column, or the bound column has no spec
+   *  extras. */
   resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
-  /** Y-only: name of the column currently bound to Y, purely for the
+  /** Name of the column currently bound to THIS axis, purely for the
    *  editor's hint copy ("Reading limits from <col>"). */
-  autoSpecYColName?: string | undefined;
+  autoSpecColName?: string | undefined;
   /** Current axis-override config (range / ticks / decimals / inverse /
    *  axis line / tick position / minor ticks / grid). Both axes use
    *  the same `YAxisConfig` shape. */
@@ -1915,7 +1928,7 @@ function AxisSettingsDialog({
   autoSpecLines,
   setAutoSpecLines,
   resolvedAutoSpec,
-  autoSpecYColName,
+  autoSpecColName,
   axisConfig,
   setAxisConfig,
   onClose,
@@ -1984,7 +1997,7 @@ function AxisSettingsDialog({
                 autoSpecLines={!!autoSpecLines}
                 setAutoSpecLines={setAutoSpecLines}
                 resolvedAutoSpec={resolvedAutoSpec}
-                autoSpecYColName={autoSpecYColName}
+                autoSpecColName={autoSpecColName}
               />
             )}
           </div>
@@ -2723,16 +2736,16 @@ interface RefLinesEditorProps {
   axis: "x" | "y";
   refLines: RefLineY[] | RefLineX[];
   setRefLines: (next: RefLineY[] | RefLineX[]) => void;
-  /** Y-only: when true, the chart auto-draws red (LSL/USL) and green
-   *  (Target) reference lines based on the active Y column's `spec`
-   *  extras. The toggle is hidden for the X editor since spec extras
-   *  are response-variable metadata. */
+  /** When true, the chart auto-draws red (LSL/USL) and green (Target)
+   *  reference lines based on the bound column's `spec` extras. The
+   *  toggle is global — enabling it surfaces spec lines on whichever
+   *  axis (or both) has a value-type column carrying spec metadata. */
   autoSpecLines?: boolean;
   setAutoSpecLines?: (next: boolean) => void;
-  /** Y-only: pre-resolved spec snapshot for the active Y column. */
+  /** Pre-resolved spec snapshot for the column bound to THIS axis. */
   resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
-  /** Y-only: name of the Y column — used in the helper hint. */
-  autoSpecYColName?: string | undefined;
+  /** Name of the column bound to THIS axis — used in the helper hint. */
+  autoSpecColName?: string | undefined;
 }
 
 /** Saturated / primary-color palette for reference lines. The chart's
@@ -2775,7 +2788,7 @@ function RefLinesEditor({
   autoSpecLines,
   setAutoSpecLines,
   resolvedAutoSpec,
-  autoSpecYColName,
+  autoSpecColName,
 }: RefLinesEditorProps) {
   const { t } = useTranslation();
   // Axis indirection: `valueField` picks which field on each card we
@@ -2830,10 +2843,11 @@ function RefLinesEditor({
 
   // Auto-spec preview state. We render up to three chips (LSL / Target
   // / USL) mirroring the colors the chart will use. When the toggle is
-  // on but no limits resolve, the hint copy explains why. Y-axis only:
-  // spec extras live on the response-variable column bound to Y.
+  // on but no limits resolve, the hint copy explains why. Available on
+  // BOTH axes: whichever axis has a value-type column carrying
+  // `extras.spec` metadata gets its own overlay snapshot.
   const autoChips: { key: "lsl" | "target" | "usl"; value: number; color: string; label: string }[] = [];
-  if (axis === "y" && autoSpecLines && resolvedAutoSpec) {
+  if (autoSpecLines && resolvedAutoSpec) {
     if (resolvedAutoSpec.lsl !== undefined) {
       autoChips.push({ key: "lsl", value: resolvedAutoSpec.lsl, color: "#E60000", label: "LSL" });
     }
@@ -2845,13 +2859,20 @@ function RefLinesEditor({
     }
   }
 
+  // Axis-aware copy used in the auto-spec hint. The toggle reads
+  // "Auto-show spec limits" identically on both axes — the difference
+  // is just which column the limits are sourced from ("the Y column" /
+  // "the X column"), surfaced in the contextual hint below.
+  const axisColCopy = axis === "y" ? "Y" : "X";
+
   return (
     <div className="gb-refline-editor">
-      {/* Auto spec-limit toggle (Y axis only). Spec extras (LSL /
-          Target / USL) are response-variable metadata so they only
-          apply when the editor is targeting Y. For the X-axis editor
-          this block is omitted entirely. */}
-      {axis === "y" && setAutoSpecLines && (
+      {/* Auto spec-limit toggle. Available on both axes: when on, the
+          chart reads LSL / Target / USL from THIS axis's bound column
+          (via its `extras.spec` metadata) and overlays red / green
+          dashed lines. The toggle itself is global — flipping it on
+          either dialog activates the overlay everywhere applicable. */}
+      {setAutoSpecLines && (
         <div className="gb-refline-auto-block">
           <label className="gb-refline-auto-toggle">
             <input
@@ -2866,18 +2887,21 @@ function RefLinesEditor({
               ? autoChips.length > 0
                 ? t("graph.refLine.autoSpecActive", {
                     defaultValue: "Reading limits from {{col}}.",
-                    col: autoSpecYColName ?? "",
+                    col: autoSpecColName ?? "",
                   })
-                : autoSpecYColName
+                : autoSpecColName
                   ? t("graph.refLine.autoSpecMissing", {
-                      defaultValue: "The Y column \"{{col}}\" has no spec extras (LSL / Target / USL).",
-                      col: autoSpecYColName,
+                      defaultValue: "The {{axis}} column \"{{col}}\" has no spec extras (LSL / Target / USL).",
+                      axis: axisColCopy,
+                      col: autoSpecColName,
                     })
-                  : t("graph.refLine.autoSpecNoY", {
-                      defaultValue: "Drop a column on Y to read its spec limits.",
+                  : t("graph.refLine.autoSpecNoCol", {
+                      defaultValue: "Drop a column on {{axis}} to read its spec limits.",
+                      axis: axisColCopy,
                     })
               : t("graph.refLine.autoSpecHint", {
-                  defaultValue: "Read LSL / Target / USL from the Y column's spec extras and overlay them as colored reference lines.",
+                  defaultValue: "Read LSL / Target / USL from the {{axis}} column's spec extras and overlay them as colored reference lines.",
+                  axis: axisColCopy,
                 })}
           </div>
           {autoChips.length > 0 && (

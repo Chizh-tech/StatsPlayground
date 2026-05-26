@@ -726,12 +726,11 @@ function buildRefLinesCarrier(
   axis: "x" | "y",
 ): any | null {
   const userValid = refLines.filter((r) => Number.isFinite(r.value));
-  // Auto-spec limits are Y-only today — column metadata lives on the
-  // Y-bound column and the rendered lines are conceptually "spec
-  // limits on the response variable". An X-axis variant is a logical
-  // follow-up once we can resolve spec extras from either axis's
-  // column binding; until then `axis === "x"` simply skips auto-spec.
-  const autoEntries = axis === "y" ? buildAutoSpecMarkLineData(autoSpec) : [];
+  // Auto-spec entries are pre-resolved per axis by the caller (it passes
+  // `spec.autoSpecY` for the Y carrier and `spec.autoSpecX` for the X
+  // carrier), so there's no axis branch here — we always emit whatever
+  // was handed in. Keeps this helper truly orientation-agnostic.
+  const autoEntries = buildAutoSpecMarkLineData(autoSpec);
   if (userValid.length === 0 && autoEntries.length === 0) return null;
   const axisField = axis === "y" ? "yAxis" : "xAxis";
   // Position the label so it sits inside the chart area at the
@@ -849,7 +848,7 @@ function collectRefLineYs(spec: GraphSpec): number[] {
   for (const r of spec.refLinesY ?? []) {
     if (Number.isFinite(r.y)) out.push(r.y);
   }
-  const a = spec.autoSpec;
+  const a = spec.autoSpecY;
   if (a) {
     if (Number.isFinite(a.lsl as number)) out.push(a.lsl as number);
     if (Number.isFinite(a.target as number)) out.push(a.target as number);
@@ -859,9 +858,9 @@ function collectRefLineYs(spec: GraphSpec): number[] {
 }
 
 /** Collect every finite reference-line X value contributed by the
- *  user-defined `refLinesX` list. Mirrors `collectRefLineYs` for the
- *  X axis. Auto-spec is Y-only today so this only sources from the
- *  user-editable list. Used by the X-axis auto-scale logic so a
+ *  user-defined `refLinesX` list AND the auto spec-limit overlay
+ *  resolved for the X column (`spec.autoSpecX`). Mirrors
+ *  `collectRefLineYs`. Used by the X-axis auto-scale logic so a
  *  vertical reference line drawn outside the data extent (e.g. a
  *  spec limit at X = 120 when the column maxes out at 95) is still
  *  rendered inside the visible chart area. */
@@ -869,6 +868,12 @@ function collectRefLineXs(spec: GraphSpec): number[] {
   const out: number[] = [];
   for (const r of spec.refLinesX ?? []) {
     if (Number.isFinite(r.x)) out.push(r.x);
+  }
+  const a = spec.autoSpecX;
+  if (a) {
+    if (Number.isFinite(a.lsl as number)) out.push(a.lsl as number);
+    if (Number.isFinite(a.target as number)) out.push(a.target as number);
+    if (Number.isFinite(a.usl as number)) out.push(a.usl as number);
   }
   return out;
 }
@@ -1409,14 +1414,16 @@ function buildSingleOption(
         width: r.width,
       })),
       refLinesX: undefined,
-      // Auto-spec is Y-only today and reads from the active Y
-      // column's metadata. After swap the inner build's Y is the
-      // user's X column — reading spec extras off the wrong column
-      // would surface unrelated limits, so the overlay is suppressed
-      // in horizontal mode. A follow-up that resolves auto-spec from
-      // the column matching the value axis (either axis) will lift
-      // this restriction.
-      autoSpec: undefined,
+      // Auto-spec extras follow the column — swap them with the
+      // encoding so the inner build reads spec metadata off the right
+      // source. The user's original X column becomes the inner Y
+      // (value axis post-transpose), so its `autoSpecX` snapshot
+      // becomes the inner `autoSpecY`. The user's original Y column
+      // becomes the inner X (categorical post-transpose); spec lines
+      // on a categorical axis have no meaningful position so we drop
+      // its `autoSpec` here, mirroring the user-defined-line policy.
+      autoSpecY: spec.autoSpecX,
+      autoSpecX: undefined,
     };
     const swappedShared = sharedRanges ? swapSharedRanges(sharedRanges) : undefined;
     const verticalOpt = buildSingleOption(
@@ -1552,11 +1559,11 @@ function buildSingleOption(
         barWidth: "99%",
         itemStyle: { color: theme.categorical[0] },
       });
-      const refCarrierY = buildRefLinesCarrier(normalizeRefLinesY(spec.refLinesY), spec.autoSpec, theme, "y");
+      const refCarrierY = buildRefLinesCarrier(normalizeRefLinesY(spec.refLinesY), spec.autoSpecY, theme, "y");
       if (refCarrierY) series.push(refCarrierY);
       // Histogram X is always a value-type axis (binned numeric data),
       // so any user-defined X ref lines render here as vertical markers.
-      const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), undefined, theme, "x");
+      const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), spec.autoSpecX, theme, "x");
       if (refCarrierX) series.push(refCarrierX);
       return {
         backgroundColor: "transparent",
@@ -1974,7 +1981,7 @@ function buildSingleOption(
   {
     const refCarrierY = buildRefLinesCarrier(
       normalizeRefLinesY(spec.refLinesY),
-      spec.autoSpec,
+      spec.autoSpecY,
       theme,
       "y",
     );
@@ -1984,7 +1991,7 @@ function buildSingleOption(
     if (xIsValueType) {
       const refCarrierX = buildRefLinesCarrier(
         normalizeRefLinesX(spec.refLinesX),
-        undefined,
+        spec.autoSpecX,
         theme,
         "x",
       );
