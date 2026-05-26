@@ -97,18 +97,22 @@ export function buildAxisCommon(theme: GraphTheme) {
     // category xAxis path overrides these back to `true` so its
     // first/last category labels still render.
     axisLabel: { color: theme.fgSecondary, fontSize: 11, showMinLabel: false, showMaxLabel: false },
-    // Major gridlines pick the darker `gridLineMajor` so they stand
-    // apart from the lighter `gridLine` used by minor gridlines below;
-    // without that contrast a chart with both shown would look like a
-    // single uniform grid.
-    splitLine: { lineStyle: { color: theme.gridLineMajor, type: "dashed" as const } },
-    // Mirror splitLine's dashed default for minor gridlines so the
-    // Tick Grid editor's "Minor gridlines (Dashed)" preset actually
-    // renders dashed. ECharts' minorSplitLine.lineStyle defaults to
-    // `type: "solid"` and does NOT inherit from splitLine, so without
-    // this override the user would see solid lines under a "Dashed"
-    // dropdown — a confusing mismatch we patched here in the theme so
-    // both the major and minor defaults match.
-    minorSplitLine: { lineStyle: { color: theme.gridLine, type: "dashed" as const } },
+    // Major gridlines: hidden by default. Picking the darker
+    // `gridLineMajor` so when the user opts in (via the Tick Grid
+    // editor) major lines visually stand apart from the lighter
+    // minor lines below. `show: false` here means a clean,
+    // unconfigured chart starts with no grid clutter — users who
+    // want lines toggle them on from the axis-settings dialog and
+    // their override flows through `buildGridLineFragment`.
+    splitLine: { show: false, lineStyle: { color: theme.gridLineMajor, type: "dashed" as const } },
+    // Minor gridlines: also hidden by default (matches the major
+    // default above so the two checkboxes behave the same way). The
+    // dashed `type` is kept on the lineStyle so the "Minor gridlines
+    // (Dashed)" preset in the editor renders dashed the moment the
+    // user enables it — ECharts' minorSplitLine.lineStyle defaults
+    // to `type: "solid"` and does NOT inherit from splitLine, so
+    // without this override the user would see solid lines under a
+    // "Dashed" dropdown.
+    minorSplitLine: { show: false, lineStyle: { color: theme.gridLine, type: "dashed" as const } },
   };
 }

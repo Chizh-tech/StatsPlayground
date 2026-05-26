@@ -1122,7 +1122,8 @@ function buildAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
   // ----- Major / minor split lines (grid) -----------------------------
   // Each branch only emits when the user has touched the toggle or
   // styled the lines, so completely-unset configs preserve the theme's
-  // splitLine default (visible, dashed gray major; hidden minor).
+  // splitLine default (both major and minor hidden — opt-in via the
+  // Tick Grid editor).
   if (cfg.showMajorGrid !== undefined || cfg.majorGridStyle) {
     out.splitLine = buildGridLineFragment(cfg.showMajorGrid, cfg.majorGridStyle);
   }
@@ -1378,14 +1379,26 @@ function buildSingleOption(
 
   // ─── Horizontal-mode early exit ────────────────────────────────────────
   // See the `transposeOption` helper above for the full rationale. The
-  // vertical builder below assumes Y is numeric; when the user binds X
-  // to a numeric column and Y to a categorical column (or leaves Y
-  // unbound), we instead build a swapped vertical chart and transpose
-  // the output. Restrict to `continuous` X to avoid sending datetime
-  // through the value-only internal Y axis (datetime horizontal is a
-  // follow-up). Histogram is also opted out — a horizontal histogram
-  // has its own conventions (rotated bins) and the existing histogram
-  // branch is vertical-only by design.
+  // vertical builder below assumes Y is numeric; to make X-as-variable
+  // and Y-as-variable fully symmetric we swap the spec and recurse
+  // through the existing vertical pipeline whenever the chart would
+  // otherwise need a numeric X axis. Two trigger cases, both of which
+  // mirror the Y-as-variable behavior the vertical path handles
+  // natively:
+  //
+  //   (a) Y absent + X present. This is the user's "single variable
+  //       dropped on X" case. The mirror "single variable dropped on
+  //       Y" already works (vertical strip of points at x=""), so we
+  //       swap so the recursive call sees Y bound + X absent and
+  //       transpose back to a horizontal strip at y="".
+  //
+  //   (b) Y categorical + X continuous. Orientation-swap for
+  //       bar / scatter / box plots where the user has put the
+  //       category column on Y on purpose.
+  //
+  // Histogram is opted out — a horizontal histogram has its own
+  // conventions (rotated bins) and the existing histogram branch is
+  // vertical-only by design.
   const xIsContinuous = xField?.type === "continuous";
   const yIsCatOrAbsent =
     !yField ||
@@ -1395,7 +1408,16 @@ function buildSingleOption(
   const hasHistogramEl = elements.some(
     (e) => e.kind === "histogram" && e.enabled !== false,
   );
-  const isHorizontal = !!xIsContinuous && yIsCatOrAbsent && !hasHistogramEl;
+  // Case (a): single-variable-on-X. Fires regardless of X type so the
+  // mirror of "drop one continuous column on Y" (which always
+  // renders a strip) works for any X type the column might have.
+  const xOnlyMirror = !yField && !!xField;
+  // Case (b): orientation-swap when Y is categorical and X is the
+  // numeric value column. Kept restricted to `continuous` to avoid
+  // sending datetime through the value-only internal Y axis
+  // (datetime horizontal is a follow-up).
+  const orientationSwap = !!xIsContinuous && yIsCatOrAbsent && !!yField;
+  const isHorizontal = (xOnlyMirror || orientationSwap) && !hasHistogramEl;
   if (isHorizontal) {
     const swappedSpec: GraphSpec = {
       ...spec,

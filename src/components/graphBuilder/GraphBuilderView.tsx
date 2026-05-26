@@ -607,10 +607,34 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     [setElements],
   );
 
-  const startOver = () => {
-    setEncoding({});
-    setElements([{ kind: "points", enabled: true }]);
-  };
+  /** Wipe everything that defines the *content* of the current chart
+   *  back to its pristine drop-zone state — encoding (axes + facets +
+   *  color / overlay / size), elements, X / Y axis overrides, every
+   *  reference-line list (manual + auto-spec toggles), legend group
+   *  visibility, and per-group style overrides. Done as a single
+   *  atomic `updateItem` so the history snapshot stays clean and the
+   *  next render sees a fully consistent blank slate (a partial reset
+   *  could leave e.g. a Y-axis range pin tied to a column the user
+   *  just cleared, which would trigger a guard the next time they
+   *  drop a new column on Y). Filters and smoother lambda are
+   *  intentionally preserved — those are session-level analysis
+   *  controls, not part of the chart's visual content. */
+  const startOver = useCallback(() => {
+    updateItem(item.id, {
+      encoding: {},
+      elements: [{ kind: "points", enabled: true }],
+      xAxis: undefined,
+      yAxis: undefined,
+      refLinesX: undefined,
+      refLinesY: undefined,
+      autoSpecLinesY: undefined,
+      autoSpecLinesX: undefined,
+      autoSpecLines: undefined,
+      hiddenGroups: undefined,
+      groupStyles: undefined,
+    });
+    markDirty();
+  }, [item.id, updateItem, markDirty]);
 
   /** Swap X and Y completely — encoding (axis + facet) plus axis
    *  settings and reference lines. The chart should read as if it had
