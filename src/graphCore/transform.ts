@@ -2102,14 +2102,19 @@ function collectFacetKeys(
 function hasPlottableRows(
   rows: GraphData["rows"],
   encoding: GraphSpec["encoding"],
-  columns: GraphData["columns"],
+  data: GraphData,
 ): boolean {
   if (rows.length === 0) return false;
-  const yIdx = encoding.y ? columns.findIndex((c) => c.name === encoding.y!.name) : -1;
+  // NOTE: GraphData.columns is `string[]`, not `{name}[]` — use
+  // `colIndex` (string match) rather than `findIndex(c => c.name…)`,
+  // which silently returns -1 on a string array and would make this
+  // helper always fall through to the `return true` fallback, defeating
+  // the empty-panel filter entirely.
+  const yIdx = encoding.y ? colIndex(data, encoding.y.name) : -1;
   if (yIdx >= 0) {
     return rows.some((r) => Number.isFinite(toNum(r[yIdx])));
   }
-  const xIdx = encoding.x ? columns.findIndex((c) => c.name === encoding.x!.name) : -1;
+  const xIdx = encoding.x ? colIndex(data, encoding.x.name) : -1;
   if (xIdx >= 0) {
     return rows.some((r) => Number.isFinite(toNum(r[xIdx])));
   }
@@ -2338,7 +2343,7 @@ export function buildGraph(
     // definition (matches collectCategories' yIdx finiteness filter).
     const nonEmptyWrapKeys = wrapKeys.filter((key) => {
       const subRows = data.rows.filter((r) => toStr(r[wIdx]) === key);
-      return hasPlottableRows(subRows, encoding, data.columns);
+      return hasPlottableRows(subRows, encoding, data);
     });
     // If every panel got filtered out (degenerate input), fall back to
     // the original key list so the user at least sees blank panels
@@ -2388,12 +2393,12 @@ export function buildGraph(
   const nonEmptyXKeys = is2D || !fx ? xKeys : xKeys.filter((xKey) => {
     if (xKey === null) return true;
     const subRows = data.rows.filter((r) => toStr(r[fxIdx]) === xKey);
-    return hasPlottableRows(subRows, encoding, data.columns);
+    return hasPlottableRows(subRows, encoding, data);
   });
   const nonEmptyYKeys = is2D || !fy ? yKeys : yKeys.filter((yKey) => {
     if (yKey === null) return true;
     const subRows = data.rows.filter((r) => toStr(r[fyIdx]) === yKey);
-    return hasPlottableRows(subRows, encoding, data.columns);
+    return hasPlottableRows(subRows, encoding, data);
   });
   // Degenerate guard: if every panel got filtered out, fall back to
   // the original key list so the user sees blank panels rather than
