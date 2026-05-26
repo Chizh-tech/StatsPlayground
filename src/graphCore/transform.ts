@@ -643,6 +643,13 @@ interface SharedAxisRanges {
    *  spacing (otherwise ECharts could re-pick density per panel even
    *  with identical bounds). Absent when no nice fit was produced. */
   yInterval?: number;
+  /** Union of all Y categories across panels — populated when Y is
+   *  bound to a nominal/ordinal/id column (horizontal-mode chart). In
+   *  the vertical orientation Y is always a value axis and this stays
+   *  undefined. Mirrors `xCats` and gets routed to `xCats` of the
+   *  swapped recursive call via `swapSharedRanges` so every faceted
+   *  horizontal panel renders with the same Y category list. */
+  yCats?: string[];
 }
 
 /** Map our `RefLineStyle` enum to ECharts' `lineStyle.type`. */
@@ -1073,6 +1080,169 @@ function mergeAxis(base: EChartsOption, userY: EChartsOption): EChartsOption {
   return merged;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Horizontal-mode transpose
+// ─────────────────────────────────────────────────────────────────────────
+// The vertical builder below (`buildSingleOption`) assumes "Y is the
+// quantitative axis, X is the category / time / value axis". That
+// asymmetry is baked into many places (yAxis is always built as `type:
+// "value"`, jitter / aggregation / boxplot data shape all key off X).
+//
+// To support the mirror case (user binds X to a numeric column and Y to
+// a categorical column, OR leaves Y unbound entirely — JMP, Tableau,
+// Spotfire etc. all let users freely choose orientation), we run the
+// vertical builder against an internally-SWAPPED spec, then flip the
+// output. Concretely:
+//   1. Detect `isHorizontal` at the top of `buildSingleOption`.
+//   2. Build a swapped spec: encoding.x ↔ encoding.y, xAxis ↔ yAxis,
+//      and sharedRanges with x/y bounds swapped.
+//   3. Recurse into `buildSingleOption` with that swapped spec. The
+//      swapped X (= original Y) is now categorical, swapped Y (=
+//      original X) is now numeric — exactly the layout the vertical
+//      code already handles. (Termination: post-swap, the new yField
+//      is the original xField which is numeric, so `isHorizontal` is
+//      false and no further recursion happens.)
+//   4. Transpose the resulting ECharts option: swap top-level xAxis/
+//      yAxis, and flip every series' per-point `[x, y]` data tuple to
+//      `[y, x]`. Same for markLine / markArea anchor descriptors.
+//
+// This keeps the X-as-variable and Y-as-variable code paths fully
+// symmetric without forking the entire builder. The user's verbatim
+// requirement: "X 做变量轴和 Y 做变量轴时的表现应该完全一致".
+
+/** Transpose one markLine / markArea data entry: swap `xAxis` ↔ `yAxis`
+ *  fields and flip any `coord: [x, y]` arrays. Pass-through entries
+ *  like `{ type: "min" }` (handled internally by ECharts and orientation-
+ *  agnostic) are returned unchanged. */
+function transposeMarkPoint(m: any): any {
+  if (!m || typeof m !== "object") return m;
+  const out: any = { ...m };
+  if ("xAxis" in out) {
+    out.yAxis = out.xAxis;
+    delete out.xAxis;
+  } else if ("yAxis" in out) {
+    out.xAxis = out.yAxis;
+    delete out.yAxis;
+  }
+  if (Array.isArray(out.coord) && out.coord.length >= 2) {
+    out.coord = [out.coord[1], out.coord[0], ...out.coord.slice(2)];
+  }
+  return out;
+}
+
+/** Transpose a markLine.data / markArea.data array. markArea entries
+ *  are 2-element arrays of mark points (start, end); markLine entries
+ *  are single mark points (or 2-element pairs for free-form lines). */
+function transposeMarkData(arr: any[] | undefined): any[] | undefined {
+  if (!Array.isArray(arr)) return arr;
+  return arr.map((entry) =>
+    Array.isArray(entry) ? entry.map(transposeMarkPoint) : transposeMarkPoint(entry),
+  );
+}
+
+/** Transpose all per-point coordinates in a single ECharts series so
+ *  the rendered chart is the horizontal mirror of the vertical build.
+ *
+ *  Data-flip is gated by series type:
+ *  - `scatter` / `effectScatter` / `line` / `bar` carry `[x, y]` tuples
+ *    (or `{ value: [x, y], symbolOffset: [dx, dy], ... }` objects). Flip
+ *    both `value` and `symbolOffset`: jitter offset has to rotate with
+ *    the axes or the JMP-style stacking lands in the wrong direction.
+ *  - `boxplot` carries the 5-tuple `[min, q1, med, q3, max]` POSITIONALLY
+ *    — the category comes from the matching xAxis.data slot, not the
+ *    tuple itself. Naively flipping these would corrupt the stats. Skip
+ *    the data flip; ECharts auto-orients the box rendering once the
+ *    top-level xAxis ↔ yAxis swap completes.
+ *  - `custom` (used for error-bar caps via `renderItem`) carries
+ *    `[x, y, lo, hi]` and a vertical-only renderItem. Skip its data
+ *    flip too — its renderItem reads `value(0)`/`value(1)` etc. and
+ *    needs a horizontal-aware variant before its geometry can mirror.
+ *    Known limitation: error bars stay vertically oriented in horizontal
+ *    mode for now; the scatter dots they're anchored to render correctly.
+ *
+ *  markLine / markArea sit on the series, not the data points, and
+ *  always need the xAxis ↔ yAxis key flip via `transposeMarkData`. */
+function transposeSeriesData(s: any): any {
+  if (!s || typeof s !== "object") return s;
+  const out: any = { ...s };
+  const seriesType = s.type;
+  const FLIP_TYPES = new Set(["scatter", "effectScatter", "line", "bar"]);
+  if (FLIP_TYPES.has(seriesType) && Array.isArray(s.data)) {
+    out.data = s.data.map((pt: any) => {
+      if (Array.isArray(pt) && pt.length >= 2) {
+        return [pt[1], pt[0], ...pt.slice(2)];
+      }
+      if (
+        pt &&
+        typeof pt === "object" &&
+        Array.isArray(pt.value) &&
+        pt.value.length >= 2
+      ) {
+        const v = [pt.value[1], pt.value[0], ...pt.value.slice(2)];
+        const newPt: any = { ...pt, value: v };
+        if (Array.isArray(pt.symbolOffset) && pt.symbolOffset.length >= 2) {
+          newPt.symbolOffset = [pt.symbolOffset[1], pt.symbolOffset[0]];
+        }
+        return newPt;
+      }
+      return pt;
+    });
+  }
+  if (s.markLine && Array.isArray(s.markLine.data)) {
+    out.markLine = { ...s.markLine, data: transposeMarkData(s.markLine.data) };
+  }
+  if (s.markArea && Array.isArray(s.markArea.data)) {
+    out.markArea = { ...s.markArea, data: transposeMarkData(s.markArea.data) };
+  }
+  return out;
+}
+
+/** Transpose a full ECharts option built by the vertical pipeline so
+ *  the rendered chart becomes its horizontal mirror. Swaps top-level
+ *  `xAxis` ↔ `yAxis` and rewrites every series' data shape. The
+ *  surrounding `grid`, `tooltip`, `textStyle`, `backgroundColor`,
+ *  `animationDuration`, etc. are orientation-agnostic and copied
+ *  verbatim. */
+function transposeOption(opt: EChartsOption): EChartsOption {
+  if (!opt || typeof opt !== "object") return opt;
+  const out: EChartsOption = { ...opt };
+  out.xAxis = opt.yAxis;
+  out.yAxis = opt.xAxis;
+  const series = Array.isArray(opt.series) ? (opt.series as any[]) : [];
+  out.series = series.map((s) => transposeSeriesData(s));
+  return out;
+}
+
+/** Swap x/y bounds in a `SharedAxisRanges` so a faceted horizontal-mode
+ *  panel still pins to the global numeric range AND the global Y
+ *  category list. The caller swaps `encoding.x` ↔ `encoding.y` before
+ *  recursing; this helper does the same swap on the precomputed axis
+ *  bounds.
+ *
+ *  - `xMin / xMax / xInterval` (from the originally-numeric X) become
+ *    the swapped `yMin / yMax / yInterval` (the internal value axis).
+ *  - `yCats` (from the originally-categorical Y, populated by the
+ *    horizontal-mode branch of `computeSharedRanges`) becomes the
+ *    swapped `xCats` so every panel renders with the same internal
+ *    category list — after transpose, these are the same Y categories
+ *    on every faceted panel. Without this forwarding, each panel
+ *    computes its categories locally from its row subset and the
+ *    label sets diverge (the user's screenshot 1 symptom: EV1 shows
+ *    3 cats, DV shows 2 cats).
+ *  - The outgoing `yCats` is dropped — in the swapped vertical build,
+ *    Y is the value axis and category data has no meaning there. */
+function swapSharedRanges(r: SharedAxisRanges): SharedAxisRanges {
+  return {
+    xMin: r.yMin,
+    xMax: r.yMax,
+    xInterval: r.yInterval,
+    xCats: r.yCats,
+    yMin: r.xMin,
+    yMax: r.xMax,
+    yInterval: r.xInterval,
+  };
+}
+
 /** 渲染一个单图（不分面）的 ECharts option
  *
  *  When called from the faceted path (`buildGraph` with `groupX`/`wrap`),
@@ -1098,6 +1268,54 @@ function buildSingleOption(
   const colorField = encoding.color;
   const overlayField = encoding.overlay;
   const sizeField = encoding.size;
+
+  // ─── Horizontal-mode early exit ────────────────────────────────────────
+  // See the `transposeOption` helper above for the full rationale. The
+  // vertical builder below assumes Y is numeric; when the user binds X
+  // to a numeric column and Y to a categorical column (or leaves Y
+  // unbound), we instead build a swapped vertical chart and transpose
+  // the output. Restrict to `continuous` X to avoid sending datetime
+  // through the value-only internal Y axis (datetime horizontal is a
+  // follow-up). Histogram is also opted out — a horizontal histogram
+  // has its own conventions (rotated bins) and the existing histogram
+  // branch is vertical-only by design.
+  const xIsContinuous = xField?.type === "continuous";
+  const yIsCatOrAbsent =
+    !yField ||
+    yField.type === "nominal" ||
+    yField.type === "ordinal" ||
+    yField.type === "id";
+  const hasHistogramEl = elements.some(
+    (e) => e.kind === "histogram" && e.enabled !== false,
+  );
+  const isHorizontal = !!xIsContinuous && yIsCatOrAbsent && !hasHistogramEl;
+  if (isHorizontal) {
+    const swappedSpec: GraphSpec = {
+      ...spec,
+      encoding: {
+        ...encoding,
+        x: encoding.y,
+        y: encoding.x,
+      },
+      xAxis: spec.yAxis,
+      yAxis: spec.xAxis,
+      // Reference lines are anchored to the value axis. In horizontal
+      // mode the value axis becomes the rendered X; pass them through
+      // as `refLinesY` of the swapped spec so the internal vertical
+      // build emits them on its (numeric) Y, then `transposeMarkData`
+      // flips each `{ yAxis: v }` to `{ xAxis: v }` on the way out.
+    };
+    const swappedShared = sharedRanges ? swapSharedRanges(sharedRanges) : undefined;
+    const verticalOpt = buildSingleOption(
+      swappedSpec,
+      data,
+      theme,
+      globalGroupKeys,
+      valueOrders,
+      swappedShared,
+    );
+    return transposeOption(verticalOpt);
+  }
 
   const xIdx = colIndex(data, xField?.name);
   const yIdx = colIndex(data, yField?.name);
@@ -1672,31 +1890,6 @@ function buildSingleOption(
       : { scale: true };
   }
 
-  // Horizontal-strip mode: no Y column bound, X is the quantitative axis.
-  // The yAxis becomes a single empty category so points emitted by
-  // `buildElementSeries` (which collapse to `[xValue, ""]` in this mode)
-  // align on one row. Hide tick / label / split-line — the strip
-  // intentionally has no Y dimension to label. The axis line itself is
-  // kept (the existing onZero:false fix pins it to the grid edge).
-  const useRowIdxY = !yField;
-  const yAxisBase = useRowIdxY
-    ? {
-        type: "category",
-        data: [""],
-        ...axis,
-        axisTick: { show: false },
-        axisLabel: { show: false },
-        splitLine: { show: false },
-      }
-    : {
-        type: "value",
-        ...axis,
-        // Pre-computed bounds (faceted shared OR local nice-snap fit).
-        // User-pinned overrides from `buildAxisOverrides` still win
-        // via the merge spread below.
-        ...yFinalBounds,
-      };
-
   return {
     backgroundColor: "transparent",
     textStyle: { color: theme.fgPrimary },
@@ -1712,7 +1905,17 @@ function buildSingleOption(
     // Series still carry `name` so tooltips and exports stay labeled.
     legend: undefined,
     xAxis,
-    yAxis: mergeAxis(yAxisBase, buildAxisOverrides(spec.yAxis)),
+    yAxis: mergeAxis(
+      {
+        type: "value",
+        ...axis,
+        // Pre-computed bounds (faceted shared OR local nice-snap fit).
+        // User-pinned overrides from `buildAxisOverrides` still win
+        // via the merge spread below.
+        ...yFinalBounds,
+      },
+      buildAxisOverrides(spec.yAxis),
+    ),
     series,
     animationDuration: 250,
   } as EChartsOption;
@@ -1729,6 +1932,13 @@ function collectCategories(data: GraphData, xIdx: number, yIdx?: number): string
   // than reserve a blank slot between TC1.6 and DV.
   const filterByY = yIdx != null && yIdx >= 0;
   for (const r of data.rows) {
+    // Skip rows whose X value itself is missing — otherwise
+    // `toStr(null) === ""` (and `toStr("") === ""`) injects a phantom
+    // blank category at the leftmost slot of the axis. The user
+    // perceives this as "extra blank space on the left of the X
+    // axis" because all real categories are pushed one band to the
+    // right of where they belong.
+    if (isMissing(r[xIdx])) continue;
     if (filterByY) {
       const v = toNum(r[yIdx as number]);
       if (!Number.isFinite(v)) continue;
@@ -1816,49 +2026,29 @@ function buildElementSeries(
   ctx: BuildCtx,
 ): any[] | null {
   const { xIdx, yIdx, sizeIdx, xIsCategory, seriesName, style } = ctx;
+  if (yIdx < 0) return null;
 
   // When no X column is bound, collapse all points onto a single category
   // so the user sees the Y distribution as a strip / single column.
+  // The mirror case (Y unbound or Y categorical with X numeric — i.e. a
+  // horizontal-orientation chart) is handled one level up at the top of
+  // `buildSingleOption`: the spec is built with X↔Y swapped (so the
+  // existing vertical path produces correct marks), then the resulting
+  // option's axes and per-series data tuples are transposed back. That
+  // keeps this per-element builder a vertical-only code path.
   const useRowIdx = xIdx < 0;
   const SINGLE_X = "";
-  // Mirror case: when no Y column is bound but X is, treat the chart
-  // as a HORIZONTAL strip — X is the quantitative axis, every point sits
-  // on a single empty Y category (yAxis is set up as `type: "category",
-  // data: [""]` in the option builder). The user explicitly asked for
-  // this: "图形生成器不规定用户用 Y 还是 X 作为变量轴". Only the
-  // `points` element makes sense in this mode for now — boxplot/line/bar
-  // rely on a numeric Y for their summary geometry and are left as a
-  // follow-up.
-  const useColIdx = yIdx < 0;
-  const SINGLE_Y = "";
-  if (useColIdx) {
-    if (el.kind !== "points") return null;
-    if (useRowIdx) return null;        // no X AND no Y → nothing to plot
-    if (xIsCategory) return null;       // X-category + no Y degenerates to a single dot per cat
-  }
 
   // 取 (x, y[, size]) 数组
-  // y is `number` in the normal vertical case, or the empty-string
-  // SINGLE_Y placeholder when running in horizontal-strip mode (useColIdx).
-  const points: Array<{ x: unknown; y: number | string; size?: number }> = [];
+  const points: Array<{ x: unknown; y: number; size?: number }> = [];
   for (const i of rowIdxs) {
     const xv = useRowIdx ? SINGLE_X : data.rows[i][xIdx];
     // When a real X column is bound, drop rows whose X is missing so
     // they don't appear as a blank category (bar) or as NaN points
     // (which ECharts plots at the axis origin on a value scale).
     if (!useRowIdx && isMissing(xv)) continue;
-    // Horizontal mode (no Y bound): X IS the value axis — drop rows
-    // whose X doesn't parse to a finite number so they don't sit on
-    // the axis origin. Then collapse Y to the single empty category.
-    let yv: number | string;
-    if (useColIdx) {
-      if (!Number.isFinite(toNum(xv))) continue;
-      yv = SINGLE_Y;
-    } else {
-      const n = toNum(data.rows[i][yIdx]);
-      if (!Number.isFinite(n)) continue;
-      yv = n;
-    }
+    const yv = toNum(data.rows[i][yIdx]);
+    if (!Number.isFinite(yv)) continue;
     const sv = sizeIdx >= 0 ? toNum(data.rows[i][sizeIdx]) : undefined;
     points.push({ x: xv, y: yv, size: sv });
   }
@@ -1873,10 +2063,7 @@ function buildElementSeries(
 
       // Aggregated mode: collapse repeated X values to a single summary point
       // (mean/median/sum) plus optional error interval.
-      // Skipped in horizontal-strip mode (useColIdx): the summary stat
-      // aggregates Y values per X bucket, which has no meaning when Y
-      // isn't bound.
-      if (summaryStat !== "none" && !useRowIdx && !useColIdx && xIdx >= 0) {
+      if (summaryStat !== "none" && !useRowIdx && xIdx >= 0) {
         const agg = aggregatePoints(
           rowIdxs, data, xIdx, yIdx, xIsCategory, summaryStat, errorInterval,
         );
@@ -1932,15 +2119,9 @@ function buildElementSeries(
       //   by side around the X position). Best for reading every point.
       // "uniform" / "normal" → random pixel offset of the requested span.
       // "none" → no offset (points overlap).
-      // Horizontal-strip mode (useColIdx) has all points on a single Y
-      // category, so the stack-by-Y-bin logic is degenerate; disable
-      // jitter for now (a follow-up could add an X-binned vertical
-      // jitter for symmetry).
-      const jitterMode = useColIdx ? "none" : getOpt<string>(opts, "jitter", "auto");
+      const jitterMode = getOpt<string>(opts, "jitter", "auto");
       const jitterLimit = Math.max(0, Math.min(1, getOpt<number>(opts, "jitterLimit", 0.5)));
-      const offsets = useColIdx
-        ? null
-        : computeJitterOffsets(points as Array<{ x: unknown; y: number }>, jitterMode, jitterLimit);
+      const offsets = computeJitterOffsets(points, jitterMode, jitterLimit);
 
       const sym = markerToSymbol(style.point.marker);
       return [
@@ -2141,13 +2322,20 @@ function collectFacetKeys(
  *  empty facet panels (Group X / Group Y / Wrap) so they don't reserve
  *  a grid cell and squeeze the visible panels.
  *
- *  Definition of "plottable":
- *   - Quantitative Y bound: at least one row whose Y parses to a
- *     finite number (mirrors `collectCategories`'s yIdx finiteness
- *     filter, the same definition the legend uses to hide empty
- *     groups and the X-axis uses to drop empty cat slots).
- *   - No Y bound but quantitative X (e.g. histogram): at least one
- *     row whose X parses to a finite number.
+ *  Definition of "plottable" keys off the VALUE axis, not blindly on Y:
+ *   - Y bound to a quantitative column (continuous / datetime): at
+ *     least one row whose Y parses to a finite number (mirrors
+ *     `collectCategories`'s yIdx filter and the legend's hide-empty
+ *     policy).
+ *   - Y bound to a CATEGORICAL column (nominal / ordinal / id): the
+ *     chart renders horizontally — the value axis is X. Plottability
+ *     therefore checks X for a finite number. Without this branch a
+ *     Y-categorical chart treats every row as non-plottable
+ *     (`toNum("EV2")` → `NaN`), every facet stripe gets filtered, and
+ *     the degenerate guard in `buildGraph` falls back to the unfiltered
+ *     key list — so empty stripes like `Build=EV2` re-appear.
+ *   - No Y bound but X bound: check X for a finite number (covers
+ *     the X-numeric-only strip and horizontal-mode no-Y case).
  *   - Neither bound: any non-empty subset counts. */
 function hasPlottableRows(
   rows: GraphData["rows"],
@@ -2160,14 +2348,19 @@ function hasPlottableRows(
   // which silently returns -1 on a string array and would make this
   // helper always fall through to the `return true` fallback, defeating
   // the empty-panel filter entirely.
-  const yIdx = encoding.y ? colIndex(data, encoding.y.name) : -1;
-  if (yIdx >= 0) {
-    return rows.some((r) => Number.isFinite(toNum(r[yIdx])));
+  const yField = encoding.y;
+  const yIsQuantitative = yField && (yField.type === "continuous" || yField.type === "datetime");
+  if (yIsQuantitative) {
+    const yIdx = colIndex(data, yField.name);
+    if (yIdx >= 0) return rows.some((r) => Number.isFinite(toNum(r[yIdx])));
   }
-  const xIdx = encoding.x ? colIndex(data, encoding.x.name) : -1;
-  if (xIdx >= 0) {
-    return rows.some((r) => Number.isFinite(toNum(r[xIdx])));
+  const xField = encoding.x;
+  if (xField) {
+    const xIdx = colIndex(data, xField.name);
+    if (xIdx >= 0) return rows.some((r) => Number.isFinite(toNum(r[xIdx])));
   }
+  // Y bound but categorical and no X bound — degenerate: every row
+  // "is" a category occurrence, so any non-empty subset is plottable.
   return true;
 }
 
@@ -2221,7 +2414,45 @@ function computeSharedRanges(
   // Snapshot the Y field's column index here so the X branch below
   // can reuse it for empty-category filtering without re-resolving.
   const yIdxForCats = yField ? colIndex(data, yField.name) : -1;
-  if (yField && yIdxForCats >= 0) {
+  const yIsCategorical =
+    yField &&
+    (yField.type === "nominal" ||
+      yField.type === "ordinal" ||
+      yField.type === "id");
+  if (yField && yIdxForCats >= 0 && yIsCategorical) {
+    // Horizontal-mode Y: collect the union of Y categories across all
+    // panels so every faceted panel pins to the same Y category list
+    // (mirrors the X-categorical branch below). `swapSharedRanges`
+    // forwards this through as `xCats` of the recursive vertical
+    // build, which the inner builder then renders on what becomes the
+    // post-transpose Y axis.
+    const seen = new Set<string>();
+    const cats: string[] = [];
+    // Resolve X's index up front so the X-finiteness filter doesn't
+    // re-lookup per row. When X is bound to a quantitative column,
+    // drop rows whose X doesn't parse to a finite number — otherwise
+    // a Y-category that exists only in non-plottable rows reserves a
+    // dead slot on every panel (matches the inner per-element loop's
+    // `Number.isFinite(toNum(xv))` policy).
+    const xFieldForFilter = encoding.x;
+    const xIdxForFilter = xFieldForFilter ? colIndex(data, xFieldForFilter.name) : -1;
+    const xIsQuantForFilter =
+      xFieldForFilter?.type === "continuous" || xFieldForFilter?.type === "datetime";
+    for (const r of data.rows) {
+      if (isRowHidden(r)) continue;
+      if (isMissing(r[yIdxForCats])) continue;
+      if (xIsQuantForFilter && xIdxForFilter >= 0) {
+        const xv = toNum(r[xIdxForFilter]);
+        if (!Number.isFinite(xv)) continue;
+      }
+      const k = toStr(r[yIdxForCats]);
+      if (!seen.has(k)) {
+        seen.add(k);
+        cats.push(k);
+      }
+    }
+    out.yCats = applyValueOrder(cats, valueOrders?.[yField.name]);
+  } else if (yField && yIdxForCats >= 0) {
     let dataMin = Infinity;
     let dataMax = -Infinity;
     for (const r of data.rows) {
@@ -2273,6 +2504,11 @@ function computeSharedRanges(
         // filter further up.
         for (const r of data.rows) {
           if (isRowHidden(r)) continue;
+          // Skip rows whose X value itself is missing — otherwise
+          // `toStr(null) === ""` injects a phantom blank category at
+          // the start of the axis, which the user perceives as "extra
+          // blank space on the left of the X axis".
+          if (isMissing(r[xIdx])) continue;
           if (yIdxForCats >= 0) {
             const y = toNum(r[yIdxForCats]);
             if (!Number.isFinite(y)) continue;
