@@ -899,7 +899,14 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 <div className="gb-empty gb-error">{error}</div>
               ) : !data ? (
                 <div className="gb-empty">{t("graph.noData")}</div>
-              ) : !encoding.y && !activeKinds.has("histogram") ? (
+              ) : !encoding.x && !encoding.y && !activeKinds.has("histogram") ? (
+                // Drag-hint shows only when neither axis is bound (and
+                // there's no histogram). Y-only renders a vertical strip
+                // and X-only renders a horizontal strip (mirror), so the
+                // moment either axis is bound we drop straight into the
+                // chart builder and let the renderer's horizontal-mode
+                // swap handle the X-only case (see `isHorizontal` /
+                // `xOnlyMirror` in transform.ts).
                 <div className="gb-empty">{t("graph.dragHint")}</div>
               ) : (
                 // `filteredData` is null iff `data` is null; the `!data`
@@ -2551,11 +2558,15 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
    *  identical so we factor the section to avoid drift between them. */
   const renderGridSection = (which: "major" | "minor") => {
     const isMajor = which === "major";
-    // Theme defaults: major grid visible (dashed gray), minor grid
-    // hidden. Reflect that as the initial checkbox state when the user
-    // hasn't overridden it yet, so the UI matches what they see.
+    // Theme defaults: BOTH major and minor gridlines are hidden out of
+    // the box (see theme.ts's splitLine/minorSplitLine `show:false`).
+    // The checkbox must reflect that or else it will display "checked"
+    // on a chart that's actually showing nothing — and any toggle the
+    // user makes will be erased by the `nextShown === defaultShown ?
+    // undefined : nextShown` shortcut below, which would silently
+    // refuse to persist a `true`.
     const shown = isMajor
-      ? (cfg.showMajorGrid ?? true)
+      ? (cfg.showMajorGrid ?? false)
       : (cfg.showMinorGrid ?? false);
     const style = (isMajor ? cfg.majorGridStyle : cfg.minorGridStyle) ?? {};
     // Per-section default color: major picks the darker swatch so the
@@ -2578,10 +2589,13 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
             type="checkbox"
             checked={shown}
             onChange={(e) => {
-              // Theme default for major is shown, minor is hidden — write
-              // undefined when the new value matches default so we keep
-              // the persisted config minimal.
-              const defaultShown = isMajor ? true : false;
+              // Both major and minor are hidden by theme default, so an
+              // unchecked checkbox matches the default → persist as
+              // undefined (keeps the saved config minimal). A checked
+              // checkbox always needs an explicit `true` override so the
+              // transform-layer `buildAxisOverrides` emits a splitLine
+              // fragment that flips `show:false` back to `true`.
+              const defaultShown = false;
               const nextShown = e.target.checked;
               const fieldName = isMajor ? "showMajorGrid" : "showMinorGrid";
               patch({
