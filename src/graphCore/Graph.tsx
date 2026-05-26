@@ -387,7 +387,21 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       const p = pendingPatch;
       pendingPatch = null;
       if (!p || (!p.xAxis && !p.yAxis)) return;
-      inst.setOption(p as echarts.EChartsCoreOption, { lazyUpdate: true, silent: true });
+      // `animation: false` kills the per-shape update tween (default
+      // animationDurationUpdate is ~300 ms). Without this, every
+      // setOption restarts a 300 ms transition from each scatter
+      // point / boxplot rect / bar's CURRENT mid-animation position
+      // toward the new target — the visible effect is that all
+      // non-path shapes trail the cursor by ~half a second. The line
+      // path stays in sync because ECharts redraws line `d` directly
+      // from the projected points, which the user noticed as "the
+      // line follows in real-time but everything else lags".
+      // Settings are restored to defaults on the post-mouseup full
+      // setOption(option, true) in the option-prop useEffect.
+      inst.setOption(
+        { ...p, animation: false } as echarts.EChartsCoreOption,
+        { lazyUpdate: true, silent: true },
+      );
     };
     const schedulePatch = (p: { xAxis?: Record<string, unknown>; yAxis?: Record<string, unknown> }) => {
       pendingPatch = p;
