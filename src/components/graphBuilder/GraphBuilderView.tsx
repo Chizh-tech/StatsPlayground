@@ -770,6 +770,20 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   valueOrders={valueOrders}
                   onYAxisDblClick={() => setYAxisDialogOpen(true)}
                   onXAxisDblClick={() => setXAxisDialogOpen(true)}
+                  onAxisRangeChange={(axis, min, max) => {
+                    // JMP-style direct-manipulation drag-zoom / drag-pan
+                    // on the axis strip. The renderer previews via
+                    // setOption during the gesture; on mouseup it hands
+                    // back the final numeric bounds, which we pin onto
+                    // the per-builder yAxis / xAxis config. Other
+                    // overrides (decimals / inverse / grid styling) are
+                    // preserved by spreading the existing config first.
+                    if (axis === "y") {
+                      setYAxisConfig({ ...(item.yAxis ?? {}), min, max });
+                    } else {
+                      setXAxisConfig({ ...(item.xAxis ?? {}), min, max });
+                    }
+                  }}
                 />
               )}
             </div>
