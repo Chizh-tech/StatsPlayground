@@ -2382,20 +2382,25 @@ export function buildGraph(
   // groups are excluded from the range calc so visible data fills the
   // chart area instead of being squashed by data that never renders.
   const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec));
-  // 1D facet (only groupX OR only groupY): drop facet keys whose
-  // subset has no plottable rows — empty panels would otherwise eat
-  // grid space and squeeze the visible panels (the user's
-  // "Build=EV2 is empty" complaint). 2D Trellis (both axes bound)
-  // intentionally KEEPS empty cells because dropping one would break
-  // row/col alignment and leave a hole in the grid (which is itself
-  // a useful signal that "this row×col combo has no data").
-  const is2D = !!fx && !!fy;
-  const nonEmptyXKeys = is2D || !fx ? xKeys : xKeys.filter((xKey) => {
+  // Drop facet keys whose ENTIRE row / column has no plottable rows.
+  // Works the same in 1D (only groupX or only groupY) and 2D Trellis:
+  //   • If every row in the Y stripe `Build=EV2` is non-plottable,
+  //     every (EV2, *) cell is too — dropping the whole Y key just
+  //     removes one grid row, alignment between the surviving cells
+  //     is preserved.
+  //   • Likewise for an entirely empty X column.
+  //   • An individual empty CELL whose Y row and X column both still
+  //     have data elsewhere is intentionally kept (rendered as an
+  //     empty panel) by the inner cell loop below — that empty cell
+  //     is itself a useful signal that "this Y×X combo has no data".
+  // Without this, the user's screenshot showed `Build=EV2` as a row
+  // of four blank panels eating ¼ of the grid height.
+  const nonEmptyXKeys = !fx ? xKeys : xKeys.filter((xKey) => {
     if (xKey === null) return true;
     const subRows = data.rows.filter((r) => toStr(r[fxIdx]) === xKey);
     return hasPlottableRows(subRows, encoding, data);
   });
-  const nonEmptyYKeys = is2D || !fy ? yKeys : yKeys.filter((yKey) => {
+  const nonEmptyYKeys = !fy ? yKeys : yKeys.filter((yKey) => {
     if (yKey === null) return true;
     const subRows = data.rows.filter((r) => toStr(r[fyIdx]) === yKey);
     return hasPlottableRows(subRows, encoding, data);
