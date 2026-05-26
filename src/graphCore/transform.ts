@@ -728,9 +728,10 @@ function buildRefLinesCarrier(
   const userValid = refLines.filter((r) => Number.isFinite(r.value));
   // Auto-spec entries are pre-resolved per axis by the caller (it passes
   // `spec.autoSpecY` for the Y carrier and `spec.autoSpecX` for the X
-  // carrier), so there's no axis branch here — we always emit whatever
-  // was handed in. Keeps this helper truly orientation-agnostic.
-  const autoEntries = buildAutoSpecMarkLineData(autoSpec);
+  // carrier). Pass `axis` through so the helper emits the right
+  // markLine field (`yAxis` → horizontal line, `xAxis` → vertical
+  // line) and matches the user-line label-position convention below.
+  const autoEntries = buildAutoSpecMarkLineData(autoSpec, axis);
   if (userValid.length === 0 && autoEntries.length === 0) return null;
   const axisField = axis === "y" ? "yAxis" : "xAxis";
   // Position the label so it sits inside the chart area at the
@@ -802,25 +803,36 @@ const AUTO_SPEC_TARGET_COLOR = "#00C853";
 
 /** Translate an `AutoSpec` into ECharts markLine data entries. Skips
  *  any limit whose value isn't a finite number so a partially-filled
- *  spec (e.g. only USL set) only emits the lines it can. */
-function buildAutoSpecMarkLineData(autoSpec: AutoSpec | undefined): any[] {
+ *  spec (e.g. only USL set) only emits the lines it can.
+ *
+ *  `axis` controls orientation:
+ *    - `"y"` → emits horizontal lines (`yAxis: value`) with the label
+ *      pinned to the right edge (`insideEndTop`).
+ *    - `"x"` → emits vertical lines (`xAxis: value`) with the label
+ *      pinned to the top-left (`insideStartTop`).
+ *  Same convention used for user-defined ref lines in
+ *  `buildRefLinesCarrier`, so both kinds of lines look identical
+ *  along the same axis. */
+function buildAutoSpecMarkLineData(autoSpec: AutoSpec | undefined, axis: "x" | "y"): any[] {
   if (!autoSpec) return [];
   const out: any[] = [];
-  const push = (y: number | undefined, label: string, color: string) => {
-    if (!Number.isFinite(y as number)) return;
+  const axisField = axis === "y" ? "yAxis" : "xAxis";
+  const labelPosition = axis === "y" ? "insideEndTop" : "insideStartTop";
+  const push = (v: number | undefined, label: string, color: string) => {
+    if (!Number.isFinite(v as number)) return;
     // Append the numeric value to the label so the user can read the
     // spec limit at a glance without hunting for a tooltip. Round to
     // 10 significant digits to suppress IEEE-754 noise like
     // `4.2228965400000001` while still preserving the natural
     // representation of clean spec values (e.g. 4.5 stays "4.5").
-    const text = `${label} = ${Number((y as number).toPrecision(10)).toString()}`;
+    const text = `${label} = ${Number((v as number).toPrecision(10)).toString()}`;
     out.push({
-      yAxis: y,
+      [axisField]: v,
       name: label,
       lineStyle: { color, width: 1, type: "dashed" },
       label: {
         show: true,
-        position: "insideEndTop",
+        position: labelPosition,
         formatter: text,
         color,
         fontSize: 11,
@@ -828,7 +840,8 @@ function buildAutoSpecMarkLineData(autoSpec: AutoSpec | undefined): any[] {
     });
   };
   // Render in LSL → Target → USL order so when limits sit close
-  // together the labels stack in a predictable vertical sequence.
+  // together the labels stack in a predictable sequence (vertical for
+  // horizontal lines, horizontal for vertical lines).
   push(autoSpec.lsl, "LSL", AUTO_SPEC_LIMIT_COLOR);
   push(autoSpec.target, "Target", AUTO_SPEC_TARGET_COLOR);
   push(autoSpec.usl, "USL", AUTO_SPEC_LIMIT_COLOR);
