@@ -1511,7 +1511,9 @@ function buildSingleOption(
   // tick density (~8 ticks). Category and time axes keep their
   // existing behavior — categories use the data list, time uses
   // ECharts' built-in time picker plus any sharedRanges extent.
-  //   - Faceted: pin to sharedRanges.x{Min,Max,Interval}
+  //   - Faceted: pin to sharedRanges.x{Min,Max} only — see the
+  //     yFinalBounds block below for why `sharedRanges.xInterval` is
+  //     intentionally NOT spread here.
   //   - Single panel: nice-fit over visible (non-hidden) rows; falls
   //     back to `scale: true` when there's no finite X data so ECharts
   //     auto-fits without forcing the axis to include 0.
@@ -1520,7 +1522,12 @@ function buildSingleOption(
     if (sharedRanges?.xMin != null || sharedRanges?.xMax != null) {
       if (sharedRanges.xMin != null) xFinalBounds.min = sharedRanges.xMin;
       if (sharedRanges.xMax != null) xFinalBounds.max = sharedRanges.xMax;
-      if (sharedRanges.xInterval != null) xFinalBounds.interval = sharedRanges.xInterval;
+      // Deliberately NOT spreading sharedRanges.xInterval — see the
+      // matching note in yFinalBounds. With identical min/max across
+      // panels, ECharts' auto-tick picks an identical interval; pinning
+      // would re-introduce the Phase-4 drag bug where setOption merges
+      // keep the old step alive after a drag changes min/max, making
+      // tick values drift off the nice grid.
     } else if (xIdx >= 0) {
       let dataMin = Infinity;
       let dataMax = -Infinity;
@@ -1621,7 +1628,16 @@ function buildSingleOption(
     yFinalBounds = {};
     if (sharedRanges.yMin != null) yFinalBounds.min = sharedRanges.yMin;
     if (sharedRanges.yMax != null) yFinalBounds.max = sharedRanges.yMax;
-    if (sharedRanges.yInterval != null) yFinalBounds.interval = sharedRanges.yInterval;
+    // Deliberately NOT spreading sharedRanges.yInterval, even though
+    // computeSharedRanges still emits it for potential future
+    // consumers. Phase 4 (commit 54b0642) established that any
+    // explicit `interval` baked into the base axis option survives
+    // subsequent setOption merges — so the moment the user drags Y to
+    // a new {min,max} the old step is reused from the new min as
+    // start, producing tick values that drift off the nice grid
+    // ("刻度数字一直在动"). With identical min/max across panels,
+    // ECharts' auto-tick picks an identical interval per panel anyway,
+    // so we get the same visual density without the drag regression.
   } else {
     let dataMin = Infinity;
     let dataMax = -Infinity;
