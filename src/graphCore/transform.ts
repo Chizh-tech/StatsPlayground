@@ -1191,13 +1191,22 @@ function buildSingleOption(
   //   - rawXCats: panel-local cats whose Y is finite for at least
   //     one row (mirrors the legend's hide-empty-group filter).
   //   - localXCats: rawXCats reordered by the user's Value Order.
-  //   - xCats: when faceted, intersect with the global category union
-  //     so cross-panel category ORDER stays consistent but empty
-  //     local slots are still dropped.
+  //   - xCats: when faceted, use the FULL cross-panel union
+  //     (sharedRanges.xCats) rather than the local intersection.
+  //     Reason: when users compare panels side-by-side under Group X
+  //     they expect every panel to expose the SAME X slots — a panel
+  //     whose data is missing one category should leave that slot
+  //     empty (ECharts auto-fills `{value:'-'}` markers via the box
+  //     builder's `xGroups.get(cat) ?? []` path) rather than silently
+  //     compress its X axis so identical X positions line up across
+  //     panels at different pixel offsets. The "drop empty local
+  //     slots" intent from earlier rounds is now handled one level
+  //     up at the facet expansion in `buildGraph`, which drops the
+  //     whole panel when there's no data to show at all.
   const rawXCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx, yIdx) : [];
   const localXCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
   const xCats: string[] = xIsCategory && sharedRanges?.xCats
-    ? sharedRanges.xCats.filter((c) => localXCats.includes(c))
+    ? sharedRanges.xCats
     : localXCats;
 
   // —— 直方图：忽略 Y，仅 X 数值 ——
@@ -2077,6 +2086,36 @@ function collectFacetKeys(
   return applyValueOrder(seen, valueOrders?.[field.name]);
 }
 
+/** Does this row subset contain at least one row that would actually
+ *  produce a mark on the chart? Used by `buildGraph` to drop entirely
+ *  empty facet panels (Group X / Group Y / Wrap) so they don't reserve
+ *  a grid cell and squeeze the visible panels.
+ *
+ *  Definition of "plottable":
+ *   - Quantitative Y bound: at least one row whose Y parses to a
+ *     finite number (mirrors `collectCategories`'s yIdx finiteness
+ *     filter, the same definition the legend uses to hide empty
+ *     groups and the X-axis uses to drop empty cat slots).
+ *   - No Y bound but quantitative X (e.g. histogram): at least one
+ *     row whose X parses to a finite number.
+ *   - Neither bound: any non-empty subset counts. */
+function hasPlottableRows(
+  rows: GraphData["rows"],
+  encoding: GraphSpec["encoding"],
+  columns: GraphData["columns"],
+): boolean {
+  if (rows.length === 0) return false;
+  const yIdx = encoding.y ? columns.findIndex((c) => c.name === encoding.y!.name) : -1;
+  if (yIdx >= 0) {
+    return rows.some((r) => Number.isFinite(toNum(r[yIdx])));
+  }
+  const xIdx = encoding.x ? columns.findIndex((c) => c.name === encoding.x!.name) : -1;
+  if (xIdx >= 0) {
+    return rows.some((r) => Number.isFinite(toNum(r[xIdx])));
+  }
+  return true;
+}
+
 /** Compute shared X / Y axis ranges across the FULL faceted dataset.
  *
  *  Faceting splits the rows into per-panel subsets whose local min/max
@@ -2289,11 +2328,25 @@ export function buildGraph(
       };
     }
     const wIdx = colIndex(data, fw.name);
-    const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(wrapKeys.length))));
-    const rows = Math.max(1, Math.ceil(wrapKeys.length / cols));
     // Pin every wrap panel to the same axis bounds for fair comparison.
     const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec));
-    const panels = wrapKeys.map((key) => {
+    // Drop wrap keys whose subset has no plottable rows so we don't
+    // render an empty panel taking up grid space (e.g. Build=EV2 with
+    // every Y NaN). Bug fix: previously these blank panels still
+    // claimed a cell, leaving the visible panels squeezed alongside
+    // wasted whitespace. See `hasPlottableRows` for the "plottable"
+    // definition (matches collectCategories' yIdx finiteness filter).
+    const nonEmptyWrapKeys = wrapKeys.filter((key) => {
+      const subRows = data.rows.filter((r) => toStr(r[wIdx]) === key);
+      return hasPlottableRows(subRows, encoding, data.columns);
+    });
+    // If every panel got filtered out (degenerate input), fall back to
+    // the original key list so the user at least sees blank panels
+    // rather than a silently empty graph.
+    const effectiveWrapKeys = nonEmptyWrapKeys.length > 0 ? nonEmptyWrapKeys : wrapKeys;
+    const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(effectiveWrapKeys.length))));
+    const rows = Math.max(1, Math.ceil(effectiveWrapKeys.length / cols));
+    const panels = effectiveWrapKeys.map((key) => {
       const subRows = data.rows.filter((r) => toStr(r[wIdx]) === key);
       const subData: GraphData = { columns: data.columns, rows: subRows };
       const subSpec: GraphSpec = {
@@ -2324,11 +2377,34 @@ export function buildGraph(
   // groups are excluded from the range calc so visible data fills the
   // chart area instead of being squashed by data that never renders.
   const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec));
+  // 1D facet (only groupX OR only groupY): drop facet keys whose
+  // subset has no plottable rows — empty panels would otherwise eat
+  // grid space and squeeze the visible panels (the user's
+  // "Build=EV2 is empty" complaint). 2D Trellis (both axes bound)
+  // intentionally KEEPS empty cells because dropping one would break
+  // row/col alignment and leave a hole in the grid (which is itself
+  // a useful signal that "this row×col combo has no data").
+  const is2D = !!fx && !!fy;
+  const nonEmptyXKeys = is2D || !fx ? xKeys : xKeys.filter((xKey) => {
+    if (xKey === null) return true;
+    const subRows = data.rows.filter((r) => toStr(r[fxIdx]) === xKey);
+    return hasPlottableRows(subRows, encoding, data.columns);
+  });
+  const nonEmptyYKeys = is2D || !fy ? yKeys : yKeys.filter((yKey) => {
+    if (yKey === null) return true;
+    const subRows = data.rows.filter((r) => toStr(r[fyIdx]) === yKey);
+    return hasPlottableRows(subRows, encoding, data.columns);
+  });
+  // Degenerate guard: if every panel got filtered out, fall back to
+  // the original key list so the user sees blank panels rather than
+  // a silently empty graph.
+  const effectiveXKeys = nonEmptyXKeys.length > 0 ? nonEmptyXKeys : xKeys;
+  const effectiveYKeys = nonEmptyYKeys.length > 0 ? nonEmptyYKeys : yKeys;
   const panels: BuiltGraph["panels"] = [];
   // row-major: outer loop = Y (top → bottom rows), inner loop = X
   // (left → right within each row). Matches the CSS grid in <Graph>.
-  for (const yKey of yKeys) {
-    for (const xKey of xKeys) {
+  for (const yKey of effectiveYKeys) {
+    for (const xKey of effectiveXKeys) {
       const subRows = data.rows.filter((r) => {
         if (fx && xKey !== null && toStr(r[fxIdx]) !== xKey) return false;
         if (fy && yKey !== null && toStr(r[fyIdx]) !== yKey) return false;
@@ -2353,7 +2429,7 @@ export function buildGraph(
 
   return {
     panels,
-    cols: Math.max(1, xKeys.length),
-    rows: Math.max(1, yKeys.length),
+    cols: Math.max(1, effectiveXKeys.length),
+    rows: Math.max(1, effectiveYKeys.length),
   };
 }
