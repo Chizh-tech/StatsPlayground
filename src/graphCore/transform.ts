@@ -2360,9 +2360,14 @@ function buildSingleOption(
             if (yWidth <= 0) {
               buckets[0]++;
             } else {
-              let bin = Math.floor((v - yLo) / yWidth);
-              if (bin < 0) bin = 0;
-              else if (bin >= binCount) bin = binCount - 1;
+              const bin = Math.floor((v - yLo) / yWidth);
+              // Skip values outside the visible axis range. Without
+              // this guard, panning/zooming the axis dumps every
+              // off-screen value into the leftmost or rightmost
+              // bin, producing a spurious tall "sliver" bar at the
+              // canvas edge that doesn't represent real data inside
+              // the visible window.
+              if (bin < 0 || bin >= binCount) continue;
               buckets[bin]++;
             }
           }
@@ -2684,9 +2689,10 @@ function buildSingleOption(
                 if (rowCat !== cat) continue;
                 const v = toNum(row[yIdx]);
                 if (!Number.isFinite(v)) continue;
-                let bin = Math.floor((v - yLo) / layerYWidth);
-                if (bin < 0) bin = 0;
-                else if (bin >= bc) bin = bc - 1;
+                const bin = Math.floor((v - yLo) / layerYWidth);
+                // Skip out-of-range values (same rationale as the
+                // primary bar bucketing loop above).
+                if (bin < 0 || bin >= bc) continue;
                 buckets[bin]++;
               }
               layerCatGroupCounts.set(cat, buckets);
@@ -2876,9 +2882,13 @@ function buildSingleOption(
         if (centers.length === 0 || width <= 0) return buckets;
         for (const v of vals) {
           if (!Number.isFinite(v)) continue;
-          let bin = Math.floor((v - gridLo) / width);
-          if (bin < 0) bin = 0;
-          else if (bin >= centers.length) bin = centers.length - 1;
+          const bin = Math.floor((v - gridLo) / width);
+          // Skip out-of-range values. Panning the axis to narrow
+          // the visible range used to pile off-screen values into
+          // the edge bin, producing a spurious tall bar at the
+          // axis boundary; only count values that actually fall
+          // inside the visible bin grid.
+          if (bin < 0 || bin >= centers.length) continue;
           buckets[bin]++;
         }
         return buckets;
