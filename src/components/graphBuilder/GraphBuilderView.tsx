@@ -554,6 +554,40 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     e.dataTransfer.effectAllowed = "copy";
   };
 
+  /** Bind a field to an encoding slot, atomically clearing the
+   *  axis's data-range overrides (min / max / tickInterval) when the
+   *  X or Y slot's column actually changes to a different one. See
+   *  the long comment in `handleDropOnSlot` for the rationale. */
+  const bindFieldToSlot = useCallback(
+    (slot: SlotKey, field: FieldRef) => {
+      const prevField = item.encoding[slot];
+      const fieldChanged =
+        (slot === "x" || slot === "y") &&
+        prevField !== undefined &&
+        prevField.name !== field.name;
+      if (fieldChanged) {
+        const axisKey: "xAxis" | "yAxis" = slot === "x" ? "xAxis" : "yAxis";
+        const prevAxis = item[axisKey];
+        const needsAxisReset =
+          prevAxis !== undefined &&
+          (prevAxis.min !== undefined ||
+            prevAxis.max !== undefined ||
+            prevAxis.tickInterval !== undefined);
+        const nextAxis = needsAxisReset
+          ? { ...prevAxis, min: undefined, max: undefined, tickInterval: undefined }
+          : prevAxis;
+        updateItem(item.id, {
+          encoding: { ...item.encoding, [slot]: field },
+          ...(needsAxisReset ? { [axisKey]: nextAxis } : {}),
+        });
+        markDirty();
+        return;
+      }
+      setEncoding((prev) => ({ ...prev, [slot]: field }));
+    },
+    [item.id, item.encoding, item.xAxis, item.yAxis, updateItem, markDirty, setEncoding],
+  );
+
   const handleDropOnSlot = (slot: SlotKey, e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -563,7 +597,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     if (!raw) return;
     try {
       const field = JSON.parse(raw) as FieldRef;
-      setEncoding((prev) => ({ ...prev, [slot]: field }));
+      // When the user swaps the column on a value-axis slot (x or y)
+      // to a DIFFERENT column, drop the data-range-dependent axis
+      // overrides (min / max / tickInterval) on that axis. The new
+      // column will almost always span a different numeric range —
+      // e.g. swapping a column scaled in centigrade (4.3 - 4.6) for
+      // one in Pa (1e4 - 1e6) — and keeping the old pinned bounds
+      // would silently crop every point off-screen. Other axis
+      // overrides (decimals, inverse, minor-tick count, gridlines,
+      // axis-line visibility, tick position) are display preferences
+      // independent of data scale and stay untouched, so the user's
+      // axis-line / gridline preferences survive a column swap.
+      bindFieldToSlot(slot, field);
     } catch {
       // ignore
     }
@@ -883,11 +928,17 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 if (!raw) return;
                 try {
                   const field = JSON.parse(raw) as FieldRef;
-                  setEncoding((prev) => {
-                    if (!prev.x) return { ...prev, x: field };
-                    if (!prev.y) return { ...prev, y: field };
-                    return { ...prev, y: field };
-                  });
+                  // Canvas-drop is the "didn't aim at a slot" fallback:
+                  // fill X first, then Y, otherwise replace Y. Route
+                  // through `bindFieldToSlot` so the replace-Y branch
+                  // gets the same automatic Y-axis range reset that a
+                  // direct slot drop on Y would get.
+                  const slot: SlotKey = !encoding.x
+                    ? "x"
+                    : !encoding.y
+                      ? "y"
+                      : "y";
+                  bindFieldToSlot(slot, field);
                 } catch {
                   // ignore
                 }
