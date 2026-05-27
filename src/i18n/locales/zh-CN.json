@@ -461,7 +461,6 @@
       "box": { "outlier": "离群", "quantile": "分位", "normal": "普通", "notched": "带凹口" },
       "histStyle": "直方图样式",
       "smoothness": "平滑度",
-      "showStats": "显示统计量",
       "showCounts": "显示频数",
       "showPercents": "显示百分比",
       "histStyles": { "bar": "柱状", "polygon": "折线", "kde": "核密度", "shadowgram": "叠影图" }

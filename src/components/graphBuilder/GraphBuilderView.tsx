@@ -2398,13 +2398,12 @@ function BoxplotOptions({ options, onChange, t }: OptionsEditorProps) {
   );
 }
 
-/** Histogram options panel — JMP-style style selector + per-bin labels +
- *  stats overlay. The Smoothness slider only matters for KDE so we hide
- *  it for the other styles to reduce visual noise. */
+/** Histogram options panel — JMP-style style selector + per-bin labels.
+ *  The Smoothness slider only matters for KDE so we hide it for the
+ *  other styles to reduce visual noise. */
 function HistogramOptions({ options, onChange, t }: OptionsEditorProps) {
   const histStyle = getOpt<string>(options, "histStyle", "bar");
   const smoothness = getOpt<number>(options, "smoothness", 0.5);
-  const showStats = getOpt<boolean>(options, "showStats", false);
   const showCounts = getOpt<boolean>(options, "showCounts", false);
   const showPercents = getOpt<boolean>(options, "showPercents", false);
   return (
@@ -2434,13 +2433,6 @@ function HistogramOptions({ options, onChange, t }: OptionsEditorProps) {
           />
         </OptRow>
       )}
-      <OptRow label={t("graph.opt.showStats")}>
-        <input
-          type="checkbox"
-          checked={showStats}
-          onChange={(e) => onChange({ showStats: e.target.checked })}
-        />
-      </OptRow>
       <OptRow label={t("graph.opt.showCounts")}>
         <input
           type="checkbox"

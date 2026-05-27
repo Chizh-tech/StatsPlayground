@@ -461,7 +461,6 @@
       "box": { "outlier": "Ngoại lai", "quantile": "Phân vị", "normal": "Bình thường", "notched": "Có khe" },
       "histStyle": "Kiểu biểu đồ",
       "smoothness": "Độ mịn",
-      "showStats": "Hiện thống kê",
       "showCounts": "Hiện số đếm",
       "showPercents": "Hiện phần trăm",
       "histStyles": { "bar": "Cột", "polygon": "Đa giác", "kde": "Kernel Density", "shadowgram": "Shadowgram" }

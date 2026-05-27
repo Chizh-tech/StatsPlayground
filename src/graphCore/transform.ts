@@ -2213,7 +2213,6 @@ function buildSingleOption(
     const opts = histEl.options;
     const histStyle = getOpt<string>(opts, "histStyle", "bar"); // bar|polygon|kde|shadowgram
     const smoothness = Math.max(0, Math.min(1, getOpt<number>(opts, "smoothness", 0.5)));
-    const showStats = getOpt<boolean>(opts, "showStats", false);
     const showCounts = getOpt<boolean>(opts, "showCounts", false);
     const showPercents = getOpt<boolean>(opts, "showPercents", false);
 
@@ -2767,129 +2766,6 @@ function buildSingleOption(
         });
       });
 
-      // ——— Stats overlay (showStats) ———
-      // Per-category mean/std annotation. Renders two carrier custom
-      // series:
-      //   1. A short dashed horizontal line at each cat's mean Y,
-      //      spanning the cat slot.
-      //   2. A two-line "μ=… σ=…" text label in the upper-left of
-      //      each cat slot.
-      // Stats are computed across ALL visible rows in the category
-      // (groups collapsed) so the annotation reflects the column-wide
-      // distribution per category, matching JMP's per-cat summary.
-      if (showStats && xCats.length > 0) {
-        const statsData: Array<[string, number, number, number]> = [];
-        for (const cat of xCats) {
-          const vals: number[] = [];
-          for (let i = 0; i < data.rows.length; i++) {
-            const row = data.rows[i];
-            if (isRowHidden(row)) continue;
-            const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
-            if (rowCat !== cat) continue;
-            const v = toNum(row[yIdx]);
-            if (Number.isFinite(v)) vals.push(v);
-          }
-          if (vals.length === 0) continue;
-          const { mean, std, n } = meanStd(vals);
-          statsData.push([cat, mean, std, n]);
-        }
-        if (statsData.length > 0) {
-          // Mean marker line per cat — dashed, spans the slot in the
-          // direction PERPENDICULAR to the value axis.
-          series.push({
-            id: "__hist_cat_stats_mean",
-            type: "custom",
-            name: "__hist_stats_mean__",
-            coordinateSystem: "cartesian2d",
-            data: statsData,
-            renderItem: (params: any, api: any) => {
-              const catIsX = !String(params.seriesId || "").endsWith("__t");
-              const catName = catIsX
-                ? String(api.value(0))
-                : String(api.value(1));
-              const mean = (catIsX ? api.value(1) : api.value(0)) as number;
-              if (!Number.isFinite(mean)) return null;
-              const xy: [any, any] = catIsX ? [catName, mean] : [mean, catName];
-              const ctr = api.coord(xy);
-              if (!ctr) return null;
-              const slotPx = catIsX
-                ? api.size([1, 0])[0]
-                : api.size([0, 1])[1];
-              const shape = catIsX
-                ? {
-                    x1: ctr[0] - slotPx / 2 + 1,
-                    y1: ctr[1],
-                    x2: ctr[0] + slotPx / 2 - 1,
-                    y2: ctr[1],
-                  }
-                : {
-                    x1: ctr[0],
-                    y1: ctr[1] - slotPx / 2 + 1,
-                    x2: ctr[0],
-                    y2: ctr[1] + slotPx / 2 - 1,
-                  };
-              return {
-                type: "line",
-                shape,
-                style: {
-                  stroke: theme.fgPrimary,
-                  lineWidth: 1.5,
-                  lineDash: [4, 3],
-                },
-              };
-            },
-            z: 4,
-            silent: true,
-            tooltip: { show: false },
-            legendHoverLink: false,
-          });
-          // Per-cat stats text — anchored in the upper-left CORNER of
-          // each slot regardless of orientation.
-          series.push({
-            id: "__hist_cat_stats_text",
-            type: "custom",
-            name: "__hist_stats_text__",
-            coordinateSystem: "cartesian2d",
-            data: statsData,
-            renderItem: (params: any, api: any) => {
-              const catIsX = !String(params.seriesId || "").endsWith("__t");
-              const catName = catIsX
-                ? String(api.value(0))
-                : String(api.value(1));
-              const mean = (catIsX ? api.value(1) : api.value(0)) as number;
-              const std = api.value(2) as number;
-              const sys = params.coordSys;
-              const xy: [any, any] = catIsX ? [catName, 0] : [0, catName];
-              const ctr = api.coord(xy);
-              if (!ctr) return null;
-              const slotPx = catIsX
-                ? api.size([1, 0])[0]
-                : api.size([0, 1])[1];
-              const fmt = (v: number) =>
-                Number.isFinite(v) ? v.toFixed(3) : "—";
-              const xText = catIsX ? ctr[0] - slotPx / 2 + 4 : sys.x + 4;
-              const yText = catIsX ? sys.y + 4 : ctr[1] - slotPx / 2 + 4;
-              return {
-                type: "text",
-                style: {
-                  text: `μ=${fmt(mean)}\nσ=${fmt(std)}`,
-                  x: xText,
-                  y: yText,
-                  fill: theme.fgPrimary,
-                  font: "10px sans-serif",
-                  textAlign: "left",
-                  textVerticalAlign: "top",
-                },
-              };
-            },
-            z: 5,
-            silent: true,
-            tooltip: { show: false },
-            legendHoverLink: false,
-          });
-        }
-      }
-
       // Category divider lines: JMP draws thin vertical guides at
       // each category boundary when a histogram is added, so the
       // left-anchored bars read against a clear visual edge. We use
@@ -3096,52 +2972,6 @@ function buildSingleOption(
       const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), spec.autoSpecX, theme, "x");
       if (refCarrierX) series.push(refCarrierX);
 
-      // Stats overlay: top-left "Mean=… Std Dev=…" text + a vertical
-      // marker line at the mean rendered via a tiny markLine carrier
-      // series. We don't reuse the ref-lines carrier because those are
-      // user-facing/spec-driven; this is a derived stat that toggles
-      // with the option.
-      const graphic: unknown[] = [];
-      if (showStats) {
-        const { mean, std, n } = meanStd(allXs);
-        if (Number.isFinite(mean) && n > 0) {
-          // Format with 4 significant digits matching the JMP convention.
-          const fmt = (v: number) =>
-            Number.isFinite(v) ? v.toFixed(4) : "—";
-          graphic.push({
-            type: "text",
-            left: 8,
-            top: 4,
-            z: 100,
-            silent: true,
-            style: {
-              text: `Mean=${fmt(mean)}\nStd Dev=${fmt(std)}`,
-              fill: theme.fgPrimary,
-              fontSize: 11,
-              lineHeight: 14,
-            },
-          });
-          // Mean line as a thin vertical marker. Use a dedicated invisible
-          // carrier series so it doesn't show up in legend/tooltip.
-          series.push({
-            type: "line",
-            name: "__stats_mean__",
-            data: [],
-            silent: true,
-            tooltip: { show: false },
-            legendHoverLink: false,
-            markLine: {
-              symbol: ["none", "none"],
-              silent: true,
-              animation: false,
-              label: { show: false },
-              lineStyle: { color: "#2f7fff", width: 1.5, type: "solid" },
-              data: [{ xAxis: mean }],
-            },
-          });
-        }
-      }
-
       return {
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
@@ -3194,7 +3024,6 @@ function buildSingleOption(
           buildAxisOverrides(spec.yAxis),
         ),
         series,
-        ...(graphic.length ? { graphic } : {}),
         animationDuration: 250,
         _binWidth: width, // 调试用
       } as EChartsOption;
