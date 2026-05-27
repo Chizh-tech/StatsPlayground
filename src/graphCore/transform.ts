@@ -294,6 +294,107 @@ function movingAverage(points: [number, number][], window: number): [number, num
   return out;
 }
 
+/** Auto-tick density tuning constants. Both are deliberately "round"
+ *  numbers so the resulting tick labels and bin boundaries land on
+ *  values like 0.5 / 0.1 instead of 0.42 / 0.083.
+ *
+ *  - `AUTO_TARGET_TICKS` is the approximate number of MAJOR ticks the
+ *    nice-snap algorithm aims for on a continuous axis. Bumped from
+ *    the historic 8 to 10 so the chart frame doesn't feel sparse on
+ *    typical 600–900 px plot widths/heights. The nice-step picker
+ *    then snaps to a {1, 2, 2.5, 5, 10} × 10^k multiplier, so the
+ *    actual on-screen tick count drifts within ±2 of the target.
+ *  - `AUTO_MINOR_SPLIT` is how many SEGMENTS each major interval is
+ *    divided into for minor ticks (ECharts `minorTick.splitNumber`).
+ *    5 → 4 visible minor ticks between every pair of majors, which
+ *    aligns with the standard "10ths" grid most measurement charts
+ *    use. The user can still override via the axis dialog
+ *    (`minorTickCount = N` → splitNumber = N + 1, or
+ *    `minorTickCount = 0` → minor ticks off entirely). */
+const AUTO_TARGET_TICKS = 10;
+const AUTO_MINOR_SPLIT = 5;
+
+/** Target tick count for HISTOGRAM bin-width computation. Must match
+ *  what ECharts' axis renderer will actually pick, NOT our internal
+ *  nice-snap density.
+ *
+ *  Why this is different from `AUTO_TARGET_TICKS`: we deliberately do
+ *  NOT pass `interval` to ECharts (it baked stale steps into the
+ *  option during drag, causing tick labels to drift off the nice
+ *  grid). ECharts then picks its own interval using its built-in
+ *  `splitNumber` (default 5 for value axes). So if our bin-width
+ *  computation uses `AUTO_TARGET_TICKS=10` to derive `majorStep`, the
+ *  bars come out at a finer width than the minor-tick segments the
+ *  user actually sees on the rendered axis — exactly the bug the
+ *  "histogram width follows minor tick width" requirement is trying
+ *  to avoid.
+ *
+ *  Concrete example: data [0.10, 0.30], range 0.20.
+ *  - niceStep(0.20, 10) → 0.02 (too fine; ECharts won't show 0.02
+ *    majors here, it shows 0.05 majors).
+ *  - niceStep(0.20, 5)  → 0.05 (matches the visible major labels).
+ *  Bin width = 0.05 / 5 = 0.01 = one visible minor segment. */
+const BIN_GRID_TARGET_TICKS = 5;
+
+/** Resolve the effective minor-tick split (segments per major) for an
+ *  axis, applying the same tri-state contract used in
+ *  `buildAxisOverrides`:
+ *    undefined  → auto default (`AUTO_MINOR_SPLIT`)
+ *    > 0        → user explicit N visible minors → N+1 segments
+ *    0          → user explicit off; we still return `AUTO_MINOR_SPLIT`
+ *                 for grid math (histogram bin width, etc.) since "no
+ *                 minor ticks rendered" should not collapse the bin
+ *                 density to one-bar-per-major. */
+function resolveMinorSplit(axisCfg: YAxisConfig | undefined): number {
+  const raw = axisCfg?.minorTickCount;
+  if (Number.isFinite(raw as number) && (raw as number) > 0) {
+    return Math.max(1, Math.round(raw as number)) + 1;
+  }
+  return AUTO_MINOR_SPLIT;
+}
+
+/** Compute a sensible histogram bin count from a value range and an
+ *  axis config so the histogram's bin edges align with the chart's
+ *  MINOR tick grid. Concretely:
+ *
+ *  - Snap a nice major step over [lo, hi] using `AUTO_TARGET_TICKS`.
+ *  - Resolve the active minor split for that axis: user explicit
+ *    `minorTickCount + 1`, or `AUTO_MINOR_SPLIT` when auto.
+ *  - bin width = step / minorSplit  (= the minor tick interval).
+ *  - bin count = round(range / binWidth), clamped to [10, 80] so
+ *    extreme axis configs (e.g. user-pinned `tickInterval = 1` on
+ *    a tiny range) don't explode into hundreds of degenerate bars.
+ *
+ *  When the user has explicitly pinned `tickInterval`, prefer that
+ *  over the auto nice-step so the histogram still aligns visually.
+ *  Returns the legacy default of 20 for degenerate inputs. */
+function computeAutoBinCount(
+  lo: number,
+  hi: number,
+  axisCfg: YAxisConfig | undefined,
+): number {
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return 20;
+  const range = hi - lo;
+  // Major step: user override → auto nice-snap fallback. We use
+  // `BIN_GRID_TARGET_TICKS` (not `AUTO_TARGET_TICKS`) so the
+  // computed bin grid lines up with the major step ECharts actually
+  // renders on the axis — the histogram code does NOT emit `interval`
+  // to ECharts (see yFinalBounds rationale), so the axis renderer's
+  // own default `splitNumber=5` picks the visible major ticks.
+  const userStep = axisCfg?.tickInterval;
+  const majorStep =
+    Number.isFinite(userStep as number) && (userStep as number) > 0
+      ? (userStep as number)
+      : niceStep(range, BIN_GRID_TARGET_TICKS);
+  // Minor split: shared with the axis renderer via `resolveMinorSplit`
+  // so bin edges land exactly on the rendered minor tick positions.
+  const minorSplit = resolveMinorSplit(axisCfg);
+  const binWidth = majorStep / minorSplit;
+  if (!Number.isFinite(binWidth) || binWidth <= 0) return 20;
+  const count = Math.round(range / binWidth);
+  return Math.max(10, Math.min(80, count));
+}
+
 /** 直方图分箱 */
 function histogramBins(values: number[], binCount = 20): {
   centers: number[];
@@ -323,6 +424,94 @@ function histogramBins(values: number[], binCount = 20): {
   return { centers, counts, width };
 }
 
+/** Mean + sample std-dev for a numeric array. Used by the histogram stats
+ *  overlay ("Mean=… Std Dev=…"). Non-finite values are filtered upstream by
+ *  `histogramBins`; this helper does the same defensively so callers can
+ *  pass raw column values without re-filtering. */
+function meanStd(values: number[]): { mean: number; std: number; n: number } {
+  let n = 0;
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (Number.isFinite(v)) {
+      sum += v;
+      n++;
+    }
+  }
+  if (n === 0) return { mean: NaN, std: NaN, n: 0 };
+  const mean = sum / n;
+  if (n < 2) return { mean, std: 0, n };
+  let sq = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (Number.isFinite(v)) {
+      const d = v - mean;
+      sq += d * d;
+    }
+  }
+  return { mean, std: Math.sqrt(sq / (n - 1)), n };
+}
+
+/** Kernel Density Estimate using a Gaussian kernel.
+ *
+ *  Bandwidth = Silverman's rule of thumb (h = 1.06 σ n^(-1/5)) multiplied
+ *  by `smoothness ∈ [0.25, 3]` so the user's 0..1 slider gives a sensible
+ *  range from a tighter-than-Silverman fit to a heavy oversmooth.
+ *
+ *  Returns [x, density × n × binWidth] pairs so the curve sits at the same
+ *  vertical scale as a count histogram (∫density dx = 1, scaled to total
+ *  count over one bin's worth of x for visual comparability).
+ *
+ *  `npoints` controls the curve resolution; 200 is enough for a smooth
+ *  rendering at any chart size without overwhelming ECharts. */
+function kdeCurve(
+  values: number[],
+  smoothness: number,
+  binWidth: number,
+  npoints = 200,
+): [number, number][] {
+  const finite: number[] = [];
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (Number.isFinite(v)) {
+      finite.push(v);
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+  }
+  const n = finite.length;
+  if (n === 0 || min === max) return [];
+  const { std } = meanStd(finite);
+  // Silverman; guard against std=0 (constant column) using range/6.
+  const sigma = std > 0 ? std : (max - min) / 6;
+  const silverman = 1.06 * sigma * Math.pow(n, -1 / 5);
+  // Map smoothness [0,1] → multiplier [0.25, 3]; default 0.5 → ~1.6.
+  const mult = 0.25 + Math.max(0, Math.min(1, smoothness)) * 2.75;
+  const h = Math.max(silverman * mult, 1e-9);
+  const pad = h * 3;
+  const x0 = min - pad;
+  const x1 = max + pad;
+  const step = (x1 - x0) / (npoints - 1);
+  const out: [number, number][] = [];
+  // Precompute the Gaussian coefficient.
+  const coeff = 1 / (Math.sqrt(2 * Math.PI) * h);
+  // Scale density to count-per-bin so the KDE overlay reads on the same
+  // axis as a count histogram (caller already binned at `binWidth`).
+  const scale = n * binWidth;
+  for (let i = 0; i < npoints; i++) {
+    const x = x0 + step * i;
+    let sum = 0;
+    for (let j = 0; j < n; j++) {
+      const u = (x - finite[j]) / h;
+      sum += Math.exp(-0.5 * u * u);
+    }
+    out.push([x, (coeff * sum / n) * scale]);
+  }
+  return out;
+}
+
 /** 箱线图统计：min, Q1, median, Q3, max */
 function boxStats(values: number[]): [number, number, number, number, number] | null {
   const v = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
@@ -334,6 +523,160 @@ function boxStats(values: number[]): [number, number, number, number, number] | 
     return lo === hi ? v[lo] : v[lo] + (v[hi] - v[lo]) * (idx - lo);
   };
   return [v[0], q(0.25), q(0.5), q(0.75), v[v.length - 1]];
+}
+
+// ---- MODE C per-category histogram bar renderer ---------------------------
+//
+// Shared renderItem for MODE C bar/shadowgram series. Per-bar data
+// (count, bin half-height, per-cat max, group total) is passed via
+// `info` rather than read with `api.value(i)` — ECharts custom series
+// only allocate dimensions up to the maximum index named in `encode`,
+// so `api.value(3+)` returns NaN even when the data tuple has more
+// columns. We use the data tuple ONLY to feed the axis (cat + a
+// representative bin center) and look up the rest by data index from
+// a closure-bound array.
+//
+// Orientation is detected from the series id suffix (`__t` appended
+// by `transposeSeriesData` after the X↔Y swap). When `catIsX` the
+// bar is horizontal in a vertical slot (cat on X); otherwise it is
+// vertical in a horizontal slot (cat on Y, post-transpose).
+type RenderHistCatBarOpts = {
+  fillColor: string;
+  strokeColor: string;
+  grouping: boolean;
+  showLabel: boolean;
+  showCounts: boolean;
+  showPercents: boolean;
+  theme: GraphTheme;
+  /** Override the per-bar opacity (e.g. shadowgram layers use ~0.18). */
+  layerOpacity?: number;
+};
+type HistBarInfo = {
+  cat: string;
+  binCenter: number;
+  count: number;
+  binHalfH: number;
+  catMaxCount: number;
+  groupTotal: number;
+};
+function renderHistCatBar(
+  params: any,
+  api: any,
+  info: HistBarInfo,
+  opts: RenderHistCatBarOpts,
+): unknown {
+  const catIsX = !String(params.seriesId || "").endsWith("__t");
+  const { cat, binCenter, count, binHalfH, catMaxCount, groupTotal } = info;
+
+  const xy = (val: number): [any, any] =>
+    catIsX ? [cat, val] : [val, cat];
+  const ctrCoord = api.coord(xy(binCenter));
+  const aCoord = api.coord(xy(binCenter + binHalfH));
+  const bCoord = api.coord(xy(binCenter - binHalfH));
+  if (!ctrCoord || !aCoord || !bCoord) return null;
+
+  const slotPx = catIsX ? api.size([1, 0])[0] : api.size([0, 1])[1];
+  const insetMargin = 1; // small gap from the divider line
+  // Reserve ~15% of the slot on the trailing edge so the longest bar
+  // doesn't touch the next category's divider line.
+  const rightSafePct = 0.15;
+  const maxBarExtent = Math.max(0, slotPx * (1 - rightSafePct) - insetMargin);
+  const barExtent =
+    catMaxCount > 0 ? (count / catMaxCount) * maxBarExtent : 0;
+
+  let rectShape: { x: number; y: number; width: number; height: number };
+  let labelX: number;
+  let labelY: number;
+  let labelAlign: "left" | "center";
+  let labelBaseline: "middle" | "top" | "bottom";
+
+  if (catIsX) {
+    // Vertical slot (cat on X), bar grows rightward.
+    // aCoord = (binCenter + binHalfH) → larger Y value → smaller pixel y (top)
+    // bCoord = (binCenter - binHalfH) → smaller Y value → larger pixel y (bottom)
+    const yTop = aCoord[1];
+    const yBot = bCoord[1];
+    const slotLeft = ctrCoord[0] - slotPx / 2 + insetMargin;
+    rectShape = {
+      x: slotLeft,
+      y: yTop,
+      width: barExtent,
+      height: Math.max(1, yBot - yTop),
+    };
+    labelX = slotLeft + barExtent + 2;
+    labelY = (yTop + yBot) / 2;
+    labelAlign = "left";
+    labelBaseline = "middle";
+  } else {
+    // Horizontal slot (cat on Y, post-transpose). X is the value
+    // axis here. Bar grows UPWARD from the BOTTOM edge of the cat
+    // slot — i.e. anchored to the larger pixel-y (lower edge in
+    // screen space). This mirrors the catIsX=true convention where
+    // bars hug the axis-line edge of their slot; with X as the
+    // value axis, the "natural" axis-adjacent edge of each cat slot
+    // is the bottom one.
+    //
+    // aCoord = (binCenter + binHalfH) → larger value → larger pixel x (right)
+    // bCoord = (binCenter - binHalfH) → smaller value → smaller pixel x (left)
+    const xLeft = bCoord[0];
+    const xRight = aCoord[0];
+    const slotBot = ctrCoord[1] + slotPx / 2 - insetMargin;
+    rectShape = {
+      x: xLeft,
+      y: slotBot - barExtent,
+      width: Math.max(1, xRight - xLeft),
+      height: barExtent,
+    };
+    // Label sits just ABOVE the bar tip (the upper edge of the
+    // upward-growing bar).
+    labelX = (xLeft + xRight) / 2;
+    labelY = slotBot - barExtent - 2;
+    labelAlign = "center";
+    labelBaseline = "bottom";
+  }
+
+  const rectEl = {
+    type: "rect",
+    shape: rectShape,
+    style: {
+      fill: opts.fillColor,
+      stroke: opts.strokeColor,
+      lineWidth: 0.5,
+      // Slightly higher opacity since bars overlap (rather than sit
+      // side-by-side) — JMP's grouped histograms read clearly at
+      // ~50% alpha. Shadowgram layers pass a much lower override.
+      opacity:
+        opts.layerOpacity ?? (opts.grouping ? 0.5 : 0.55),
+    },
+  };
+
+  if (!opts.showLabel || !(barExtent > 0)) return rectEl;
+
+  // Compose count and/or percent text. Percent base is the group's
+  // total within this category. Label always renders OUTSIDE the bar
+  // tip — per UX request, never inside, to avoid mid-bar text clutter
+  // and contrast issues against the translucent fill.
+  const parts: string[] = [];
+  if (opts.showCounts) parts.push(String(count));
+  if (opts.showPercents) {
+    const pct = groupTotal > 0 ? (count / groupTotal) * 100 : 0;
+    parts.push(`${pct.toFixed(1)}%`);
+  }
+  const labelText = parts.join(" ");
+  const textEl = {
+    type: "text",
+    style: {
+      text: labelText,
+      x: labelX,
+      y: labelY,
+      fill: opts.theme.fgPrimary,
+      font: "10px sans-serif",
+      textAlign: labelAlign,
+      textVerticalAlign: labelBaseline,
+    },
+  };
+
+  return { type: "group", children: [rectEl, textEl] };
 }
 
 // ---- Aggregate / interval helpers (used by per-element options) -----------
@@ -1248,14 +1591,26 @@ function buildAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
   // is the number of *segments* the major interval is divided into,
   // which renders splitNumber-1 visible minor ticks (the endpoints are
   // already the majors). So we translate by adding 1, e.g. user N=2
-  // yields splitNumber=3 → exactly 2 minor ticks visible. 0/undefined
-  // → minor ticks stay hidden.
-  if (Number.isFinite(cfg.minorTickCount as number) && (cfg.minorTickCount as number) > 0) {
-    const visible = Math.max(1, Math.round(cfg.minorTickCount as number));
-    out.minorTick = {
-      show: true,
-      splitNumber: visible + 1,
-    };
+  // yields splitNumber=3 → exactly 2 minor ticks visible.
+  //
+  // Tri-state contract (matters because the base axis now defaults
+  // minor ticks ON via AUTO_MINOR_SPLIT — see `buildSingleOption`):
+  //   undefined  → no override, base auto-default wins
+  //   0          → user explicitly OFF, override the base default
+  //   > 0        → user explicitly N visible minors
+  if (cfg.minorTickCount !== undefined && Number.isFinite(cfg.minorTickCount as number)) {
+    const n = cfg.minorTickCount as number;
+    if (n > 0) {
+      const visible = Math.max(1, Math.round(n));
+      out.minorTick = {
+        show: true,
+        splitNumber: visible + 1,
+      };
+    } else {
+      // Explicit 0 → suppress minor ticks (and minor gridlines via
+      // the `hasMinorTicks` gate below).
+      out.minorTick = { show: false };
+    }
   }
 
   // ----- Major / minor split lines (grid) -----------------------------
@@ -1272,15 +1627,18 @@ function buildAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
   // sub-segments per major tick whenever `minorSplitLine.show: true`
   // — even with `minorTick.show: false`. That produces the confusing
   // "minor gridlines without minor ticks" state the editor's hint
-  // explicitly warns against. Mirror that contract here: a stored
-  // `showMinorGrid: true` (e.g. left over from a session where the
-  // user previously had minor ticks set) is silently a no-op until
-  // the user actually configures `minorTickCount > 0`. The persisted
-  // flag stays so re-enabling minor ticks immediately brings the
-  // lines back without an extra click.
-  const hasMinorTicks =
+  // explicitly warns against. Mirror that contract here.
+  //
+  // Tri-state matches the minor-tick block above (the base axis now
+  // auto-enables minor ticks via AUTO_MINOR_SPLIT, so undefined is
+  // also "on"):
+  //   undefined → auto minor ticks present → gridlines allowed
+  //   0         → user explicit off → gridlines suppressed
+  //   > 0       → user explicit on → gridlines allowed
+  const minorOff =
     Number.isFinite(cfg.minorTickCount as number) &&
-    (cfg.minorTickCount as number) > 0;
+    (cfg.minorTickCount as number) === 0;
+  const hasMinorTicks = !minorOff;
   if (hasMinorTicks && (cfg.showMinorGrid !== undefined || cfg.minorGridStyle)) {
     out.minorSplitLine = buildGridLineFragment(cfg.showMinorGrid, cfg.minorGridStyle);
   }
@@ -1471,6 +1829,31 @@ function transposeSeriesData(s: any): any {
       return flipped;
     });
   }
+  // Per-category histogram custom series (MODE C in `buildSingleOption`):
+  // bars, polygon/KDE fills, stats overlays and divider lines all share
+  // the `__hist_cat_` id prefix. When the parent path swaps X↔Y axes
+  // and recurses into the vertical builder, the recursed call emits
+  // these series assuming X = cat. transposeOption then flips the
+  // axes — so to keep the renderItems anchored to the correct axis we
+  // also flip tuple[0]↔tuple[1] here, AND append a `__t` suffix to
+  // the series id. Each MODE C renderItem reads `params.seriesId` to
+  // detect the transposed orientation and adjusts geometry (cat axis
+  // becomes Y, value axis becomes X).
+  if (
+    seriesType === "custom" &&
+    typeof s.id === "string" &&
+    s.id.startsWith("__hist_cat_") &&
+    !s.id.endsWith("__t") &&
+    Array.isArray(s.data)
+  ) {
+    out.data = s.data.map((row: any) => {
+      if (Array.isArray(row) && row.length >= 2) {
+        return [row[1], row[0], ...row.slice(2)];
+      }
+      return row;
+    });
+    out.id = `${s.id}__t`;
+  }
   if (s.markLine && Array.isArray(s.markLine.data)) {
     out.markLine = { ...s.markLine, data: transposeMarkData(s.markLine.data) };
   }
@@ -1571,9 +1954,14 @@ function buildSingleOption(
   //       bar / scatter / box plots where the user has put the
   //       category column on Y on purpose.
   //
-  // Histogram is opted out — a horizontal histogram has its own
-  // conventions (rotated bins) and the existing histogram branch is
-  // vertical-only by design.
+  // Histogram special-case: vertical histogram has X = bin centers,
+  // Y = "Count". Horizontal histogram swaps those (bins on Y, "Count"
+  // on X). Trigger horizontal mode only when the user has bound the
+  // continuous column to Y (and left X empty) AND a histogram element
+  // is enabled — that's the user expressing "I want bars going
+  // horizontally". When a histogram element is enabled but X is bound
+  // instead, opt out of the generic orientation swap so the vertical
+  // histogram branch wins.
   const xIsContinuous = xField?.type === "continuous";
   const yIsCatOrAbsent =
     !yField ||
@@ -1583,6 +1971,8 @@ function buildSingleOption(
   const hasHistogramEl = elements.some(
     (e) => e.kind === "histogram" && e.enabled !== false,
   );
+  const yOnlyHistogram =
+    !xField && !!yField && yField.type === "continuous" && hasHistogramEl;
   // Case (a): single-variable-on-X. Fires regardless of X type so the
   // mirror of "drop one continuous column on Y" (which always
   // renders a strip) works for any X type the column might have.
@@ -1592,7 +1982,24 @@ function buildSingleOption(
   // sending datetime through the value-only internal Y axis
   // (datetime horizontal is a follow-up).
   const orientationSwap = !!xIsContinuous && yIsCatOrAbsent && !!yField;
-  const isHorizontal = (xOnlyMirror || orientationSwap) && !hasHistogramEl;
+  // Histogram element gating: the per-category mode (MODE C)
+  // implementation assumes the CATEGORICAL axis is X. To make
+  // "X = continuous, Y = categorical, + histogram" behave
+  // symmetrically to "X = cat, Y = continuous, + histogram", we
+  // route X-cont/Y-cat through the same swap → recurse → transpose
+  // pipeline `yOnlyHistogram` uses. After the swap the recursive
+  // call sees X=cat / Y=cont and hits MODE C, then `transposeOption`
+  // flips it back so bars render vertically inside each Y-categorical
+  // row of the user's original orientation.
+  //
+  // xOnlyMirror is intentionally NOT extended this way — its purpose
+  // is to put a Y-bound continuous strip on the user's vertical axis
+  // when only one axis is bound, and the histogram exclusive vertical
+  // case (MODE A) already handles X-only correctly.
+  const isHorizontal =
+    yOnlyHistogram ||
+    (xOnlyMirror && !hasHistogramEl) ||
+    orientationSwap;
   if (isHorizontal) {
     const swappedSpec: GraphSpec = {
       ...spec,
@@ -1773,24 +2180,968 @@ function buildSingleOption(
     ? sharedRanges.xCats
     : localXCats;
 
-  // —— 直方图：忽略 Y，仅 X 数值 ——
+  // MODE C category-divider flag. Set true inside the histogram block
+  // when per-category horizontal histograms are emitted; consumed by
+  // the xAxis builder far below to turn on `splitLine` (vertical
+  // hairlines between every category slot). We use the built-in axis
+  // splitLine feature here instead of a custom-series carrier because
+  // ECharts silently filters custom-series rows whose value-axis dim
+  // falls outside the visible range — the carrier rendered nothing
+  // when the value axis was zoomed away from 0.
+  let perCategoryHistogramOn = false;
+
+  // —— 直方图：两种模式 ——
+  //
+  // MODE A (exclusive): X bound to continuous, Y empty. Histogram
+  //   takes over the entire chart — X = bin centers, Y = "Count".
+  //   Other layers don't compose with this mode (their semantics
+  //   don't fit "Count" on Y). Early-returns the full ECharts option.
+  //
+  // MODE C (per-category): X categorical, Y continuous. Histogram
+  //   renders as JMP-style per-category horizontal bars — one mini
+  //   horizontal histogram inside each X-category slot, with bins
+  //   along the Y axis. Composes with box / scatter / line layers
+  //   so they overlay in the same coordinate space. Implemented as
+  //   a `custom` series so each bar can be drawn at a precise
+  //   pixel offset within its category slot.
+  //
+  // The horizontal-orientation case (Y bound continuous, X empty)
+  // is handled by the outer `yOnlyHistogram` swap, which recurses
+  // into MODE A with the column on X then transposes the option.
   if (enabledElements.some((e) => e.kind === "histogram")) {
-    if (xIdx >= 0) {
-      const xs = data.rows.map((r) => toNum(r[xIdx]));
-      const { centers, counts, width } = histogramBins(xs, 20);
-      series.push({
-        type: "bar",
-        name: xField?.name || i18n.t("graph.frequency"),
-        data: centers.map((c, i) => [c, counts[i]]),
-        barWidth: "99%",
-        itemStyle: { color: theme.categorical[0] },
+    const histEl = enabledElements.find((e) => e.kind === "histogram")!;
+    const opts = histEl.options;
+    const histStyle = getOpt<string>(opts, "histStyle", "bar"); // bar|polygon|kde|shadowgram
+    const smoothness = Math.max(0, Math.min(1, getOpt<number>(opts, "smoothness", 0.5)));
+    const showStats = getOpt<boolean>(opts, "showStats", false);
+    const showCounts = getOpt<boolean>(opts, "showCounts", false);
+    const showPercents = getOpt<boolean>(opts, "showPercents", false);
+
+    // Resolve the iteration list of groups, shared by both modes.
+    // With no grouping, fall back to a single ungrouped layer keyed
+    // by `DEFAULT_GROUP_KEY` so the `resolveGroupStyle` lookup still
+    // picks up any user overrides saved under that key.
+    type HistGroupSlot = { key: string; rowIdxs: number[]; baseColor: string };
+    const histGroupSlots: HistGroupSlot[] = [];
+    if (grouping) {
+      for (const gKey of groupKeys) {
+        if (isHidden(gKey)) continue;
+        const rowIdxs = groups.get(gKey) ?? [];
+        if (rowIdxs.length === 0) continue;
+        histGroupSlots.push({
+          key: gKey,
+          rowIdxs,
+          baseColor: theme.categorical[colorIndexOf(gKey) % theme.categorical.length],
+        });
+      }
+    } else {
+      histGroupSlots.push({
+        key: DEFAULT_GROUP_KEY,
+        rowIdxs: data.rows.map((_, i) => i),
+        baseColor: theme.categorical[0],
       });
+    }
+
+    // —— MODE C: per-category horizontal histograms ——
+    //
+    // Active whenever X is categorical AND Y is continuous. This is
+    // the JMP convention: the histogram layer adds a per-category
+    // mini-histogram (bins on Y, bars extending horizontally within
+    // the category slot) alongside box / scatter / line layers. We
+    // do NOT early-return so the rest of the layer pipeline runs.
+    const perCategoryMode = xIsCategory && yField?.type === "continuous" && yIdx >= 0;
+    if (perCategoryMode) {
+      // Bin grid alignment contract: the histogram bars in MODE C are
+      // horizontal, so their THICKNESS on Y is the bin width. To make
+      // each bar visually span exactly one minor-tick segment on the
+      // Y axis (the user's "histogram width follows minor tick width"
+      // ask), we must:
+      //
+      //   1. Use the same nice-snapped [yLo, yHi] the axis renders to,
+      //      NOT the raw data extent. Otherwise the rendered axis pads
+      //      outward by 2% and bin edges drift off the gridlines.
+      //   2. Set bin width = niceStep / minorSplit, NOT
+      //      (yHi - yLo) / round(N). Even with the right range,
+      //      dividing by a rounded integer bin count introduces a tiny
+      //      offset that accumulates across bins.
+      //
+      // When faceted, we honor the shared snapped range +
+      // shared interval so every panel uses identical bin edges.
+      let yLo: number;
+      let yHi: number;
+      let yMajorStep: number | undefined;
+      if (sharedRanges?.yMin != null && sharedRanges?.yMax != null) {
+        yLo = sharedRanges.yMin;
+        yHi = sharedRanges.yMax;
+        yMajorStep = sharedRanges.yInterval;
+      } else {
+        let lo = Infinity;
+        let hi = -Infinity;
+        for (let i = 0; i < data.rows.length; i++) {
+          if (isRowHidden(data.rows[i])) continue;
+          const v = toNum(data.rows[i][yIdx]);
+          if (!Number.isFinite(v)) continue;
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+        // Respect user-pinned axis bounds (drag-zoom / drag-pan on the
+        // Y axis writes these via `onAxisRangeChange`). Without this,
+        // the bin grid stays anchored to the raw data extent even
+        // after the user has narrowed the visible range, so bars keep
+        // their original width while the axis renders a denser minor-
+        // tick grid — exactly the "bar width doesn't follow minor tick
+        // width on zoom" complaint. When only one side is pinned we
+        // honor that side and fall back to the data extent for the
+        // other.
+        const yPinMin = spec.yAxis?.min;
+        const yPinMax = spec.yAxis?.max;
+        if (Number.isFinite(yPinMin)) lo = yPinMin as number;
+        if (Number.isFinite(yPinMax)) hi = yPinMax as number;
+        const fit = computeNiceBounds(
+          Number.isFinite(lo) ? lo : undefined,
+          Number.isFinite(hi) ? hi : undefined,
+          collectRefLineYs(spec),
+          AUTO_TARGET_TICKS,
+        );
+        if (fit) {
+          yLo = fit.min;
+          yHi = fit.max;
+          // Re-derive the bin-grid step against `BIN_GRID_TARGET_TICKS`
+          // (not `fit.interval` from `AUTO_TARGET_TICKS=10`) so the
+          // resulting bin width = `majorStep / minorSplit` lines up with
+          // the major tick step ECharts actually picks for the axis.
+          // See `BIN_GRID_TARGET_TICKS` docs for the full rationale.
+          yMajorStep = niceStep(yHi - yLo, BIN_GRID_TARGET_TICKS);
+        } else {
+          yLo = Number.isFinite(lo) ? lo : 0;
+          yHi = Number.isFinite(hi) ? hi : 1;
+        }
+      }
+      // User-pinned `tickInterval` overrides the auto-fit step so bins
+      // realign with whatever the user dialed in.
+      const userYStep = spec.yAxis?.tickInterval;
+      if (Number.isFinite(userYStep as number) && (userYStep as number) > 0) {
+        yMajorStep = userYStep as number;
+      }
+      const yMinorSplit = resolveMinorSplit(spec.yAxis);
+      let yWidth: number;
+      let binCount: number;
+      if (yMajorStep && yMajorStep > 0 && yHi > yLo) {
+        // Aligned mode: bin edges land on minor tick positions.
+        yWidth = yMajorStep / yMinorSplit;
+        binCount = Math.max(1, Math.round((yHi - yLo) / yWidth));
+      } else {
+        // Fallback: shouldn't normally hit this (only if the fit
+        // failed and data is degenerate). Keep the legacy density.
+        binCount = computeAutoBinCount(yLo, yHi, spec.yAxis);
+        yWidth = yHi > yLo ? (yHi - yLo) / binCount : 1;
+      }
+      const yHalf = yWidth / 2;
+      const yCenters: number[] = [];
+      for (let i = 0; i < binCount; i++) yCenters.push(yLo + yWidth * (i + 0.5));
+
+      // Compute per-(cat, group) bin counts and per-cat max count
+      // (used to normalize bar widths so the longest bar in each
+      // category fills its sub-slot).
+      const perCatPerGroup = new Map<string, Map<string, number[]>>();
+      const perCatMaxCount = new Map<string, number>();
+
+      for (const cat of xCats) {
+        const perGroup = new Map<string, number[]>();
+        let catMax = 0;
+        for (const slot of histGroupSlots) {
+          const buckets = new Array<number>(binCount).fill(0);
+          // Intersect this group's row indices with this category.
+          for (const i of slot.rowIdxs) {
+            const row = data.rows[i];
+            const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
+            if (rowCat !== cat) continue;
+            const v = toNum(row[yIdx]);
+            if (!Number.isFinite(v)) continue;
+            if (yWidth <= 0) {
+              buckets[0]++;
+            } else {
+              let bin = Math.floor((v - yLo) / yWidth);
+              if (bin < 0) bin = 0;
+              else if (bin >= binCount) bin = binCount - 1;
+              buckets[bin]++;
+            }
+          }
+          perGroup.set(slot.key, buckets);
+          for (const c of buckets) if (c > catMax) catMax = c;
+        }
+        perCatPerGroup.set(cat, perGroup);
+        perCatMaxCount.set(cat, catMax);
+      }
+
+      // —— PHASE 2 (precompute): KDE curves per (cat, group) when
+      // `histStyle === "kde"`. We normalize bar/curve extent within
+      // each category to a shared per-cat max so all groups in a cat
+      // are visually comparable. For KDE this means tracking the max
+      // density across all groups in the cat.
+      type KdePoints = [number, number][];
+      let perCatKde: Map<string, Map<string, KdePoints>> | null = null;
+      let perCatMaxDensity: Map<string, number> | null = null;
+      if (histStyle === "kde") {
+        perCatKde = new Map();
+        perCatMaxDensity = new Map();
+        for (const cat of xCats) {
+          const groupKde = new Map<string, KdePoints>();
+          let catMaxDensity = 0;
+          for (const slot of histGroupSlots) {
+            const vals: number[] = [];
+            for (const i of slot.rowIdxs) {
+              const row = data.rows[i];
+              if (isRowHidden(row)) continue;
+              const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
+              if (rowCat !== cat) continue;
+              const v = toNum(row[yIdx]);
+              if (Number.isFinite(v)) vals.push(v);
+            }
+            if (vals.length === 0) {
+              groupKde.set(slot.key, []);
+              continue;
+            }
+            const pts = kdeCurve(vals, smoothness, yWidth);
+            groupKde.set(slot.key, pts);
+            for (const p of pts) if (p[1] > catMaxDensity) catMaxDensity = p[1];
+          }
+          perCatKde.set(cat, groupKde);
+          perCatMaxDensity.set(cat, catMaxDensity);
+        }
+      }
+
+      // Per-(cat, group) totals — only needed when showCounts /
+      // showPercents render labels. For showPercents the percent base
+      // is the group's total count within that category (matches the
+      // bar style most naturally).
+      let perCatGroupTotal: Map<string, Map<string, number>> | null = null;
+      if (showCounts || showPercents) {
+        perCatGroupTotal = new Map();
+        for (const cat of xCats) {
+          const totals = new Map<string, number>();
+          const groupBins = perCatPerGroup.get(cat);
+          if (groupBins) {
+            for (const [k, bins] of groupBins) {
+              let sum = 0;
+              for (const c of bins) sum += c;
+              totals.set(k, sum);
+            }
+          }
+          perCatGroupTotal.set(cat, totals);
+        }
+      }
+
+      // Push one custom series per group so each carries its own
+      // color and shows up in the external legend (the
+      // `LegendStylePanel` reads `groupKeys` and matches series by
+      // name). The renderer used depends on `histStyle`:
+      //   - bar (default): per-bar rect renderItem
+      //   - polygon: per-cat closed polygon through bin tops
+      //   - kde: per-cat closed polygon through KDE curve points
+      //   - shadowgram: multi-bin-count bar overlay at low alpha
+      //
+      // All renderItems are orientation-aware: they detect whether
+      // the cat axis is X (original) or Y (after `transposeOption`
+      // post-swap) by inspecting `params.seriesId` for a `__t`
+      // suffix appended in `transposeSeriesData`. Geometry is then
+      // computed against the appropriate axis.
+      histGroupSlots.forEach((slot) => {
+        const styleKey = grouping ? slot.key : DEFAULT_GROUP_KEY;
+        const rs = resolveGroupStyle(
+          styleKey,
+          slot.baseColor,
+          !!grouping,
+          theme,
+          spec.styles,
+        );
+        // Visible fill color: same fallback logic as the bar layer —
+        // `resolveGroupStyle` defaults ungrouped fill to "transparent"
+        // which would render the histogram invisible.
+        const userFill = spec.styles?.[styleKey]?.fill;
+        const hasUserFill = !!(userFill?.color ?? userFill?.fillColor);
+        const fillColor = hasUserFill
+          ? rs.fill.color
+          : grouping
+            ? rs.fill.color
+            : slot.baseColor;
+        const strokeColor = rs.line.color || slot.baseColor;
+
+        // ——— Polygon / KDE branch ———
+        // Both styles render as a single closed polygon per (cat,
+        // group): anchored on the slot's leading edge, fanning
+        // outward through the per-bin (polygon) or per-sample (kde)
+        // "intensity" points. Anchoring on the leading edge mirrors
+        // the JMP convention used by the bar layer.
+        //
+        // Polygon points + per-cat max weight are stored in a
+        // closure-bound Map rather than nested-array data fields.
+        // ECharts custom series with `coordinateSystem: 'cartesian2d'`
+        // only declares 2 numeric dimensions by default, so non-numeric
+        // values at indices ≥ 2 in the data tuple get coerced to NaN
+        // and lost — which is why a previous attempt that packed
+        // `pts` into tuple[2] rendered nothing.
+        if (histStyle === "polygon" || histStyle === "kde") {
+          type CatPolyInfo = { pts: [number, number][]; catMaxW: number };
+          const catData = new Map<string, CatPolyInfo>();
+          for (const cat of xCats) {
+            let pts: [number, number][];
+            let catMaxWeight: number;
+            if (histStyle === "kde") {
+              pts = perCatKde!.get(cat)?.get(slot.key) ?? [];
+              catMaxWeight = perCatMaxDensity!.get(cat) ?? 0;
+            } else {
+              const bins = perCatPerGroup.get(cat)?.get(slot.key) ?? [];
+              catMaxWeight = perCatMaxCount.get(cat) ?? 0;
+              pts = bins.map((c, i) => [yCenters[i], c]);
+            }
+            if (pts.length === 0 || catMaxWeight <= 0) continue;
+            catData.set(cat, { pts, catMaxW: catMaxWeight });
+          }
+          if (catData.size === 0) return;
+          // One tuple per cat. tuple[0]=cat, tuple[1]=representative
+          // y value used for axis-extent. The renderItem reads
+          // pts/catMaxW from the closure-bound Map.
+          const tuples: any[][] = [];
+          for (const [cat, info] of catData) {
+            tuples.push([cat, info.pts[0][0]]);
+          }
+
+          const polyPadY = histStyle === "kde" ? 0 : yWidth / 2;
+
+          series.push({
+            id: `__hist_cat_${slot.key}_${histStyle}`,
+            type: "custom",
+            name: slot.key,
+            coordinateSystem: "cartesian2d",
+            encode: { x: 0, y: 1, tooltip: [0] },
+            data: tuples,
+            renderItem: (params: any, api: any) => {
+              const catIsX = !String(params.seriesId || "").endsWith("__t");
+              const catName = catIsX
+                ? String(api.value(0))
+                : String(api.value(1));
+              const info = catData.get(catName);
+              if (!info) return null;
+              const { pts, catMaxW } = info;
+              if (pts.length === 0 || catMaxW <= 0) return null;
+
+              const xy = (val: number): [any, any] =>
+                catIsX ? [catName, val] : [val, catName];
+              const slotPx = catIsX
+                ? api.size([1, 0])[0]
+                : api.size([0, 1])[1];
+              const insetMargin = 1;
+              const rightSafePct = 0.15;
+              const maxBarExtent = Math.max(
+                0,
+                slotPx * (1 - rightSafePct) - insetMargin,
+              );
+
+              const firstV = pts[0][0];
+              const lastV = pts[pts.length - 1][0];
+              const startCoord = api.coord(xy(firstV - polyPadY));
+              const endCoord = api.coord(xy(lastV + polyPadY));
+              const ctrCoord = api.coord(xy(pts[0][0]));
+              if (!startCoord || !endCoord || !ctrCoord) return null;
+
+              const polyPts: number[][] = [];
+              if (catIsX) {
+                // Vertical slot, polygon fans rightward.
+                const slotLeft = ctrCoord[0] - slotPx / 2 + insetMargin;
+                polyPts.push([slotLeft, startCoord[1]]);
+                for (const [v, w] of pts) {
+                  const c = api.coord(xy(v));
+                  if (!c) continue;
+                  polyPts.push([
+                    slotLeft + (w / catMaxW) * maxBarExtent,
+                    c[1],
+                  ]);
+                }
+                polyPts.push([slotLeft, endCoord[1]]);
+              } else {
+                // Horizontal slot (cat on Y, X is value axis).
+                // Polygon fans UPWARD from the BOTTOM edge of the
+                // cat slot to match the bar branch's bottom-alignment
+                // convention — the per-cat histogram should always
+                // hug the axis-adjacent edge (bottom when X is the
+                // value axis) so all per-cat shapes share the same
+                // visual baseline.
+                const slotBot = ctrCoord[1] + slotPx / 2 - insetMargin;
+                polyPts.push([startCoord[0], slotBot]);
+                for (const [v, w] of pts) {
+                  const c = api.coord(xy(v));
+                  if (!c) continue;
+                  polyPts.push([
+                    c[0],
+                    slotBot - (w / catMaxW) * maxBarExtent,
+                  ]);
+                }
+                polyPts.push([endCoord[0], slotBot]);
+              }
+
+              return {
+                type: "polygon",
+                shape: { points: polyPts },
+                style: {
+                  fill: fillColor,
+                  stroke: strokeColor,
+                  lineWidth: 1.2,
+                  opacity: grouping ? 0.35 : 0.45,
+                },
+              };
+            },
+            z: 1,
+            silent: false,
+            tooltip: {
+              formatter: (p: any) => {
+                const v = p.value as any[];
+                return `${v[0]} (${histStyle})`;
+              },
+            },
+          });
+          return;
+        }
+
+        // ——— Shadowgram branch ———
+        // Multi-bin-count overlay: render several semi-transparent
+        // bar layers at varying bin densities so the union reads as
+        // a density estimate (no single bin count is privileged).
+        // The minor-tick alignment guarantee is intentionally
+        // relaxed here — shadowgram is about exploring multiple
+        // interpretations of the same data, not gridline alignment.
+        if (histStyle === "shadowgram") {
+          // Cap depth to keep series count and render cost bounded.
+          const binChoices = [
+            Math.max(6, Math.round(binCount * 0.5)),
+            Math.max(8, Math.round(binCount * 0.75)),
+            binCount,
+            Math.round(binCount * 1.25),
+            Math.round(binCount * 1.5),
+          ];
+          binChoices.forEach((bc, layerIdx) => {
+            const layerYWidth = (yHi - yLo) / Math.max(1, bc);
+            const layerYHalf = layerYWidth / 2;
+            const layerCenters: number[] = [];
+            for (let i = 0; i < bc; i++)
+              layerCenters.push(yLo + layerYWidth * (i + 0.5));
+            // Build per-cat layer counts and per-cat max for this bin
+            // count (each layer is independently normalized).
+            const layerCatMax = new Map<string, number>();
+            const layerCatGroupCounts = new Map<string, number[]>();
+            for (const cat of xCats) {
+              const buckets = new Array<number>(bc).fill(0);
+              for (const i of slot.rowIdxs) {
+                const row = data.rows[i];
+                if (isRowHidden(row)) continue;
+                const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
+                if (rowCat !== cat) continue;
+                const v = toNum(row[yIdx]);
+                if (!Number.isFinite(v)) continue;
+                let bin = Math.floor((v - yLo) / layerYWidth);
+                if (bin < 0) bin = 0;
+                else if (bin >= bc) bin = bc - 1;
+                buckets[bin]++;
+              }
+              layerCatGroupCounts.set(cat, buckets);
+              // For the shadowgram layer, normalize against the cat's
+              // own group counts at this resolution.
+              let mx = 0;
+              for (const c of buckets) if (c > mx) mx = c;
+              layerCatMax.set(cat, mx);
+            }
+            const layerBarInfos: HistBarInfo[] = [];
+            const tuples: any[][] = [];
+            for (const cat of xCats) {
+              const bins = layerCatGroupCounts.get(cat) ?? [];
+              const catMax = layerCatMax.get(cat) ?? 0;
+              if (catMax <= 0) continue;
+              for (let bi = 0; bi < bins.length; bi++) {
+                if (bins[bi] <= 0) continue;
+                layerBarInfos.push({
+                  cat,
+                  binCenter: layerCenters[bi],
+                  count: bins[bi],
+                  binHalfH: layerYHalf,
+                  catMaxCount: catMax,
+                  groupTotal: 0,
+                });
+                tuples.push([cat, layerCenters[bi]]);
+              }
+            }
+            if (tuples.length === 0) return;
+
+            series.push({
+              id: `__hist_cat_${slot.key}_shadowgram_${layerIdx}`,
+              type: "custom",
+              name: slot.key,
+              coordinateSystem: "cartesian2d",
+              encode: { x: 0, y: 1, tooltip: [0, 1] },
+              data: tuples,
+              renderItem: (params: any, api: any) => {
+                const info = layerBarInfos[params.dataIndex];
+                if (!info) return null;
+                return renderHistCatBar(params, api, info, {
+                  fillColor,
+                  strokeColor,
+                  grouping: !!grouping,
+                  showLabel: false,
+                  showCounts: false,
+                  showPercents: false,
+                  theme,
+                  layerOpacity: 0.18,
+                });
+              },
+              z: 1,
+              silent: true,
+              tooltip: { show: false },
+              legendHoverLink: false,
+            });
+          });
+          return;
+        }
+
+        // ——— Bar branch (default) ———
+        // Per-bar info is stored in a closure-bound array because
+        // ECharts custom series only allocate data dimensions up to
+        // the maximum index named in `encode`, so `api.value(3+)`
+        // would return NaN even though our tuples carry six values.
+        // Tuples therefore carry only the two axis-relevant fields
+        // (cat + bin center); everything else is looked up by
+        // `params.dataIndex` from `barInfos`.
+        const barInfos: HistBarInfo[] = [];
+        const tuples: any[][] = [];
+        for (const cat of xCats) {
+          const bins = perCatPerGroup.get(cat)?.get(slot.key) ?? [];
+          const catMax = perCatMaxCount.get(cat) ?? 0;
+          if (catMax <= 0) continue;
+          const groupTotal = perCatGroupTotal?.get(cat)?.get(slot.key) ?? 0;
+          for (let bi = 0; bi < bins.length; bi++) {
+            if (bins[bi] <= 0) continue;
+            barInfos.push({
+              cat,
+              binCenter: yCenters[bi],
+              count: bins[bi],
+              binHalfH: yHalf,
+              catMaxCount: catMax,
+              groupTotal,
+            });
+            tuples.push([cat, yCenters[bi]]);
+          }
+        }
+        if (tuples.length === 0) return;
+
+        const showLabel = showCounts || showPercents;
+
+        series.push({
+          id: `__hist_cat_${slot.key}`,
+          type: "custom",
+          name: slot.key,
+          coordinateSystem: "cartesian2d",
+          encode: { x: 0, y: 1, tooltip: [0, 1] },
+          data: tuples,
+          renderItem: (params: any, api: any) => {
+            const info = barInfos[params.dataIndex];
+            if (!info) return null;
+            return renderHistCatBar(params, api, info, {
+              fillColor,
+              strokeColor,
+              grouping: !!grouping,
+              showLabel,
+              showCounts,
+              showPercents,
+              theme,
+            });
+          },
+          // Render below scatter/box outlines so they remain readable
+          // on top of the histogram bars.
+          z: 1,
+          silent: false,
+          tooltip: {
+            formatter: (p: any) => {
+              const info = barInfos[p.dataIndex];
+              if (!info) return "";
+              return `${info.cat}<br/>bin: ${info.binCenter.toFixed(3)}<br/>count: ${info.count}`;
+            },
+          },
+        });
+      });
+
+      // ——— Stats overlay (showStats) ———
+      // Per-category mean/std annotation. Renders two carrier custom
+      // series:
+      //   1. A short dashed horizontal line at each cat's mean Y,
+      //      spanning the cat slot.
+      //   2. A two-line "μ=… σ=…" text label in the upper-left of
+      //      each cat slot.
+      // Stats are computed across ALL visible rows in the category
+      // (groups collapsed) so the annotation reflects the column-wide
+      // distribution per category, matching JMP's per-cat summary.
+      if (showStats && xCats.length > 0) {
+        const statsData: Array<[string, number, number, number]> = [];
+        for (const cat of xCats) {
+          const vals: number[] = [];
+          for (let i = 0; i < data.rows.length; i++) {
+            const row = data.rows[i];
+            if (isRowHidden(row)) continue;
+            const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
+            if (rowCat !== cat) continue;
+            const v = toNum(row[yIdx]);
+            if (Number.isFinite(v)) vals.push(v);
+          }
+          if (vals.length === 0) continue;
+          const { mean, std, n } = meanStd(vals);
+          statsData.push([cat, mean, std, n]);
+        }
+        if (statsData.length > 0) {
+          // Mean marker line per cat — dashed, spans the slot in the
+          // direction PERPENDICULAR to the value axis.
+          series.push({
+            id: "__hist_cat_stats_mean",
+            type: "custom",
+            name: "__hist_stats_mean__",
+            coordinateSystem: "cartesian2d",
+            data: statsData,
+            renderItem: (params: any, api: any) => {
+              const catIsX = !String(params.seriesId || "").endsWith("__t");
+              const catName = catIsX
+                ? String(api.value(0))
+                : String(api.value(1));
+              const mean = (catIsX ? api.value(1) : api.value(0)) as number;
+              if (!Number.isFinite(mean)) return null;
+              const xy: [any, any] = catIsX ? [catName, mean] : [mean, catName];
+              const ctr = api.coord(xy);
+              if (!ctr) return null;
+              const slotPx = catIsX
+                ? api.size([1, 0])[0]
+                : api.size([0, 1])[1];
+              const shape = catIsX
+                ? {
+                    x1: ctr[0] - slotPx / 2 + 1,
+                    y1: ctr[1],
+                    x2: ctr[0] + slotPx / 2 - 1,
+                    y2: ctr[1],
+                  }
+                : {
+                    x1: ctr[0],
+                    y1: ctr[1] - slotPx / 2 + 1,
+                    x2: ctr[0],
+                    y2: ctr[1] + slotPx / 2 - 1,
+                  };
+              return {
+                type: "line",
+                shape,
+                style: {
+                  stroke: theme.fgPrimary,
+                  lineWidth: 1.5,
+                  lineDash: [4, 3],
+                },
+              };
+            },
+            z: 4,
+            silent: true,
+            tooltip: { show: false },
+            legendHoverLink: false,
+          });
+          // Per-cat stats text — anchored in the upper-left CORNER of
+          // each slot regardless of orientation.
+          series.push({
+            id: "__hist_cat_stats_text",
+            type: "custom",
+            name: "__hist_stats_text__",
+            coordinateSystem: "cartesian2d",
+            data: statsData,
+            renderItem: (params: any, api: any) => {
+              const catIsX = !String(params.seriesId || "").endsWith("__t");
+              const catName = catIsX
+                ? String(api.value(0))
+                : String(api.value(1));
+              const mean = (catIsX ? api.value(1) : api.value(0)) as number;
+              const std = api.value(2) as number;
+              const sys = params.coordSys;
+              const xy: [any, any] = catIsX ? [catName, 0] : [0, catName];
+              const ctr = api.coord(xy);
+              if (!ctr) return null;
+              const slotPx = catIsX
+                ? api.size([1, 0])[0]
+                : api.size([0, 1])[1];
+              const fmt = (v: number) =>
+                Number.isFinite(v) ? v.toFixed(3) : "—";
+              const xText = catIsX ? ctr[0] - slotPx / 2 + 4 : sys.x + 4;
+              const yText = catIsX ? sys.y + 4 : ctr[1] - slotPx / 2 + 4;
+              return {
+                type: "text",
+                style: {
+                  text: `μ=${fmt(mean)}\nσ=${fmt(std)}`,
+                  x: xText,
+                  y: yText,
+                  fill: theme.fgPrimary,
+                  font: "10px sans-serif",
+                  textAlign: "left",
+                  textVerticalAlign: "top",
+                },
+              };
+            },
+            z: 5,
+            silent: true,
+            tooltip: { show: false },
+            legendHoverLink: false,
+          });
+        }
+      }
+
+      // Category divider lines: JMP draws thin vertical guides at
+      // each category boundary when a histogram is added, so the
+      // left-anchored bars read against a clear visual edge. We use
+      // ECharts' built-in category-axis `splitLine` (set on the X
+      // axis below) instead of a custom-series carrier — the carrier
+      // approach was unreliable because ECharts silently filters
+      // custom-series rows whose value-axis dim is outside the
+      // visible range, so the dividers disappeared whenever the
+      // value axis was zoomed away from 0.
+      perCategoryHistogramOn = true;
+
+      // Fall through — boxplot / scatter / line layers below render
+      // alongside the per-category histogram.
+    } else if (xIdx >= 0) {
+      // —— MODE A: exclusive vertical histogram ——
+      //
+      // X = bin centers (value axis), Y = "Count" (value axis).
+      // Other layers don't compose with this mode so we early-return
+      // the full ECharts option.
+
+      // Bin grid is computed once on the FULL dataset (or shared facet
+      // range when faceted) so stacked / overlaid per-group series
+      // share identical bin centers and widths.
+      const allXs = data.rows.map((r) => toNum(r[xIdx]));
+      // Pick bin count so bar edges align with the X axis minor-tick
+      // grid (one bar per minor segment). Scan the data once for the
+      // range; `sharedRanges?.xMin/xMax` would be the faceted span but
+      // here we want the per-panel data extent since the X bounds the
+      // histogram emits below are also data-driven.
+      let xLoForBins = Infinity;
+      let xHiForBins = -Infinity;
+      for (const v of allXs) {
+        if (!Number.isFinite(v)) continue;
+        if (v < xLoForBins) xLoForBins = v;
+        if (v > xHiForBins) xHiForBins = v;
+      }
+      // Respect user-pinned axis bounds (drag-zoom / drag-pan writes
+      // these via `onAxisRangeChange`). Without this, the bin grid
+      // stays anchored to the raw data extent even after the user has
+      // narrowed the visible range, so bars keep their original width
+      // while the axis renders a denser minor-tick grid — exactly the
+      // "bar width doesn't follow minor tick width on zoom" complaint.
+      // When only one side is pinned we honor that side and fall back
+      // to the data extent for the other.
+      const xPinMin = spec.xAxis?.min;
+      const xPinMax = spec.xAxis?.max;
+      if (Number.isFinite(xPinMin)) xLoForBins = xPinMin as number;
+      if (Number.isFinite(xPinMax)) xHiForBins = xPinMax as number;
+      const autoBinCount = computeAutoBinCount(
+        xLoForBins,
+        xHiForBins,
+        spec.xAxis,
+      );
+      const { centers, counts: totalCounts, width } = histogramBins(allXs, autoBinCount);
+      const total = totalCounts.reduce((a, b) => a + b, 0);
+      const gridLo = centers.length > 0 ? centers[0] - width / 2 : 0;
+
+      // Bucket a per-group slice of values onto the shared grid.
+      const binOntoGrid = (vals: number[]): number[] => {
+        const buckets = new Array<number>(centers.length).fill(0);
+        if (centers.length === 0 || width <= 0) return buckets;
+        for (const v of vals) {
+          if (!Number.isFinite(v)) continue;
+          let bin = Math.floor((v - gridLo) / width);
+          if (bin < 0) bin = 0;
+          else if (bin >= centers.length) bin = centers.length - 1;
+          buckets[bin]++;
+        }
+        return buckets;
+      };
+
+      // Per-bin label formatter shared by bar/polygon styles. Returns empty
+      // string when neither counts nor percents are requested (so ECharts
+      // skips the label render entirely instead of drawing a 0-px label).
+      const formatBinLabel = (count: number): string => {
+        if (!showCounts && !showPercents) return "";
+        const pct = total > 0 ? (count / total) * 100 : 0;
+        if (showCounts && showPercents) return `${count}, ${pct.toFixed(0)}%`;
+        if (showCounts) return `${count}`;
+        return `${pct.toFixed(0)}%`;
+      };
+      const labelCfg = (showCounts || showPercents)
+        ? {
+            label: {
+              show: true,
+              // Inside-position keeps stacked-bar labels from colliding
+              // with the bar above; ungrouped bars (and polygon) can sit
+              // above the data point unobstructed.
+              position: histStyle === "bar" && !!grouping ? "inside" : "top",
+              color: theme.fgPrimary,
+              fontSize: 10,
+              formatter: (p: { value: [number, number] }) =>
+                formatBinLabel(p.value?.[1] ?? 0),
+            },
+          }
+        : {};
+
+      // Emit one (or more) series per group based on the chosen style.
+      // Shared `stackId` ensures grouped bars stack within each bin.
+      const stackId = "__hist_stack__";
+      histGroupSlots.forEach((slot) => {
+        const styleKey = grouping ? slot.key : DEFAULT_GROUP_KEY;
+        const rs = resolveGroupStyle(
+          styleKey,
+          slot.baseColor,
+          !!grouping,
+          theme,
+          spec.styles,
+        );
+        const gxs = slot.rowIdxs.map((i) => toNum(data.rows[i][xIdx]));
+        const groupCounts = binOntoGrid(gxs);
+
+        // Resolve the visible fill color for bars. `resolveGroupStyle`
+        // defaults ungrouped fill to "transparent" (so JMP-style point
+        // overlays stay see-through), but a transparent histogram bar
+        // is invisible — fall back to the group's base color in that
+        // case. User-set fill colors still win.
+        const userFill = spec.styles?.[styleKey]?.fill;
+        const hasUserFill = !!(userFill?.color ?? userFill?.fillColor);
+        const barFillColor = hasUserFill
+          ? rs.fill.color
+          : grouping
+            ? rs.fill.color
+            : slot.baseColor;
+
+        // Line / area colors for polygon and KDE styles. Same fallback
+        // logic: prefer the user's line override, then the resolved
+        // line style, finally the base color.
+        const lineColor = rs.line.color || slot.baseColor;
+        const areaColor = hasUserFill ? rs.fill.color : slot.baseColor;
+
+        if (histStyle === "shadowgram") {
+          // Multi-binCount overlay using this group's data only. Heavy
+          // translucency means the union of bars reads as a "shadow"
+          // density estimate — no single bin count is privileged.
+          const binChoices = [10, 14, 18, 22, 26, 30];
+          for (const bc of binChoices) {
+            const layer = histogramBins(gxs, bc);
+            series.push({
+              type: "bar",
+              name: slot.key,
+              data: layer.centers.map((c, i) => [c, layer.counts[i]]),
+              barWidth: "99%",
+              itemStyle: { color: lineColor, opacity: 0.15 },
+              silent: true,
+              tooltip: { show: false },
+              legendHoverLink: false,
+            });
+          }
+        } else if (histStyle === "polygon") {
+          // Frequency polygon: line through bin-top points. Phantom
+          // zero anchors at each end close the polygon back to the
+          // axis (matches JMP's polygon style).
+          const polyData: [number, number][] = [
+            [centers[0] - width, 0],
+            ...centers.map((c, i) => [c, groupCounts[i]] as [number, number]),
+            [centers[centers.length - 1] + width, 0],
+          ];
+          series.push({
+            type: "line",
+            name: slot.key,
+            data: polyData,
+            showSymbol: showCounts || showPercents, // need symbols to host labels
+            symbolSize: 4,
+            lineStyle: { color: lineColor, width: 2 },
+            itemStyle: { color: lineColor },
+            ...labelCfg,
+          });
+        } else if (histStyle === "kde") {
+          // Smoothed kernel density curve scaled to count-per-bin so it
+          // shares the Y axis with a count histogram. Each group's
+          // curve is scaled by its OWN count, so a small group's curve
+          // has proportionally smaller area than a large group's.
+          const kde = kdeCurve(gxs, smoothness, width);
+          series.push({
+            type: "line",
+            name: slot.key,
+            data: kde,
+            showSymbol: false,
+            smooth: true,
+            lineStyle: { color: lineColor, width: 2 },
+            itemStyle: { color: lineColor },
+            areaStyle: { color: areaColor, opacity: grouping ? 0.12 : 0.18 },
+          });
+        } else {
+          // Default: filled bar histogram. Stacked when grouped so
+          // each bin shows the per-group contribution as a segment.
+          series.push({
+            type: "bar",
+            name: slot.key,
+            data: centers.map((c, i) => [c, groupCounts[i]]),
+            barWidth: "99%",
+            itemStyle: { color: barFillColor },
+            ...(grouping ? { stack: stackId } : {}),
+            ...labelCfg,
+          });
+        }
+      });
+
       const refCarrierY = buildRefLinesCarrier(normalizeRefLinesY(spec.refLinesY), spec.autoSpecY, theme, "y");
       if (refCarrierY) series.push(refCarrierY);
       // Histogram X is always a value-type axis (binned numeric data),
       // so any user-defined X ref lines render here as vertical markers.
       const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), spec.autoSpecX, theme, "x");
       if (refCarrierX) series.push(refCarrierX);
+
+      // Stats overlay: top-left "Mean=… Std Dev=…" text + a vertical
+      // marker line at the mean rendered via a tiny markLine carrier
+      // series. We don't reuse the ref-lines carrier because those are
+      // user-facing/spec-driven; this is a derived stat that toggles
+      // with the option.
+      const graphic: unknown[] = [];
+      if (showStats) {
+        const { mean, std, n } = meanStd(allXs);
+        if (Number.isFinite(mean) && n > 0) {
+          // Format with 4 significant digits matching the JMP convention.
+          const fmt = (v: number) =>
+            Number.isFinite(v) ? v.toFixed(4) : "—";
+          graphic.push({
+            type: "text",
+            left: 8,
+            top: 4,
+            z: 100,
+            silent: true,
+            style: {
+              text: `Mean=${fmt(mean)}\nStd Dev=${fmt(std)}`,
+              fill: theme.fgPrimary,
+              fontSize: 11,
+              lineHeight: 14,
+            },
+          });
+          // Mean line as a thin vertical marker. Use a dedicated invisible
+          // carrier series so it doesn't show up in legend/tooltip.
+          series.push({
+            type: "line",
+            name: "__stats_mean__",
+            data: [],
+            silent: true,
+            tooltip: { show: false },
+            legendHoverLink: false,
+            markLine: {
+              symbol: ["none", "none"],
+              silent: true,
+              animation: false,
+              label: { show: false },
+              lineStyle: { color: "#2f7fff", width: 1.5, type: "solid" },
+              data: [{ xAxis: mean }],
+            },
+          });
+        }
+      }
+
       return {
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
@@ -1808,6 +3159,10 @@ function buildSingleOption(
             nameLocation: "middle",
             nameGap: 28,
             ...axis,
+            // Auto-enable minor ticks — mirrors the main path so an
+            // exclusive histogram chart inherits the same denser grid
+            // by default. User overrides still win via mergeAxis.
+            minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
             // Faceted histograms still benefit from a shared X span so the
             // bin centers are visually comparable across panels.
             ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
@@ -1829,6 +3184,8 @@ function buildSingleOption(
             nameLocation: "middle",
             nameGap: 40,
             ...axis,
+            // Auto-enable minor ticks on the frequency axis too.
+            minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
             // Expand auto-fit so ref lines (manual or auto-spec) stay
             // visible on the frequency axis. User-pinned min/max from
             // `buildAxisOverrides` still wins via the merge spread.
@@ -1837,6 +3194,7 @@ function buildSingleOption(
           buildAxisOverrides(spec.yAxis),
         ),
         series,
+        ...(graphic.length ? { graphic } : {}),
         animationDuration: 250,
         _binWidth: width, // 调试用
       } as EChartsOption;
@@ -2127,7 +3485,7 @@ function buildSingleOption(
         Number.isFinite(dataMin) ? dataMin : undefined,
         Number.isFinite(dataMax) ? dataMax : undefined,
         collectRefLineXs(spec),
-        8,
+        AUTO_TARGET_TICKS,
       );
       // Emit only the snapped min/max bounds — let ECharts auto-pick
       // the tick interval. Pinning `fit.interval` here baked a stale
@@ -2166,11 +3524,40 @@ function buildSingleOption(
           showMinLabel: true,
           showMaxLabel: true,
         },
+        // Per-category histogram (MODE C) divider lines. ECharts'
+        // built-in category-axis `splitLine` draws a hairline at every
+        // category BOUNDARY (between adjacent slots) which is exactly
+        // the JMP-style "thin separator between histogram cells" the
+        // user wants. We render lighter than JMP's near-black guide
+        // — `axisLine` (#c0c0c0) at half opacity gives a subtle
+        // visual break without competing with the bars or scatter.
+        // User overrides from `buildAxisOverrides` still win via the
+        // merge spread below if the user explicitly turns splitLine
+        // off, so this only ADDS the default styling.
+        ...(perCategoryHistogramOn
+          ? {
+              splitLine: {
+                show: true,
+                interval: 0,
+                lineStyle: {
+                  color: theme.axisLine,
+                  width: 1,
+                  opacity: 0.5,
+                },
+              },
+            }
+          : {}),
       }
     : xIsTime
       ? {
           type: "time",
           ...axis,
+          // Auto-enable minor ticks on the time axis so the chart
+          // matches the value-axis density without forcing the user
+          // to opt in. Explicit overrides from `buildAxisOverrides`
+          // (including `minorTickCount = 0` for off) still win via
+          // `mergeAxis` below.
+          minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
           // Pin to shared bounds when faceted so every panel's time axis
           // covers the same span.
           ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
@@ -2179,6 +3566,12 @@ function buildSingleOption(
       : {
           type: "value",
           ...axis,
+          // Auto-enable minor ticks on continuous value axes so
+          // unconfigured charts read with the same minor-tick density
+          // the user can otherwise dial in manually. Categorical axes
+          // skip this (above) because minor sub-ticks between adjacent
+          // category slots have no meaningful interpretation.
+          minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
           // Pre-computed bounds (faceted shared OR local nice-snap fit).
           // `scale: true` is encoded INSIDE xFinalBounds when no fit
           // was produced; we don't emit it unconditionally because it
@@ -2287,7 +3680,7 @@ function buildSingleOption(
       Number.isFinite(dataMin) ? dataMin : undefined,
       Number.isFinite(dataMax) ? dataMax : undefined,
       collectRefLineYs(spec),
-      8,
+      AUTO_TARGET_TICKS,
     );
     // See xFinalBounds above: emit min/max only so ECharts auto-ticks.
     yFinalBounds = fit
@@ -2314,6 +3707,10 @@ function buildSingleOption(
       {
         type: "value",
         ...axis,
+        // Auto-enable minor ticks on the Y value axis — same rationale
+        // as `xAxis` above. User overrides (including explicit-off
+        // via `minorTickCount = 0`) merge in below.
+        minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
         // Pre-computed bounds (faceted shared OR local nice-snap fit).
         // User-pinned overrides from `buildAxisOverrides` still win
         // via the merge spread below.
@@ -2882,7 +4279,7 @@ function computeSharedRanges(
       Number.isFinite(dataMin) ? dataMin : undefined,
       Number.isFinite(dataMax) ? dataMax : undefined,
       refYs ?? [],
-      8,
+      AUTO_TARGET_TICKS,
     );
     if (fit) {
       out.yMin = fit.min;
@@ -2892,7 +4289,7 @@ function computeSharedRanges(
   } else if (refYs && refYs.length > 0) {
     // No Y data column but ref lines are configured: fit the axis
     // around just the ref lines so they still render predictably.
-    const fit = computeNiceBounds(undefined, undefined, refYs, 8);
+    const fit = computeNiceBounds(undefined, undefined, refYs, AUTO_TARGET_TICKS);
     if (fit) {
       out.yMin = fit.min;
       out.yMax = fit.max;
@@ -2963,7 +4360,7 @@ function computeSharedRanges(
             out.xMin = xMin - pad;
             out.xMax = xMax + pad;
           } else {
-            const fit = computeNiceBounds(xMin, xMax, refXs ?? [], 8);
+            const fit = computeNiceBounds(xMin, xMax, refXs ?? [], AUTO_TARGET_TICKS);
             if (fit) {
               out.xMin = fit.min;
               out.xMax = fit.max;
@@ -2977,7 +4374,7 @@ function computeSharedRanges(
         } else if (refXs && refXs.length > 0) {
           // No finite X data but X ref lines configured: fit just
           // around the ref lines so they still render predictably.
-          const fit = computeNiceBounds(undefined, undefined, refXs, 8);
+          const fit = computeNiceBounds(undefined, undefined, refXs, AUTO_TARGET_TICKS);
           if (fit) {
             out.xMin = fit.min;
             out.xMax = fit.max;

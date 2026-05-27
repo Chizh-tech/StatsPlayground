@@ -458,7 +458,13 @@
       "conn": { "line": "直線", "step": "階梯", "spline": "曲線" },
       "fillMode": { "toZero": "到零填充", "between": "區間填充" },
       "missing": { "skip": "跳過", "include": "包含", "connect": "跨越連接", "break": "斷開" },
-      "box": { "outlier": "離群", "quantile": "分位", "normal": "普通", "notched": "帶凹口" }
+      "box": { "outlier": "離群", "quantile": "分位", "normal": "普通", "notched": "帶凹口" },
+      "histStyle": "直方圖樣式",
+      "smoothness": "平滑度",
+      "showStats": "顯示統計量",
+      "showCounts": "顯示頻數",
+      "showPercents": "顯示百分比",
+      "histStyles": { "bar": "柱狀", "polygon": "折線", "kde": "核密度", "shadowgram": "疊影圖" }
     },
     "loading": "正在載入資料…",
     "noData": "無資料",

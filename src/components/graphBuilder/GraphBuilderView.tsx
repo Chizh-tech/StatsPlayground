@@ -54,6 +54,7 @@ const CHART_TYPE_DEFS: ChartTypeDef[] = [
   { kind: "points", icon: "●" },
   { kind: "line", icon: "╱" },
   { kind: "boxplot", icon: "⊟" },
+  { kind: "histogram", icon: "▥" },
 ];
 
 /** 数据类型对应的小图标 */
@@ -2122,6 +2123,9 @@ function LayerCard({
         {kind === "boxplot" && (
           <BoxplotOptions options={options} onChange={onChangeOptions} t={t} />
         )}
+        {kind === "histogram" && (
+          <HistogramOptions options={options} onChange={onChangeOptions} t={t} />
+        )}
       </div>
     </div>
   );
@@ -2388,6 +2392,67 @@ function BoxplotOptions({ options, onChange, t }: OptionsEditorProps) {
           onChange={(e) =>
             onChange({ widthProportion: parseFloat(e.target.value) || 0 })
           }
+        />
+      </OptRow>
+    </>
+  );
+}
+
+/** Histogram options panel — JMP-style style selector + per-bin labels +
+ *  stats overlay. The Smoothness slider only matters for KDE so we hide
+ *  it for the other styles to reduce visual noise. */
+function HistogramOptions({ options, onChange, t }: OptionsEditorProps) {
+  const histStyle = getOpt<string>(options, "histStyle", "bar");
+  const smoothness = getOpt<number>(options, "smoothness", 0.5);
+  const showStats = getOpt<boolean>(options, "showStats", false);
+  const showCounts = getOpt<boolean>(options, "showCounts", false);
+  const showPercents = getOpt<boolean>(options, "showPercents", false);
+  return (
+    <>
+      <OptRow label={t("graph.opt.histStyle")}>
+        <select
+          className="gb-opt-select"
+          value={histStyle}
+          onChange={(e) => onChange({ histStyle: e.target.value })}
+        >
+          <option value="bar">{t("graph.opt.histStyles.bar")}</option>
+          <option value="polygon">{t("graph.opt.histStyles.polygon")}</option>
+          <option value="kde">{t("graph.opt.histStyles.kde")}</option>
+          <option value="shadowgram">{t("graph.opt.histStyles.shadowgram")}</option>
+        </select>
+      </OptRow>
+      {histStyle === "kde" && (
+        <OptRow label={t("graph.opt.smoothness")}>
+          <input
+            type="range"
+            className="gb-slider"
+            min={0}
+            max={1}
+            step={0.05}
+            value={smoothness}
+            onChange={(e) => onChange({ smoothness: parseFloat(e.target.value) })}
+          />
+        </OptRow>
+      )}
+      <OptRow label={t("graph.opt.showStats")}>
+        <input
+          type="checkbox"
+          checked={showStats}
+          onChange={(e) => onChange({ showStats: e.target.checked })}
+        />
+      </OptRow>
+      <OptRow label={t("graph.opt.showCounts")}>
+        <input
+          type="checkbox"
+          checked={showCounts}
+          onChange={(e) => onChange({ showCounts: e.target.checked })}
+        />
+      </OptRow>
+      <OptRow label={t("graph.opt.showPercents")}>
+        <input
+          type="checkbox"
+          checked={showPercents}
+          onChange={(e) => onChange({ showPercents: e.target.checked })}
         />
       </OptRow>
     </>

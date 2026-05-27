@@ -458,7 +458,13 @@
       "conn": { "line": "Line", "step": "Step", "spline": "Spline" },
       "fillMode": { "toZero": "To Zero", "between": "Between" },
       "missing": { "skip": "Skip", "include": "Include", "connect": "Connect Through", "break": "Break" },
-      "box": { "outlier": "Outlier", "quantile": "Quantile", "normal": "Normal", "notched": "Notched" }
+      "box": { "outlier": "Outlier", "quantile": "Quantile", "normal": "Normal", "notched": "Notched" },
+      "histStyle": "Histogram Style",
+      "smoothness": "Smoothness",
+      "showStats": "Show Statistics",
+      "showCounts": "Show Counts",
+      "showPercents": "Show Percents",
+      "histStyles": { "bar": "Bar", "polygon": "Polygon", "kde": "Kernel Density", "shadowgram": "Shadowgram" }
     },
     "loading": "Loading data…",
     "noData": "No data",

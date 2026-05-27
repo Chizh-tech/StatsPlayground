@@ -458,7 +458,13 @@
       "conn": { "line": "Đường thẳng", "step": "Bậc", "spline": "Đường cong" },
       "fillMode": { "toZero": "Về 0", "between": "Giữa" },
       "missing": { "skip": "Bỏ qua", "include": "Bao gồm", "connect": "Nối qua", "break": "Ngắt" },
-      "box": { "outlier": "Ngoại lai", "quantile": "Phân vị", "normal": "Bình thường", "notched": "Có khe" }
+      "box": { "outlier": "Ngoại lai", "quantile": "Phân vị", "normal": "Bình thường", "notched": "Có khe" },
+      "histStyle": "Kiểu biểu đồ",
+      "smoothness": "Độ mịn",
+      "showStats": "Hiện thống kê",
+      "showCounts": "Hiện số đếm",
+      "showPercents": "Hiện phần trăm",
+      "histStyles": { "bar": "Cột", "polygon": "Đa giác", "kde": "Kernel Density", "shadowgram": "Shadowgram" }
     },
     "loading": "Đang tải dữ liệu…",
     "noData": "Không có dữ liệu",
