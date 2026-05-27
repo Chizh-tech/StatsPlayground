@@ -6,7 +6,7 @@
  * 以及 X / Y / Color / Size / Overlay / GroupX / GroupY / Wrap 编码通道。
  */
 
-import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineX, RefLineStyle, YAxisConfig, GridLineStyle, AutoSpec } from "./types";
+import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineX, RefLineStyle, BandRefLine, YAxisConfig, GridLineStyle, AutoSpec } from "./types";
 import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
 import i18n from "@/i18n";
@@ -848,6 +848,131 @@ function buildAutoSpecMarkLineData(autoSpec: AutoSpec | undefined, axis: "x" | "
   return out;
 }
 
+/** Half-width of each category band, in fractional category-index
+ *  units. ECharts category axes with `boundaryGap: true` (the default
+ *  used for non-time category axes throughout this renderer) place
+ *  category N at the integer index N and extend its band ±0.5 around
+ *  that center. We pull the segment endpoints in by a small gap so
+ *  adjacent bands don't visually touch — at 0.45 each band's spec
+ *  line spans 90 % of its slot width, leaving a 10 % gutter between
+ *  neighbors that mirrors the inter-category gap used by the
+ *  scatter / box renderers. */
+const BAND_REF_HALF_WIDTH = 0.45;
+
+/** Stable id prefix shared by the X-anchored and Y-anchored band
+ *  carriers. Used by `transposeSeriesData` to spot the carrier and
+ *  apply the dim-flip needed when the outer transpose swaps axes
+ *  (custom series data is otherwise pass-through). */
+const BAND_REF_CARRIER_ID_PREFIX = "__band_ref_lines_";
+
+/** Build a `custom` series that draws per-category reference-line
+ *  segments. Each `BandRefLine` becomes one line primitive whose
+ *  extent on the OPPOSITE axis is exactly one category band wide
+ *  (scaled by `BAND_REF_HALF_WIDTH × 2`).
+ *
+ *  Why `custom` instead of `markLine` with fractional `coord`
+ *  indices: ECharts category axes interpret numeric `coord` values
+ *  as data-values to look up by name (e.g. `coord: [0.55, val]`
+ *  searches the category list for a literal entry named "0.55",
+ *  finds none, and silently drops the line). The only reliable way
+ *  to position a marker BETWEEN two category centers is via
+ *  pixel-space arithmetic in a `renderItem`, mirroring the
+ *  error-bar custom-series pattern used elsewhere in this file.
+ *
+ *  Data layout per row: `[dim0, dim1, color, width, dashType, "h"|"v"]`.
+ *  Dim 0 / dim 1 are the (X-value, Y-value) pair fed into `api.coord`;
+ *  the 6th column encodes which axis the segment runs along so
+ *  `transposeSeriesData` can flip both the dim order AND the
+ *  orientation flag together when the outer pipeline transposes
+ *  axes. With the flag readable inside `renderItem`, the carrier
+ *  needs no closure state and survives the transpose unchanged.
+ *
+ *  Returns `null` when nothing emits so callers can use a simple
+ *  `if (carrier) series.push(carrier)` pattern. */
+function buildBandRefLinesCarrier(
+  bandLines: BandRefLine[] | undefined,
+  cats: string[],
+  valueAxisFilter: "x" | "y",
+  _theme: GraphTheme,
+): any | null {
+  if (!bandLines || bandLines.length === 0) return null;
+  if (!cats || cats.length === 0) return null;
+  const catSet = new Set(cats);
+  const rows: any[] = [];
+  for (const ln of bandLines) {
+    if (ln.valueAxis !== valueAxisFilter) continue;
+    if (!Number.isFinite(ln.value)) continue;
+    if (!catSet.has(ln.category)) continue;
+    const dash = refDashFor(ln.style);
+    if (valueAxisFilter === "y") {
+      // Horizontal segment, cat axis is X. Dim 0 = catName (→ X),
+      // dim 1 = value (→ Y). Orientation flag "h" so the renderItem
+      // knows to draw a horizontal line and pull band width from
+      // api.size([1, 0])[0].
+      rows.push([ln.category, ln.value, ln.color, ln.width, dash, "h"]);
+    } else {
+      // Vertical segment, cat axis is Y. Dim 0 = value (→ X),
+      // dim 1 = catName (→ Y). Orientation flag "v".
+      rows.push([ln.value, ln.category, ln.color, ln.width, dash, "v"]);
+    }
+  }
+  if (rows.length === 0) return null;
+  return {
+    id: `${BAND_REF_CARRIER_ID_PREFIX}${valueAxisFilter}`,
+    type: "custom",
+    name: "",
+    legendHoverLink: false,
+    silent: true,
+    z: 5,
+    animation: false,
+    progressive: 0,
+    encode: { x: 0, y: 1 },
+    renderItem(_params: any, api: any) {
+      const d0 = api.value(0);
+      const d1 = api.value(1);
+      const center = api.coord([d0, d1]);
+      const color = api.value(2) as string;
+      const width = api.value(3) as number;
+      const dashType = api.value(4) as "solid" | "dashed" | "dotted";
+      const orientation = api.value(5) as "h" | "v";
+      const lineDash =
+        dashType === "dashed" ? [6, 4] : dashType === "dotted" ? [2, 3] : undefined;
+      let shape: any;
+      if (orientation === "h") {
+        // api.size([1, 0]) returns the pixel size of one unit on each
+        // axis at the current zoom level. For a category axis, one
+        // unit = one band's width; we pull the X-pixel size since the
+        // cat axis is X in this orientation.
+        const halfBand = api.size([1, 0])[0] * BAND_REF_HALF_WIDTH;
+        shape = {
+          x1: center[0] - halfBand,
+          y1: center[1],
+          x2: center[0] + halfBand,
+          y2: center[1],
+        };
+      } else {
+        const halfBand = api.size([0, 1])[1] * BAND_REF_HALF_WIDTH;
+        shape = {
+          x1: center[0],
+          y1: center[1] - halfBand,
+          x2: center[0],
+          y2: center[1] + halfBand,
+        };
+      }
+      return {
+        type: "line",
+        shape,
+        style: {
+          stroke: color,
+          lineWidth: width,
+          ...(lineDash ? { lineDash } : {}),
+        },
+      };
+    },
+    data: rows,
+  };
+}
+
 /** Collect every finite reference-line Y value contributed by the
  *  user-defined `refLinesY` list and the auto-spec overlay. Used by
  *  the Y-axis auto-scale logic to guarantee that every ref line stays
@@ -866,6 +991,14 @@ function collectRefLineYs(spec: GraphSpec): number[] {
     if (Number.isFinite(a.lsl as number)) out.push(a.lsl as number);
     if (Number.isFinite(a.target as number)) out.push(a.target as number);
     if (Number.isFinite(a.usl as number)) out.push(a.usl as number);
+  }
+  // Band ref lines anchored to the Y axis still need to influence
+  // the Y auto-fit even though they only span one category band on
+  // X — otherwise a per-column USL above the data extent would be
+  // clipped by the auto-scaled Y range and the user wouldn't see
+  // their data hitting (or missing) the limit.
+  for (const ln of spec.bandRefLines ?? []) {
+    if (ln.valueAxis === "y" && Number.isFinite(ln.value)) out.push(ln.value);
   }
   return out;
 }
@@ -887,6 +1020,12 @@ function collectRefLineXs(spec: GraphSpec): number[] {
     if (Number.isFinite(a.lsl as number)) out.push(a.lsl as number);
     if (Number.isFinite(a.target as number)) out.push(a.target as number);
     if (Number.isFinite(a.usl as number)) out.push(a.usl as number);
+  }
+  // Symmetric to `collectRefLineYs`: include band ref lines anchored
+  // to the X axis so the X auto-fit still pads out to keep them in
+  // view even though they only span one Y-category band.
+  for (const ln of spec.bandRefLines ?? []) {
+    if (ln.valueAxis === "x" && Number.isFinite(ln.value)) out.push(ln.value);
   }
   return out;
 }
@@ -1311,6 +1450,27 @@ function transposeSeriesData(s: any): any {
       return pt;
     });
   }
+  // Custom band-ref-line carriers: same shape on input as `scatter`
+  // (data rows are `[dim0, dim1, …]` arrays) but custom series are
+  // otherwise pass-through. We DO want to flip these so the segments
+  // re-anchor to the swapped axes — flipping dims 0/1 keeps the
+  // (catName, value) ↔ (value, catName) alignment correct, and
+  // flipping the orientation flag at index 5 keeps the renderItem
+  // drawing along the right axis. Detect by id-prefix so the rest
+  // of the custom-series ecosystem (error-bar caps, etc.) stays
+  // skipped exactly as before.
+  if (
+    seriesType === "custom" &&
+    typeof s.id === "string" &&
+    s.id.startsWith(BAND_REF_CARRIER_ID_PREFIX) &&
+    Array.isArray(s.data)
+  ) {
+    out.data = s.data.map((row: any) => {
+      if (!Array.isArray(row) || row.length < 6) return row;
+      const flipped = [row[1], row[0], row[2], row[3], row[4], row[5] === "h" ? "v" : "h"];
+      return flipped;
+    });
+  }
   if (s.markLine && Array.isArray(s.markLine.data)) {
     out.markLine = { ...s.markLine, data: transposeMarkData(s.markLine.data) };
   }
@@ -1464,6 +1624,22 @@ function buildSingleOption(
         width: r.width,
       })),
       refLinesX: undefined,
+      // Band ref lines: in horizontal mode the user's original X axis
+      // becomes the inner Y (numeric value axis post-transpose), so
+      // any band lines whose `valueAxis === "x"` must flip to `"y"`
+      // before the inner build sees them. The `category` field still
+      // names whichever axis ISN'T `valueAxis` — pre-swap that was
+      // the (now inner-X) categorical axis, post-swap it's still on
+      // the categorical axis the inner build sees. Band lines with
+      // `valueAxis === "y"` pre-swap would land on the inner X (the
+      // user's original categorical Y) which has no meaningful
+      // numeric position, so we drop them, mirroring the user-line
+      // policy above. `transposeMarkData` doesn't touch the markLine
+      // `coord` arrays the band carrier emits, so flipping the spec
+      // here is the only translation needed.
+      bandRefLines: (spec.bandRefLines ?? [])
+        .filter((ln) => ln.valueAxis === "x")
+        .map((ln) => ({ ...ln, valueAxis: "y" as const })),
       // Auto-spec extras follow the column — swap them with the
       // encoding so the inner build reads spec metadata off the right
       // source. The user's original X column becomes the inner Y
@@ -2046,6 +2222,29 @@ function buildSingleOption(
         "x",
       );
       if (refCarrierX) series.push(refCarrierX);
+    }
+    // Band ref lines: per-category segments anchored to one band
+    // each. Only meaningful when the opposite axis is categorical,
+    // so we emit:
+    //   - Y-anchored band lines (horizontal segments) only when X
+    //     is a category axis (xIsCategory).
+    //   - X-anchored band lines (vertical segments) only when Y is
+    //     a category axis — but the horizontal-mode short-circuit
+    //     above has already swapped categorical-Y cases through the
+    //     vertical pipeline, so by the time execution reaches here Y
+    //     is always value-type and there's no native category-Y
+    //     branch to drive a vertical band carrier. The swap copies
+    //     band lines with `valueAxis: "x"` → `"y"` so they re-enter
+    //     this block as Y-anchored on the swapped spec and
+    //     `transposeOption` flips them back on the way out.
+    if (xIsCategory) {
+      const bandCarrierY = buildBandRefLinesCarrier(
+        spec.bandRefLines,
+        xCats,
+        "y",
+        theme,
+      );
+      if (bandCarrierY) series.push(bandCarrierY);
     }
   }
 

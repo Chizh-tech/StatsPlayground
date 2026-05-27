@@ -20,6 +20,7 @@ export {
   type RefLineY,
   type RefLineX,
   type RefLineStyle,
+  type BandRefLine,
   type YAxisConfig,
   type GridLineStyle,
   type AutoSpec,

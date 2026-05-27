@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } fr
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -113,6 +113,80 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // instead of by column name.
   const [specByCol, setSpecByCol] = useState<Record<string, { lsl?: number; target?: number; usl?: number }>>({});
 
+  // Multi-select state for the column list (left rail). Plain click =
+  // single select; Ctrl/Cmd+click = toggle one; Shift+click = range
+  // select between the click anchor and the current item. When the
+  // user starts a drag on a selected item, the drag payload becomes
+  // ALL selected fields (multi-drag). Drag on an unselected item
+  // clears selection and drags only that one (single-drag, identical
+  // to pre-multi-select behavior). The selection is purely transient
+  // UI state — not persisted with the project. */
+  const [selectedColNames, setSelectedColNames] = useState<Set<string>>(() => new Set());
+  // Anchor for Shift+click range selection — last column the user
+  // clicked WITHOUT shift. Reset to the clicked item on every plain /
+  // ctrl click. Shift+click preserves the anchor.
+  const colAnchorRef = useRef<string | null>(null);
+  // Visual reject-flash state per slot. Set briefly to flash the slot
+  // red when a multi-drop is rejected (mixed numeric / non-numeric,
+  // or non-numeric appended in multi-mode). The Slot component reads
+  // this and adds a CSS class for ~400 ms.
+  const [rejectFlashSlot, setRejectFlashSlot] = useState<SlotKey | null>(null);
+  const rejectFlashTimerRef = useRef<number | null>(null);
+  const flashRejectOnSlot = useCallback((slot: SlotKey) => {
+    setRejectFlashSlot(slot);
+    if (rejectFlashTimerRef.current !== null) {
+      window.clearTimeout(rejectFlashTimerRef.current);
+    }
+    rejectFlashTimerRef.current = window.setTimeout(() => {
+      setRejectFlashSlot(null);
+      rejectFlashTimerRef.current = null;
+    }, 400);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (rejectFlashTimerRef.current !== null) {
+        window.clearTimeout(rejectFlashTimerRef.current);
+      }
+    };
+  }, []);
+  // Which slot's multi-mode manager popover is currently open. null
+  // means no manager is open. Only one manager can be open at a time
+  // (they're mutually exclusive — opening one closes the other).
+  const [managerOpenSlot, setManagerOpenSlot] = useState<SlotKey | null>(null);
+  // Right-click context menu on a slot (X / Y / Group X / Group Y /
+  // Overlay). Lifted up here (rather than per-Slot state) so opening
+  // a menu on one slot implicitly closes any other slot's menu — a
+  // single source of truth keeps the close-on-outside-click handler
+  // simple. Position is in viewport coordinates (clientX / clientY).
+  const [slotCtxMenu, setSlotCtxMenu] = useState<{ slot: SlotKey; x: number; y: number } | null>(null);
+  // Close the slot context menu on any left click outside the menu
+  // itself, and also on any other contextmenu (so right-clicking a
+  // different slot replaces the menu cleanly). Mirrors the pattern in
+  // DataTableView's column / cell context menus. Items inside the menu
+  // call `stopPropagation` so the close handler doesn't fire before
+  // their own onClick.
+  useEffect(() => {
+    if (!slotCtxMenu) return;
+    const close = () => setSlotCtxMenu(null);
+    document.addEventListener("click", close);
+    document.addEventListener("contextmenu", close);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("contextmenu", close);
+    };
+  }, [slotCtxMenu]);
+  // Auto-close the manager when its slot leaves multi-mode (cols
+  // dropped below 2 via deletion in the manager itself, slot-clear,
+  // swap XY, start-over, etc.). Without this, the next time the user
+  // re-enters multi-mode on the same slot the manager would pop open
+  // by itself because `managerOpenSlot` was still set from before.
+  useEffect(() => {
+    if (!managerOpenSlot) return;
+    const cols =
+      managerOpenSlot === "x" ? item.multiX : managerOpenSlot === "y" ? item.multiY : undefined;
+    if ((cols?.length ?? 0) < 2) setManagerOpenSlot(null);
+  }, [managerOpenSlot, item.multiX, item.multiY]);
+
   // Resizable side-rail widths. Mirror the Excel-grid splitter pattern
   // (DataTableView): clamp on drag and double-click to reset.
   const [leftWidth, setLeftWidth] = useState(220);
@@ -199,6 +273,117 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     () => applyFilters(data, filters),
     [data, filters],
   );
+
+  // ---- Multi-column melt (multi-mode rendering) ---------------------
+  //
+  // When the user drops 2+ numeric columns onto one axis at once,
+  // that axis enters "multi-mode": `item.multiX` or `item.multiY`
+  // holds the list of dropped columns. There are two render modes,
+  // chosen at render time based on whether the OTHER axis is bound:
+  //
+  //   - "axis" mode (other axis empty): the dropped column NAMES
+  //     become the multi-mode axis (categorical) and the dropped
+  //     column VALUES become the other axis (continuous). This lets
+  //     the user instantly compare similar-typed columns side by
+  //     side without a separate melt step.
+  //
+  //   - "merge" mode (other axis bound): all dropped column values
+  //     are concatenated into one anonymous series on the multi-mode
+  //     axis (continuous), against the bound other axis. Mirrors the
+  //     "long-form" data layout — every dropped column contributes
+  //     its rows to the same plotted series.
+  //
+  // The melt rewrites `filteredData` by:
+  //   - keeping all original columns (so legend/overlay/group still
+  //     reference the same data),
+  //   - appending two synthetic columns `__sp_variable__` (the
+  //     source column NAME) and `__sp_value__` (the per-row value
+  //     from that column),
+  //   - emitting N rows per original row, where N = number of
+  //     melted columns.
+  //
+  // The spec then sees a synthetic FieldRef for the affected axis /
+  // axes pointing at these synthetic columns, so transform.ts and
+  // ECharts don't need to know multi-mode exists. */
+  const MELT_VAR = "__sp_variable__";
+  const MELT_VAL = "__sp_value__";
+  const meltInfo = useMemo<
+    | {
+        slot: "x" | "y";
+        cols: FieldRef[];
+        mode: "axis" | "merge";
+        varField: FieldRef;
+        valField: FieldRef;
+      }
+    | null
+  >(() => {
+    // At most one axis can be in multi-mode at a time
+    // (setMultiAtSlot enforces this on the write side). On read,
+    // if both happen to be set (e.g. an older project file), prefer
+    // X — it's the more common axis to multi-drop on.
+    const mx = item.multiX ?? [];
+    const my = item.multiY ?? [];
+    const xActive = mx.length >= 2;
+    const yActive = my.length >= 2;
+    if (!xActive && !yActive) return null;
+    const slot: "x" | "y" = xActive ? "x" : "y";
+    const cols = slot === "x" ? mx : my;
+    const otherBound = slot === "x" ? !!item.encoding.y : !!item.encoding.x;
+    const mode: "axis" | "merge" = otherBound ? "merge" : "axis";
+    return {
+      slot,
+      cols,
+      mode,
+      varField: { name: MELT_VAR, type: "nominal" },
+      valField: { name: MELT_VAL, type: "continuous" },
+    };
+  }, [item.multiX, item.multiY, item.encoding.x, item.encoding.y]);
+
+  // Build the melted dataset. Returns `filteredData` unchanged when
+  // not in multi-mode (zero-cost no-op). */
+  const effectiveData = useMemo<GraphData | null>(() => {
+    if (!filteredData) return filteredData;
+    if (!meltInfo) return filteredData;
+    const colIdx = meltInfo.cols.map((c) =>
+      filteredData.columns.indexOf(c.name),
+    );
+    const newCols = [...filteredData.columns, MELT_VAR, MELT_VAL];
+    const newRows: unknown[][] = [];
+    for (const row of filteredData.rows) {
+      for (let i = 0; i < meltInfo.cols.length; i++) {
+        const ci = colIdx[i];
+        const v = ci >= 0 ? row[ci] : null;
+        newRows.push([...row, meltInfo.cols[i].name, v]);
+      }
+    }
+    return { columns: newCols, rows: newRows };
+  }, [filteredData, meltInfo]);
+
+  // Build the effective encoding for the renderer. In multi-mode the
+  // synthetic FieldRefs replace the affected slot(s); other slots
+  // (overlay, group X/Y, etc.) pass through untouched. */
+  const effectiveEncoding = useMemo<typeof item.encoding>(() => {
+    if (!meltInfo) return item.encoding;
+    const enc = { ...item.encoding };
+    if (meltInfo.slot === "x") {
+      if (meltInfo.mode === "axis") {
+        enc.x = meltInfo.varField;
+        enc.y = meltInfo.valField;
+      } else {
+        enc.x = meltInfo.valField;
+        // enc.y stays as the user's bound Y field.
+      }
+    } else {
+      if (meltInfo.mode === "axis") {
+        enc.y = meltInfo.varField;
+        enc.x = meltInfo.valField;
+      } else {
+        enc.y = meltInfo.valField;
+        // enc.x stays as the user's bound X field.
+      }
+    }
+    return enc;
+  }, [item.encoding, meltInfo]);
 
   // User-saved CustomPalettes feed into legend default-color assignment:
   // when a group doesn't have an explicit style override yet, the renderer
@@ -390,9 +575,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     // per-group Style editor. Drop them when building the spec so legacy
     // projects don't surprise the user with auto-coloring or auto-sizing.
     const SKIP_KEYS = new Set<SlotKey>(["color", "size", "wrap"]);
-    (Object.keys(encoding) as SlotKey[]).forEach((k) => {
+    (Object.keys(effectiveEncoding) as SlotKey[]).forEach((k) => {
       if (SKIP_KEYS.has(k)) return;
-      const v = encoding[k];
+      const v = effectiveEncoding[k];
       if (v) (enc as any)[k] = v;
     });
     // Resolve the auto spec-limit overlay independently for each axis.
@@ -404,15 +589,119 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     // build) is used as a fallback for any per-axis field still
     // `undefined`, so old projects keep their previous behavior on
     // first load until the user touches either checkbox.
+    //
+    // In multi-mode the auto-spec overlay is handled differently —
+    // the single-column overlay (autoSpecY / autoSpecX) is disabled
+    // because there's no longer a single underlying column; instead
+    // each dropped column contributes its OWN LSL / Target / USL ref
+    // lines on the value axis (computed below). This way the user
+    // can see per-column spec limits side by side on the same axis
+    // even after the columns were merged via melt. */
     const legacy = item.autoSpecLines;
-    const onY = item.autoSpecLinesY ?? legacy ?? false;
-    const onX = item.autoSpecLinesX ?? legacy ?? false;
-    const yName = encoding.y?.name;
-    const xName = encoding.x?.name;
+    const onY = !meltInfo && (item.autoSpecLinesY ?? legacy ?? false);
+    const onX = !meltInfo && (item.autoSpecLinesX ?? legacy ?? false);
+    const yName = effectiveEncoding.y?.name;
+    const xName = effectiveEncoding.x?.name;
     const yLimits = onY && yName ? specByCol[yName] : undefined;
     const xLimits = onX && xName ? specByCol[xName] : undefined;
     const autoSpecY = yLimits ? { ...yLimits, colName: yName } : undefined;
     const autoSpecX = xLimits ? { ...xLimits, colName: xName } : undefined;
+
+    // Multi-mode per-column auto-spec ref lines. Computed here (rather
+    // than persisted on the item) so toggling the checkbox in the
+    // axis-settings dialog doesn't pollute the user's editable
+    // ref-lines list. Each column contributes up to three lines (LSL,
+    // Target, USL) drawn on whichever axis ended up carrying the
+    // synthetic value column: in "axis" mode that's the axis opposite
+    // the multi-drop slot; in "merge" mode it's the multi-drop slot
+    // itself.
+    //
+    // Two rendering strategies, picked off `meltInfo.mode`:
+    //
+    //   - "axis" mode (variable column on the OTHER axis): every
+    //     melted column becomes its own category band on the variable
+    //     axis. Drawing full-width spec lines across all categories
+    //     would visually attribute one column's USL to every other
+    //     column AND let labels stack on top of one another when
+    //     limits sit close together. Emit `BandRefLine` entries
+    //     instead — each line is restricted to its source column's
+    //     band on the categorical axis, labels are suppressed (the
+    //     column's position on the cat axis already conveys identity),
+    //     and they ride a separate carrier series in the renderer.
+    //
+    //   - "merge" mode (value column on the multi slot, no variable
+    //     axis exists): there's no category axis to band against, so
+    //     fall back to full-width refLines with column-name labels —
+    //     same shape as a manually-added ref line. */
+    const extraRefLinesY: RefLineY[] = [];
+    const extraRefLinesX: RefLineX[] = [];
+    const extraBandRefLines: BandRefLine[] = [];
+    if (meltInfo) {
+      const valueAxis: "x" | "y" = meltInfo.mode === "axis"
+        ? (meltInfo.slot === "y" ? "x" : "y")
+        : meltInfo.slot;
+      const autoOn = valueAxis === "y"
+        ? (item.autoSpecLinesY ?? legacy ?? false)
+        : (item.autoSpecLinesX ?? legacy ?? false);
+      if (autoOn) {
+        let seq = 0;
+        if (meltInfo.mode === "axis") {
+          // Per-column band segments. `category` is the column name
+          // because in axis mode the variable axis is rendered as a
+          // category axis with one slot per column (the melt
+          // synthesizes a `__sp_variable__` column whose values are
+          // exactly the source column names).
+          const push = (col: string, kind: "LSL" | "Target" | "USL", v: number) => {
+            const id = `auto-spec-band-${col}-${kind}-${++seq}`;
+            const color = kind === "Target" ? "#00C853" : "#E60000";
+            extraBandRefLines.push({
+              id,
+              value: v,
+              category: col,
+              valueAxis,
+              color,
+              style: "dashed",
+              width: 1,
+            });
+          };
+          for (const c of meltInfo.cols) {
+            const sp = specByCol[c.name];
+            if (!sp) continue;
+            if (sp.lsl !== undefined) push(c.name, "LSL", sp.lsl);
+            if (sp.target !== undefined) push(c.name, "Target", sp.target);
+            if (sp.usl !== undefined) push(c.name, "USL", sp.usl);
+          }
+        } else {
+          // Merge mode: no category axis on the opposite side, so
+          // full-width labeled refLines are the only option. Keep
+          // the column name in the label so users can still tell
+          // which limit came from which column when several columns
+          // were merged onto the same value axis.
+          const push = (col: string, kind: "LSL" | "Target" | "USL", v: number) => {
+            const id = `auto-spec-multi-${col}-${kind}-${++seq}`;
+            const color = kind === "Target" ? "#00C853" : "#E60000";
+            const label = `${kind}[${col}] = ${Number(v.toPrecision(10))}`;
+            const base = { id, label, style: "dashed" as RefLineStyle, color, width: 1 };
+            if (valueAxis === "y") extraRefLinesY.push({ ...base, y: v });
+            else extraRefLinesX.push({ ...base, x: v });
+          };
+          for (const c of meltInfo.cols) {
+            const sp = specByCol[c.name];
+            if (!sp) continue;
+            if (sp.lsl !== undefined) push(c.name, "LSL", sp.lsl);
+            if (sp.target !== undefined) push(c.name, "Target", sp.target);
+            if (sp.usl !== undefined) push(c.name, "USL", sp.usl);
+          }
+        }
+      }
+    }
+    const finalRefLinesY = extraRefLinesY.length
+      ? [...(item.refLinesY ?? []), ...extraRefLinesY]
+      : item.refLinesY;
+    const finalRefLinesX = extraRefLinesX.length
+      ? [...(item.refLinesX ?? []), ...extraRefLinesX]
+      : item.refLinesX;
+    const finalBandRefLines = extraBandRefLines.length ? extraBandRefLines : undefined;
     return {
       datasetId: dataset.id,
       datasetName: dataset.name,
@@ -420,14 +709,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       elements: finalElements,
       styles: effectiveStyles,
       hiddenGroups: item.hiddenGroups,
-      refLinesY: item.refLinesY,
-      refLinesX: item.refLinesX,
+      refLinesY: finalRefLinesY,
+      refLinesX: finalRefLinesX,
+      bandRefLines: finalBandRefLines,
       autoSpecY,
       autoSpecX,
       yAxis: item.yAxis,
       xAxis: item.xAxis,
     };
-  }, [encoding, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.refLinesX, item.yAxis, item.xAxis, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, specByCol]);
+  }, [effectiveEncoding, meltInfo, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.refLinesX, item.yAxis, item.xAxis, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, specByCol]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -548,27 +838,112 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
   // 拖放处理
   const onDragStart = (e: React.DragEvent, field: FieldRef) => {
-    e.dataTransfer.setData(DRAG_MIME, JSON.stringify(field));
+    // Multi-drag: when the dragged item is part of the current
+    // selection AND the selection has more than one entry, drag ALL
+    // selected fields together as an array. Otherwise this is a
+    // single-item drag — clear the visual selection so the user
+    // doesn't see stale highlights, and serialize just this one
+    // field (still as a 1-length array for receiver simplicity).
+    const dragSet =
+      selectedColNames.has(field.name) && selectedColNames.size > 1
+        ? columns.filter((c) => selectedColNames.has(c.name))
+        : [field];
+    if (dragSet.length <= 1) {
+      // Drag started on an unselected (or only-self-selected) item:
+      // reset the multi-select to just this column so the highlight
+      // matches the drag.
+      setSelectedColNames(new Set([field.name]));
+      colAnchorRef.current = field.name;
+    }
+    const payload = JSON.stringify(dragSet);
+    e.dataTransfer.setData(DRAG_MIME, payload);
     // 同时写入 text/plain 作为傅底（部分 WebView 对自定义 MIME 不友好）
-    try { e.dataTransfer.setData("text/plain", JSON.stringify(field)); } catch { /* ignore */ }
+    try { e.dataTransfer.setData("text/plain", payload); } catch { /* ignore */ }
     e.dataTransfer.effectAllowed = "copy";
   };
+
+  /** Handle a click on a column-list item. Implements the standard
+   *  multi-select gesture set:
+   *    - plain click         → select only this item (anchor = this)
+   *    - Ctrl / Cmd + click  → toggle this item (anchor = this)
+   *    - Shift + click       → range select from anchor to this item
+   *  The selection persists across re-renders and only resets when
+   *  the user makes a plain click on a different item or starts a
+   *  drag on an unselected item. */
+  const handleColClick = useCallback(
+    (name: string, e: React.MouseEvent) => {
+      const isCtrl = e.ctrlKey || e.metaKey;
+      const isShift = e.shiftKey && !isCtrl;
+      if (isShift && colAnchorRef.current && colAnchorRef.current !== name) {
+        const names = columns.map((c) => c.name);
+        const a = names.indexOf(colAnchorRef.current);
+        const b = names.indexOf(name);
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a <= b ? [a, b] : [b, a];
+          const range = new Set(names.slice(lo, hi + 1));
+          setSelectedColNames(range);
+          return;
+        }
+      }
+      if (isCtrl) {
+        setSelectedColNames((prev) => {
+          const next = new Set(prev);
+          if (next.has(name)) next.delete(name);
+          else next.add(name);
+          return next;
+        });
+        colAnchorRef.current = name;
+        return;
+      }
+      // Plain click: single select.
+      setSelectedColNames(new Set([name]));
+      colAnchorRef.current = name;
+    },
+    [columns],
+  );
+
+  /** Parse a drag payload that may be a single FieldRef (legacy) or
+   *  an array of FieldRef (multi-drag). Always returns an array; empty
+   *  array means "could not parse". */
+  const parseDragFields = useCallback((raw: string): FieldRef[] => {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((f): f is FieldRef =>
+          !!f && typeof (f as FieldRef).name === "string",
+        );
+      }
+      if (parsed && typeof (parsed as FieldRef).name === "string") {
+        return [parsed as FieldRef];
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  }, []);
 
   /** Bind a field to an encoding slot, atomically clearing the
    *  axis's data-range overrides (min / max / tickInterval) when the
    *  X or Y slot's column actually changes to a different one. See
-   *  the long comment in `handleDropOnSlot` for the rationale. */
+   *  the long comment in `handleDropOnSlot` for the rationale.
+   *  Also clears any multi-mode list on the same slot — a single
+   *  field bind always exits multi-mode for that slot. */
   const bindFieldToSlot = useCallback(
     (slot: SlotKey, field: FieldRef) => {
       const prevField = item.encoding[slot];
+      const multiKey: "multiX" | "multiY" | null =
+        slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
+      const hadMulti = multiKey ? (item[multiKey]?.length ?? 0) > 0 : false;
       const fieldChanged =
         (slot === "x" || slot === "y") &&
         prevField !== undefined &&
         prevField.name !== field.name;
-      if (fieldChanged) {
-        const axisKey: "xAxis" | "yAxis" = slot === "x" ? "xAxis" : "yAxis";
-        const prevAxis = item[axisKey];
+      if (fieldChanged || hadMulti) {
+        const axisKey: "xAxis" | "yAxis" | null =
+          slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
+        const prevAxis = axisKey ? item[axisKey] : undefined;
         const needsAxisReset =
+          axisKey !== undefined &&
           prevAxis !== undefined &&
           (prevAxis.min !== undefined ||
             prevAxis.max !== undefined ||
@@ -578,15 +953,84 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           : prevAxis;
         updateItem(item.id, {
           encoding: { ...item.encoding, [slot]: field },
-          ...(needsAxisReset ? { [axisKey]: nextAxis } : {}),
+          ...(needsAxisReset && axisKey ? { [axisKey]: nextAxis } : {}),
+          ...(multiKey ? { [multiKey]: undefined } : {}),
         });
         markDirty();
         return;
       }
       setEncoding((prev) => ({ ...prev, [slot]: field }));
     },
-    [item.id, item.encoding, item.xAxis, item.yAxis, updateItem, markDirty, setEncoding],
+    [item.id, item.encoding, item.xAxis, item.yAxis, item.multiX, item.multiY, updateItem, markDirty, setEncoding],
   );
+
+  /** Replace a slot's multi-mode list. Length 0 / undefined exits
+   *  multi-mode (also clears `encoding[slot]`). Length 1 is
+   *  auto-collapsed back to single-field encoding on `encoding[slot]`
+   *  so multi-mode never holds exactly one column. Length 2+
+   *  enters / stays in multi-mode and clears `encoding[slot]`.
+   *  Atomic via a single `updateItem` so the rendered state stays
+   *  consistent during transitions. At most one axis can be in
+   *  multi-mode at a time — entering multi-mode on one axis also
+   *  clears the other axis's multi list (the other-axis multi state
+   *  would otherwise produce an ambiguous render). */
+  const setMultiAtSlot = useCallback(
+    (slot: "x" | "y", next: FieldRef[] | undefined) => {
+      const multiKey: "multiX" | "multiY" = slot === "x" ? "multiX" : "multiY";
+      const otherMultiKey: "multiX" | "multiY" = slot === "x" ? "multiY" : "multiX";
+      const axisKey: "xAxis" | "yAxis" = slot === "x" ? "xAxis" : "yAxis";
+      const list = (next ?? []).filter((f, i, arr) =>
+        arr.findIndex((g) => g.name === f.name) === i,
+      );
+      const prevAxis = item[axisKey];
+      const needsAxisReset =
+        prevAxis !== undefined &&
+        (prevAxis.min !== undefined ||
+          prevAxis.max !== undefined ||
+          prevAxis.tickInterval !== undefined);
+      const axisPatch =
+        needsAxisReset
+          ? { [axisKey]: { ...prevAxis, min: undefined, max: undefined, tickInterval: undefined } }
+          : {};
+      if (list.length === 0) {
+        updateItem(item.id, { [multiKey]: undefined, ...axisPatch });
+        markDirty();
+        return;
+      }
+      if (list.length === 1) {
+        const only = list[0];
+        updateItem(item.id, {
+          [multiKey]: undefined,
+          encoding: { ...item.encoding, [slot]: only },
+          ...axisPatch,
+        });
+        markDirty();
+        return;
+      }
+      // ≥2 columns: stay in multi-mode. Clear `encoding[slot]` so the
+      // single-field chip doesn't shadow the multi list. Also clear
+      // any multi on the OTHER axis — only one axis can be in
+      // multi-mode at a time.
+      const nextEncoding = { ...item.encoding };
+      delete nextEncoding[slot];
+      updateItem(item.id, {
+        [multiKey]: list,
+        [otherMultiKey]: undefined,
+        encoding: nextEncoding,
+        ...axisPatch,
+      });
+      markDirty();
+    },
+    [item.id, item.encoding, item.xAxis, item.yAxis, updateItem, markDirty],
+  );
+
+  /** Are all the given fields numeric (continuous)? Multi-mode is
+   *  restricted to numeric columns because the "names → axis, values
+   *  → other axis" semantics only makes sense for comparable scales. */
+  const allNumeric = useCallback((fields: FieldRef[]): boolean => {
+    if (fields.length === 0) return false;
+    return fields.every((f) => f.type === "continuous");
+  }, []);
 
   const handleDropOnSlot = (slot: SlotKey, e: React.DragEvent) => {
     e.preventDefault();
@@ -595,31 +1039,87 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       e.dataTransfer.getData(DRAG_MIME) ||
       e.dataTransfer.getData("text/plain");
     if (!raw) return;
-    try {
-      const field = JSON.parse(raw) as FieldRef;
-      // When the user swaps the column on a value-axis slot (x or y)
-      // to a DIFFERENT column, drop the data-range-dependent axis
-      // overrides (min / max / tickInterval) on that axis. The new
-      // column will almost always span a different numeric range —
-      // e.g. swapping a column scaled in centigrade (4.3 - 4.6) for
-      // one in Pa (1e4 - 1e6) — and keeping the old pinned bounds
-      // would silently crop every point off-screen. Other axis
-      // overrides (decimals, inverse, minor-tick count, gridlines,
-      // axis-line visibility, tick position) are display preferences
-      // independent of data scale and stay untouched, so the user's
-      // axis-line / gridline preferences survive a column swap.
-      bindFieldToSlot(slot, field);
-    } catch {
-      // ignore
-    }
+    const fields = parseDragFields(raw);
+    if (fields.length === 0) return;
+    // When the user swaps the column on a value-axis slot (x or y)
+    // to a DIFFERENT column, drop the data-range-dependent axis
+    // overrides (min / max / tickInterval) on that axis. The new
+    // column will almost always span a different numeric range —
+    // e.g. swapping a column scaled in centigrade (4.3 - 4.6) for
+    // one in Pa (1e4 - 1e6) — and keeping the old pinned bounds
+    // would silently crop every point off-screen. Other axis
+    // overrides (decimals, inverse, minor-tick count, gridlines,
+    // axis-line visibility, tick position) are display preferences
+    // independent of data scale and stay untouched, so the user's
+    // axis-line / gridline preferences survive a column swap.
+    routeDropToSlot(slot, fields);
   };
 
+  /** Centralized drop-router for one slot. Single field → existing
+   *  single-bind logic (replace). Multi-field on x/y → multi-mode
+   *  (axis or merge, derived at render time). Multi-field on any
+   *  other slot → first field only (multi-mode is X/Y-only).
+   *  Drop while already in multi-mode on x/y → APPEND.
+   *  Any drop that would mix numeric + non-numeric columns in multi
+   *  is rejected with a brief visual flash; the existing multi list
+   *  stays untouched. */
+  const routeDropToSlot = useCallback(
+    (slot: SlotKey, fields: FieldRef[]) => {
+      if (fields.length === 0) return;
+      const isAxis = slot === "x" || slot === "y";
+      const multiKey: "multiX" | "multiY" | null =
+        slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
+      const existingMulti = multiKey ? item[multiKey] : undefined;
+      const inMulti = !!existingMulti && existingMulti.length >= 2;
+
+      // Already in multi-mode → all drops APPEND (single or multi).
+      if (isAxis && inMulti && multiKey) {
+        if (!allNumeric(fields)) {
+          flashRejectOnSlot(slot);
+          return;
+        }
+        const merged = [...(existingMulti ?? []), ...fields];
+        setMultiAtSlot(slot, merged);
+        return;
+      }
+
+      // Single field drop, NOT in multi-mode → existing replace logic.
+      if (fields.length === 1) {
+        bindFieldToSlot(slot, fields[0]);
+        return;
+      }
+
+      // Multi-field drop on a non-axis slot: take the first field
+      // (Color / Overlay / Group X / Group Y / Wrap / Size are single-
+      // value channels — multi-binding wouldn't make sense there).
+      if (!isAxis) {
+        bindFieldToSlot(slot, fields[0]);
+        return;
+      }
+
+      // Multi-field drop on x/y, NOT in multi-mode yet.
+      if (!allNumeric(fields)) {
+        flashRejectOnSlot(slot);
+        return;
+      }
+      // Enter multi-mode with the dropped fields.
+      setMultiAtSlot(slot, fields);
+    },
+    [item.multiX, item.multiY, bindFieldToSlot, setMultiAtSlot, allNumeric, flashRejectOnSlot],
+  );
+
   const clearSlot = (slot: SlotKey) => {
-    setEncoding((prev) => {
-      const next = { ...prev };
-      delete next[slot];
-      return next;
+    // Atomic: clear both single encoding AND any multi list on the
+    // same slot so the slot returns to fully empty.
+    const multiKey: "multiX" | "multiY" | null =
+      slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
+    const nextEncoding = { ...item.encoding };
+    delete nextEncoding[slot];
+    updateItem(item.id, {
+      encoding: nextEncoding,
+      ...(multiKey ? { [multiKey]: undefined } : {}),
     });
+    markDirty();
   };
 
   /** Add a new layer (chart kind) — enables it if already present. */
@@ -677,6 +1177,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       autoSpecLines: undefined,
       hiddenGroups: undefined,
       groupStyles: undefined,
+      multiX: undefined,
+      multiY: undefined,
     });
     markDirty();
   }, [item.id, updateItem, markDirty]);
@@ -746,9 +1248,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       // canonical (legacy field becomes shadowed).
       autoSpecLinesY: item.autoSpecLinesX ?? item.autoSpecLines,
       autoSpecLinesX: item.autoSpecLinesY ?? item.autoSpecLines,
+      // multiX ↔ multiY — mirror the encoding swap so a multi-mode
+      // axis stays in multi-mode on the other side after rotation.
+      multiX: item.multiY,
+      multiY: item.multiX,
     });
     markDirty();
-  }, [item.id, item.encoding, item.xAxis, item.yAxis, item.refLinesX, item.refLinesY, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, updateItem, markDirty]);
+  }, [item.id, item.encoding, item.xAxis, item.yAxis, item.refLinesX, item.refLinesY, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, item.multiX, item.multiY, updateItem, markDirty]);
 
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
@@ -822,11 +1328,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               {columns.map((c, i) => {
                 const sqlType = colSqlTypes[i] ?? "";
                 const tLabel = t(`dataTable.type.${sqlType}`, { defaultValue: sqlType });
+                const selected = selectedColNames.has(c.name);
                 return (
                   <div
                     key={c.name}
-                    className="sp-cols-panel-item"
+                    className={`sp-cols-panel-item${selected ? " sp-cols-panel-item-selected" : ""}`}
                     draggable
+                    onClick={(e) => handleColClick(c.name, e)}
                     onDragStart={(e) => onDragStart(e, c)}
                     title={`${c.name} (${tLabel})`}
                   >
@@ -900,6 +1408,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             field={encoding.groupX}
             onDrop={(e) => handleDropOnSlot("groupX", e)}
             onClear={() => clearSlot("groupX")}
+            onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupX", x, y })}
             orientation="horizontal-top"
           />
 
@@ -909,10 +1418,14 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               slot="y"
               label="Y"
               field={encoding.y}
+              fields={item.multiY}
               onDrop={(e) => handleDropOnSlot("y", e)}
               onClear={() => clearSlot("y")}
+              onOpenManager={() => setManagerOpenSlot("y")}
+              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "y", x, y })}
               orientation="vertical-left"
               required
+              rejectFlash={rejectFlashSlot === "y"}
             />
             <div
               className="gb-canvas"
@@ -926,22 +1439,24 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   e.dataTransfer.getData(DRAG_MIME) ||
                   e.dataTransfer.getData("text/plain");
                 if (!raw) return;
-                try {
-                  const field = JSON.parse(raw) as FieldRef;
-                  // Canvas-drop is the "didn't aim at a slot" fallback:
-                  // fill X first, then Y, otherwise replace Y. Route
-                  // through `bindFieldToSlot` so the replace-Y branch
-                  // gets the same automatic Y-axis range reset that a
-                  // direct slot drop on Y would get.
-                  const slot: SlotKey = !encoding.x
-                    ? "x"
-                    : !encoding.y
-                      ? "y"
-                      : "y";
-                  bindFieldToSlot(slot, field);
-                } catch {
-                  // ignore
-                }
+                const fields = parseDragFields(raw);
+                if (fields.length === 0) return;
+                // Canvas-drop is the "didn't aim at a slot" fallback:
+                // fill X first, then Y, otherwise replace Y. We treat
+                // a multi-mode list on a slot the same as a bound
+                // single field for "is this slot occupied?" purposes
+                // — once X has any binding (single OR multi), the
+                // next canvas-drop falls through to Y. Route through
+                // `routeDropToSlot` so the single/multi/append cases
+                // get the same handling as a direct slot drop.
+                const xBound = !!encoding.x || (item.multiX?.length ?? 0) > 0;
+                const yBound = !!encoding.y || (item.multiY?.length ?? 0) > 0;
+                const slot: SlotKey = !xBound
+                  ? "x"
+                  : !yBound
+                    ? "y"
+                    : "y";
+                routeDropToSlot(slot, fields);
               }}
             >
               {loading ? (
@@ -950,22 +1465,26 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 <div className="gb-empty gb-error">{error}</div>
               ) : !data ? (
                 <div className="gb-empty">{t("graph.noData")}</div>
-              ) : !encoding.x && !encoding.y && !activeKinds.has("histogram") ? (
+              ) : !encoding.x && !encoding.y && !(item.multiX?.length) && !(item.multiY?.length) && !activeKinds.has("histogram") ? (
                 // Drag-hint shows only when neither axis is bound (and
                 // there's no histogram). Y-only renders a vertical strip
                 // and X-only renders a horizontal strip (mirror), so the
                 // moment either axis is bound we drop straight into the
                 // chart builder and let the renderer's horizontal-mode
                 // swap handle the X-only case (see `isHorizontal` /
-                // `xOnlyMirror` in transform.ts).
+                // `xOnlyMirror` in transform.ts). Multi-mode also counts
+                // as "bound" — both axes are populated by the synthetic
+                // melt fields at render time.
                 <div className="gb-empty">{t("graph.dragHint")}</div>
               ) : (
-                // `filteredData` is null iff `data` is null; the `!data`
-                // branch above already handled that, so `filteredData ?? data`
-                // is non-null here and just satisfies the type checker.
+                // `effectiveData` is null iff `data` is null; the `!data`
+                // branch above already handled that, so the fallback to
+                // `data` is unreachable and just satisfies the type
+                // checker. `effectiveData` carries the melted view in
+                // multi-mode and equals `filteredData` otherwise.
                 <Graph
                   spec={spec}
-                  data={filteredData ?? data}
+                  data={effectiveData ?? data}
                   valueOrders={valueOrders}
                   onYAxisDblClick={() => setYAxisDialogOpen(true)}
                   onXAxisDblClick={() => setXAxisDialogOpen(true)}
@@ -992,6 +1511,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               field={encoding.groupY}
               onDrop={(e) => handleDropOnSlot("groupY", e)}
               onClear={() => clearSlot("groupY")}
+              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupY", x, y })}
               orientation="vertical-right"
             />
           </div>
@@ -1001,10 +1521,14 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             slot="x"
             label="X"
             field={encoding.x}
+            fields={item.multiX}
             onDrop={(e) => handleDropOnSlot("x", e)}
             onClear={() => clearSlot("x")}
+            onOpenManager={() => setManagerOpenSlot("x")}
+            onContextMenu={(x, y) => setSlotCtxMenu({ slot: "x", x, y })}
             orientation="horizontal-bottom"
             required
+            rejectFlash={rejectFlashSlot === "x"}
           />
         </div>
 
@@ -1054,6 +1578,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           setAutoSpecLines={setAutoSpecLinesY}
           resolvedAutoSpec={spec.autoSpecY}
           autoSpecColName={encoding.y?.name}
+          multiValueColCount={
+            meltInfo &&
+            ((meltInfo.mode === "axis" && meltInfo.slot === "x") ||
+              (meltInfo.mode === "merge" && meltInfo.slot === "y"))
+              ? meltInfo.cols.length
+              : 0
+          }
           axisConfig={item.yAxis}
           setAxisConfig={setYAxisConfig}
           onClose={() => setYAxisDialogOpen(false)}
@@ -1078,10 +1609,58 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           setAutoSpecLines={setAutoSpecLinesX}
           resolvedAutoSpec={spec.autoSpecX}
           autoSpecColName={encoding.x?.name}
+          multiValueColCount={
+            meltInfo &&
+            ((meltInfo.mode === "axis" && meltInfo.slot === "y") ||
+              (meltInfo.mode === "merge" && meltInfo.slot === "x"))
+              ? meltInfo.cols.length
+              : 0
+          }
           axisConfig={item.xAxis}
           setAxisConfig={setXAxisConfig}
           onClose={() => setXAxisDialogOpen(false)}
         />
+      )}
+      {/* Multi-column manager popover. Opened by clicking the slot
+          body when an axis is in multi-mode (2+ columns). Lets the
+          user reorder and delete columns. If the list drops to <=1
+          via deletes, multi-mode is auto-exited by `setMultiAtSlot`
+          (length-1 collapses to single-field encoding, length-0
+          clears the slot entirely). */}
+      {managerOpenSlot && (managerOpenSlot === "x" || managerOpenSlot === "y") &&
+       ((managerOpenSlot === "x" ? item.multiX : item.multiY)?.length ?? 0) >= 2 && (
+        <MultiColManager
+          slot={managerOpenSlot}
+          cols={(managerOpenSlot === "x" ? item.multiX : item.multiY) ?? []}
+          datasetColumns={columns}
+          onChange={(next) => setMultiAtSlot(managerOpenSlot, next)}
+          onClose={() => setManagerOpenSlot(null)}
+        />
+      )}
+
+      {/* Right-click context menu on slots. Currently a single
+          "Clear" action — kept as a menu (not just a click) so the
+          gesture is consistent across slot types and leaves room for
+          future per-slot actions without restructuring. `clearSlot`
+          handles both single-field and multi-mode atomically. */}
+      {slotCtxMenu && (
+        <div
+          ref={ctxMenuRef}
+          className="sp-ctx-menu"
+          style={{ left: slotCtxMenu.x, top: slotCtxMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <div
+            className="sp-ctx-item sp-ctx-danger"
+            onClick={() => {
+              clearSlot(slotCtxMenu.slot);
+              setSlotCtxMenu(null);
+            }}
+          >
+            {t("graph.slotCtx.clear", { defaultValue: "Clear slot" })}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1091,18 +1670,41 @@ interface SlotProps {
   slot: SlotKey;
   label: string;
   field?: FieldRef;
+  /** Multi-mode columns. When present and length >= 2 the slot
+   *  renders as a multi-chip slot whose body click opens the manager
+   *  popover instead of showing a single-field chip. */
+  fields?: FieldRef[];
   onDrop: (e: React.DragEvent) => void;
   onClear: () => void;
+  /** Called when the slot body is clicked in multi-mode — opens the
+   *  manager popover. Required when `fields` has length >= 2. */
+  onOpenManager?: () => void;
+  /** Right-click hook — fires only when the slot has content (single
+   *  OR multi). Receives viewport coordinates so the parent can pin
+   *  the context menu at the cursor. Empty slots silently ignore
+   *  right-clicks (no menu to show), letting the native browser menu
+   *  through would just confuse the user when there's nothing to
+   *  act on. */
+  onContextMenu?: (x: number, y: number) => void;
   orientation: "horizontal-top" | "horizontal-bottom" | "vertical-left" | "vertical-right" | "shelf";
   required?: boolean;
+  /** When true, briefly flashes the slot red to signal a rejected
+   *  multi-drop (e.g. non-numeric mixed in). Reset by the parent
+   *  after ~400 ms. */
+  rejectFlash?: boolean;
 }
 
-function Slot({ label, field, onDrop, onClear, orientation, required }: SlotProps) {
+function Slot({ label, field, fields, onDrop, onClear, onOpenManager, onContextMenu, orientation, required, rejectFlash }: SlotProps) {
   const { t } = useTranslation();
   const [over, setOver] = useState(false);
+  // Multi-mode triggers when the parent passes 2+ fields. Length-1
+  // is auto-collapsed back to single mode on the write side, so we
+  // never need to handle that case here. */
+  const isMulti = !!fields && fields.length >= 2;
+  const filled = isMulti || !!field;
   return (
     <div
-      className={`gb-slot gb-slot-${orientation}${over ? " gb-slot-over" : ""}${field ? " gb-slot-filled" : ""}`}
+      className={`gb-slot gb-slot-${orientation}${over ? " gb-slot-over" : ""}${filled ? " gb-slot-filled" : ""}${isMulti ? " gb-slot-multi" : ""}${rejectFlash ? " gb-slot-reject" : ""}`}
       onDragEnter={(e) => {
         e.preventDefault();
         setOver(true);
@@ -1117,11 +1719,38 @@ function Slot({ label, field, onDrop, onClear, orientation, required }: SlotProp
         setOver(false);
         onDrop(e);
       }}
+      onClick={isMulti ? () => onOpenManager?.() : undefined}
+      onContextMenu={(e) => {
+        // Only intercept right-clicks on filled slots — empty slots
+        // have nothing to act on so let the browser do its thing
+        // (or let the parent's right-click handler bubble up). When
+        // filled, suppress the native menu and hand the cursor
+        // position to the parent so it can render a styled menu.
+        if (!filled || !onContextMenu) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onContextMenu(e.clientX, e.clientY);
+      }}
+      title={isMulti ? t("graph.multiSlot.openManager", { defaultValue: "Click to manage columns" }) : undefined}
     >
-      {!field && (
+      {!filled && (
         <span className="gb-slot-label">{label}{required ? " *" : ""}</span>
       )}
-      {field && (
+      {isMulti && (
+        // Compact summary chip — shows the count and a preview of
+        // the first column name. Full management happens in the
+        // popover opened via onOpenManager.
+        <span className="gb-slot-chip gb-slot-chip-multi">
+          <span className="gb-slot-chip-name">
+            {t("graph.multiSlot.summary", {
+              defaultValue: "{{n}} cols: {{first}}",
+              n: fields!.length,
+              first: fields![0].name,
+            })}
+          </span>
+        </span>
+      )}
+      {!isMulti && field && (
         <span className="gb-slot-chip">
           <span className="gb-slot-chip-name">{field.name}</span>
           <button
@@ -1136,6 +1765,305 @@ function Slot({ label, field, onDrop, onClear, orientation, required }: SlotProp
           </button>
         </span>
       )}
+    </div>
+  );
+}
+
+// ---- Multi-column manager popover ---------------------------------------
+//
+// Modal-style overlay opened by clicking a slot that's in multi-mode
+// (2+ columns). Supports:
+//   - Per-row selection (plain click toggles; Ctrl+click toggles
+//     individually; Shift+click range-selects from the last anchor).
+//   - Bulk toolbar at the top: Move selection up / down (preserves
+//     relative order, sails the selected block past unselected rows),
+//     Delete selection, Reset to dataset order. All disabled when no
+//     selection exists (except Reset which is always meaningful).
+//   - All edits write through onChange → setMultiAtSlot on the parent,
+//     which auto-collapses length-1 back to single-field encoding and
+//     clears the slot entirely on length-0. The manager never has to
+//     worry about those edge cases.
+// Backdrop click and Esc both close.
+
+interface MultiColManagerProps {
+  slot: "x" | "y";
+  cols: FieldRef[];
+  /** Full ordered list of columns in the dataset — used as the
+   *  authoritative "default order" for the Reset button. The manager
+   *  ranks each multi-col by its index here and sorts ascending.
+   *  Columns missing from this list (defensive — shouldn't happen)
+   *  fall to the end in stable order. */
+  datasetColumns: FieldRef[];
+  onChange: (next: FieldRef[]) => void;
+  onClose: () => void;
+}
+
+function MultiColManager({ slot, cols, datasetColumns, onChange, onClose }: MultiColManagerProps) {
+  const { t } = useTranslation();
+  // Selection by column NAME (stable across reorders). Stored as a Set
+  // for O(1) membership checks during the move/delete operations and
+  // the per-row className branch.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  // Anchor for shift+click range selection — points at the column name
+  // of the last *plain*-clicked row. Null until the first click.
+  const anchorRef = useRef<string | null>(null);
+
+  // Auto-prune selection when columns disappear from `cols` (e.g.
+  // after a delete the parent re-renders us with the trimmed list).
+  // Without this the selection would carry stale names forward and
+  // confuse the toolbar (e.g. "Delete (3)" when only 2 are present).
+  useEffect(() => {
+    const live = new Set(cols.map((c) => c.name));
+    setSelected((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((n) => {
+        if (live.has(n)) next.add(n);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [cols]);
+
+  // Close on Esc — matches the AxisSettingsDialog interaction.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // ---- Row click: plain / Ctrl / Shift selection model -----------------
+  const handleRowClick = (name: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const names = cols.map((c) => c.name);
+    if (e.shiftKey && anchorRef.current && names.includes(anchorRef.current)) {
+      // Range select from anchor to clicked, inclusive. Replaces the
+      // current selection so the result is exactly the range — matches
+      // the Windows file-explorer feel.
+      const a = names.indexOf(anchorRef.current);
+      const b = names.indexOf(name);
+      const [lo, hi] = a < b ? [a, b] : [b, a];
+      const range = new Set(names.slice(lo, hi + 1));
+      setSelected(range);
+      // anchor stays the same — sequential shift+clicks pivot around it.
+    } else if (e.ctrlKey || e.metaKey) {
+      // Toggle individual row in / out of the selection. New anchor =
+      // this row so subsequent shift+clicks pivot here.
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
+        return next;
+      });
+      anchorRef.current = name;
+    } else {
+      // Plain click: select only this row. Re-clicking the only
+      // selected row keeps it selected (clearer than a toggle for
+      // bulk-action UX).
+      setSelected(new Set([name]));
+      anchorRef.current = name;
+    }
+  };
+
+  const selectAll = () => {
+    setSelected(new Set(cols.map((c) => c.name)));
+  };
+  const clearSelection = () => {
+    setSelected(new Set());
+    anchorRef.current = null;
+  };
+  const selCount = selected.size;
+  const allSelected = selCount > 0 && selCount === cols.length;
+
+  // ---- Bulk move up / down --------------------------------------------
+  // Strategy: pass once over the array; for move-up walk top-down and
+  // swap any selected row with the unselected row above it. The block
+  // semantics fall out naturally — a selected run "bubbles" upward past
+  // unselected rows but stays internally ordered.
+  const moveUp = () => {
+    if (selCount === 0) return;
+    const next = cols.slice();
+    for (let i = 1; i < next.length; i++) {
+      if (selected.has(next[i].name) && !selected.has(next[i - 1].name)) {
+        [next[i - 1], next[i]] = [next[i], next[i - 1]];
+      }
+    }
+    onChange(next);
+  };
+  const moveDown = () => {
+    if (selCount === 0) return;
+    const next = cols.slice();
+    for (let i = next.length - 2; i >= 0; i--) {
+      if (selected.has(next[i].name) && !selected.has(next[i + 1].name)) {
+        [next[i], next[i + 1]] = [next[i + 1], next[i]];
+      }
+    }
+    onChange(next);
+  };
+
+  // ---- Bulk delete -----------------------------------------------------
+  // Drops every selected row in one go. The parent (setMultiAtSlot)
+  // handles the length-1 collapse and length-0 clear, so dropping the
+  // selection below 2 auto-exits multi-mode without any check here.
+  const deleteSelected = () => {
+    if (selCount === 0) return;
+    const next = cols.filter((c) => !selected.has(c.name));
+    onChange(next);
+  };
+
+  // ---- Reset to default order -----------------------------------------
+  // "Default" = the column order in the dataset (matches the order the
+  // user sees in the left-rail column list). Cols missing from the
+  // dataset list (defensive) sort to the end while preserving their
+  // current relative order.
+  const resetOrder = () => {
+    const orderByName = new Map<string, number>();
+    datasetColumns.forEach((c, i) => orderByName.set(c.name, i));
+    const fallback = datasetColumns.length;
+    const next = cols
+      .map((c, i) => ({ c, rank: orderByName.get(c.name) ?? fallback, i }))
+      .sort((a, b) => (a.rank - b.rank) || (a.i - b.i))
+      .map((x) => x.c);
+    // Skip the update if it would be a no-op (avoids dirtying the
+    // project when the order is already canonical).
+    let same = true;
+    for (let i = 0; i < next.length; i++) {
+      if (next[i].name !== cols[i].name) { same = false; break; }
+    }
+    if (!same) onChange(next);
+  };
+
+  // Disable conditions for the move buttons: precisely when no move
+  // would change the array. That is: every selected row's neighbor on
+  // that side is also selected (the selected block is already pinned).
+  // The contiguous-block-at-top case (e.g. selection = first 2 rows)
+  // and the interleaved case (e.g. selection = rows 0 and 2) are both
+  // handled — for interleaved selections moving up still re-arranges
+  // the unpinned rows, so the button stays enabled.
+  const upDisabled = selCount === 0 || !cols.some(
+    (c, i) => i > 0 && selected.has(c.name) && !selected.has(cols[i - 1].name),
+  );
+  const downDisabled = selCount === 0 || !cols.some(
+    (c, i) => i < cols.length - 1 && selected.has(c.name) && !selected.has(cols[i + 1].name),
+  );
+
+  return (
+    <div
+      className="gb-multi-mgr-backdrop"
+      onClick={onClose}
+      onMouseDown={(e) => {
+        // Prevent backdrop mousedown from selecting underlying text.
+        if (e.target === e.currentTarget) e.preventDefault();
+      }}
+    >
+      <div className="gb-multi-mgr" onClick={(e) => e.stopPropagation()}>
+        <div className="gb-multi-mgr-head">
+          <span>
+            {t("graph.multiSlot.title", {
+              defaultValue: "{{axis}} axis columns ({{n}})",
+              axis: slot.toUpperCase(),
+              n: cols.length,
+            })}
+          </span>
+          <button
+            className="gb-slot-chip-x"
+            onClick={onClose}
+            title={t("graph.multiSlot.close", { defaultValue: "Close" })}
+          >
+            ×
+          </button>
+        </div>
+        <div className="gb-multi-mgr-hint">
+          {t("graph.multiSlot.hint", {
+            defaultValue:
+              "Click to select. Ctrl+click toggles; Shift+click range. Drop new columns onto the slot to add.",
+          })}
+        </div>
+        {/* Bulk action toolbar. Selection-based: move ↑↓ shift the
+            selected block past unselected rows preserving order; Delete
+            removes everything in the selection; Reset sorts by dataset
+            column order. The selection counter on the left doubles as
+            a select-all toggle for fast bulk operations. */}
+        <div className="gb-multi-mgr-toolbar">
+          <button
+            type="button"
+            className="gb-multi-mgr-toolbar-sel"
+            onClick={allSelected ? clearSelection : selectAll}
+            title={allSelected
+              ? t("graph.multiSlot.clearSel", { defaultValue: "Clear selection" })
+              : t("graph.multiSlot.selectAll", { defaultValue: "Select all" })}
+          >
+            {selCount > 0
+              ? t("graph.multiSlot.selCount", {
+                  defaultValue: "{{n}} selected",
+                  n: selCount,
+                })
+              : t("graph.multiSlot.selNone", { defaultValue: "None selected" })}
+          </button>
+          <span className="gb-multi-mgr-toolbar-spacer" />
+          <button
+            type="button"
+            className="gb-multi-mgr-toolbar-btn"
+            disabled={upDisabled}
+            onClick={moveUp}
+            title={t("graph.multiSlot.moveUp", { defaultValue: "Move up" })}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            className="gb-multi-mgr-toolbar-btn"
+            disabled={downDisabled}
+            onClick={moveDown}
+            title={t("graph.multiSlot.moveDown", { defaultValue: "Move down" })}
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            className="gb-multi-mgr-toolbar-btn gb-multi-mgr-toolbar-btn-del"
+            disabled={selCount === 0}
+            onClick={deleteSelected}
+            title={t("graph.multiSlot.deleteSel", { defaultValue: "Delete selected" })}
+          >
+            ×
+          </button>
+          <button
+            type="button"
+            className="gb-multi-mgr-toolbar-btn"
+            onClick={resetOrder}
+            title={t("graph.multiSlot.resetOrder", {
+              defaultValue: "Reset to dataset column order",
+            })}
+          >
+            ⟲
+          </button>
+        </div>
+        <div className="gb-multi-mgr-body">
+          {cols.map((c) => {
+            const sel = selected.has(c.name);
+            return (
+              <div
+                key={c.name}
+                className={`gb-multi-mgr-row${sel ? " gb-multi-mgr-row-sel" : ""}`}
+                onClick={(e) => handleRowClick(c.name, e)}
+              >
+                <span className="gb-multi-mgr-row-name">{c.name}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="gb-multi-mgr-foot">
+          <button
+            className="gb-multi-mgr-foot-btn gb-multi-mgr-foot-btn-primary"
+            onClick={onClose}
+          >
+            {t("graph.multiSlot.done", { defaultValue: "Done" })}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1761,6 +2689,7 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           field={encoding.overlay}
           onDrop={onDropOverlay}
           onClear={onClearOverlay}
+          onContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
           orientation="shelf"
         />
 
@@ -2020,6 +2949,13 @@ interface AxisSettingsDialogProps {
   /** Name of the column currently bound to THIS axis, purely for the
    *  editor's hint copy ("Reading limits from <col>"). */
   autoSpecColName?: string | undefined;
+  /** When > 0, this axis is carrying a multi-column melt and the
+   *  auto-spec overlay (if enabled) will draw per-column ref lines
+   *  instead of a single overlay. Used purely to clarify the hint
+   *  copy so users understand WHY the toggle is producing lines even
+   *  though no single column is bound. `0` (or `undefined`) means
+   *  not in multi-mode. */
+  multiValueColCount?: number;
   /** Current axis-override config (range / ticks / decimals / inverse /
    *  axis line / tick position / minor ticks / grid). Both axes use
    *  the same `YAxisConfig` shape. */
@@ -2038,6 +2974,7 @@ function AxisSettingsDialog({
   setAutoSpecLines,
   resolvedAutoSpec,
   autoSpecColName,
+  multiValueColCount,
   axisConfig,
   setAxisConfig,
   onClose,
@@ -2107,6 +3044,7 @@ function AxisSettingsDialog({
                 setAutoSpecLines={setAutoSpecLines}
                 resolvedAutoSpec={resolvedAutoSpec}
                 autoSpecColName={autoSpecColName}
+                multiValueColCount={multiValueColCount}
               />
             )}
           </div>
@@ -2862,6 +3800,11 @@ interface RefLinesEditorProps {
   resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
   /** Name of the column bound to THIS axis — used in the helper hint. */
   autoSpecColName?: string | undefined;
+  /** Number of source columns contributing per-column spec lines on
+   *  THIS axis when a multi-column melt is active. > 0 switches the
+   *  auto-spec hint into multi-column mode; 0 / undefined means the
+   *  axis carries at most one bound column. */
+  multiValueColCount?: number;
 }
 
 /** Saturated / primary-color palette for reference lines. The chart's
@@ -2905,6 +3848,7 @@ function RefLinesEditor({
   setAutoSpecLines,
   resolvedAutoSpec,
   autoSpecColName,
+  multiValueColCount,
 }: RefLinesEditorProps) {
   const { t } = useTranslation();
   // Axis indirection: `valueField` picks which field on each card we
@@ -3000,7 +3944,12 @@ function RefLinesEditor({
           </label>
           <div className="gb-refline-auto-hint">
             {autoSpecLines
-              ? autoChips.length > 0
+              ? (multiValueColCount && multiValueColCount > 0)
+                ? t("graph.refLine.autoSpecMulti", {
+                    defaultValue: "Drawing per-column spec lines from {{n}} multi-mode columns.",
+                    n: multiValueColCount,
+                  })
+                : autoChips.length > 0
                 ? t("graph.refLine.autoSpecActive", {
                     defaultValue: "Reading limits from {{col}}.",
                     col: autoSpecColName ?? "",
@@ -3015,10 +3964,15 @@ function RefLinesEditor({
                       defaultValue: "Drop a column on {{axis}} to read its spec limits.",
                       axis: axisColCopy,
                     })
-              : t("graph.refLine.autoSpecHint", {
-                  defaultValue: "Read LSL / Target / USL from the {{axis}} column's spec extras and overlay them as colored reference lines.",
-                  axis: axisColCopy,
-                })}
+              : (multiValueColCount && multiValueColCount > 0)
+                ? t("graph.refLine.autoSpecHintMulti", {
+                    defaultValue: "Read each multi-mode column's LSL / Target / USL and overlay them as per-column reference lines on the {{axis}} axis.",
+                    axis: axisColCopy,
+                  })
+                : t("graph.refLine.autoSpecHint", {
+                    defaultValue: "Read LSL / Target / USL from the {{axis}} column's spec extras and overlay them as colored reference lines.",
+                    axis: axisColCopy,
+                  })}
           </div>
           {autoChips.length > 0 && (
             <div className="gb-refline-auto-chips">

@@ -136,6 +136,45 @@ export interface RefLineX {
   width: number;
 }
 
+/** Per-category reference line whose horizontal (or vertical) extent
+ *  is limited to a single category's band on the OPPOSITE axis. Used
+ *  by the multi-column auto-spec overlay so each melted column's
+ *  LSL / Target / USL renders ONLY across its own band — preventing
+ *  the labels and lines of one column from visually colliding with
+ *  another's when columns have different spec limits.
+ *
+ *  No `label` field: with N columns × up to 3 lines per column the
+ *  labels would inevitably overlap, so we rely on the column's
+ *  position on the categorical axis to convey which limit belongs
+ *  to which column.
+ *
+ *  `valueAxis` tells the renderer which axis the numeric `value`
+ *  lives on; the OTHER axis is the one carrying `category`. When
+ *  `valueAxis === "y"` the segment is horizontal (constant Y, X span
+ *  from `cat - 0.45` to `cat + 0.45`); when `"x"` the segment is
+ *  vertical (constant X, Y span the band). The renderer silently
+ *  skips lines whose category isn't on the rendered cat axis (e.g.
+ *  after a Swap X & Y inverts which axis is categorical). */
+export interface BandRefLine {
+  /** Stable id for React keys / dedup. */
+  id: string;
+  /** Numeric position on the value axis (the axis named by
+   *  `valueAxis`). */
+  value: number;
+  /** Category name on the OPPOSITE axis. The segment is restricted
+   *  to this band's width. */
+  category: string;
+  /** Which axis carries the numeric `value`. The OTHER axis is the
+   *  category axis where `category` is looked up. */
+  valueAxis: "x" | "y";
+  /** Stroke color (any CSS color string). */
+  color: string;
+  /** Dash pattern. */
+  style: RefLineStyle;
+  /** Stroke width in px. */
+  width: number;
+}
+
 /** User overrides for the primary Y axis. Every field is optional and
  *  `undefined` means *auto* — i.e. let ECharts derive the value from the
  *  data range. The whole object being `undefined` (or empty) restores
@@ -291,6 +330,15 @@ export interface GraphSpec {
    *  `refLinesY` for the X axis. Only drawn when the X axis is
    *  value-type — lines on a categorical X are silently skipped. */
   refLinesX?: RefLineX[];
+  /** Per-category spec-limit reference lines emitted by the
+   *  multi-column auto-spec feature. Each entry restricts itself to
+   *  one category's band on the OPPOSITE axis so spec limits from
+   *  different melted columns don't visually compete on the value
+   *  axis. Labels are intentionally omitted (column-position conveys
+   *  identity); the renderer dedicates a separate carrier series so
+   *  these lines remain segregated from the user-editable
+   *  `refLinesY` / `refLinesX` lists. */
+  bandRefLines?: BandRefLine[];
   /** Auto-derived spec-limit lines pulled from the Y column's extras.
    *  Rendered side-by-side with `refLinesY` on the same carrier series
    *  but with hardcoded red/green coloring (red = USL/LSL, green =

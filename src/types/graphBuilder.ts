@@ -26,6 +26,25 @@ export interface GraphBuilderItem {
   sourceDatasetId: string;
   /** 编码槽：字段引用 */
   encoding: Partial<Record<GraphSlotKey, FieldRef>>;
+  /** Multi-column mode on the X axis. When the user drops 2+ numeric
+   *  columns onto the X slot at once, the slot enters "multi-mode":
+   *  `encoding.x` is cleared and the dropped columns are stored here
+   *  in display order. Two render modes are derived from `multiY`:
+   *    - other axis empty → "axis mode": the column NAMES become the
+   *      X category axis and their VALUES become the Y axis (quick
+   *      side-by-side comparison of similar-typed columns).
+   *    - other axis bound → "merge mode": all column values are
+   *      concatenated into one anonymous X series against the bound Y.
+   *  Single-column drops never enter multi-mode — they use the
+   *  existing replace logic on `encoding.x`. Drops while already in
+   *  multi-mode APPEND to this list; mixing in a non-numeric column
+   *  is rejected with a brief visual flash. Length-0 or undefined ==
+   *  "not in multi-mode". Length-1 is automatically collapsed back
+   *  to `encoding.x` so this never holds exactly one. */
+  multiX?: FieldRef[];
+  /** Mirror of `multiX` for the Y axis. See `multiX` for the full
+   *  semantics — Y and X are completely symmetric. */
+  multiY?: FieldRef[];
   /** 启用的图形元素 */
   elements: ChartElement[];
   /** 平滑器 lambda 0~1 */

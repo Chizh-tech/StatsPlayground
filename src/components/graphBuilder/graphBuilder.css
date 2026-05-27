@@ -603,6 +603,244 @@
   color: var(--fg-danger);
 }
 
+/* ===== Multi-mode slot ===== */
+/* When an axis slot holds 2+ columns (multi-mode), the body becomes
+   clickable to open the manager popover. We swap the default cursor
+   so the affordance is obvious, and tint the chip slightly so the
+   user can distinguish "single-field bound" from "multi-mode bound"
+   at a glance. */
+.gb-slot-multi {
+  cursor: pointer;
+}
+
+.gb-slot-multi:hover {
+  background: var(--bg-cell-hover);
+}
+
+.gb-slot-chip-multi {
+  background: var(--bg-cell-selected);
+  border: 1px solid var(--fg-accent);
+}
+
+/* Rejection flash — applied for ~400 ms when a multi-drop is denied
+   (e.g. mixing in a non-numeric column). The keyframe pulses the
+   border and background red, then fades back. */
+.gb-slot-reject {
+  animation: gb-slot-reject-flash 0.4s ease-out;
+}
+
+@keyframes gb-slot-reject-flash {
+  0%   { background: rgba(239, 68, 68, 0.45); border-color: var(--fg-danger); }
+  60%  { background: rgba(239, 68, 68, 0.20); border-color: var(--fg-danger); }
+  100% { background: var(--bg-header); border-color: var(--border-input); }
+}
+
+/* ===== Multi-column manager popover ===== */
+/* Modal-style overlay: backdrop click closes; the centered panel
+   lists each melted column with reorder arrows and a delete button.
+   Mirrors the lightweight Preferences-dialog pattern used elsewhere
+   in the app so the visual language stays consistent. */
+.gb-multi-mgr-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.gb-multi-mgr {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-main);
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  min-width: 320px;
+  max-width: 420px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.gb-multi-mgr-head {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-main);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--fg-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.gb-multi-mgr-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.gb-multi-mgr-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.gb-multi-mgr-row:hover {
+  background: var(--bg-cell-hover);
+}
+
+/* Selected row — clear visual cue for the bulk-action targets. The
+   ring uses an inset shadow rather than a border so the row width
+   doesn't shift between selected and unselected states. */
+.gb-multi-mgr-row-sel,
+.gb-multi-mgr-row-sel:hover {
+  background: var(--bg-selected, rgba(64, 128, 255, 0.18));
+  box-shadow: inset 2px 0 0 var(--fg-accent);
+}
+
+.gb-multi-mgr-row-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gb-multi-mgr-row-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  line-height: 1;
+}
+
+.gb-multi-mgr-row-btn:hover:not(:disabled) {
+  color: var(--fg-primary);
+  border-color: var(--border-input);
+  background: var(--bg-card);
+}
+
+.gb-multi-mgr-row-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.gb-multi-mgr-row-btn-del:hover:not(:disabled) {
+  color: var(--fg-danger);
+  border-color: var(--fg-danger);
+}
+
+.gb-multi-mgr-foot {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-main);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.gb-multi-mgr-foot-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border-input);
+  color: var(--fg-primary);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.gb-multi-mgr-foot-btn:hover {
+  background: var(--bg-cell-hover);
+}
+
+.gb-multi-mgr-foot-btn-primary {
+  background: var(--fg-accent);
+  border-color: var(--fg-accent);
+  color: #fff;
+}
+
+.gb-multi-mgr-foot-btn-primary:hover {
+  filter: brightness(1.1);
+}
+
+.gb-multi-mgr-hint {
+  padding: 6px 14px 4px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--border-main);
+  background: var(--bg-header);
+}
+
+/* Bulk-action toolbar above the row list. Left side is the selection
+   counter (which doubles as a select-all toggle); right side is the
+   move-up / move-down / delete / reset cluster. Buttons follow the
+   small-icon-button pattern used elsewhere in the app (transparent
+   ground, subtle hover border) to stay visually quiet against the
+   row list. */
+.gb-multi-mgr-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-main);
+  background: var(--bg-panel);
+}
+
+.gb-multi-mgr-toolbar-sel {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--fg-dim);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.gb-multi-mgr-toolbar-sel:hover {
+  color: var(--fg-primary);
+  border-color: var(--border-input);
+  background: var(--bg-card);
+}
+
+.gb-multi-mgr-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.gb-multi-mgr-toolbar-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  line-height: 1;
+  min-width: 26px;
+}
+
+.gb-multi-mgr-toolbar-btn:hover:not(:disabled) {
+  color: var(--fg-primary);
+  border-color: var(--border-input);
+  background: var(--bg-card);
+}
+
+.gb-multi-mgr-toolbar-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.gb-multi-mgr-toolbar-btn-del:hover:not(:disabled) {
+  color: var(--fg-danger);
+  border-color: var(--fg-danger);
+}
+
 /* ===== Right-side Legend + Style editor (overlay slot + per-group styles) ===== */
 .gb-legend {
   display: flex;
