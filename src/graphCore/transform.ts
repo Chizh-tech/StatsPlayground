@@ -2498,15 +2498,34 @@ function buildSingleOption(
             catData.set(cat, { pts, catMaxW: catMaxWeight });
           }
           if (catData.size === 0) return;
-          // One tuple per cat. tuple[0]=cat, tuple[1]=representative
-          // y value used for axis-extent. The renderItem reads
-          // pts/catMaxW from the closure-bound Map.
+          // Per-cat tuple emitted into ECharts. tuple[1] MUST be a
+          // numeric value strictly INSIDE the visible value-axis
+          // range, otherwise ECharts silently filters the row and
+          // `renderItem` is never invoked — the original code used
+          // `info.pts[0][0]` which:
+          //   • For polygon = `yCenters[0]` = `yLo + yWidth/2`. In
+          //     range, but boundary-adjacent — works on most builds.
+          //   • For KDE     = `min(vals) - 3·bandwidth`. ALWAYS
+          //     outside `[yLo, yHi]`, so KDE rendered nothing.
+          // Picking the middle bin center guarantees the tuple lands
+          // safely inside the axis range for every histStyle.
+          const safeMidY =
+            yCenters.length > 0
+              ? yCenters[Math.floor(yCenters.length / 2)]
+              : (yLo + yHi) / 2;
           const tuples: any[][] = [];
-          for (const [cat, info] of catData) {
-            tuples.push([cat, info.pts[0][0]]);
+          for (const [cat] of catData) {
+            tuples.push([cat, safeMidY]);
           }
 
           const polyPadY = histStyle === "kde" ? 0 : yWidth / 2;
+          // Clamp to a hair INSIDE [yLo, yHi] so api.coord doesn't
+          // return null at the exact boundary (some ECharts builds
+          // reject `==max`). The epsilon is a tiny fraction of the
+          // axis span so it's invisible after pixel rounding.
+          const valEps = Math.max((yHi - yLo) * 1e-6, 1e-9);
+          const clampVal = (v: number) =>
+            Math.max(yLo + valEps, Math.min(yHi - valEps, v));
 
           series.push({
             id: `__hist_cat_${slot.key}_${histStyle}`,
@@ -2527,6 +2546,10 @@ function buildSingleOption(
 
               const xy = (val: number): [any, any] =>
                 catIsX ? [catName, val] : [val, catName];
+              // Reference center coord — uses the safe in-range
+              // value so api.coord never returns null here.
+              const ctrCoord = api.coord(xy(safeMidY));
+              if (!ctrCoord) return null;
               const slotPx = catIsX
                 ? api.size([1, 0])[0]
                 : api.size([0, 1])[1];
@@ -2537,24 +2560,38 @@ function buildSingleOption(
                 slotPx * (1 - rightSafePct) - insetMargin,
               );
 
+              // Start/end "phantom anchor" points — clamped INSIDE
+              // the visible axis range so the polygon closes cleanly
+              // even when the source pts extend beyond it (KDE
+              // tails) or sit exactly on the boundary (polygon).
               const firstV = pts[0][0];
               const lastV = pts[pts.length - 1][0];
-              const startCoord = api.coord(xy(firstV - polyPadY));
-              const endCoord = api.coord(xy(lastV + polyPadY));
-              const ctrCoord = api.coord(xy(pts[0][0]));
-              if (!startCoord || !endCoord || !ctrCoord) return null;
+              const startCoord = api.coord(xy(clampVal(firstV - polyPadY)));
+              const endCoord = api.coord(xy(clampVal(lastV + polyPadY)));
+              if (!startCoord || !endCoord) return null;
+
+              // Walk pts, dropping any whose data value maps outside
+              // the axis (KDE samples below yLo / above yHi). For
+              // each in-range pt, project onto the value-axis pixel
+              // line for this slot.
+              const inRange: Array<{ pixel: number; w: number }> = [];
+              for (const [v, w] of pts) {
+                if (v < yLo || v > yHi) continue;
+                const c = api.coord(xy(v));
+                if (!c) continue;
+                inRange.push({ pixel: catIsX ? c[1] : c[0], w });
+              }
+              if (inRange.length === 0) return null;
 
               const polyPts: number[][] = [];
               if (catIsX) {
                 // Vertical slot, polygon fans rightward.
                 const slotLeft = ctrCoord[0] - slotPx / 2 + insetMargin;
                 polyPts.push([slotLeft, startCoord[1]]);
-                for (const [v, w] of pts) {
-                  const c = api.coord(xy(v));
-                  if (!c) continue;
+                for (const { pixel, w } of inRange) {
                   polyPts.push([
                     slotLeft + (w / catMaxW) * maxBarExtent,
-                    c[1],
+                    pixel,
                   ]);
                 }
                 polyPts.push([slotLeft, endCoord[1]]);
@@ -2568,11 +2605,9 @@ function buildSingleOption(
                 // visual baseline.
                 const slotBot = ctrCoord[1] + slotPx / 2 - insetMargin;
                 polyPts.push([startCoord[0], slotBot]);
-                for (const [v, w] of pts) {
-                  const c = api.coord(xy(v));
-                  if (!c) continue;
+                for (const { pixel, w } of inRange) {
                   polyPts.push([
-                    c[0],
+                    pixel,
                     slotBot - (w / catMaxW) * maxBarExtent,
                   ]);
                 }
