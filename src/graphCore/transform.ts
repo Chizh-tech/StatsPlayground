@@ -2527,6 +2527,21 @@ function buildSingleOption(
           const clampVal = (v: number) =>
             Math.max(yLo + valEps, Math.min(yHi - valEps, v));
 
+          // [DEBUG] Confirm series push is reached
+          try {
+            // eslint-disable-next-line no-console
+            console.log("[hist-poly-push]", {
+              slotKey: slot.key,
+              histStyle,
+              tuplesLen: tuples.length,
+              catDataSize: catData.size,
+              safeMidY,
+              yLo,
+              yHi,
+              binCount,
+              firstTuple: tuples[0],
+            });
+          } catch {}
           series.push({
             id: `__hist_cat_${slot.key}_${histStyle}`,
             type: "custom",
@@ -2539,8 +2554,28 @@ function buildSingleOption(
               const catName = catIsX
                 ? String(api.value(0))
                 : String(api.value(1));
+              // [DEBUG] Confirm renderItem fires per tuple
+              try {
+                if ((params.dataIndex ?? 0) === 0) {
+                  // eslint-disable-next-line no-console
+                  console.log("[hist-poly-render]", {
+                    seriesId: params.seriesId,
+                    catIsX,
+                    catName,
+                    dataIndex: params.dataIndex,
+                    val0: api.value(0),
+                    val1: api.value(1),
+                  });
+                }
+              } catch {}
               const info = catData.get(catName);
-              if (!info) return null;
+              if (!info) {
+                try {
+                  // eslint-disable-next-line no-console
+                  console.warn("[hist-poly-render] catData miss", { catName, knownCats: Array.from(catData.keys()) });
+                } catch {}
+                return null;
+              }
               const { pts, catMaxW } = info;
               if (pts.length === 0 || catMaxW <= 0) return null;
 
@@ -2549,7 +2584,13 @@ function buildSingleOption(
               // Reference center coord — uses the safe in-range
               // value so api.coord never returns null here.
               const ctrCoord = api.coord(xy(safeMidY));
-              if (!ctrCoord) return null;
+              if (!ctrCoord) {
+                try {
+                  // eslint-disable-next-line no-console
+                  console.warn("[hist-poly-render] ctrCoord null", { catName, safeMidY });
+                } catch {}
+                return null;
+              }
               const slotPx = catIsX
                 ? api.size([1, 0])[0]
                 : api.size([0, 1])[1];
@@ -2614,15 +2655,60 @@ function buildSingleOption(
                 polyPts.push([endCoord[0], slotBot]);
               }
 
+              // [DEBUG] log polyPts for first cat to verify geometry
+              try {
+                if ((params.dataIndex ?? 0) === 0) {
+                  // eslint-disable-next-line no-console
+                  console.log("[hist-poly-shape]", {
+                    seriesId: params.seriesId,
+                    catName,
+                    polyPtsLen: polyPts.length,
+                    first3: polyPts.slice(0, 3),
+                    last3: polyPts.slice(-3),
+                    ctrCoord,
+                    slotPx,
+                    maxBarExtent,
+                    fillColor,
+                    strokeColor,
+                  });
+                }
+              } catch {}
+
+              // [DEBUG] wrap polygon + a bright sentinel rect in a
+              // group so we can visually confirm the renderItem is
+              // being invoked. If sentinel rects appear but polygon
+              // doesn't, the bug is in the polygon shape. If neither
+              // appears, the renderItem isn't being called at all.
               return {
-                type: "polygon",
-                shape: { points: polyPts },
-                style: {
-                  fill: fillColor,
-                  stroke: strokeColor,
-                  lineWidth: 1.2,
-                  opacity: grouping ? 0.35 : 0.45,
-                },
+                type: "group",
+                children: [
+                  {
+                    type: "polygon",
+                    shape: { points: polyPts },
+                    style: {
+                      fill: fillColor,
+                      stroke: strokeColor,
+                      lineWidth: 1.2,
+                      opacity: grouping ? 0.35 : 0.45,
+                    },
+                  },
+                  {
+                    type: "rect",
+                    shape: {
+                      x: ctrCoord[0] - 4,
+                      y: ctrCoord[1] - 4,
+                      width: 8,
+                      height: 8,
+                    },
+                    style: {
+                      fill: "#ff0000",
+                      stroke: "#ffffff",
+                      lineWidth: 1,
+                      opacity: 1,
+                    },
+                    z: 1000,
+                  },
+                ],
               };
             },
             z: 1,
