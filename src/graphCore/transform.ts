@@ -2325,19 +2325,33 @@ function buildSingleOption(
       const yMinorSplit = resolveMinorSplit(spec.yAxis);
       let yWidth: number;
       let binCount: number;
+      // Bin grid ORIGIN — separate from `yLo` so the bin edges land
+      // on the same nice multiples ECharts uses for its minor tick
+      // grid. Without this snap, drag-zooming the axis to a non-nice
+      // min (e.g. 4.31 instead of 4.30) leaves bin edges at
+      // 4.310, 4.314, 4.318, … while ECharts' minor ticks land on
+      // 4.32, 4.34, 4.36, …  → permanent visual misalignment that
+      // only "fixes itself" when the user happens to drag the axis
+      // back onto a nice multiple. Snapping the origin to the next
+      // nice multiple below `yLo` keeps both grids on the same
+      // ladder regardless of where the user dragged.
+      let yGridOrigin: number;
       if (yMajorStep && yMajorStep > 0 && yHi > yLo) {
         // Aligned mode: bin edges land on minor tick positions.
         yWidth = yMajorStep / yMinorSplit;
-        binCount = Math.max(1, Math.round((yHi - yLo) / yWidth));
+        yGridOrigin = Math.floor(yLo / yWidth) * yWidth;
+        const yGridEnd = Math.ceil(yHi / yWidth) * yWidth;
+        binCount = Math.max(1, Math.round((yGridEnd - yGridOrigin) / yWidth));
       } else {
         // Fallback: shouldn't normally hit this (only if the fit
         // failed and data is degenerate). Keep the legacy density.
         binCount = computeAutoBinCount(yLo, yHi, spec.yAxis);
         yWidth = yHi > yLo ? (yHi - yLo) / binCount : 1;
+        yGridOrigin = yLo;
       }
       const yHalf = yWidth / 2;
       const yCenters: number[] = [];
-      for (let i = 0; i < binCount; i++) yCenters.push(yLo + yWidth * (i + 0.5));
+      for (let i = 0; i < binCount; i++) yCenters.push(yGridOrigin + yWidth * (i + 0.5));
 
       // Compute per-(cat, group) bin counts and per-cat max count
       // (used to normalize bar widths so the longest bar in each
@@ -2360,7 +2374,7 @@ function buildSingleOption(
             if (yWidth <= 0) {
               buckets[0]++;
             } else {
-              const bin = Math.floor((v - yLo) / yWidth);
+              const bin = Math.floor((v - yGridOrigin) / yWidth);
               // Skip values outside the visible axis range. Without
               // this guard, panning/zooming the axis dumps every
               // off-screen value into the leftmost or rightmost
@@ -2872,9 +2886,36 @@ function buildSingleOption(
         xHiForBins,
         spec.xAxis,
       );
-      const { centers, counts: totalCounts, width } = histogramBins(allXs, autoBinCount);
+      // Tick-aligned bin grid. `histogramBins` would anchor the grid
+      // at the data extent (= min of `allXs`), which lands on a
+      // non-nice multiple whenever the user has drag-zoomed the axis;
+      // the resulting bin edges then drift off ECharts' minor tick
+      // positions and look misaligned until the user happens to drag
+      // back onto a nice multiple. Build the grid manually instead:
+      // pick `width` from the auto bin count, snap `gridLo` down to
+      // the nearest multiple of `width`, and extend until at least
+      // `xHiForBins` is covered. Bin EDGES then sit on the same
+      // nice ladder ECharts uses for its minor ticks.
+      const rawSpan = xHiForBins - xLoForBins;
+      const rawWidth = rawSpan > 0 && autoBinCount > 0 ? rawSpan / autoBinCount : 1;
+      const width = rawWidth > 0 ? rawWidth : 1;
+      const gridLo = Number.isFinite(xLoForBins)
+        ? Math.floor(xLoForBins / width) * width
+        : 0;
+      const gridHi = Number.isFinite(xHiForBins)
+        ? Math.ceil(xHiForBins / width) * width
+        : gridLo + width;
+      const binCountA = Math.max(1, Math.round((gridHi - gridLo) / width));
+      const centers: number[] = new Array(binCountA);
+      for (let i = 0; i < binCountA; i++) centers[i] = gridLo + width * (i + 0.5);
+      const totalCounts = new Array<number>(binCountA).fill(0);
+      for (const v of allXs) {
+        if (!Number.isFinite(v)) continue;
+        const bin = Math.floor((v - gridLo) / width);
+        if (bin < 0 || bin >= binCountA) continue;
+        totalCounts[bin]++;
+      }
       const total = totalCounts.reduce((a, b) => a + b, 0);
-      const gridLo = centers.length > 0 ? centers[0] - width / 2 : 0;
 
       // Bucket a per-group slice of values onto the shared grid.
       const binOntoGrid = (vals: number[]): number[] => {
