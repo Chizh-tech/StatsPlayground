@@ -3897,7 +3897,20 @@ function buildSingleOption(
       return {
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
-        grid: { left: 56, right: 24, top: 32, bottom: 48 },
+        // `grid.show:true` draws a rectangle around the plot area so the
+        // top + right edges are bounded. The left + bottom already get
+        // drawn by the value-axis `axisLine`, but ECharts paints both at
+        // the same color (`theme.axisLine`) and at integer pixel widths,
+        // so the overdraw is visually a single 1px line per edge.
+        grid: {
+          left: 56,
+          right: 24,
+          top: 32,
+          bottom: 48,
+          show: true,
+          borderColor: theme.axisLine,
+          borderWidth: 1,
+        },
         // appendToBody + confine: rendering the tooltip into document.body
         // keeps it from briefly enlarging the chart container (which made
         // the parent's overflow:auto flash a 1-px scrollbar at the bottom
@@ -4453,7 +4466,20 @@ function buildSingleOption(
     // its color swatch — drawing a second legend strip on top of the
     // canvas is redundant and steals vertical space. Always reserve the
     // small 16-px top margin so titles / tooltips have headroom.
-    grid: { left: 52, right: 16, top: 16, bottom: bottomGap },
+    //
+    // `grid.show:true` closes the plot frame with a top + right edge.
+    // The left + bottom edges are already drawn by each value-axis
+    // `axisLine`; ECharts paints all four in the same `theme.axisLine`
+    // color, so the overlap reads as a single 1-px border.
+    grid: {
+      left: 52,
+      right: 16,
+      top: 16,
+      bottom: bottomGap,
+      show: true,
+      borderColor: theme.axisLine,
+      borderWidth: 1,
+    },
     // See histogram path above — appendToBody avoids the bottom-edge
     // scrollbar flash; confine keeps the tooltip glued to the chart area.
     tooltip: { trigger: "item", confine: true, appendToBody: true },
