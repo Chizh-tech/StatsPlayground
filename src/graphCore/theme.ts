@@ -88,8 +88,14 @@ export function buildAxisCommon(theme: GraphTheme) {
     // that 0 moves into the middle of the chart drags the axis line
     // along with the zero gridline — the user sees the "frame"
     // wandering through the plot area. Matches JMP / Plotly / matplotlib.
-    axisLine: { show: true, onZero: false, lineStyle: { color: theme.axisLine } },
-    axisTick: { show: true, lineStyle: { color: theme.axisLine } },
+    //
+    // `width: 0.5` pins axisLine / axisTick to the exact same stroke
+    // width as the grid border (`borderWidth: 0.5` in transform.ts).
+    // Without this, ECharts' default lineStyle.width = 1 made the
+    // bottom/left axis lines visibly thicker than the top/right
+    // border, breaking the closed-frame illusion.
+    axisLine: { show: true, onZero: false, lineStyle: { color: theme.axisLine, width: 0.5 } },
+    axisTick: { show: true, lineStyle: { color: theme.axisLine, width: 0.5 } },
     // Hide the bookend boundary labels on value-type axes — ECharts
     // otherwise stamps the EXACT min and max above/below the nice
     // round tick labels (e.g. `4.9100341933248375` on top of the
