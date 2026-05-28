@@ -14,7 +14,7 @@
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "@tauri-apps/plugin-fs": "^2.0.0",
-    "echarts": "^6.0.0",
+    "echarts": "^6.1.0",
     "i18next": "^26.0.9",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

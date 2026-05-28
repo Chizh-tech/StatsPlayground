@@ -597,28 +597,25 @@ function renderHistCatBar(
     const yTop = aCoord[1];
     const yBot = bCoord[1];
     const slotLeft = ctrCoord[0] - slotPx / 2 + insetMargin;
-    // Clip the bin-direction extent (Y here, the value axis) to the
-    // coord-system bounds. The bin grid origin is snapped DOWN to a
-    // multiple of `width` (so edges land on minor-tick positions),
-    // which means the first / last bin can extend just past the
-    // visible axis min / max into the axis-label gutter. Without
-    // clipping, the spilling bar paints over the perpendicular axis
-    // labels (e.g. the rotated category names in MODE C). ECharts
-    // doesn't auto-clip custom-series shapes; we do it manually.
-    const cs = (params as { coordSys?: { y: number; height: number } }).coordSys;
-    const csYMin = cs ? cs.y : -Infinity;
-    const csYMax = cs ? cs.y + cs.height : Infinity;
-    const yTopC = Math.max(yTop, csYMin);
-    const yBotC = Math.min(yBot, csYMax);
-    if (yBotC - yTopC < 1) return null;
+    // NOTE: we deliberately DO NOT clip yTop/yBot to coordSys bounds here.
+    // The series sets `clip: true` (see option spec), so ECharts applies
+    // its own clip-path to the series group — only the in-bounds portion
+    // of the full bar is painted, while the bar's logical position and
+    // size remain stable. An earlier in-renderItem clip resized the
+    // rect (and shifted the label to the clipped midpoint), which made
+    // edge bins visibly "jump" / "shrink" the moment the axis cut
+    // through them. Letting ECharts clip the rendered output keeps the
+    // visible portion identical to the corresponding slice of the full,
+    // unclipped bar.
+    if (yBot - yTop < 1) return null;
     rectShape = {
       x: slotLeft,
-      y: yTopC,
+      y: yTop,
       width: barExtent,
-      height: yBotC - yTopC,
+      height: yBot - yTop,
     };
     labelX = slotLeft + barExtent + 2;
-    labelY = (yTopC + yBotC) / 2;
+    labelY = (yTop + yBot) / 2;
     labelAlign = "left";
     labelBaseline = "middle";
   } else {
@@ -635,26 +632,22 @@ function renderHistCatBar(
     const xLeft = bCoord[0];
     const xRight = aCoord[0];
     const slotBot = ctrCoord[1] + slotPx / 2 - insetMargin;
-    // Clip the bin-direction extent (X here, the value axis) to the
-    // coord-system bounds. See matching note in the `catIsX` branch
-    // above for why this is necessary — edge bins from the snapped
-    // grid can spill into the perpendicular axis-label gutter and
-    // paint over the category names.
-    const cs = (params as { coordSys?: { x: number; width: number } }).coordSys;
-    const csXMin = cs ? cs.x : -Infinity;
-    const csXMax = cs ? cs.x + cs.width : Infinity;
-    const xLeftC = Math.max(xLeft, csXMin);
-    const xRightC = Math.min(xRight, csXMax);
-    if (xRightC - xLeftC < 1) return null;
+    // See matching note in the `catIsX` branch above — we let
+    // ECharts' own `clip: true` handle the coord-system clipping via
+    // the series-group clip-path, so the rect's logical position and
+    // width stay stable when the axis cuts through a bin. Resizing
+    // the rect in renderItem made edge bins visibly "jump" and shifted
+    // their labels to the clipped midpoint.
+    if (xRight - xLeft < 1) return null;
     rectShape = {
-      x: xLeftC,
+      x: xLeft,
       y: slotBot - barExtent,
-      width: xRightC - xLeftC,
+      width: xRight - xLeft,
       height: barExtent,
     };
     // Label sits just ABOVE the bar tip (the upper edge of the
     // upward-growing bar).
-    labelX = (xLeftC + xRightC) / 2;
+    labelX = (xLeft + xRight) / 2;
     labelY = slotBot - barExtent - 2;
     labelAlign = "center";
     labelBaseline = "bottom";
