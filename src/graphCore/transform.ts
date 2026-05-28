@@ -570,6 +570,383 @@ function savgolSmoother(
   return out;
 }
 
+// ---- Polynomial / Robust regression -----------------------------------
+// Helpers backing the `fitline` element. Polynomial OLS supports any
+// degree 1–6 with proper confidence (`Fit`) and prediction (`Pred`)
+// intervals. Robust Cauchy is an IRLS variant that down-weights
+// outliers via the Cauchy ψ function — useful when the data contains
+// heavy-tailed noise or a few influential outliers.
+
+/** Invert a small dense matrix via Gauss-Jordan elimination with
+ *  partial pivoting. Returns null when `A` is singular. Used by the
+ *  polynomial fit to compute fit / prediction confidence intervals
+ *  via the quadratic form x*ᵀ(XᵀX)⁻¹x*. */
+function invertMatrix(A: number[][]): number[][] | null {
+  const n = A.length;
+  const M: number[][] = A.map((row, i) => {
+    const r = [...row];
+    for (let j = 0; j < n; j++) r.push(i === j ? 1 : 0);
+    return r;
+  });
+  for (let i = 0; i < n; i++) {
+    let pivot = i;
+    for (let r = i + 1; r < n; r++) {
+      if (Math.abs(M[r][i]) > Math.abs(M[pivot][i])) pivot = r;
+    }
+    [M[i], M[pivot]] = [M[pivot], M[i]];
+    if (Math.abs(M[i][i]) < 1e-12) return null;
+    const piv = M[i][i];
+    for (let c = 0; c < 2 * n; c++) M[i][c] /= piv;
+    for (let r = 0; r < n; r++) {
+      if (r === i) continue;
+      const f = M[r][i];
+      if (f === 0) continue;
+      for (let c = 0; c < 2 * n; c++) M[r][c] -= f * M[i][c];
+    }
+  }
+  return M.map((row) => row.slice(n));
+}
+
+/** Two-tailed Student's t critical value at α = 0.05 (i.e. 95% CI).
+ *  Fisher-Cornish expansion around the normal z = 1.96 — accurate to
+ *  ~3 decimal places for df ≥ 5 and asymptotes to 1.96 as df → ∞.
+ *  We only need 95% CIs in the UI so a fixed-α implementation keeps
+ *  the call site simple. */
+function tCritical95(df: number): number {
+  if (!(df > 0)) return 1.96;
+  if (df >= 1000) return 1.96;
+  const z = 1.96;
+  const z2 = z * z;
+  return (
+    z +
+    (z * z2 + z) / (4 * df) +
+    (5 * z2 * z2 * z + 16 * z * z2 + 3 * z) / (96 * df * df)
+  );
+}
+
+/** Output of a polynomial regression. Coefficients live in NORMALISED
+ *  x-space (x' = (x − xMean) / xScale) so the design matrix stays
+ *  well-conditioned even at degree 6 with widely-ranged or large X
+ *  values (e.g. epoch ms). Callers that want to display the equation
+ *  in raw x must run `denormalizeCoefs` first. */
+interface PolyFit {
+  coefs: number[];
+  xMean: number;
+  xScale: number;
+  rmse: number;
+  r2: number;
+  fStat: number;
+  n: number;
+  degree: number;
+  /** (XᵀX)⁻¹ in normalised space; null when the design is singular —
+   *  callers must skip CI computation in that case. */
+  invXTX: number[][] | null;
+  /** Residual variance σ̂² = SSE / (n − p − 1). */
+  sigma2: number;
+}
+
+/** Ordinary least-squares polynomial fit of degree `degree` (1–6).
+ *  Returns null when the sample size is too small for a meaningful
+ *  variance estimate or when X has no spread. */
+function fitPolynomial(
+  xs: number[],
+  ys: number[],
+  degree: number,
+): PolyFit | null {
+  const n = xs.length;
+  const m = degree + 1;
+  if (n < m + 1) return null;
+  let xMean = 0;
+  for (const x of xs) xMean += x;
+  xMean /= n;
+  // Use the max absolute deviation as the scale (cheaper than std and
+  // keeps x' inside [-1, 1] so xⁿ never overflows for n ≤ 6).
+  let xScale = 0;
+  for (const x of xs) {
+    const d = Math.abs(x - xMean);
+    if (d > xScale) xScale = d;
+  }
+  if (!(xScale > 0)) return null;
+  const XTX: number[][] = Array.from({ length: m }, () =>
+    new Array<number>(m).fill(0),
+  );
+  const XTy: number[] = new Array<number>(m).fill(0);
+  const xp = new Array<number>(m);
+  for (let i = 0; i < n; i++) {
+    const xn = (xs[i] - xMean) / xScale;
+    let v = 1;
+    for (let k = 0; k < m; k++) {
+      xp[k] = v;
+      v *= xn;
+    }
+    for (let r = 0; r < m; r++) {
+      XTy[r] += xp[r] * ys[i];
+      for (let c = 0; c < m; c++) XTX[r][c] += xp[r] * xp[c];
+    }
+  }
+  const coefs = solveLinearSystem(XTX, XTy);
+  if (!coefs) return null;
+  let yMean = 0;
+  for (const y of ys) yMean += y;
+  yMean /= n;
+  let sse = 0;
+  let sst = 0;
+  for (let i = 0; i < n; i++) {
+    const xn = (xs[i] - xMean) / xScale;
+    let yhat = 0;
+    let v = 1;
+    for (let k = 0; k < m; k++) {
+      yhat += coefs[k] * v;
+      v *= xn;
+    }
+    const r = ys[i] - yhat;
+    sse += r * r;
+    const d = ys[i] - yMean;
+    sst += d * d;
+  }
+  const dfRes = n - m;
+  const sigma2 = dfRes > 0 ? sse / dfRes : 0;
+  const rmse = dfRes > 0 ? Math.sqrt(sigma2) : 0;
+  const r2 = sst > 0 ? Math.max(0, 1 - sse / sst) : 0;
+  const fStat =
+    sse > 0 && dfRes > 0 && degree > 0
+      ? ((sst - sse) / degree) / (sse / dfRes)
+      : 0;
+  return {
+    coefs,
+    xMean,
+    xScale,
+    rmse,
+    r2,
+    fStat,
+    n,
+    degree,
+    invXTX: invertMatrix(XTX),
+    sigma2,
+  };
+}
+
+/** Iteratively-reweighted least squares with the Cauchy ψ function —
+ *  a robust M-estimator that pulls outlier weights toward zero
+ *  smoothly (unlike Huber's clipped weighting). Tuning constant
+ *  c = 2.385 matches JMP's "Robust Cauchy" preset. The reported
+ *  RMSE / R² / F / invXTX are computed from the UNWEIGHTED residuals
+ *  against the robust coefs so the confidence band still has a
+ *  meaningful frequentist interpretation. */
+function fitRobustCauchy(
+  xs: number[],
+  ys: number[],
+  degree: number,
+  maxIter = 50,
+): PolyFit | null {
+  const init = fitPolynomial(xs, ys, degree);
+  if (!init) return null;
+  const n = xs.length;
+  const m = degree + 1;
+  const { xMean, xScale } = init;
+  const c = 2.385;
+  let coefs = [...init.coefs];
+  const xp = new Array<number>(m);
+  const resid = new Array<number>(n);
+  for (let iter = 0; iter < maxIter; iter++) {
+    for (let i = 0; i < n; i++) {
+      const xn = (xs[i] - xMean) / xScale;
+      let yhat = 0;
+      let v = 1;
+      for (let k = 0; k < m; k++) {
+        yhat += coefs[k] * v;
+        v *= xn;
+      }
+      resid[i] = ys[i] - yhat;
+    }
+    // MAD-based robust scale (0.6745 ≈ inverse normal CDF at .75 so
+    // σ̂ matches the std-dev of a Normal sample in the absence of
+    // outliers).
+    const sortedR = [...resid].sort((a, b) => a - b);
+    const med = sortedR[n >> 1];
+    const absDev = resid.map((x) => Math.abs(x - med)).sort((a, b) => a - b);
+    const mad = absDev[n >> 1];
+    const sigma = mad / 0.6745 || 1e-9;
+    const XTX: number[][] = Array.from({ length: m }, () =>
+      new Array<number>(m).fill(0),
+    );
+    const XTy: number[] = new Array<number>(m).fill(0);
+    for (let i = 0; i < n; i++) {
+      const ratio = resid[i] / (c * sigma);
+      const w = 1 / (1 + ratio * ratio);
+      const xn = (xs[i] - xMean) / xScale;
+      let v = 1;
+      for (let k = 0; k < m; k++) {
+        xp[k] = v;
+        v *= xn;
+      }
+      for (let r = 0; r < m; r++) {
+        XTy[r] += w * xp[r] * ys[i];
+        for (let cc = 0; cc < m; cc++) XTX[r][cc] += w * xp[r] * xp[cc];
+      }
+    }
+    const next = solveLinearSystem(XTX, XTy);
+    if (!next) break;
+    let maxDelta = 0;
+    for (let k = 0; k < m; k++) {
+      const d = Math.abs(next[k] - coefs[k]);
+      if (d > maxDelta) maxDelta = d;
+    }
+    coefs = next;
+    if (maxDelta < 1e-7) break;
+  }
+  // Recompute summary stats + unweighted XTX from the final coefs.
+  let yMean = 0;
+  for (const y of ys) yMean += y;
+  yMean /= n;
+  let sse = 0;
+  let sst = 0;
+  const XTX: number[][] = Array.from({ length: m }, () =>
+    new Array<number>(m).fill(0),
+  );
+  for (let i = 0; i < n; i++) {
+    const xn = (xs[i] - xMean) / xScale;
+    let yhat = 0;
+    let v = 1;
+    for (let k = 0; k < m; k++) {
+      xp[k] = v;
+      yhat += coefs[k] * v;
+      v *= xn;
+    }
+    const r = ys[i] - yhat;
+    sse += r * r;
+    const d = ys[i] - yMean;
+    sst += d * d;
+    for (let rr = 0; rr < m; rr++) {
+      for (let cc = 0; cc < m; cc++) XTX[rr][cc] += xp[rr] * xp[cc];
+    }
+  }
+  const dfRes = n - m;
+  const sigma2 = dfRes > 0 ? sse / dfRes : 0;
+  const rmse = dfRes > 0 ? Math.sqrt(sigma2) : 0;
+  const r2 = sst > 0 ? Math.max(0, 1 - sse / sst) : 0;
+  const fStat =
+    sse > 0 && dfRes > 0 && degree > 0
+      ? ((sst - sse) / degree) / (sse / dfRes)
+      : 0;
+  return {
+    coefs,
+    xMean,
+    xScale,
+    rmse,
+    r2,
+    fStat,
+    n,
+    degree,
+    invXTX: invertMatrix(XTX),
+    sigma2,
+  };
+}
+
+/** Convert polynomial coefficients fit in normalised x' = (x − μ)/s
+ *  back to the original x basis, so the equation we display matches
+ *  what the user sees on the X axis. Uses the binomial expansion of
+ *  x'ᵏ; numerically fine up to degree 6 because the precomputed
+ *  binomial table is exact. */
+function denormalizeCoefs(
+  coefs: number[],
+  mean: number,
+  scale: number,
+): number[] {
+  const m = coefs.length;
+  const out = new Array<number>(m).fill(0);
+  const invS = new Array<number>(m);
+  invS[0] = 1;
+  for (let k = 1; k < m; k++) invS[k] = invS[k - 1] / scale;
+  const negMu = new Array<number>(m);
+  negMu[0] = 1;
+  for (let k = 1; k < m; k++) negMu[k] = negMu[k - 1] * -mean;
+  const C: number[][] = Array.from({ length: m }, () =>
+    new Array<number>(m).fill(0),
+  );
+  for (let i = 0; i < m; i++) {
+    C[i][0] = 1;
+    C[i][i] = 1;
+    for (let j = 1; j < i; j++) C[i][j] = C[i - 1][j - 1] + C[i - 1][j];
+  }
+  for (let j = 0; j < m; j++) {
+    let bj = 0;
+    for (let k = j; k < m; k++) {
+      bj += coefs[k] * invS[k] * C[k][j] * negMu[k - j];
+    }
+    out[j] = bj;
+  }
+  return out;
+}
+
+/** Pretty-print a polynomial equation. Uses Unicode superscripts for
+ *  exponents 2–6 (the only degrees this UI exposes) so the equation
+ *  reads naturally without a math-typesetter. */
+function formatEquation(coefs: number[]): string {
+  const SUP = ["", "", "²", "³", "⁴", "⁵", "⁶"];
+  const fmt = (v: number): string => {
+    const a = Math.abs(v);
+    if (a !== 0 && (a >= 1e4 || a < 1e-3)) return v.toExponential(3);
+    // toPrecision then strip trailing zeros / dangling decimal.
+    return parseFloat(v.toPrecision(4)).toString();
+  };
+  let s = "y = ";
+  for (let k = 0; k < coefs.length; k++) {
+    const c = coefs[k];
+    if (k === 0) {
+      s += fmt(c);
+      continue;
+    }
+    const sign = c >= 0 ? " + " : " − ";
+    const mag = Math.abs(c);
+    const term =
+      k === 1 ? `${fmt(mag)}·x` : `${fmt(mag)}·x${SUP[k] ?? `^${k}`}`;
+    s += sign + term;
+  }
+  return s;
+}
+
+/** Render a filled band between two same-x line series via ECharts'
+ *  stack-and-area trick: a transparent baseline series plus a stacked
+ *  "delta" series whose areaStyle fills the gap. Shared by the fitline
+ *  Fit / Prediction confidence bands. */
+function buildBandSeries(
+  lower: [number, number][],
+  upper: [number, number][],
+  color: string,
+  opacity: number,
+  idPrefix: string,
+): any[] {
+  if (lower.length === 0 || lower.length !== upper.length) return [];
+  return [
+    {
+      id: `${idPrefix}__lo`,
+      type: "line",
+      stack: `band-${idPrefix}`,
+      data: lower,
+      lineStyle: { opacity: 0 },
+      symbol: "none",
+      animation: false,
+      silent: true,
+      z: 2,
+      legendHoverLink: false,
+    },
+    {
+      id: `${idPrefix}__hi`,
+      type: "line",
+      stack: `band-${idPrefix}`,
+      data: upper.map((u, i) => [u[0], u[1] - lower[i][1]]),
+      lineStyle: { opacity: 0 },
+      symbol: "none",
+      areaStyle: { color, opacity },
+      animation: false,
+      silent: true,
+      z: 2,
+      legendHoverLink: false,
+    },
+  ];
+}
+
 /** Auto-tick density tuning constants. Both are deliberately "round"
  *  numbers so the resulting tick labels and bin boundaries land on
  *  values like 0.5 / 0.1 instead of 0.42 / 0.083.
@@ -4517,6 +4894,176 @@ function buildElementSeries(
           data: smoothed,
         },
       ];
+    }
+    case "fitline": {
+      // Polynomial / robust regression. Requires numeric X — categorical
+      // X has no metric so OLS is undefined.
+      if (xIsCategory) return null;
+      const xy: [number, number][] = points
+        .map((p) => [toNum(p.x), p.y] as [number, number])
+        .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+      if (xy.length < 3) return null;
+      const opts = el.options ?? {};
+      const fitType =
+        (opts.fitType as string | undefined) ?? "polynomial";
+      const degree = Math.max(
+        1,
+        Math.min(6, Math.floor((opts.degree as number | undefined) ?? 1)),
+      );
+      const showFitCI = (opts.showFitCI as boolean | undefined) ?? false;
+      const showPredCI = (opts.showPredCI as boolean | undefined) ?? false;
+      const showStats = (opts.showStats as boolean | undefined) ?? false;
+      const showEquation =
+        (opts.showEquation as boolean | undefined) ?? false;
+      const showRMSE = (opts.showRMSE as boolean | undefined) ?? false;
+      const showR2 = (opts.showR2 as boolean | undefined) ?? false;
+      const showFTest = (opts.showFTest as boolean | undefined) ?? false;
+      // We need at least `degree + 2` rows to estimate residual variance
+      // (n − p − 1 ≥ 1). Otherwise drop the layer silently.
+      if (xy.length < degree + 2) return null;
+      const xsRaw = xy.map((p) => p[0]);
+      const ysRaw = xy.map((p) => p[1]);
+      const fit =
+        fitType === "robustCauchy"
+          ? fitRobustCauchy(xsRaw, ysRaw, degree)
+          : fitPolynomial(xsRaw, ysRaw, degree);
+      if (!fit) return null;
+      let xMin = Infinity;
+      let xMax = -Infinity;
+      let yDataMax = -Infinity;
+      for (let i = 0; i < xsRaw.length; i++) {
+        if (xsRaw[i] < xMin) xMin = xsRaw[i];
+        if (xsRaw[i] > xMax) xMax = xsRaw[i];
+        if (ysRaw[i] > yDataMax) yDataMax = ysRaw[i];
+      }
+      if (!(xMax > xMin)) return null;
+      const SAMPLES = 200;
+      const fitData: [number, number][] = [];
+      const loFit: [number, number][] = [];
+      const hiFit: [number, number][] = [];
+      const loPred: [number, number][] = [];
+      const hiPred: [number, number][] = [];
+      const tCrit = tCritical95(fit.n - degree - 1);
+      const m = degree + 1;
+      const xvec = new Array<number>(m);
+      const needBands = (showFitCI || showPredCI) && !!fit.invXTX;
+      for (let i = 0; i < SAMPLES; i++) {
+        const x = xMin + (i / (SAMPLES - 1)) * (xMax - xMin);
+        const xn = (x - fit.xMean) / fit.xScale;
+        let yhat = 0;
+        let v = 1;
+        for (let k = 0; k < m; k++) {
+          xvec[k] = v;
+          yhat += fit.coefs[k] * v;
+          v *= xn;
+        }
+        fitData.push([x, yhat]);
+        if (needBands) {
+          // Quadratic form x*ᵀ · (XᵀX)⁻¹ · x* gives the leverage at x*.
+          let q = 0;
+          const inv = fit.invXTX!;
+          for (let r = 0; r < m; r++) {
+            const xr = xvec[r];
+            for (let c = 0; c < m; c++) q += xr * inv[r][c] * xvec[c];
+          }
+          if (showFitCI) {
+            const se = Math.sqrt(Math.max(0, fit.sigma2 * q));
+            loFit.push([x, yhat - tCrit * se]);
+            hiFit.push([x, yhat + tCrit * se]);
+          }
+          if (showPredCI) {
+            const se = Math.sqrt(Math.max(0, fit.sigma2 * (1 + q)));
+            loPred.push([x, yhat - tCrit * se]);
+            hiPred.push([x, yhat + tCrit * se]);
+          }
+        }
+      }
+      const bandColor = style.line.color;
+      const out: any[] = [];
+      // Prediction band first (lighter, wider) so the Fit band paints
+      // on top with the higher opacity.
+      if (showPredCI && loPred.length > 0) {
+        out.push(
+          ...buildBandSeries(
+            loPred,
+            hiPred,
+            bandColor,
+            0.08,
+            `${seriesName}_fitpred`,
+          ),
+        );
+      }
+      if (showFitCI && loFit.length > 0) {
+        out.push(
+          ...buildBandSeries(
+            loFit,
+            hiFit,
+            bandColor,
+            0.18,
+            `${seriesName}_fitci`,
+          ),
+        );
+      }
+      out.push({
+        type: "line",
+        name: `${seriesName} 拟合`,
+        showSymbol: false,
+        smooth: false,
+        lineStyle: {
+          color: style.line.color,
+          width: style.line.width,
+          type: "solid",
+          opacity: style.line.opacity,
+        },
+        itemStyle: { color: style.line.color },
+        z: 6,
+        data: fitData,
+      });
+      // Statistics overlay (top-left of the data extent). Rendered as
+      // a single invisible scatter point whose label carries the
+      // multi-line text — gives us pixel-precise placement plus a
+      // legible background panel without adding a new option-level
+      // `graphic` plumbing path.
+      if (
+        showStats &&
+        (showEquation || showRMSE || showR2 || showFTest)
+      ) {
+        const lines: string[] = [];
+        if (showEquation) {
+          const orig = denormalizeCoefs(fit.coefs, fit.xMean, fit.xScale);
+          lines.push(formatEquation(orig));
+        }
+        if (showRMSE) lines.push(`RMSE: ${fit.rmse.toPrecision(4)}`);
+        if (showR2) lines.push(`R²: ${fit.r2.toFixed(4)}`);
+        if (showFTest) lines.push(`F: ${fit.fStat.toPrecision(4)}`);
+        out.push({
+          id: `${seriesName}__fitstats`,
+          type: "scatter",
+          name: `${seriesName} _stats`,
+          data: [[xMin, yDataMax]],
+          symbolSize: 0,
+          silent: true,
+          animation: false,
+          legendHoverLink: false,
+          z: 7,
+          label: {
+            show: true,
+            formatter: lines.join("\n"),
+            align: "left",
+            verticalAlign: "top",
+            position: [4, 0],
+            backgroundColor: "rgba(255,255,255,0.85)",
+            borderColor: style.line.color,
+            borderWidth: 1,
+            borderRadius: 3,
+            padding: [4, 6],
+            fontSize: 11,
+            lineHeight: 14,
+            color: "#222",
+          },
+        });
+      }
+      return out;
     }
     default:
       return null;

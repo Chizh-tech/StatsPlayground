@@ -417,7 +417,8 @@
       "bar": "Bar",
       "histogram": "Histogram",
       "boxplot": "Box plot",
-      "smoother": "Smoother"
+      "smoother": "Smoother",
+      "fitline": "Fit Line"
     },
     "frequency": "Count",
     "startOver": "Start Over",
@@ -471,7 +472,14 @@
       "smootherKernelBandwidth": "Bandwidth",
       "smootherSavgolWindow": "Window",
       "smootherSavgolPolyOrder": "Poly Order",
-      "smootherWindow": "Window"
+      "smootherWindow": "Window",
+      "fitType": "Fit",
+      "fitTypes": { "polynomial": "Polynomial", "robustCauchy": "Robust Cauchy" },
+      "fitDegree": "Degree",
+      "fitDegrees": { "1": "1", "2": "2", "3": "3", "4": "4", "5": "5", "6": "6" },
+      "fitConf": { "fit": "Fit Confidence", "prediction": "Prediction Confidence" },
+      "fitStats": "Statistics",
+      "fitStat": { "equation": "Equation", "rmse": "RMSE", "r2": "R²", "fTest": "F Test" }
     },
     "loading": "Loading data…",
     "noData": "No data",
@@ -484,6 +492,7 @@
       "line": "Line",
       "boxplot": "Box plot",
       "smoother": "Smoother",
+      "fitline": "Fit Line",
       "allEntries": "All",
       "hide": "Hide this group",
       "show": "Show this group"

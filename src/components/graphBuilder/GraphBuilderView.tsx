@@ -54,6 +54,7 @@ const CHART_TYPE_DEFS: ChartTypeDef[] = [
   { kind: "points", icon: "●" },
   { kind: "line", icon: "╱" },
   { kind: "smoother", icon: "∿" },
+  { kind: "fitline", icon: "ƒ" },
   { kind: "boxplot", icon: "⊟" },
   { kind: "histogram", icon: "▥" },
 ];
@@ -1140,7 +1141,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   };
 
   /** Add a new layer (chart kind) — enables it if already present.
-   *  New smoother layers default to the Spline algorithm; legacy
+   *  New smoother layers default to the Spline algorithm; new fitline
+   *  layers default to a linear (degree-1) Polynomial fit. Legacy
    *  smoother elements saved without an `algo` keep their previous
    *  Moving Average behaviour via the fallbacks in transform.ts. */
   const addElement = useCallback((kind: ElementKind) => {
@@ -1151,6 +1153,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       }
       const next: ChartElement = { kind, enabled: true };
       if (kind === "smoother") next.options = { algo: "spline" };
+      if (kind === "fitline") {
+        next.options = { fitType: "polynomial", degree: 1 };
+      }
       return [...prev, next];
     });
   }, [setElements]);
@@ -2150,6 +2155,9 @@ function LayerCard({
         {kind === "smoother" && (
           <SmootherOptions options={options} onChange={onChangeOptions} t={t} />
         )}
+        {kind === "fitline" && (
+          <FitLineOptions options={options} onChange={onChangeOptions} t={t} />
+        )}
       </div>
     </div>
   );
@@ -2607,6 +2615,111 @@ function SmootherOptions({ options, onChange, t }: OptionsEditorProps) {
             }
           />
         </OptRow>
+      )}
+    </>
+  );
+}
+
+/** Fit-line options panel — fit type (Polynomial / Robust Cauchy) +
+ *  degree (1–6) + Fit / Prediction confidence-band toggles + a master
+ *  Statistics toggle that reveals the four per-stat checkboxes
+ *  (Equation / RMSE / R² / F Test). Layout mirrors HistogramOptions
+ *  and SmootherOptions so the panel feels like the rest of the
+ *  Builder. */
+function FitLineOptions({ options, onChange, t }: OptionsEditorProps) {
+  const fitType = getOpt<string>(options, "fitType", "polynomial");
+  const degree = getOpt<number>(options, "degree", 1);
+  const showFitCI = getOpt<boolean>(options, "showFitCI", false);
+  const showPredCI = getOpt<boolean>(options, "showPredCI", false);
+  const showStats = getOpt<boolean>(options, "showStats", false);
+  const showEquation = getOpt<boolean>(options, "showEquation", false);
+  const showRMSE = getOpt<boolean>(options, "showRMSE", false);
+  const showR2 = getOpt<boolean>(options, "showR2", false);
+  const showFTest = getOpt<boolean>(options, "showFTest", false);
+  return (
+    <>
+      <OptRow label={t("graph.opt.fitType")}>
+        <select
+          className="gb-opt-select"
+          value={fitType}
+          onChange={(e) => onChange({ fitType: e.target.value })}
+        >
+          <option value="polynomial">
+            {t("graph.opt.fitTypes.polynomial")}
+          </option>
+          <option value="robustCauchy">
+            {t("graph.opt.fitTypes.robustCauchy")}
+          </option>
+        </select>
+      </OptRow>
+      <OptRow label={t("graph.opt.fitDegree")}>
+        <select
+          className="gb-opt-select"
+          value={degree}
+          onChange={(e) => onChange({ degree: parseInt(e.target.value, 10) })}
+        >
+          <option value={1}>{t("graph.opt.fitDegrees.1")}</option>
+          <option value={2}>{t("graph.opt.fitDegrees.2")}</option>
+          <option value={3}>{t("graph.opt.fitDegrees.3")}</option>
+          <option value={4}>{t("graph.opt.fitDegrees.4")}</option>
+          <option value={5}>{t("graph.opt.fitDegrees.5")}</option>
+          <option value={6}>{t("graph.opt.fitDegrees.6")}</option>
+        </select>
+      </OptRow>
+      <OptRow label={t("graph.opt.fitConf.fit")}>
+        <input
+          type="checkbox"
+          checked={showFitCI}
+          onChange={(e) => onChange({ showFitCI: e.target.checked })}
+        />
+      </OptRow>
+      <OptRow label={t("graph.opt.fitConf.prediction")}>
+        <input
+          type="checkbox"
+          checked={showPredCI}
+          onChange={(e) => onChange({ showPredCI: e.target.checked })}
+        />
+      </OptRow>
+      <OptRow label={t("graph.opt.fitStats")}>
+        <input
+          type="checkbox"
+          checked={showStats}
+          onChange={(e) => onChange({ showStats: e.target.checked })}
+        />
+      </OptRow>
+      {showStats && (
+        <>
+          <OptRow label={t("graph.opt.fitStat.equation")}>
+            <input
+              type="checkbox"
+              checked={showEquation}
+              onChange={(e) =>
+                onChange({ showEquation: e.target.checked })
+              }
+            />
+          </OptRow>
+          <OptRow label={t("graph.opt.fitStat.rmse")}>
+            <input
+              type="checkbox"
+              checked={showRMSE}
+              onChange={(e) => onChange({ showRMSE: e.target.checked })}
+            />
+          </OptRow>
+          <OptRow label={t("graph.opt.fitStat.r2")}>
+            <input
+              type="checkbox"
+              checked={showR2}
+              onChange={(e) => onChange({ showR2: e.target.checked })}
+            />
+          </OptRow>
+          <OptRow label={t("graph.opt.fitStat.fTest")}>
+            <input
+              type="checkbox"
+              checked={showFTest}
+              onChange={(e) => onChange({ showFTest: e.target.checked })}
+            />
+          </OptRow>
+        </>
       )}
     </>
   );

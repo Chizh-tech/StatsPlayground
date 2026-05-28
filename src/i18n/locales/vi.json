@@ -417,7 +417,8 @@
       "bar": "Cột",
       "histogram": "Histogram",
       "boxplot": "Boxplot",
-      "smoother": "Làm mịn"
+      "smoother": "Làm mịn",
+      "fitline": "Đường khớp"
     },
     "frequency": "Tần suất",
     "startOver": "Bắt đầu lại",
@@ -471,7 +472,14 @@
       "smootherKernelBandwidth": "Băng thông",
       "smootherSavgolWindow": "Cửa sổ",
       "smootherSavgolPolyOrder": "Bậc đa thức",
-      "smootherWindow": "Cửa sổ"
+      "smootherWindow": "Cửa sổ",
+      "fitType": "Kiểu khớp",
+      "fitTypes": { "polynomial": "Đa thức", "robustCauchy": "Cauchy bền vững" },
+      "fitDegree": "Bậc",
+      "fitDegrees": { "1": "Bậc 1", "2": "Bậc 2", "3": "Bậc 3", "4": "Bậc 4", "5": "Bậc 5", "6": "Bậc 6" },
+      "fitConf": { "fit": "Khoảng tin cậy khớp", "prediction": "Khoảng tin cậy dự báo" },
+      "fitStats": "Thống kê",
+      "fitStat": { "equation": "Phương trình", "rmse": "RMSE", "r2": "R²", "fTest": "Kiểm định F" }
     },
     "loading": "Đang tải dữ liệu…",
     "noData": "Không có dữ liệu",
@@ -484,6 +492,7 @@
       "line": "Đường",
       "boxplot": "Biểu đồ hộp",
       "smoother": "Đường làm trơn",
+      "fitline": "Đường khớp",
       "allEntries": "Tất cả",
       "hide": "Ẩn nhóm này",
       "show": "Hiện nhóm này"

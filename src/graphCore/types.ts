@@ -30,7 +30,8 @@ export type ElementKind =
   | "bar"          // 柱状（含分组均值）
   | "histogram"    // 直方图
   | "boxplot"      // 箱线
-  | "smoother";    // 平滑曲线
+  | "smoother"     // 平滑曲线
+  | "fitline";     // 拟合线（多项式 / 稳健 Cauchy + 置信区间 + 统计量）
 
 /** 平滑器配置 */
 export interface SmootherOptions {

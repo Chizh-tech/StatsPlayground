@@ -417,7 +417,8 @@
       "bar": "柱状",
       "histogram": "直方图",
       "boxplot": "箱线图",
-      "smoother": "平滑"
+      "smoother": "平滑",
+      "fitline": "拟合线"
     },
     "frequency": "频次",
     "startOver": "重新开始",
@@ -471,7 +472,14 @@
       "smootherKernelBandwidth": "带宽",
       "smootherSavgolWindow": "窗口",
       "smootherSavgolPolyOrder": "多项式阶数",
-      "smootherWindow": "窗口"
+      "smootherWindow": "窗口",
+      "fitType": "拟合",
+      "fitTypes": { "polynomial": "多项式", "robustCauchy": "稳健 Cauchy" },
+      "fitDegree": "阶数",
+      "fitDegrees": { "1": "一次", "2": "二次", "3": "三次", "4": "四次", "5": "五次", "6": "六次" },
+      "fitConf": { "fit": "拟合置信区间", "prediction": "预测置信区间" },
+      "fitStats": "统计量",
+      "fitStat": { "equation": "方程", "rmse": "RMSE", "r2": "R²", "fTest": "F 检验" }
     },
     "loading": "正在加载数据…",
     "noData": "无数据",
@@ -484,6 +492,7 @@
       "line": "折线",
       "boxplot": "箱线图",
       "smoother": "平滑曲线",
+      "fitline": "拟合线",
       "allEntries": "全部",
       "hide": "隐藏该分组",
       "show": "显示该分组"
