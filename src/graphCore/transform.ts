@@ -3952,6 +3952,49 @@ function buildSingleOption(
       const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), spec.autoSpecX, theme, "x");
       if (refCarrierX) series.push(refCarrierX);
 
+      // Pin axisTick + axisLabel customValues for the histogram axes.
+      // Same rationale as the main scatter/box/line path: ECharts'
+      // Interval.js#getTicks unconditionally pushes an extra tick at
+      // extent[1] when extent[1] > lastNiceTick, which the theme's
+      // showMaxLabel:false leaves as an unlabeled stub at the very
+      // top/right of the plot frame. Using customValues short-circuits
+      // createAxisTicks past that boundary-push branch.
+      //
+      // X: enumerate ticks at xFit.interval steps inside the visible
+      //    bin grid. xFit gives nice-snapped bounds from the data; the
+      //    bin grid (gridLo..gridHi) may be slightly wider, so we
+      //    intersect by stepping outward from xFit-aligned multiples.
+      let histXCustomTicks: EChartsOption = {};
+      if (xFit && xFit.interval > 0) {
+        const startK = Math.ceil(gridLo / xFit.interval);
+        const endK = Math.floor(gridHi / xFit.interval);
+        if (endK >= startK) {
+          const prec = Math.max(0, -Math.floor(Math.log10(xFit.interval)) + 6);
+          const round = (v: number): number => Number(v.toFixed(prec));
+          const tickValues: number[] = [];
+          for (let k = startK; k <= endK; k++) tickValues.push(round(k * xFit.interval));
+          histXCustomTicks = buildCustomTickFragment(tickValues);
+        }
+      }
+      // Y: derive nice bounds from the per-bin total counts. For
+      //    stacked grouped bars this is the displayed bar height; for
+      //    overlay (max-per-bin display) it's an upper bound, which
+      //    leaves a bit of headroom but never clips. Refs from spec
+      //    are folded in so user/auto-spec Y ref lines stay visible.
+      let histYCustomTicks: EChartsOption = {};
+      const histYMax = totalCounts.length > 0 ? Math.max(...totalCounts) : 0;
+      const histYFit = computeNiceBounds(
+        0,
+        Number.isFinite(histYMax) && histYMax > 0 ? histYMax : undefined,
+        collectRefLineYs(spec),
+        AUTO_TARGET_TICKS,
+      );
+      if (histYFit) {
+        histYCustomTicks = buildCustomTickFragment(
+          enumerateNiceTicks(histYFit.min, histYFit.max, histYFit.interval),
+        );
+      }
+
       return {
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
@@ -3979,44 +4022,57 @@ function buildSingleOption(
         // bounding box so it still visually anchors to the data point.
         tooltip: { trigger: "axis", confine: true, appendToBody: true },
         xAxis: mergeAxis(
-          {
-            type: "value",
-            name: xField?.name,
-            nameLocation: "middle",
-            nameGap: 28,
-            ...axis,
-            // Auto-enable minor ticks — mirrors the main path so an
-            // exclusive histogram chart inherits the same denser grid
-            // by default. User overrides still win via mergeAxis.
-            minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
-            // Faceted histograms still benefit from a shared X span so the
-            // bin centers are visually comparable across panels.
-            ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
-            ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
-            // Single-panel: expand auto-fit so vertical ref lines drawn
-            // outside the data extent stay visible. The shared-range
-            // spreads above already include refXs via computeSharedRanges,
-            // so this only matters when those are absent.
-            ...(sharedRanges?.xMin == null && sharedRanges?.xMax == null
-              ? buildXAxisRefLineExpand(collectRefLineXs(spec))
-              : {}),
-          },
+          mergeAxis(
+            {
+              type: "value",
+              name: xField?.name,
+              nameLocation: "middle",
+              nameGap: 28,
+              ...axis,
+              // Auto-enable minor ticks — mirrors the main path so an
+              // exclusive histogram chart inherits the same denser grid
+              // by default. User overrides still win via mergeAxis.
+              minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
+              // Faceted histograms still benefit from a shared X span so the
+              // bin centers are visually comparable across panels.
+              ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
+              ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
+              // Single-panel: expand auto-fit so vertical ref lines drawn
+              // outside the data extent stay visible. The shared-range
+              // spreads above already include refXs via computeSharedRanges,
+              // so this only matters when those are absent.
+              ...(sharedRanges?.xMin == null && sharedRanges?.xMax == null
+                ? buildXAxisRefLineExpand(collectRefLineXs(spec))
+                : {}),
+            },
+            // See histXCustomTicks above — short-circuits ECharts'
+            // boundary-push to eliminate unlabeled tick stubs at the
+            // right end of the histogram X axis.
+            histXCustomTicks,
+          ),
           buildAxisOverrides(spec.xAxis),
         ),
         yAxis: mergeAxis(
-          {
-            type: "value",
-            name: i18n.t("graph.frequency"),
-            nameLocation: "middle",
-            nameGap: 40,
-            ...axis,
-            // Auto-enable minor ticks on the frequency axis too.
-            minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
-            // Expand auto-fit so ref lines (manual or auto-spec) stay
-            // visible on the frequency axis. User-pinned min/max from
-            // `buildAxisOverrides` still wins via the merge spread.
-            ...buildYAxisRefLineExpand(collectRefLineYs(spec)),
-          },
+          mergeAxis(
+            {
+              type: "value",
+              name: i18n.t("graph.frequency"),
+              nameLocation: "middle",
+              nameGap: 40,
+              ...axis,
+              // Auto-enable minor ticks on the frequency axis too.
+              minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
+              // Expand auto-fit so ref lines (manual or auto-spec) stay
+              // visible on the frequency axis. User-pinned min/max from
+              // `buildAxisOverrides` still wins via the merge spread.
+              ...buildYAxisRefLineExpand(collectRefLineYs(spec)),
+            },
+            // Same boundary-stub suppression as the X axis above. For
+            // the frequency Y axis the stub is rare in practice (counts
+            // are integers that often coincide with niceExtent), but
+            // the fix is cheap and keeps both axes symmetric.
+            histYCustomTicks,
+          ),
           buildAxisOverrides(spec.yAxis),
         ),
         series,
