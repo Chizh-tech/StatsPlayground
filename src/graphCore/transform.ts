@@ -1429,18 +1429,29 @@ function computeJitterOffsets(
   // is ~6px, give a little air around it so dots don't kiss.
   const SYMBOL_PX = 6;
   const SPACING = SYMBOL_PX + 1;
-  // Maximum total horizontal spread per category. The cap below
-  // (120px) is sized to roughly fill a typical category band on a
-  // ~600px chart — narrower than that and JMP-style stack jitter
-  // collapses onto a single visible line for small buckets.
-  //
-  // `limit` is the user's 0..1 slider. PRIOR BUG: the fallback was
-  // `limit > 0 ? limit : 1`, so dragging the slider to 0 silently
-  // promoted MAX_SPREAD to its maximum (the opposite of what 0 should
-  // mean). Now `limit === 0` truly disables horizontal spread — the
-  // points pile back onto a single column at the category center,
-  // exactly as the slider position suggests.
-  const MAX_SPREAD = 120 * Math.max(0, Math.min(1, limit));
+  // Estimate the per-category band width in CSS pixels. The chart isn't
+  // rendered yet at option-build time so the real bandwidth is unknown;
+  // assume a reasonable plot-area width (~640px after axis margins) and
+  // divide by the number of distinct categories. Clamped so:
+  //   - Tiny chart areas / many categories don't collapse the spread to
+  //     a degenerate <60px (lower bound below SYMBOL_PX is useless).
+  //   - Huge wide-screen layouts with 1-2 categories don't blow the
+  //     spread out to >450px (where points start crossing into
+  //     neighboring bands).
+  // `limit` (0..1) then maps to "this fraction of one category band":
+  //   limit = 0   → no spread (single column at category center)
+  //   limit = 0.5 → ~half-band spread (matches the user's expectation
+  //                  "50%滑块 ≈ 50% of the category width")
+  //   limit = 1   → full-band spread (points fill the whole band)
+  const distinctX = new Set<string>();
+  for (const p of points) distinctX.add(toStr(p.x));
+  const nCats = Math.max(1, distinctX.size);
+  const ASSUMED_PLOT_WIDTH = 640;
+  const ESTIMATED_BAND = Math.max(80, Math.min(450, ASSUMED_PLOT_WIDTH / nCats));
+  // PRIOR BUG: `MAX_SPREAD = 60 * (limit > 0 ? limit : 1)` treated
+  // limit=0 as "fallback to 1", producing MAX spread at the slider's
+  // zero position. Plain `clamp01(limit)` is correct.
+  const MAX_SPREAD = ESTIMATED_BAND * Math.max(0, Math.min(1, limit));
 
   if (mode === "uniform" || mode === "normal") {
     const half = MAX_SPREAD / 2;
@@ -1484,8 +1495,7 @@ function computeJitterOffsets(
 
   // Slider at 0 means "no horizontal spread" — leave every offset at
   // [0, 0] and return early. Skipping the bucket loop also avoids the
-  // `spacing = min(SPACING, MAX_SPREAD/(n-1))` branch resolving to 0/0
-  // (which would be moot but is messier than this explicit short-circuit).
+  // `MAX_SPREAD/(n-1)` divide-by-zero edge for single-point buckets.
   if (MAX_SPREAD <= 0) return offs;
 
   groups.forEach((idxs) => {
@@ -1499,11 +1509,20 @@ function computeJitterOffsets(
     }
     bins.forEach((bucket) => {
       const n = bucket.length;
-      // Center the bucket horizontally; cap total width at MAX_SPREAD.
-      const spacing = Math.min(SPACING, n > 1 ? MAX_SPREAD / (n - 1) : SPACING);
-      const center = (n - 1) / 2;
+      // Spread the bucket across MAX_SPREAD. PRIOR BUG: this used
+      // `Math.min(SPACING, MAX_SPREAD/(n-1))` which capped spacing at
+      // 7px once the bucket was small enough — the slider had no
+      // effect above ~50% because `MAX_SPREAD/(n-1)` exceeded SPACING
+      // and the min() pinned spacing to the constant ceiling. Without
+      // the cap the slider scales continuously across the full range
+      // and a SYMBOL_PX-wide floor still keeps overlapping symbols
+      // visually distinct.
+      const total = n > 1 ? MAX_SPREAD : 0;
+      const spacing = n > 1 ? Math.max(SPACING, total / (n - 1)) : 0;
+      const widthOut = (n - 1) * spacing;
+      const center = widthOut / 2;
       bucket.forEach((idx, k) => {
-        offs[idx] = [(k - center) * spacing, 0];
+        offs[idx] = [k * spacing - center, 0];
       });
     });
   });
