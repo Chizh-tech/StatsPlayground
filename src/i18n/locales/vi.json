@@ -464,7 +464,14 @@
       "histHeight": "Chiều cao biểu đồ",
       "showCounts": "Hiện số đếm",
       "showPercents": "Hiện phần trăm",
-      "histStyles": { "bar": "Cột", "polygon": "Đa giác", "kde": "Kernel Density", "shadowgram": "Shadowgram" }
+      "histStyles": { "bar": "Cột", "polygon": "Đa giác", "kde": "Kernel Density", "shadowgram": "Shadowgram" },
+      "smootherAlgo": "Thuật toán",
+      "smootherAlgos": { "spline": "Spline", "kernel": "Kernel cục bộ", "savgol": "Savitzky-Golay", "movingAvg": "Trung bình động", "movingBox": "Trung vị động" },
+      "smootherSplineSmoothness": "Độ mịn",
+      "smootherKernelBandwidth": "Băng thông",
+      "smootherSavgolWindow": "Cửa sổ",
+      "smootherSavgolPolyOrder": "Bậc đa thức",
+      "smootherWindow": "Cửa sổ"
     },
     "loading": "Đang tải dữ liệu…",
     "noData": "Không có dữ liệu",

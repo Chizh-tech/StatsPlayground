@@ -464,7 +464,14 @@
       "histHeight": "Histogram Height",
       "showCounts": "Show Counts",
       "showPercents": "Show Percents",
-      "histStyles": { "bar": "Bar", "polygon": "Polygon", "kde": "Kernel Density", "shadowgram": "Shadowgram" }
+      "histStyles": { "bar": "Bar", "polygon": "Polygon", "kde": "Kernel Density", "shadowgram": "Shadowgram" },
+      "smootherAlgo": "Algorithm",
+      "smootherAlgos": { "spline": "Spline", "kernel": "Local Kernel", "savgol": "Savitzky-Golay", "movingAvg": "Moving Average", "movingBox": "Moving Box" },
+      "smootherSplineSmoothness": "Smoothness",
+      "smootherKernelBandwidth": "Bandwidth",
+      "smootherSavgolWindow": "Window",
+      "smootherSavgolPolyOrder": "Poly Order",
+      "smootherWindow": "Window"
     },
     "loading": "Loading data…",
     "noData": "No data",

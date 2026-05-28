@@ -53,6 +53,7 @@ interface ChartTypeDef {
 const CHART_TYPE_DEFS: ChartTypeDef[] = [
   { kind: "points", icon: "●" },
   { kind: "line", icon: "╱" },
+  { kind: "smoother", icon: "∿" },
   { kind: "boxplot", icon: "⊟" },
   { kind: "histogram", icon: "▥" },
 ];
@@ -469,13 +470,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     },
     [item.id, item.elements, updateItem, markDirty],
   );
-  const setSmootherLambda = useCallback(
-    (v: number) => {
-      updateItem(item.id, { smootherLambda: v });
-      markDirty();
-    },
-    [item.id, updateItem, markDirty],
-  );
+  // NOTE: there is no longer a workspace-level "smoothness" slider —
+  // that was replaced by the per-layer SmootherOptions panel which
+  // edits `element.options.algo` and the per-algorithm parameters
+  // directly. `item.smootherLambda` is still kept in the schema so old
+  // projects load cleanly and seed back-compat for legacy smoother
+  // elements (see `finalElements` above) but nothing in the UI ever
+  // writes to it any more.
   const setFilters = useCallback(
     (next: FilterRuleItem[]) => {
       updateItem(item.id, { filters: next });
@@ -561,13 +562,28 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     };
   }, [dataset.id, dataset.rowCount]);
 
-  /** 同步元素的 options（如平滑器 lambda） */
+  /** Resolve final per-element options. The smoother layer used to be
+   *  driven by a single workspace-level `smootherLambda` slider; that
+   *  slider has been replaced by the per-layer SmootherOptions panel
+   *  (algorithm + per-algo params). For backwards compatibility we
+   *  still seed `lambda` from the workspace value when a smoother
+   *  element predates the per-layer panel — i.e. it has neither an
+   *  explicit algorithm choice nor its own `lambda`/`windowFraction`.
+   *  Brand-new layers and explicitly-configured ones are passed
+   *  through untouched so the panel's settings are not overwritten. */
   const finalElements = useMemo<ChartElement[]>(() => {
-    return elements.map((el) =>
-      el.kind === "smoother"
-        ? { ...el, options: { ...el.options, lambda: smootherLambda } }
-        : el,
-    );
+    return elements.map((el) => {
+      if (el.kind !== "smoother") return el;
+      const o = el.options ?? {};
+      if (
+        o.algo !== undefined ||
+        o.lambda !== undefined ||
+        o.windowFraction !== undefined
+      ) {
+        return el;
+      }
+      return { ...el, options: { ...o, lambda: smootherLambda } };
+    });
   }, [elements, smootherLambda]);
 
   const spec = useMemo<GraphSpec>(() => {
@@ -2126,6 +2142,9 @@ function LayerCard({
         {kind === "histogram" && (
           <HistogramOptions options={options} onChange={onChangeOptions} t={t} />
         )}
+        {kind === "smoother" && (
+          <SmootherOptions options={options} onChange={onChangeOptions} t={t} />
+        )}
       </div>
     </div>
   );
@@ -2459,6 +2478,131 @@ function HistogramOptions({ options, onChange, t }: OptionsEditorProps) {
           onChange={(e) => onChange({ showPercents: e.target.checked })}
         />
       </OptRow>
+    </>
+  );
+}
+
+/** Smoother options panel — algorithm selector + per-algorithm
+ *  parameters. The visible controls below the algo dropdown vary with
+ *  the selected algorithm so the panel only ever shows the inputs that
+ *  actually affect the current curve. */
+function SmootherOptions({ options, onChange, t }: OptionsEditorProps) {
+  const algo = getOpt<string>(options, "algo", "movingAvg");
+  // Per-algo parameter slots. Defaults match the values used in
+  // transform.ts so an un-edited element renders identically to a
+  // freshly added one.
+  const splineSmoothness = getOpt<number>(options, "splineSmoothness", 0.5);
+  const kernelBandwidth = getOpt<number>(options, "kernelBandwidth", 0.1);
+  const savgolWindow = getOpt<number>(options, "savgolWindow", 11);
+  const savgolPolyOrder = getOpt<number>(options, "savgolPolyOrder", 2);
+  // `windowFraction` is the new key; fall back to legacy `lambda` for
+  // pre-existing smoother elements so they show the right slider value
+  // the first time their card is opened.
+  const windowFraction = getOpt<number>(
+    options,
+    "windowFraction",
+    getOpt<number>(options, "lambda", 0.4),
+  );
+  return (
+    <>
+      <OptRow label={t("graph.opt.smootherAlgo")}>
+        <select
+          className="gb-opt-select"
+          value={algo}
+          onChange={(e) => onChange({ algo: e.target.value })}
+        >
+          <option value="spline">{t("graph.opt.smootherAlgos.spline")}</option>
+          <option value="kernel">{t("graph.opt.smootherAlgos.kernel")}</option>
+          <option value="savgol">{t("graph.opt.smootherAlgos.savgol")}</option>
+          <option value="movingAvg">
+            {t("graph.opt.smootherAlgos.movingAvg")}
+          </option>
+          <option value="movingBox">
+            {t("graph.opt.smootherAlgos.movingBox")}
+          </option>
+        </select>
+      </OptRow>
+      {algo === "spline" && (
+        <OptRow label={t("graph.opt.smootherSplineSmoothness")}>
+          <input
+            type="range"
+            className="gb-slider"
+            min={0}
+            max={1}
+            step={0.05}
+            value={splineSmoothness}
+            onChange={(e) =>
+              onChange({ splineSmoothness: parseFloat(e.target.value) })
+            }
+          />
+        </OptRow>
+      )}
+      {algo === "kernel" && (
+        <OptRow label={t("graph.opt.smootherKernelBandwidth")}>
+          <input
+            type="range"
+            className="gb-slider"
+            min={0.01}
+            max={0.5}
+            step={0.01}
+            value={kernelBandwidth}
+            onChange={(e) =>
+              onChange({ kernelBandwidth: parseFloat(e.target.value) })
+            }
+          />
+        </OptRow>
+      )}
+      {algo === "savgol" && (
+        <>
+          <OptRow label={t("graph.opt.smootherSavgolWindow")}>
+            <input
+              type="number"
+              className="gb-opt-num"
+              min={5}
+              max={101}
+              step={2}
+              value={savgolWindow}
+              onChange={(e) => {
+                const raw = parseInt(e.target.value, 10);
+                const v = Number.isFinite(raw)
+                  ? Math.max(5, Math.min(101, raw))
+                  : 11;
+                // SG window must be odd — silently round up the even
+                // values the spinner produces with step=2 ± clamping.
+                onChange({ savgolWindow: v % 2 === 1 ? v : v + 1 });
+              }}
+            />
+          </OptRow>
+          <OptRow label={t("graph.opt.smootherSavgolPolyOrder")}>
+            <select
+              className="gb-opt-select"
+              value={savgolPolyOrder}
+              onChange={(e) =>
+                onChange({ savgolPolyOrder: parseInt(e.target.value, 10) })
+              }
+            >
+              <option value={2}>2</option>
+              <option value={3}>3</option>
+              <option value={4}>4</option>
+            </select>
+          </OptRow>
+        </>
+      )}
+      {(algo === "movingAvg" || algo === "movingBox") && (
+        <OptRow label={t("graph.opt.smootherWindow")}>
+          <input
+            type="range"
+            className="gb-slider"
+            min={0.02}
+            max={0.9}
+            step={0.02}
+            value={windowFraction}
+            onChange={(e) =>
+              onChange({ windowFraction: parseFloat(e.target.value) })
+            }
+          />
+        </OptRow>
+      )}
     </>
   );
 }

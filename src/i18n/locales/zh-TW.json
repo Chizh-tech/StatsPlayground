@@ -464,7 +464,14 @@
       "histHeight": "直方圖高度",
       "showCounts": "顯示頻數",
       "showPercents": "顯示百分比",
-      "histStyles": { "bar": "柱狀", "polygon": "折線", "kde": "核密度", "shadowgram": "疊影圖" }
+      "histStyles": { "bar": "柱狀", "polygon": "折線", "kde": "核密度", "shadowgram": "疊影圖" },
+      "smootherAlgo": "演算法",
+      "smootherAlgos": { "spline": "樣條", "kernel": "局部核", "savgol": "Savitzky-Golay", "movingAvg": "移動平均", "movingBox": "移動中位" },
+      "smootherSplineSmoothness": "平滑度",
+      "smootherKernelBandwidth": "頻寬",
+      "smootherSavgolWindow": "視窗",
+      "smootherSavgolPolyOrder": "多項式階數",
+      "smootherWindow": "視窗"
     },
     "loading": "正在載入資料…",
     "noData": "無資料",

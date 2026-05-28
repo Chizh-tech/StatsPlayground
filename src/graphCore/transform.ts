@@ -294,6 +294,282 @@ function movingAverage(points: [number, number][], window: number): [number, num
   return out;
 }
 
+/** Moving box (running median) — same window semantics as `movingAverage`
+ *  but takes the per-window median of Y instead of the mean. Robust to
+ *  outliers; sister algorithm to MA in the smoother panel. */
+function movingMedian(points: [number, number][], window: number): [number, number][] {
+  if (points.length === 0) return [];
+  const sorted = [...points].sort((a, b) => a[0] - b[0]);
+  const out: [number, number][] = [];
+  const half = Math.max(1, Math.floor(window / 2));
+  for (let i = 0; i < sorted.length; i++) {
+    const lo = Math.max(0, i - half);
+    const hi = Math.min(sorted.length - 1, i + half);
+    const ys: number[] = [];
+    for (let j = lo; j <= hi; j++) ys.push(sorted[j][1]);
+    ys.sort((a, b) => a - b);
+    const m = ys.length;
+    const med = m % 2 === 1 ? ys[m >> 1] : (ys[m / 2 - 1] + ys[m / 2]) / 2;
+    out.push([sorted[i][0], med]);
+  }
+  return out;
+}
+
+/** Solve a small linear system A x = b via partial-pivot Gaussian
+ *  elimination. Used by the local-polynomial fits inside the
+ *  Savitzky-Golay smoother. Returns null when the system is singular
+ *  (rank-deficient neighbourhood, e.g. all neighbours collapse to one
+ *  x value); callers fall back to NaN at that sample. */
+function solveLinearSystem(A: number[][], b: number[]): number[] | null {
+  const n = A.length;
+  const M: number[][] = A.map((row, i) => [...row, b[i]]);
+  for (let i = 0; i < n; i++) {
+    let pivot = i;
+    for (let r = i + 1; r < n; r++) {
+      if (Math.abs(M[r][i]) > Math.abs(M[pivot][i])) pivot = r;
+    }
+    [M[i], M[pivot]] = [M[pivot], M[i]];
+    if (Math.abs(M[i][i]) < 1e-12) return null;
+    for (let r = i + 1; r < n; r++) {
+      const f = M[r][i] / M[i][i];
+      for (let c = i; c <= n; c++) M[r][c] -= f * M[i][c];
+    }
+  }
+  const x = new Array<number>(n).fill(0);
+  for (let i = n - 1; i >= 0; i--) {
+    let s = M[i][n];
+    for (let c = i + 1; c < n; c++) s -= M[i][c] * x[c];
+    x[i] = s / M[i][i];
+  }
+  return x;
+}
+
+/** Second derivatives at each knot of a natural cubic spline through
+ *  (xs, ys). `xs` MUST be strictly increasing. Used by `splineSmoother`
+ *  to interpolate between bin-averaged knots. Standard tridiagonal
+ *  algorithm (Numerical Recipes §3.3 / Burden & Faires Alg. 3.4). */
+function naturalCubicSpline2nd(xs: number[], ys: number[]): number[] {
+  const n = xs.length;
+  if (n < 3) return new Array<number>(n).fill(0);
+  const h = new Array<number>(n - 1);
+  for (let i = 0; i < n - 1; i++) h[i] = xs[i + 1] - xs[i];
+  const alpha = new Array<number>(n).fill(0);
+  for (let i = 1; i < n - 1; i++) {
+    alpha[i] =
+      (3 / h[i]) * (ys[i + 1] - ys[i]) -
+      (3 / h[i - 1]) * (ys[i] - ys[i - 1]);
+  }
+  const l = new Array<number>(n).fill(0);
+  const mu = new Array<number>(n).fill(0);
+  const z = new Array<number>(n).fill(0);
+  l[0] = 1;
+  for (let i = 1; i < n - 1; i++) {
+    l[i] = 2 * (xs[i + 1] - xs[i - 1]) - h[i - 1] * mu[i - 1];
+    mu[i] = h[i] / l[i];
+    z[i] = (alpha[i] - h[i - 1] * z[i - 1]) / l[i];
+  }
+  l[n - 1] = 1;
+  const c = new Array<number>(n).fill(0);
+  for (let j = n - 2; j >= 0; j--) c[j] = z[j] - mu[j] * c[j + 1];
+  return c;
+}
+
+/** Evaluate the natural cubic spline (knots `xs`/`ys`, 2nd derivs `c`)
+ *  at `x`. Extrapolates linearly via the first/last segment when `x`
+ *  falls outside the knot range. */
+function evalCubicSpline(
+  xs: number[],
+  ys: number[],
+  c: number[],
+  x: number,
+): number {
+  const n = xs.length;
+  if (n === 0) return NaN;
+  if (n === 1) return ys[0];
+  let lo = 0;
+  let hi = n - 1;
+  if (x <= xs[0]) {
+    lo = 0;
+    hi = 1;
+  } else if (x >= xs[n - 1]) {
+    lo = n - 2;
+    hi = n - 1;
+  } else {
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (xs[mid] > x) hi = mid;
+      else lo = mid;
+    }
+  }
+  const hSeg = xs[hi] - xs[lo];
+  if (hSeg <= 0) return ys[lo];
+  const a = ys[lo];
+  const b = (ys[hi] - ys[lo]) / hSeg - (hSeg * (2 * c[lo] + c[hi])) / 3;
+  const d = (c[hi] - c[lo]) / (3 * hSeg);
+  const dx = x - xs[lo];
+  return a + b * dx + c[lo] * dx * dx + d * dx * dx * dx;
+}
+
+/** Spline smoother: bin-average to K knots, then natural cubic spline
+ *  through the knot centres. `smoothness` ∈ [0, 1] picks the knot count
+ *  — 0 = ~n knots (close to raw data interpolation), 1 = 4 knots (very
+ *  smooth). Sampled at `sampleCount` evenly-spaced points across the
+ *  data X range so the rendered line stays crisp regardless of data
+ *  density. */
+function splineSmoother(
+  points: [number, number][],
+  smoothness: number,
+  sampleCount = 200,
+): [number, number][] {
+  if (points.length < 2) return points;
+  const sorted = [...points].sort((a, b) => a[0] - b[0]);
+  const n = sorted.length;
+  const xMin = sorted[0][0];
+  const xMax = sorted[n - 1][0];
+  if (!(xMax > xMin)) return points;
+  const s = Math.max(0, Math.min(1, smoothness));
+  const K = Math.max(4, Math.min(n, Math.round(n - s * (n - 4))));
+  const kxs: number[] = [];
+  const kys: number[] = [];
+  const binW = (xMax - xMin) / K;
+  let cursor = 0;
+  for (let k = 0; k < K; k++) {
+    const lo = xMin + k * binW;
+    const hi = k === K - 1 ? xMax + 1 : lo + binW;
+    let sx = 0;
+    let sy = 0;
+    let cnt = 0;
+    // sorted is monotonic in x → advance a moving cursor instead of
+    // re-scanning the whole array per bin (O(n) total vs O(n·K)).
+    while (cursor < n && sorted[cursor][0] < lo) cursor++;
+    let j = cursor;
+    while (j < n && sorted[j][0] < hi) {
+      sx += sorted[j][0];
+      sy += sorted[j][1];
+      cnt++;
+      j++;
+    }
+    if (cnt > 0) {
+      kxs.push(sx / cnt);
+      kys.push(sy / cnt);
+    }
+  }
+  if (kxs.length < 2) return points;
+  // Strict-increasing fix: identical knot xs (multiple rows at the
+  // same X) would zero a segment width and explode the tridiagonal
+  // solve. Nudge duplicates forward by a sub-pixel epsilon.
+  for (let i = 1; i < kxs.length; i++) {
+    if (kxs[i] <= kxs[i - 1]) kxs[i] = kxs[i - 1] + 1e-9;
+  }
+  const c = naturalCubicSpline2nd(kxs, kys);
+  const out: [number, number][] = [];
+  for (let i = 0; i < sampleCount; i++) {
+    const x = xMin + (i / (sampleCount - 1)) * (xMax - xMin);
+    out.push([x, evalCubicSpline(kxs, kys, c, x)]);
+  }
+  return out;
+}
+
+/** Nadaraya–Watson kernel regression with Gaussian kernel.
+ *  `bandwidth` is the kernel standard deviation expressed as a
+ *  fraction of the X-range (clamped to [0.01, 0.5]). */
+function kernelSmoother(
+  points: [number, number][],
+  bandwidth: number,
+  sampleCount = 200,
+): [number, number][] {
+  if (points.length === 0) return [];
+  const sorted = [...points].sort((a, b) => a[0] - b[0]);
+  const n = sorted.length;
+  const xMin = sorted[0][0];
+  const xMax = sorted[n - 1][0];
+  if (!(xMax > xMin)) return points;
+  const h = Math.max(
+    (xMax - xMin) * Math.max(0.01, Math.min(0.5, bandwidth)),
+    1e-9,
+  );
+  const out: [number, number][] = [];
+  for (let i = 0; i < sampleCount; i++) {
+    const x = xMin + (i / (sampleCount - 1)) * (xMax - xMin);
+    let num = 0;
+    let den = 0;
+    for (let j = 0; j < n; j++) {
+      const u = (x - sorted[j][0]) / h;
+      const w = Math.exp(-0.5 * u * u);
+      num += w * sorted[j][1];
+      den += w;
+    }
+    out.push([x, den > 0 ? num / den : NaN]);
+  }
+  return out;
+}
+
+/** Savitzky–Golay smoother generalised to IRREGULARLY-SPACED data:
+ *  at each sample x*, fit a degree-`polyOrder` polynomial via
+ *  ordinary least squares through the `window` nearest neighbours and
+ *  evaluate at x*. Reduces to the classic SG filter on uniform grids.
+ *  `window` is clamped to be odd and ≥ polyOrder+1; `polyOrder` to
+ *  [1, 4]. */
+function savgolSmoother(
+  points: [number, number][],
+  window: number,
+  polyOrder: number,
+  sampleCount = 200,
+): [number, number][] {
+  if (points.length === 0) return [];
+  const sorted = [...points].sort((a, b) => a[0] - b[0]);
+  const n = sorted.length;
+  const xMin = sorted[0][0];
+  const xMax = sorted[n - 1][0];
+  if (!(xMax > xMin)) return points;
+  const p = Math.max(1, Math.min(4, Math.floor(polyOrder)));
+  let win = Math.max(p + 1, Math.min(n, Math.floor(window)));
+  if (win % 2 === 0) win = Math.min(n, win + 1);
+  const half = Math.floor(win / 2);
+  const m = p + 1;
+  const out: [number, number][] = [];
+  for (let i = 0; i < sampleCount; i++) {
+    const x = xMin + (i / (sampleCount - 1)) * (xMax - xMin);
+    // Binary-search the nearest sample to `x`, then take the window
+    // centred there (clamped at the data edges).
+    let lo = 0;
+    let hi = n - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (sorted[mid][0] < x) lo = mid;
+      else hi = mid;
+    }
+    const center =
+      Math.abs(sorted[lo][0] - x) <= Math.abs(sorted[hi][0] - x) ? lo : hi;
+    const start = Math.max(0, Math.min(n - win, center - half));
+    const end = start + win;
+    // Build normal equations (AᵀA) a = Aᵀb for the local polynomial
+    // y ≈ Σ_k aₖ (xᵢ − x*)ᵏ. Power matrix is constructed on the fly
+    // to skip materialising A explicitly.
+    const ATA: number[][] = Array.from({ length: m }, () =>
+      new Array<number>(m).fill(0),
+    );
+    const ATb: number[] = new Array<number>(m).fill(0);
+    const row = new Array<number>(m);
+    for (let j = start; j < end; j++) {
+      const dx = sorted[j][0] - x;
+      let v = 1;
+      for (let k = 0; k < m; k++) {
+        row[k] = v;
+        v *= dx;
+      }
+      const yj = sorted[j][1];
+      for (let r = 0; r < m; r++) {
+        ATb[r] += row[r] * yj;
+        for (let c = 0; c < m; c++) ATA[r][c] += row[r] * row[c];
+      }
+    }
+    const a = solveLinearSystem(ATA, ATb);
+    out.push([x, a ? a[0] : NaN]);
+  }
+  return out;
+}
+
 /** Auto-tick density tuning constants. Both are deliberately "round"
  *  numbers so the resulting tick labels and bin boundaries land on
  *  values like 0.5 / 0.1 instead of 0.42 / 0.083.
@@ -4143,21 +4419,99 @@ function buildElementSeries(
       ];
     }
     case "smoother": {
-      // 仅在数值 X 上有效
+      // 仅在数值 X 上有效：分类 X 的 "曲线" 没有定义良好的距离/带宽
       if (xIsCategory) return null;
       const xy: [number, number][] = points
         .map((p) => [toNum(p.x), p.y] as [number, number])
-        .filter((p) => Number.isFinite(p[0]));
-      const lambda = (el.options?.lambda as number | undefined) ?? 0.4;
-      const win = Math.max(3, Math.floor(xy.length * Math.max(0.05, Math.min(0.9, lambda))));
-      const smoothed = movingAverage(xy, win);
+        .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+      if (xy.length < 2) return null;
+      const opts = el.options ?? {};
+      // Algorithm dispatcher. Default "movingAvg" preserves the
+      // behaviour of pre-2024 projects that only ever had the
+      // moving-average path (and stored its window in `lambda`).
+      const algo = (opts.algo as string | undefined) ?? "movingAvg";
+      let smoothed: [number, number][];
+      switch (algo) {
+        case "spline": {
+          const sm = Math.max(
+            0,
+            Math.min(1, (opts.splineSmoothness as number | undefined) ?? 0.5),
+          );
+          smoothed = splineSmoother(xy, sm);
+          break;
+        }
+        case "kernel": {
+          const bw = Math.max(
+            0.01,
+            Math.min(0.5, (opts.kernelBandwidth as number | undefined) ?? 0.1),
+          );
+          smoothed = kernelSmoother(xy, bw);
+          break;
+        }
+        case "savgol": {
+          const wRaw = Math.max(
+            5,
+            Math.min(
+              101,
+              Math.floor((opts.savgolWindow as number | undefined) ?? 11),
+            ),
+          );
+          const w = wRaw % 2 === 1 ? wRaw : wRaw + 1;
+          const p = Math.max(
+            2,
+            Math.min(
+              4,
+              Math.floor((opts.savgolPolyOrder as number | undefined) ?? 2),
+            ),
+          );
+          smoothed = savgolSmoother(xy, w, p);
+          break;
+        }
+        case "movingBox": {
+          // Same window semantics as the moving-average path; `lambda`
+          // is the legacy fallback so projects saved before the
+          // algorithm selector existed keep their window unchanged.
+          const frac = Math.max(
+            0.02,
+            Math.min(
+              0.9,
+              (opts.windowFraction as number | undefined) ??
+                (opts.lambda as number | undefined) ??
+                0.4,
+            ),
+          );
+          const win = Math.max(3, Math.floor(xy.length * frac));
+          smoothed = movingMedian(xy, win);
+          break;
+        }
+        case "movingAvg":
+        default: {
+          const frac = Math.max(
+            0.02,
+            Math.min(
+              0.9,
+              (opts.windowFraction as number | undefined) ??
+                (opts.lambda as number | undefined) ??
+                0.4,
+            ),
+          );
+          const win = Math.max(3, Math.floor(xy.length * frac));
+          smoothed = movingAverage(xy, win);
+          break;
+        }
+      }
       return [
         {
           type: "line",
           name: `${seriesName} 平滑`,
           showSymbol: false,
           smooth: true,
-          lineStyle: { color: style.line.color, width: style.line.width, type: "solid", opacity: style.line.opacity },
+          lineStyle: {
+            color: style.line.color,
+            width: style.line.width,
+            type: "solid",
+            opacity: style.line.opacity,
+          },
           itemStyle: { color: style.line.color },
           z: 5,
           data: smoothed,
