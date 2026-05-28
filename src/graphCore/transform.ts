@@ -922,6 +922,14 @@ function buildIntervalSeries(
       id: `${seriesName}__ci`,
       type: "custom",
       name: `${seriesName} CI`,
+      // `series-custom.clip` defaults to FALSE — without this, error
+      // bars near the edge stay visible past the axis line during
+      // drag-zoom / drag-pan (only the next full setOption pass
+      // re-runs renderItem and applies the in-renderItem clip),
+      // while standard series like scatter clip live. Enabling
+      // ECharts' own clip path on the series group keeps the
+      // visible region consistent on every frame.
+      clip: true,
       renderItem(_params: any, api: any) {
         const x = api.coord([api.value(0), api.value(1)])[0];
         const yLo = api.coord([api.value(0), api.value(2)])[1];
@@ -1294,6 +1302,10 @@ function buildBandRefLinesCarrier(
     z: 5,
     animation: false,
     progressive: 0,
+    // See note on the CI custom series above — custom series default
+    // is `clip: false`, so band reference lines would spill past the
+    // axis during drag without this.
+    clip: true,
     encode: { x: 0, y: 1 },
     renderItem(_params: any, api: any) {
       const d0 = api.value(0);
@@ -2605,6 +2617,14 @@ function buildSingleOption(
             type: "custom",
             name: slot.key,
             coordinateSystem: "cartesian2d",
+            // `series-custom.clip` defaults to FALSE — without this,
+            // bars at the edge stay visible past the axis line
+            // during drag-zoom / drag-pan (only mouseup triggers a
+            // full rebuild that re-runs renderItem and applies the
+            // in-renderItem clip). Standard series like scatter
+            // clip live because ECharts maintains a clip path on
+            // the series group, which we opt into here.
+            clip: true,
             encode: { x: 0, y: 1, tooltip: [0] },
             data: tuples,
             renderItem: (params: any, api: any) => {
@@ -2787,6 +2807,11 @@ function buildSingleOption(
               type: "custom",
               name: slot.key,
               coordinateSystem: "cartesian2d",
+              // See note on the sibling __hist_cat_ series above —
+              // custom series default is `clip: false`, so without
+              // this the shadowgram layers spill past the axis
+              // during axis drag.
+              clip: true,
               encode: { x: 0, y: 1, tooltip: [0, 1] },
               data: tuples,
               renderItem: (params: any, api: any) => {
@@ -2849,6 +2874,11 @@ function buildSingleOption(
           type: "custom",
           name: slot.key,
           coordinateSystem: "cartesian2d",
+          // See note on the sibling __hist_cat_${slot.key}_${histStyle}
+          // series above — custom series default is `clip: false`,
+          // so without this the per-category bin bars spill past the
+          // axis during drag-zoom / drag-pan.
+          clip: true,
           encode: { x: 0, y: 1, tooltip: [0, 1] },
           data: tuples,
           renderItem: (params: any, api: any) => {
@@ -3338,6 +3368,13 @@ function buildSingleOption(
         name: seriesName,
         data: boxData,
         boxWidth: [10, maxBoxPx],
+        // Boxplot defaults to `clip: false` (unlike scatter / line /
+        // standard bar). Without this opt-in, the box body and
+        // whiskers stay visible past the axis line during drag-zoom
+        // / drag-pan and only clip after mouseup commits a full
+        // rebuild. Scatter live-clips because its own default is
+        // `clip: true`.
+        clip: true,
         // ECharts' top-level `itemStyle.opacity` applies to *both* the
         // fill color and the border, so we bake the per-mark alphas into
         // the colors themselves via rgba() and leave `opacity` unset.
