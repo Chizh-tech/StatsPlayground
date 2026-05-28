@@ -3900,8 +3900,11 @@ function buildSingleOption(
         // `grid.show:true` draws a rectangle around the plot area so the
         // top + right edges are bounded. The left + bottom already get
         // drawn by the value-axis `axisLine`, but ECharts paints both at
-        // the same color (`theme.axisLine`) and at integer pixel widths,
-        // so the overdraw is visually a single 1px line per edge.
+        // the same color (`theme.axisLine`); `borderWidth: 0.5` keeps
+        // the new top/right edges visually equal to the 1px axisLine
+        // (the grid border is rendered as a stroked rect, so its width
+        // straddles the rect boundary and effectively reads ~1 device
+        // pixel at width 0.5).
         grid: {
           left: 56,
           right: 24,
@@ -3909,7 +3912,7 @@ function buildSingleOption(
           bottom: 48,
           show: true,
           borderColor: theme.axisLine,
-          borderWidth: 1,
+          borderWidth: 0.5,
         },
         // appendToBody + confine: rendering the tooltip into document.body
         // keeps it from briefly enlarging the chart container (which made
@@ -4470,7 +4473,10 @@ function buildSingleOption(
     // `grid.show:true` closes the plot frame with a top + right edge.
     // The left + bottom edges are already drawn by each value-axis
     // `axisLine`; ECharts paints all four in the same `theme.axisLine`
-    // color, so the overlap reads as a single 1-px border.
+    // color. `borderWidth: 0.5` keeps the new top/right edges visually
+    // equal to the 1px axisLine — the grid border is rendered as a
+    // stroked rect that straddles the rect boundary, so width 0.5
+    // effectively reads ~1 device pixel.
     grid: {
       left: 52,
       right: 16,
@@ -4478,7 +4484,7 @@ function buildSingleOption(
       bottom: bottomGap,
       show: true,
       borderColor: theme.axisLine,
-      borderWidth: 1,
+      borderWidth: 0.5,
     },
     // See histogram path above — appendToBody avoids the bottom-edge
     // scrollbar flash; confine keeps the tooltip glued to the chart area.
