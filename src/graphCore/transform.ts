@@ -2411,6 +2411,16 @@ function buildSingleOption(
 
       for (const cat of xCats) {
         const perGroup = new Map<string, number[]>();
+        // Track every value's bin index (including bins outside the
+        // visible axis range, where the index goes negative or beyond
+        // binCount). The per-cat max used to normalize sub-slot bar
+        // widths is taken from THIS tally, not from the visible
+        // `buckets[]`, so the bars don't visibly renormalize when the
+        // tallest bin scrolls off-screen during axis pan/zoom. Without
+        // this, clipping a tall bin behind the axis caused the
+        // remaining visible bars to grow taller (new visible max) and
+        // the whole histogram appeared to "breathe" with the drag.
+        const allBinCounts = new Map<number, number>();
         let catMax = 0;
         for (const slot of histGroupSlots) {
           const buckets = new Array<number>(binCount).fill(0);
@@ -2423,20 +2433,25 @@ function buildSingleOption(
             if (!Number.isFinite(v)) continue;
             if (yWidth <= 0) {
               buckets[0]++;
+              const cur = (allBinCounts.get(0) ?? 0) + 1;
+              allBinCounts.set(0, cur);
+              if (cur > catMax) catMax = cur;
             } else {
               const bin = Math.floor((v - yGridOrigin) / yWidth);
-              // Skip values outside the visible axis range. Without
-              // this guard, panning/zooming the axis dumps every
-              // off-screen value into the leftmost or rightmost
-              // bin, producing a spurious tall "sliver" bar at the
-              // canvas edge that doesn't represent real data inside
-              // the visible window.
+              const cur = (allBinCounts.get(bin) ?? 0) + 1;
+              allBinCounts.set(bin, cur);
+              if (cur > catMax) catMax = cur;
+              // For the visible-data array we still drop out-of-range
+              // bins. Without this guard, panning/zooming the axis
+              // would dump every off-screen value into the leftmost
+              // or rightmost visible bin, producing a spurious tall
+              // "sliver" bar at the canvas edge that doesn't
+              // represent real data inside the visible window.
               if (bin < 0 || bin >= binCount) continue;
               buckets[bin]++;
             }
           }
           perGroup.set(slot.key, buckets);
-          for (const c of buckets) if (c > catMax) catMax = c;
         }
         perCatPerGroup.set(cat, perGroup);
         perCatMaxCount.set(cat, catMax);
@@ -2754,6 +2769,12 @@ function buildSingleOption(
             const layerCatGroupCounts = new Map<string, number[]>();
             for (const cat of xCats) {
               const buckets = new Array<number>(bc).fill(0);
+              // Tally ALL bin indices (including out-of-visible bins,
+              // which get negative or large keys) so the layer's
+              // per-cat max stays stable as the user pans/zooms the
+              // axis. Mirrors the primary `perCatMaxCount` fix above.
+              const allBinCounts = new Map<number, number>();
+              let mx = 0;
               for (const i of slot.rowIdxs) {
                 const row = data.rows[i];
                 if (isRowHidden(row)) continue;
@@ -2762,16 +2783,16 @@ function buildSingleOption(
                 const v = toNum(row[yIdx]);
                 if (!Number.isFinite(v)) continue;
                 const bin = Math.floor((v - yLo) / layerYWidth);
-                // Skip out-of-range values (same rationale as the
-                // primary bar bucketing loop above).
+                const cur = (allBinCounts.get(bin) ?? 0) + 1;
+                allBinCounts.set(bin, cur);
+                if (cur > mx) mx = cur;
+                // For the visible-data array we still drop out-of-range
+                // bins (same edge-bin pileup rationale as the primary
+                // bar bucketing loop).
                 if (bin < 0 || bin >= bc) continue;
                 buckets[bin]++;
               }
               layerCatGroupCounts.set(cat, buckets);
-              // For the shadowgram layer, normalize against the cat's
-              // own group counts at this resolution.
-              let mx = 0;
-              for (const c of buckets) if (c > mx) mx = c;
               layerCatMax.set(cat, mx);
             }
             const layerBarInfos: HistBarInfo[] = [];
