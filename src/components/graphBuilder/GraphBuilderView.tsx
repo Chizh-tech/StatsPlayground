@@ -1139,14 +1139,19 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     markDirty();
   };
 
-  /** Add a new layer (chart kind) — enables it if already present. */
+  /** Add a new layer (chart kind) — enables it if already present.
+   *  New smoother layers default to the Spline algorithm; legacy
+   *  smoother elements saved without an `algo` keep their previous
+   *  Moving Average behaviour via the fallbacks in transform.ts. */
   const addElement = useCallback((kind: ElementKind) => {
     setElements((prev) => {
       const idx = prev.findIndex((e) => e.kind === kind);
       if (idx >= 0) {
         return prev.map((e, i) => (i === idx ? { ...e, enabled: true } : e));
       }
-      return [...prev, { kind, enabled: true }];
+      const next: ChartElement = { kind, enabled: true };
+      if (kind === "smoother") next.options = { algo: "spline" };
+      return [...prev, next];
     });
   }, [setElements]);
 
