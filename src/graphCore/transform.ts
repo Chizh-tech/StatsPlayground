@@ -597,14 +597,28 @@ function renderHistCatBar(
     const yTop = aCoord[1];
     const yBot = bCoord[1];
     const slotLeft = ctrCoord[0] - slotPx / 2 + insetMargin;
+    // Clip the bin-direction extent (Y here, the value axis) to the
+    // coord-system bounds. The bin grid origin is snapped DOWN to a
+    // multiple of `width` (so edges land on minor-tick positions),
+    // which means the first / last bin can extend just past the
+    // visible axis min / max into the axis-label gutter. Without
+    // clipping, the spilling bar paints over the perpendicular axis
+    // labels (e.g. the rotated category names in MODE C). ECharts
+    // doesn't auto-clip custom-series shapes; we do it manually.
+    const cs = (params as { coordSys?: { y: number; height: number } }).coordSys;
+    const csYMin = cs ? cs.y : -Infinity;
+    const csYMax = cs ? cs.y + cs.height : Infinity;
+    const yTopC = Math.max(yTop, csYMin);
+    const yBotC = Math.min(yBot, csYMax);
+    if (yBotC - yTopC < 1) return null;
     rectShape = {
       x: slotLeft,
-      y: yTop,
+      y: yTopC,
       width: barExtent,
-      height: Math.max(1, yBot - yTop),
+      height: yBotC - yTopC,
     };
     labelX = slotLeft + barExtent + 2;
-    labelY = (yTop + yBot) / 2;
+    labelY = (yTopC + yBotC) / 2;
     labelAlign = "left";
     labelBaseline = "middle";
   } else {
@@ -621,15 +635,26 @@ function renderHistCatBar(
     const xLeft = bCoord[0];
     const xRight = aCoord[0];
     const slotBot = ctrCoord[1] + slotPx / 2 - insetMargin;
+    // Clip the bin-direction extent (X here, the value axis) to the
+    // coord-system bounds. See matching note in the `catIsX` branch
+    // above for why this is necessary — edge bins from the snapped
+    // grid can spill into the perpendicular axis-label gutter and
+    // paint over the category names.
+    const cs = (params as { coordSys?: { x: number; width: number } }).coordSys;
+    const csXMin = cs ? cs.x : -Infinity;
+    const csXMax = cs ? cs.x + cs.width : Infinity;
+    const xLeftC = Math.max(xLeft, csXMin);
+    const xRightC = Math.min(xRight, csXMax);
+    if (xRightC - xLeftC < 1) return null;
     rectShape = {
-      x: xLeft,
+      x: xLeftC,
       y: slotBot - barExtent,
-      width: Math.max(1, xRight - xLeft),
+      width: xRightC - xLeftC,
       height: barExtent,
     };
     // Label sits just ABOVE the bar tip (the upper edge of the
     // upward-growing bar).
-    labelX = (xLeft + xRight) / 2;
+    labelX = (xLeftC + xRightC) / 2;
     labelY = slotBot - barExtent - 2;
     labelAlign = "center";
     labelBaseline = "bottom";
