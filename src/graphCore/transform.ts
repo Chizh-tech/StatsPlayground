@@ -4236,8 +4236,13 @@ function buildSingleOption(
   let xFinalBounds: EChartsOption = {};
   if (!xIsCategory && !xIsTime && xField) {
     if (sharedRanges?.xMin != null || sharedRanges?.xMax != null) {
-      if (sharedRanges.xMin != null) xFinalBounds.min = sharedRanges.xMin;
-      if (sharedRanges.xMax != null) xFinalBounds.max = sharedRanges.xMax;
+      // Half-interval pad so the axis bounds fall BETWEEN nice tick
+      // positions. ECharts auto-tick then places every tick strictly
+      // inside the axis — no tick at MIN/MAX, no unlabeled tick stub
+      // poking out of the top/right corners next to the plot frame.
+      const xPad = (sharedRanges.xInterval ?? 0) * 0.5;
+      if (sharedRanges.xMin != null) xFinalBounds.min = sharedRanges.xMin - xPad;
+      if (sharedRanges.xMax != null) xFinalBounds.max = sharedRanges.xMax + xPad;
       // Deliberately NOT spreading sharedRanges.xInterval — see the
       // matching note in yFinalBounds. With identical min/max across
       // panels, ECharts' auto-tick picks an identical interval; pinning
@@ -4268,8 +4273,14 @@ function buildSingleOption(
       // mis-aligned tick labels seen in earlier rounds. With min/max
       // already on a clean grid via computeNiceBounds, ECharts'
       // auto-tick picks identical positions on initial render.
+      //
+      // Half-interval pad so the axis bounds fall BETWEEN nice tick
+      // positions — ECharts auto-tick then places every tick strictly
+      // inside the axis instead of stamping one at MIN and MAX, which
+      // was producing unlabeled tick stubs at the top-left and
+      // bottom-right corners of the plot frame.
       xFinalBounds = fit
-        ? { min: fit.min, max: fit.max }
+        ? { min: fit.min - fit.interval * 0.5, max: fit.max + fit.interval * 0.5 }
         : { scale: true };
     } else {
       xFinalBounds = { scale: true };
@@ -4425,8 +4436,10 @@ function buildSingleOption(
   let yFinalBounds: EChartsOption;
   if (sharedRanges?.yMin != null || sharedRanges?.yMax != null) {
     yFinalBounds = {};
-    if (sharedRanges.yMin != null) yFinalBounds.min = sharedRanges.yMin;
-    if (sharedRanges.yMax != null) yFinalBounds.max = sharedRanges.yMax;
+    // Half-interval pad — see xFinalBounds above for rationale.
+    const yPad = (sharedRanges.yInterval ?? 0) * 0.5;
+    if (sharedRanges.yMin != null) yFinalBounds.min = sharedRanges.yMin - yPad;
+    if (sharedRanges.yMax != null) yFinalBounds.max = sharedRanges.yMax + yPad;
     // Deliberately NOT spreading sharedRanges.yInterval, even though
     // computeSharedRanges still emits it for potential future
     // consumers. Phase 4 (commit 54b0642) established that any
@@ -4457,8 +4470,10 @@ function buildSingleOption(
       AUTO_TARGET_TICKS,
     );
     // See xFinalBounds above: emit min/max only so ECharts auto-ticks.
+    // Half-interval pad pushes the axis bounds OFF nice tick positions
+    // so no tick lands at the very top or bottom of the plot frame.
     yFinalBounds = fit
-      ? { min: fit.min, max: fit.max }
+      ? { min: fit.min - fit.interval * 0.5, max: fit.max + fit.interval * 0.5 }
       : { scale: true };
   }
 
