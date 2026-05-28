@@ -1384,11 +1384,20 @@ function niceStep(range: number, targetTicks: number): number {
   const rough = range / targetTicks;
   const exp = Math.pow(10, Math.floor(Math.log10(rough)));
   const norm = rough / exp;
+  // Ladder MUST match ECharts' internal `nice(val, round=true)` exactly
+  // (echarts/src/scale/helper.ts) so the major step we use for the
+  // histogram bin grid coincides with whatever ECharts auto-picks for
+  // the axis major ticks. ECharts uses {1, 2, 3, 5, 10} with break
+  // points {1.5, 2.5, 4, 7}; using a different ladder here (e.g.
+  // {1, 2, 2.5, 5, 10}) lets the bin grid pick 0.02 while ECharts
+  // picks 0.03 for the same range — bars then never align with the
+  // visible tick lines. Keep this in lock-step with the upstream
+  // implementation; if ECharts changes its ladder, mirror it here.
   let nice: number;
   if (norm < 1.5) nice = 1;
-  else if (norm < 2.25) nice = 2;
-  else if (norm < 3.5) nice = 2.5;
-  else if (norm < 7.5) nice = 5;
+  else if (norm < 2.5) nice = 2;
+  else if (norm < 4) nice = 3;
+  else if (norm < 7) nice = 5;
   else nice = 10;
   return nice * exp;
 }
@@ -1397,7 +1406,9 @@ function niceStep(range: number, targetTicks: number): number {
  *  optional data extent plus any reference values that must stay
  *  visible (e.g. user / spec ref-line Ys on the Y axis). Axis-agnostic:
  *  callers pass the data range and any reference values, get back a
- *  fit that snaps to the {1, 2, 2.5, 5, 10} × 10^k tick family.
+ *  fit that snaps to the {1, 2, 3, 5, 10} × 10^k tick family (matches
+ *  ECharts' internal `nice(round=true)` ladder so our snapped bounds
+ *  fall on whatever interval ECharts auto-picks for the axis).
  *  Returns null when there's nothing to fit (no data and no refs) so
  *  the caller can fall back to ECharts' auto-scale. A 2 % visual pad
  *  is applied BEFORE the snap so a reference value sitting at the
