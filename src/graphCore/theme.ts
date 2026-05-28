@@ -96,6 +96,13 @@ export function buildAxisCommon(theme: GraphTheme) {
     // border, breaking the closed-frame illusion.
     axisLine: { show: true, onZero: false, lineStyle: { color: theme.axisLine, width: 0.5 } },
     axisTick: { show: true, lineStyle: { color: theme.axisLine, width: 0.5 } },
+    // Match the minor-tick stroke width to the major-tick + axisLine
+    // width (0.5px). ECharts' default minorTick.lineStyle.width is 1px
+    // — without this override, the minor ticks render TWICE as thick
+    // as the majors, which reads as the minors being more prominent
+    // than the majors they're subdividing. Color also matches the
+    // major tick line so the two read as members of the same scale.
+    minorTick: { lineStyle: { color: theme.axisLine, width: 0.5 } },
     // Hide the bookend boundary labels on value-type axes — ECharts
     // otherwise stamps the EXACT min and max above/below the nice
     // round tick labels (e.g. `4.9100341933248375` on top of the

@@ -2300,8 +2300,17 @@ function buildCustomTickFragment(values: number[]): EChartsOption {
  *       extreme end — exactly the artifact this helper exists to
  *       prevent).
  *
- *  Returns `{}` when there's not enough info to produce a sensible
- *  tick list, leaving the callsite's other axis options untouched. */
+ *  Returns `{ fragment: {}, interval: null }` when there's not enough
+ *  info to produce a sensible tick list, leaving the callsite's other
+ *  axis options untouched. Otherwise returns the customValues fragment
+ *  AND the effective interval — the caller pins `interval` on the
+ *  axis option so ECharts' internal `scale.getTicks()` (which drives
+ *  `splitLine` and the `minorTick` / `minorSplitLine` subdivisions)
+ *  uses the SAME step as our `customValues`. Without that pin, major
+ *  tick marks (from customValues) and the splitLine / minor ticks
+ *  (from scale.getTicks) would land on different positions whenever
+ *  ECharts' auto-pick disagrees with our `niceStep` — minors looked
+ *  like they "missed" the majors they're supposed to subdivide. */
 function buildAxisCustomTicks(
   fitMin: number | null,
   fitMax: number | null,
@@ -2309,10 +2318,12 @@ function buildAxisCustomTicks(
   userMin: number | null,
   userMax: number | null,
   userInterval: number | null,
-): EChartsOption {
+): { fragment: EChartsOption; interval: number | null } {
   const effMin = userMin ?? fitMin;
   const effMax = userMax ?? fitMax;
-  if (effMin == null || effMax == null || !(effMax > effMin)) return {};
+  if (effMin == null || effMax == null || !(effMax > effMin)) {
+    return { fragment: {}, interval: null };
+  }
   let effInterval: number | null = null;
   if (userInterval != null && userInterval > 0) effInterval = userInterval;
   // Recompute the interval when the user pinned bounds wider than
@@ -2330,12 +2341,15 @@ function buildAxisCustomTicks(
   } else {
     effInterval = niceStep(effMax - effMin, AUTO_TARGET_TICKS);
   }
-  if (!(effInterval > 0)) return {};
+  if (!(effInterval > 0)) return { fragment: {}, interval: null };
   const eps = effInterval * 1e-9;
   const tickLo = Math.ceil(effMin / effInterval - eps) * effInterval;
   const tickHi = Math.floor(effMax / effInterval + eps) * effInterval;
-  if (tickHi < tickLo) return {};
-  return buildCustomTickFragment(enumerateNiceTicks(tickLo, tickHi, effInterval));
+  if (tickHi < tickLo) return { fragment: {}, interval: effInterval };
+  return {
+    fragment: buildCustomTickFragment(enumerateNiceTicks(tickLo, tickHi, effInterval)),
+    interval: effInterval,
+  };
 }
 
 /** Build a Y-axis option fragment that expands the auto-fitted range
@@ -2572,7 +2586,11 @@ function buildGridLineFragment(
  *  the X and Y axis literals (the override shape is identical for
  *  the two axes). */
 function mergeAxis(base: EChartsOption, userY: EChartsOption): EChartsOption {
-  const NESTED = ["axisLine", "axisTick", "axisLabel", "splitLine", "minorSplitLine"] as const;
+  // `minorTick` is in here so a user `minorTickCount` override (which only
+  // sets `show + splitNumber`) doesn't clobber the theme's `lineStyle`
+  // (color + 0.5px width). Without the deep merge, ECharts would fall
+  // back to its 1px default and make minors visually thicker than majors.
+  const NESTED = ["axisLine", "axisTick", "axisLabel", "splitLine", "minorSplitLine", "minorTick"] as const;
   const merged: EChartsOption = { ...base, ...userY };
   for (const key of NESTED) {
     const b = base[key] as EChartsOption | undefined;
@@ -4104,10 +4122,13 @@ function buildSingleOption(
           Number.isFinite(spec.xAxis?.tickInterval as number) && (spec.xAxis!.tickInterval as number) > 0
             ? (spec.xAxis!.tickInterval as number)
             : null;
-        histXCustomTicks = buildAxisCustomTicks(
+        const xTicks = buildAxisCustomTicks(
           gridLo, gridHi, xFit.interval,
           xUserMin, xUserMax, xUserInterval,
         );
+        histXCustomTicks = xTicks.interval != null
+          ? { ...xTicks.fragment, interval: xTicks.interval }
+          : xTicks.fragment;
       }
       // Y: derive nice bounds from the per-bin total counts. For
       //    stacked grouped bars this is the displayed bar height; for
@@ -4129,12 +4150,15 @@ function buildSingleOption(
           Number.isFinite(spec.yAxis?.tickInterval as number) && (spec.yAxis!.tickInterval as number) > 0
             ? (spec.yAxis!.tickInterval as number)
             : null;
-        histYCustomTicks = buildAxisCustomTicks(
+        const yTicks = buildAxisCustomTicks(
           histYFit ? histYFit.min : null,
           histYFit ? histYFit.max : null,
           histYFit ? histYFit.interval : null,
           yUserMin, yUserMax, yUserInterval,
         );
+        histYCustomTicks = yTicks.interval != null
+          ? { ...yTicks.fragment, interval: yTicks.interval }
+          : yTicks.fragment;
       }
 
       return {
@@ -4173,8 +4197,12 @@ function buildSingleOption(
               ...axis,
               // Auto-enable minor ticks — mirrors the main path so an
               // exclusive histogram chart inherits the same denser grid
-              // by default. User overrides still win via mergeAxis.
-              minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
+              // by default. User overrides still win via mergeAxis. The
+              // `...axis.minorTick` spread preserves theme.minorTick.
+              // lineStyle (color + 0.5px width) so minor tick marks
+              // render at the same stroke width as the majors instead
+              // of ECharts' default 1px (which made them look thicker).
+              minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
               // Faceted histograms still benefit from a shared X span so the
               // bin centers are visually comparable across panels.
               ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
@@ -4203,7 +4231,8 @@ function buildSingleOption(
               nameGap: 40,
               ...axis,
               // Auto-enable minor ticks on the frequency axis too.
-              minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
+              // See the X-axis comment above for the spread rationale.
+              minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
               // Expand auto-fit so ref lines (manual or auto-spec) stay
               // visible on the frequency axis. User-pinned min/max from
               // `buildAxisOverrides` still wins via the merge spread.
@@ -4573,10 +4602,19 @@ function buildSingleOption(
       Number.isFinite(spec.xAxis?.tickInterval as number) && (spec.xAxis!.tickInterval as number) > 0
         ? (spec.xAxis!.tickInterval as number)
         : null;
-    xCustomTicks = buildAxisCustomTicks(
+    const xTicks = buildAxisCustomTicks(
       xFitMin, xFitMax, xFitInterval,
       xUserMin, xUserMax, xUserInterval,
     );
+    // Pin `interval` alongside customValues so ECharts' internal scale
+    // (which drives splitLine + minorTick subdivisions) uses the same
+    // step as our major tick marks. Without this, splitLine and the
+    // minor ticks would land between our majors whenever ECharts'
+    // auto-pick disagrees with our `niceStep`. User-pinned interval
+    // still wins via `buildAxisOverrides` below.
+    xCustomTicks = xTicks.interval != null
+      ? { ...xTicks.fragment, interval: xTicks.interval }
+      : xTicks.fragment;
   }
   const xAxisBase = xIsCategory
     ? {
@@ -4633,8 +4671,11 @@ function buildSingleOption(
           // matches the value-axis density without forcing the user
           // to opt in. Explicit overrides from `buildAxisOverrides`
           // (including `minorTickCount = 0` for off) still win via
-          // `mergeAxis` below.
-          minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
+          // `mergeAxis` below. The `...axis.minorTick` spread
+          // preserves theme.minorTick.lineStyle (color + 0.5px width)
+          // so minor ticks match the major tick stroke instead of
+          // rendering at ECharts' default 1px.
+          minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
           // Pin to shared bounds when faceted so every panel's time axis
           // covers the same span.
           ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
@@ -4647,8 +4688,10 @@ function buildSingleOption(
           // unconfigured charts read with the same minor-tick density
           // the user can otherwise dial in manually. Categorical axes
           // skip this (above) because minor sub-ticks between adjacent
-          // category slots have no meaningful interpretation.
-          minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
+          // category slots have no meaningful interpretation. The
+          // `...axis.minorTick` spread preserves theme lineStyle
+          // (color + 0.5px width) — see X-time branch above.
+          minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
           // Pre-computed bounds (faceted shared OR local nice-snap fit).
           // `scale: true` is encoded INSIDE xFinalBounds when no fit
           // was produced; we don't emit it unconditionally because it
@@ -4803,10 +4846,15 @@ function buildSingleOption(
       Number.isFinite(spec.yAxis?.tickInterval as number) && (spec.yAxis!.tickInterval as number) > 0
         ? (spec.yAxis!.tickInterval as number)
         : null;
-    yCustomTicks = buildAxisCustomTicks(
+    const yTicks = buildAxisCustomTicks(
       yFitMin, yFitMax, yFitInterval,
       yUserMin, yUserMax, yUserInterval,
     );
+    // Pin `interval` so splitLine + minorTick subdivisions align with
+    // our customValues — see the matching note on `xCustomTicks` above.
+    yCustomTicks = yTicks.interval != null
+      ? { ...yTicks.fragment, interval: yTicks.interval }
+      : yTicks.fragment;
   }
 
   return {
@@ -4847,8 +4895,10 @@ function buildSingleOption(
           ...axis,
           // Auto-enable minor ticks on the Y value axis — same rationale
           // as `xAxis` above. User overrides (including explicit-off
-          // via `minorTickCount = 0`) merge in below.
-          minorTick: { show: true, splitNumber: AUTO_MINOR_SPLIT },
+          // via `minorTickCount = 0`) merge in below. The
+          // `...axis.minorTick` spread preserves theme lineStyle so
+          // minors render at the same 0.5px stroke as the majors.
+          minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
           // Pre-computed bounds (faceted shared OR local nice-snap fit).
           // User-pinned overrides from `buildAxisOverrides` still win
           // via the merge spread below.
