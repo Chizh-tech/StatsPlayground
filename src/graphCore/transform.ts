@@ -2310,9 +2310,20 @@ function buildSingleOption(
       let yLo: number;
       let yHi: number;
       let yMajorStep: number | undefined;
+      // RAW data extent on Y, also captured for the bin-grid
+      // over-render path further below (extend bins past the visible
+      // axis range so an outward drag exposes pre-rendered bars
+      // instead of a blank band).
+      let dataLo: number;
+      let dataHi: number;
       if (sharedRanges?.yMin != null && sharedRanges?.yMax != null) {
         yLo = sharedRanges.yMin;
         yHi = sharedRanges.yMax;
+        // In faceted shared-range mode the shared axis already covers
+        // every panel's data, so there's no extra "past the axis"
+        // extent to over-render into.
+        dataLo = yLo;
+        dataHi = yHi;
         // Deliberately NOT using `sharedRanges.yInterval` for the bin
         // step. `yInterval` comes from `computeNiceBounds(...,
         // AUTO_TARGET_TICKS=10)` which is ~2× finer than what ECharts'
@@ -2332,6 +2343,8 @@ function buildSingleOption(
           if (v < lo) lo = v;
           if (v > hi) hi = v;
         }
+        dataLo = Number.isFinite(lo) ? lo : 0;
+        dataHi = Number.isFinite(hi) ? hi : 1;
         // Bin-grid bounds MUST follow the EXACT same path the axis
         // takes (`yFinalBounds` block + `mergeAxis` overrides below):
         //   1. Auto-fit on RAW dataMin/dataMax (NOT user pin).
@@ -2389,8 +2402,27 @@ function buildSingleOption(
       if (yMajorStep && yMajorStep > 0 && yHi > yLo) {
         // Aligned mode: bin edges land on minor tick positions.
         yWidth = yMajorStep / yMinorSplit;
-        yGridOrigin = Math.floor(yLo / yWidth) * yWidth;
-        const yGridEnd = Math.ceil(yHi / yWidth) * yWidth;
+        // Over-render the bin grid OUTWARD past the visible
+        // [yLo, yHi] axis range so it spans the full raw data
+        // extent. Off-screen bins still get emitted as custom-series
+        // tuples and rendered to the canvas; `clip: true` on the
+        // series masks them visually. During a pan/zoom drag, we
+        // only push a partial axis-only `setOption` (lazyUpdate +
+        // animation:false) — the transform pipeline doesn't re-run
+        // until pointerup, so the bin tuples are FROZEN at their
+        // build-time set. If we only emitted tuples inside [yLo,
+        // yHi], dragging the axis OUTWARD would expose a blank band
+        // (no tuples → no shapes → nothing for the expanding clip
+        // region to reveal) until mouseup triggered the full
+        // rebuild. By extending to [dataLo, dataHi] up-front, the
+        // bars in any newly-revealed area are already on the canvas
+        // the instant the clip path expands past them. The bin
+        // width (= minor tick step) is unchanged, so tick
+        // alignment is preserved.
+        const extLo = Math.min(yLo, dataLo);
+        const extHi = Math.max(yHi, dataHi);
+        yGridOrigin = Math.floor(extLo / yWidth) * yWidth;
+        const yGridEnd = Math.ceil(extHi / yWidth) * yWidth;
         binCount = Math.max(1, Math.round((yGridEnd - yGridOrigin) / yWidth));
       } else {
         // Fallback: shouldn't normally hit this (only if the fit
@@ -2411,16 +2443,13 @@ function buildSingleOption(
 
       for (const cat of xCats) {
         const perGroup = new Map<string, number[]>();
-        // Track every value's bin index (including bins outside the
-        // visible axis range, where the index goes negative or beyond
-        // binCount). The per-cat max used to normalize sub-slot bar
-        // widths is taken from THIS tally, not from the visible
-        // `buckets[]`, so the bars don't visibly renormalize when the
-        // tallest bin scrolls off-screen during axis pan/zoom. Without
-        // this, clipping a tall bin behind the axis caused the
-        // remaining visible bars to grow taller (new visible max) and
-        // the whole histogram appeared to "breathe" with the drag.
-        const allBinCounts = new Map<number, number>();
+        // `binCount` covers the FULL data range (over-render block
+        // above), so per-cat bin counts taken straight from
+        // `buckets[]` already reflect the global per-cat max. No
+        // separate "all-bin tally" Map is needed; an earlier
+        // workaround tracked off-screen bins explicitly because the
+        // bin grid only covered [yLo, yHi] and the visible max
+        // would drop when the tallest bin scrolled off-axis.
         let catMax = 0;
         for (const slot of histGroupSlots) {
           const buckets = new Array<number>(binCount).fill(0);
@@ -2433,22 +2462,15 @@ function buildSingleOption(
             if (!Number.isFinite(v)) continue;
             if (yWidth <= 0) {
               buckets[0]++;
-              const cur = (allBinCounts.get(0) ?? 0) + 1;
-              allBinCounts.set(0, cur);
-              if (cur > catMax) catMax = cur;
+              if (buckets[0] > catMax) catMax = buckets[0];
             } else {
               const bin = Math.floor((v - yGridOrigin) / yWidth);
-              const cur = (allBinCounts.get(bin) ?? 0) + 1;
-              allBinCounts.set(bin, cur);
-              if (cur > catMax) catMax = cur;
-              // For the visible-data array we still drop out-of-range
-              // bins. Without this guard, panning/zooming the axis
-              // would dump every off-screen value into the leftmost
-              // or rightmost visible bin, producing a spurious tall
-              // "sliver" bar at the canvas edge that doesn't
-              // represent real data inside the visible window.
+              // Guard kept as a safety net for floating-point
+              // edge cases. The extended grid should cover every
+              // valid data point.
               if (bin < 0 || bin >= binCount) continue;
               buckets[bin]++;
+              if (buckets[bin] > catMax) catMax = buckets[bin];
             }
           }
           perGroup.set(slot.key, buckets);
@@ -2760,20 +2782,38 @@ function buildSingleOption(
           binChoices.forEach((bc, layerIdx) => {
             const layerYWidth = (yHi - yLo) / Math.max(1, bc);
             const layerYHalf = layerYWidth / 2;
+            // Over-render this layer's bin grid OUTWARD past
+            // [yLo, yHi] (same rationale as the primary bin grid
+            // above). `layerYWidth` is derived from the visible
+            // span — we DON'T change it — but we walk the grid
+            // outward to cover [dataLo, dataHi] so off-screen
+            // bars are emitted and the expanding clip region
+            // can reveal them mid-drag.
+            const layerExtLo = Math.min(yLo, dataLo);
+            const layerExtHi = Math.max(yHi, dataHi);
+            const layerGridOrigin =
+              layerYWidth > 0
+                ? Math.floor(layerExtLo / layerYWidth) * layerYWidth
+                : yLo;
+            const layerBinCount =
+              layerYWidth > 0
+                ? Math.max(
+                    bc,
+                    Math.round((layerExtHi - layerGridOrigin) / layerYWidth),
+                  )
+                : bc;
             const layerCenters: number[] = [];
-            for (let i = 0; i < bc; i++)
-              layerCenters.push(yLo + layerYWidth * (i + 0.5));
+            for (let i = 0; i < layerBinCount; i++)
+              layerCenters.push(layerGridOrigin + layerYWidth * (i + 0.5));
             // Build per-cat layer counts and per-cat max for this bin
             // count (each layer is independently normalized).
             const layerCatMax = new Map<string, number>();
             const layerCatGroupCounts = new Map<string, number[]>();
             for (const cat of xCats) {
-              const buckets = new Array<number>(bc).fill(0);
-              // Tally ALL bin indices (including out-of-visible bins,
-              // which get negative or large keys) so the layer's
-              // per-cat max stays stable as the user pans/zooms the
-              // axis. Mirrors the primary `perCatMaxCount` fix above.
-              const allBinCounts = new Map<number, number>();
+              const buckets = new Array<number>(layerBinCount).fill(0);
+              // `layerBinCount` spans the full data extent (extended
+              // grid above), so per-cat max read straight from
+              // `buckets[]` is stable as the visible axis pans/zooms.
               let mx = 0;
               for (const i of slot.rowIdxs) {
                 const row = data.rows[i];
@@ -2782,15 +2822,12 @@ function buildSingleOption(
                 if (rowCat !== cat) continue;
                 const v = toNum(row[yIdx]);
                 if (!Number.isFinite(v)) continue;
-                const bin = Math.floor((v - yLo) / layerYWidth);
-                const cur = (allBinCounts.get(bin) ?? 0) + 1;
-                allBinCounts.set(bin, cur);
-                if (cur > mx) mx = cur;
-                // For the visible-data array we still drop out-of-range
-                // bins (same edge-bin pileup rationale as the primary
-                // bar bucketing loop).
-                if (bin < 0 || bin >= bc) continue;
+                const bin = Math.floor((v - layerGridOrigin) / layerYWidth);
+                // Guard kept as a floating-point safety net; the
+                // extended grid covers every valid data point.
+                if (bin < 0 || bin >= layerBinCount) continue;
                 buckets[bin]++;
+                if (buckets[bin] > mx) mx = buckets[bin];
               }
               layerCatGroupCounts.set(cat, buckets);
               layerCatMax.set(cat, mx);
