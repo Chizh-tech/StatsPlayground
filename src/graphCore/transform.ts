@@ -2283,7 +2283,15 @@ function buildSingleOption(
       if (sharedRanges?.yMin != null && sharedRanges?.yMax != null) {
         yLo = sharedRanges.yMin;
         yHi = sharedRanges.yMax;
-        yMajorStep = sharedRanges.yInterval;
+        // Deliberately NOT using `sharedRanges.yInterval` for the bin
+        // step. `yInterval` comes from `computeNiceBounds(...,
+        // AUTO_TARGET_TICKS=10)` which is ~2× finer than what ECharts'
+        // axis picks for its major step (`splitNumber=5` default). If
+        // we used `yInterval`, bin width = `yInterval / 5` would be
+        // ~½ the axis minor tick step, leaving bars misaligned by half
+        // a tick. We derive `yMajorStep` from `niceStep(span,
+        // BIN_GRID_TARGET_TICKS)` below — the exact step ECharts will
+        // pick — so bin width matches the minor tick step.
       } else {
         let lo = Infinity;
         let hi = -Infinity;
@@ -2294,39 +2302,40 @@ function buildSingleOption(
           if (v < lo) lo = v;
           if (v > hi) hi = v;
         }
-        // Respect user-pinned axis bounds (drag-zoom / drag-pan on the
-        // Y axis writes these via `onAxisRangeChange`). Without this,
-        // the bin grid stays anchored to the raw data extent even
-        // after the user has narrowed the visible range, so bars keep
-        // their original width while the axis renders a denser minor-
-        // tick grid — exactly the "bar width doesn't follow minor tick
-        // width on zoom" complaint. When only one side is pinned we
-        // honor that side and fall back to the data extent for the
-        // other.
-        const yPinMin = spec.yAxis?.min;
-        const yPinMax = spec.yAxis?.max;
-        if (Number.isFinite(yPinMin)) lo = yPinMin as number;
-        if (Number.isFinite(yPinMax)) hi = yPinMax as number;
+        // Bin-grid bounds MUST follow the EXACT same path the axis
+        // takes (`yFinalBounds` block + `mergeAxis` overrides below):
+        //   1. Auto-fit on RAW dataMin/dataMax (NOT user pin).
+        //   2. Apply user pins RAW on top — same as `mergeAxis` →
+        //      `buildAxisOverrides` spreading `cfg.min`/`cfg.max`
+        //      unmodified over the auto-fit.
+        // Earlier code passed user pins THROUGH `computeNiceBounds`
+        // which re-snapped them to a local nice grid, producing a
+        // DIFFERENT span than the axis ended up with. When the pin
+        // happens to land on a non-nice value (e.g. 4.345), the
+        // re-snap shifts `yLo` down to 4.32 → bin span 0.36 →
+        // `niceStep(0.36, 5)=0.1` while axis span stays 0.335 →
+        // ECharts step 0.05 → bin width 0.02 vs axis minor tick 0.01
+        // → bars are 2× the minor tick width. Mirroring the axis
+        // exactly keeps the two spans identical.
         const fit = computeNiceBounds(
           Number.isFinite(lo) ? lo : undefined,
           Number.isFinite(hi) ? hi : undefined,
           collectRefLineYs(spec),
           AUTO_TARGET_TICKS,
         );
-        if (fit) {
-          yLo = fit.min;
-          yHi = fit.max;
-          // Re-derive the bin-grid step against `BIN_GRID_TARGET_TICKS`
-          // (not `fit.interval` from `AUTO_TARGET_TICKS=10`) so the
-          // resulting bin width = `majorStep / minorSplit` lines up with
-          // the major tick step ECharts actually picks for the axis.
-          // See `BIN_GRID_TARGET_TICKS` docs for the full rationale.
-          yMajorStep = niceStep(yHi - yLo, BIN_GRID_TARGET_TICKS);
-        } else {
-          yLo = Number.isFinite(lo) ? lo : 0;
-          yHi = Number.isFinite(hi) ? hi : 1;
-        }
+        const autoLo = fit ? fit.min : (Number.isFinite(lo) ? lo : 0);
+        const autoHi = fit ? fit.max : (Number.isFinite(hi) ? hi : 1);
+        const yPinMin = spec.yAxis?.min;
+        const yPinMax = spec.yAxis?.max;
+        yLo = Number.isFinite(yPinMin) ? (yPinMin as number) : autoLo;
+        yHi = Number.isFinite(yPinMax) ? (yPinMax as number) : autoHi;
       }
+      // Derive bin-grid step against `BIN_GRID_TARGET_TICKS` — the
+      // same `splitNumber` ECharts uses by default — so the resulting
+      // bin width = `majorStep / minorSplit` lines up with the major
+      // tick step ECharts auto-picks for the axis from the IDENTICAL
+      // `[yLo, yHi]` span.
+      yMajorStep = niceStep(yHi - yLo, BIN_GRID_TARGET_TICKS);
       // User-pinned `tickInterval` overrides the auto-fit step so bins
       // realign with whatever the user dialed in.
       const userYStep = spec.yAxis?.tickInterval;
@@ -2869,29 +2878,43 @@ function buildSingleOption(
       // share identical bin centers and widths.
       const allXs = data.rows.map((r) => toNum(r[xIdx]));
       // Pick bin count so bar edges align with the X axis minor-tick
-      // grid (one bar per minor segment). Scan the data once for the
-      // range; `sharedRanges?.xMin/xMax` would be the faceted span but
-      // here we want the per-panel data extent since the X bounds the
-      // histogram emits below are also data-driven.
-      let xLoForBins = Infinity;
-      let xHiForBins = -Infinity;
+      // grid (one bar per minor segment). Mirror the EXACT same path
+      // the X axis takes (`xFinalBounds` block + `mergeAxis`
+      // overrides further down):
+      //   1. Auto-fit on RAW dataMin/dataMax via
+      //      `computeNiceBounds(..., AUTO_TARGET_TICKS=10)`.
+      //   2. Apply user pins RAW on top — same as `mergeAxis` →
+      //      `buildAxisOverrides` spreading `cfg.min`/`cfg.max`
+      //      unmodified over the auto-fit.
+      // Using the raw data extent here (without `computeNiceBounds`)
+      // produces a DIFFERENT span than the axis ends up with, so
+      // `niceStep(span, 5)` returns a different step → bar width
+      // doesn't match the minor tick step → bars misalign at certain
+      // zooms (e.g. "bar width = 2× minor tick"). Replicating the
+      // axis pipeline keeps both spans identical.
+      let xDataLo = Infinity;
+      let xDataHi = -Infinity;
       for (const v of allXs) {
         if (!Number.isFinite(v)) continue;
-        if (v < xLoForBins) xLoForBins = v;
-        if (v > xHiForBins) xHiForBins = v;
+        if (v < xDataLo) xDataLo = v;
+        if (v > xDataHi) xDataHi = v;
       }
-      // Respect user-pinned axis bounds (drag-zoom / drag-pan writes
-      // these via `onAxisRangeChange`). Without this, the bin grid
-      // stays anchored to the raw data extent even after the user has
-      // narrowed the visible range, so bars keep their original width
-      // while the axis renders a denser minor-tick grid — exactly the
-      // "bar width doesn't follow minor tick width on zoom" complaint.
-      // When only one side is pinned we honor that side and fall back
-      // to the data extent for the other.
+      const xFit = computeNiceBounds(
+        Number.isFinite(xDataLo) ? xDataLo : undefined,
+        Number.isFinite(xDataHi) ? xDataHi : undefined,
+        collectRefLineXs(spec),
+        AUTO_TARGET_TICKS,
+      );
+      const autoXLo = xFit ? xFit.min : (Number.isFinite(xDataLo) ? xDataLo : 0);
+      const autoXHi = xFit ? xFit.max : (Number.isFinite(xDataHi) ? xDataHi : 1);
       const xPinMin = spec.xAxis?.min;
       const xPinMax = spec.xAxis?.max;
-      if (Number.isFinite(xPinMin)) xLoForBins = xPinMin as number;
-      if (Number.isFinite(xPinMax)) xHiForBins = xPinMax as number;
+      const xLoForBins = Number.isFinite(xPinMin)
+        ? (xPinMin as number)
+        : autoXLo;
+      const xHiForBins = Number.isFinite(xPinMax)
+        ? (xPinMax as number)
+        : autoXHi;
       // Tick-aligned bin grid. Two invariants must hold for bars to
       // sit on ECharts' minor tick lines:
       //   (1) `width` MUST equal ECharts' minor tick step exactly:
