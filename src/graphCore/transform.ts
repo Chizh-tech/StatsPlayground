@@ -2269,6 +2269,75 @@ function buildCustomTickFragment(values: number[]): EChartsOption {
   };
 }
 
+/** Build the customValues fragment for a value axis, snapped to a
+ *  nice tick grid that spans the EFFECTIVE axis extent (i.e. whatever
+ *  ECharts will actually render, after merging user-pinned bounds /
+ *  shared faceted bounds / the data-driven auto-fit).
+ *
+ *  Why this isn't just `enumerateNiceTicks(fit.min, fit.max, fit.interval)`:
+ *  the user can pin the axis to a wider range than the data fit
+ *  (via the axis dialog, the drag-to-pan gesture, or a faceted
+ *  `sharedRanges` that pads beyond this panel's local data) — those
+ *  pinned bounds win in `buildAxisOverrides` / the `sharedRanges`
+ *  spread and become the actual extent ECharts paints. If
+ *  customValues only covers the narrower fit range, the area between
+ *  the fit edge and the wider extent shows up as a blank, unlabeled
+ *  stretch of axis with the data clustered in the middle — exactly
+ *  the "axis only shows numbers for the part with data" bug.
+ *
+ *  Logic:
+ *    1. Effective bounds = user pin (if set) ELSE shared (if set)
+ *       ELSE fit. Caller passes whichever applies as `fitMin/Max` and
+ *       overlays `userMin/Max` separately.
+ *    2. Effective interval = user pin (if > 0) ELSE fit / shared
+ *       ELSE a fresh `niceStep` over the effective range. The fresh
+ *       step matters when the user pinned a much wider range than
+ *       the fit — the fit interval would be too dense, producing a
+ *       wall of labels.
+ *    3. Snap the effective min UP and max DOWN to the interval grid
+ *       so every enumerated tick sits inside the axis extent (an
+ *       enumerated tick outside the extent renders as a stub at the
+ *       extreme end — exactly the artifact this helper exists to
+ *       prevent).
+ *
+ *  Returns `{}` when there's not enough info to produce a sensible
+ *  tick list, leaving the callsite's other axis options untouched. */
+function buildAxisCustomTicks(
+  fitMin: number | null,
+  fitMax: number | null,
+  fitInterval: number | null,
+  userMin: number | null,
+  userMax: number | null,
+  userInterval: number | null,
+): EChartsOption {
+  const effMin = userMin ?? fitMin;
+  const effMax = userMax ?? fitMax;
+  if (effMin == null || effMax == null || !(effMax > effMin)) return {};
+  let effInterval: number | null = null;
+  if (userInterval != null && userInterval > 0) effInterval = userInterval;
+  // Recompute the interval when the user pinned bounds wider than
+  // the fit (the fit-interval was sized for the narrower range and
+  // would over-tick the wider extent). When the bounds came purely
+  // from the fit OR fit ⊇ user, keep the fit interval to preserve
+  // the original auto-tick density.
+  else if (
+    fitInterval != null && fitInterval > 0 &&
+    (fitMin == null || fitMax == null ||
+      (effMin >= fitMin - fitInterval * 1e-6 &&
+       effMax <= fitMax + fitInterval * 1e-6))
+  ) {
+    effInterval = fitInterval;
+  } else {
+    effInterval = niceStep(effMax - effMin, AUTO_TARGET_TICKS);
+  }
+  if (!(effInterval > 0)) return {};
+  const eps = effInterval * 1e-9;
+  const tickLo = Math.ceil(effMin / effInterval - eps) * effInterval;
+  const tickHi = Math.floor(effMax / effInterval + eps) * effInterval;
+  if (tickHi < tickLo) return {};
+  return buildCustomTickFragment(enumerateNiceTicks(tickLo, tickHi, effInterval));
+}
+
 /** Build a Y-axis option fragment that expands the auto-fitted range
  *  to encompass every finite ref-line Y value. Returns `{}` when
  *  there's nothing to expand for, so the caller can spread it
@@ -4022,21 +4091,23 @@ function buildSingleOption(
       // top/right of the plot frame. Using customValues short-circuits
       // createAxisTicks past that boundary-push branch.
       //
-      // X: enumerate ticks at xFit.interval steps inside the visible
-      //    bin grid. xFit gives nice-snapped bounds from the data; the
-      //    bin grid (gridLo..gridHi) may be slightly wider, so we
-      //    intersect by stepping outward from xFit-aligned multiples.
+      // X: the bin grid (gridLo..gridHi) already snaps to xFit.interval
+      //    multiples via histBinGrid, so we use the bin extent as the
+      //    natural fit. `buildAxisCustomTicks` then expands to whatever
+      //    the user pinned on `spec.xAxis` (drag / dialog) so a wider
+      //    pinned extent still gets labels across the full axis.
       let histXCustomTicks: EChartsOption = {};
       if (xFit && xFit.interval > 0) {
-        const startK = Math.ceil(gridLo / xFit.interval);
-        const endK = Math.floor(gridHi / xFit.interval);
-        if (endK >= startK) {
-          const prec = Math.max(0, -Math.floor(Math.log10(xFit.interval)) + 6);
-          const round = (v: number): number => Number(v.toFixed(prec));
-          const tickValues: number[] = [];
-          for (let k = startK; k <= endK; k++) tickValues.push(round(k * xFit.interval));
-          histXCustomTicks = buildCustomTickFragment(tickValues);
-        }
+        const xUserMin = Number.isFinite(spec.xAxis?.min as number) ? (spec.xAxis!.min as number) : null;
+        const xUserMax = Number.isFinite(spec.xAxis?.max as number) ? (spec.xAxis!.max as number) : null;
+        const xUserInterval =
+          Number.isFinite(spec.xAxis?.tickInterval as number) && (spec.xAxis!.tickInterval as number) > 0
+            ? (spec.xAxis!.tickInterval as number)
+            : null;
+        histXCustomTicks = buildAxisCustomTicks(
+          gridLo, gridHi, xFit.interval,
+          xUserMin, xUserMax, xUserInterval,
+        );
       }
       // Y: derive nice bounds from the per-bin total counts. For
       //    stacked grouped bars this is the displayed bar height; for
@@ -4051,9 +4122,18 @@ function buildSingleOption(
         collectRefLineYs(spec),
         AUTO_TARGET_TICKS,
       );
-      if (histYFit) {
-        histYCustomTicks = buildCustomTickFragment(
-          enumerateNiceTicks(histYFit.min, histYFit.max, histYFit.interval),
+      {
+        const yUserMin = Number.isFinite(spec.yAxis?.min as number) ? (spec.yAxis!.min as number) : null;
+        const yUserMax = Number.isFinite(spec.yAxis?.max as number) ? (spec.yAxis!.max as number) : null;
+        const yUserInterval =
+          Number.isFinite(spec.yAxis?.tickInterval as number) && (spec.yAxis!.tickInterval as number) > 0
+            ? (spec.yAxis!.tickInterval as number)
+            : null;
+        histYCustomTicks = buildAxisCustomTicks(
+          histYFit ? histYFit.min : null,
+          histYFit ? histYFit.max : null,
+          histYFit ? histYFit.interval : null,
+          yUserMin, yUserMax, yUserInterval,
         );
       }
 
@@ -4416,8 +4496,21 @@ function buildSingleOption(
   // `Interval.js#getTicks` that was producing unlabeled tick stubs at
   // the right end of the plot frame. Merged into the X axis option
   // BEFORE `buildAxisOverrides` so user pins still win.
+  //
+  // The tick list MUST span the effective axis extent (post-merge of
+  // user pins / sharedRanges / fit), not just the data fit — when the
+  // user drags or pins the axis wider than the data range, customValues
+  // limited to the fit leave the over-pinned portion blank. We capture
+  // fit values + user pins separately and let `buildAxisCustomTicks`
+  // figure out the effective range.
   let xCustomTicks: EChartsOption = {};
   if (!xIsCategory && !xIsTime && xField) {
+    // Capture the "natural" fit values from either shared ranges
+    // (faceted) or a local nice-snap fit over data + refs. These act
+    // as defaults; user pins on `spec.xAxis` win in the helper below.
+    let xFitMin: number | null = null;
+    let xFitMax: number | null = null;
+    let xFitInterval: number | null = null;
     if (sharedRanges?.xMin != null || sharedRanges?.xMax != null) {
       // Use exact shared bounds — no pad. `customValues` below
       // prevents ECharts from auto-stamping a tick at extent[1].
@@ -4429,19 +4522,9 @@ function buildSingleOption(
       // would re-introduce the Phase-4 drag bug where setOption merges
       // keep the old step alive after a drag changes min/max, making
       // tick values drift off the nice grid.
-      if (
-        sharedRanges.xMin != null &&
-        sharedRanges.xMax != null &&
-        sharedRanges.xInterval != null
-      ) {
-        xCustomTicks = buildCustomTickFragment(
-          enumerateNiceTicks(
-            sharedRanges.xMin,
-            sharedRanges.xMax,
-            sharedRanges.xInterval,
-          ),
-        );
-      }
+      xFitMin = sharedRanges.xMin ?? null;
+      xFitMax = sharedRanges.xMax ?? null;
+      xFitInterval = sharedRanges.xInterval ?? null;
     } else if (xIdx >= 0) {
       let dataMin = Infinity;
       let dataMax = -Infinity;
@@ -4475,13 +4558,25 @@ function buildSingleOption(
         ? { min: fit.min, max: fit.max }
         : { scale: true };
       if (fit) {
-        xCustomTicks = buildCustomTickFragment(
-          enumerateNiceTicks(fit.min, fit.max, fit.interval),
-        );
+        xFitMin = fit.min;
+        xFitMax = fit.max;
+        xFitInterval = fit.interval;
       }
     } else {
       xFinalBounds = { scale: true };
     }
+    // Read user pins from `spec.xAxis` so customValues spans the
+    // FULL extent ECharts will render — see `buildAxisCustomTicks`.
+    const xUserMin = Number.isFinite(spec.xAxis?.min as number) ? (spec.xAxis!.min as number) : null;
+    const xUserMax = Number.isFinite(spec.xAxis?.max as number) ? (spec.xAxis!.max as number) : null;
+    const xUserInterval =
+      Number.isFinite(spec.xAxis?.tickInterval as number) && (spec.xAxis!.tickInterval as number) > 0
+        ? (spec.xAxis!.tickInterval as number)
+        : null;
+    xCustomTicks = buildAxisCustomTicks(
+      xFitMin, xFitMax, xFitInterval,
+      xUserMin, xUserMax, xUserInterval,
+    );
   }
   const xAxisBase = xIsCategory
     ? {
@@ -4644,8 +4739,14 @@ function buildSingleOption(
   let yFinalBounds: EChartsOption;
   // Companion to xCustomTicks — see comment there. Both axes need the
   // same protection because the boundary-push artifact applies to any
-  // value axis whose extent is wider than its nice extent.
+  // value axis whose extent is wider than its nice extent. The tick
+  // list MUST span the effective post-merge extent (user pin ∪
+  // sharedRanges ∪ fit) so a user-pinned wider range doesn't leave
+  // the over-pinned portion blank — see `buildAxisCustomTicks`.
   let yCustomTicks: EChartsOption = {};
+  let yFitMin: number | null = null;
+  let yFitMax: number | null = null;
+  let yFitInterval: number | null = null;
   if (sharedRanges?.yMin != null || sharedRanges?.yMax != null) {
     yFinalBounds = {};
     if (sharedRanges.yMin != null) yFinalBounds.min = sharedRanges.yMin;
@@ -4660,15 +4761,9 @@ function buildSingleOption(
     // ("刻度数字一直在动"). With identical min/max across panels,
     // ECharts' auto-tick picks an identical interval per panel anyway,
     // so we get the same visual density without the drag regression.
-    if (
-      sharedRanges.yMin != null &&
-      sharedRanges.yMax != null &&
-      sharedRanges.yInterval != null
-    ) {
-      yCustomTicks = buildCustomTickFragment(
-        enumerateNiceTicks(sharedRanges.yMin, sharedRanges.yMax, sharedRanges.yInterval),
-      );
-    }
+    yFitMin = sharedRanges.yMin ?? null;
+    yFitMax = sharedRanges.yMax ?? null;
+    yFitInterval = sharedRanges.yInterval ?? null;
   } else {
     let dataMin = Infinity;
     let dataMax = -Infinity;
@@ -4694,10 +4789,24 @@ function buildSingleOption(
       ? { min: fit.min, max: fit.max }
       : { scale: true };
     if (fit) {
-      yCustomTicks = buildCustomTickFragment(
-        enumerateNiceTicks(fit.min, fit.max, fit.interval),
-      );
+      yFitMin = fit.min;
+      yFitMax = fit.max;
+      yFitInterval = fit.interval;
     }
+  }
+  // Read user pins from `spec.yAxis` so customValues spans the full
+  // extent ECharts will render — see `buildAxisCustomTicks`.
+  {
+    const yUserMin = Number.isFinite(spec.yAxis?.min as number) ? (spec.yAxis!.min as number) : null;
+    const yUserMax = Number.isFinite(spec.yAxis?.max as number) ? (spec.yAxis!.max as number) : null;
+    const yUserInterval =
+      Number.isFinite(spec.yAxis?.tickInterval as number) && (spec.yAxis!.tickInterval as number) > 0
+        ? (spec.yAxis!.tickInterval as number)
+        : null;
+    yCustomTicks = buildAxisCustomTicks(
+      yFitMin, yFitMax, yFitInterval,
+      yUserMin, yUserMax, yUserInterval,
+    );
   }
 
   return {
