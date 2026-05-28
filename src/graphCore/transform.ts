@@ -1419,12 +1419,35 @@ function intervalHalf(ys: number[], kind: string): number {
  *
  *  Returns one [dx, 0] tuple per input point or null if no jitter requested.
  */
+/** Compute per-point horizontal jitter offsets in CSS pixels.
+ *
+ *  - `stacked` (preferred) — JMP-style stack jitter, a.k.a. beeswarm /
+ *    stacked-dot plot:
+ *      1. Group points by X category.
+ *      2. Within each category, bin points by Y (~80 bins across the
+ *         visible Y span).
+ *      3. Points sharing a (category, Y-bin) bucket are spread
+ *         side-by-side around the X center with a fixed minimum
+ *         per-symbol pixel spacing, capped by the per-category band
+ *         width × `limit`.
+ *      Result: deterministic, no Y distortion, and every overlapping
+ *      observation is individually visible.
+ *
+ *  - `auto` — legacy alias for `stacked`. Older saved specs may carry
+ *    this value; treat it identically so existing projects still render.
+ *
+ *  - `uniform` / `normal` — random pixel-space horizontal noise scaled
+ *    by `limit` (uniform = flat, normal = clamped Box-Muller).
+ *
+ *  Returns one [dx, 0] tuple per input point, or null when `mode` is
+ *  unrecognized (so the caller skips applying any offsets).
+ */
 function computeJitterOffsets(
   points: Array<{ x: unknown; y: number }>,
   mode: string,
   limit: number,
 ): Array<[number, number]> | null {
-  if (mode === "none" || points.length === 0) return null;
+  if (points.length === 0) return null;
   // Pixel spacing between adjacent stacked symbols. ECharts default scatter
   // is ~6px, give a little air around it so dots don't kiss.
   const SYMBOL_PX = 6;
@@ -1472,7 +1495,12 @@ function computeJitterOffsets(
     return offs;
   }
 
-  // "auto" → deterministic stack jitter.
+  // Default / "stacked" / legacy "auto" → deterministic stack jitter.
+  // Anything other than "uniform" / "normal" lands here, so unrecognized
+  // values render safely as the stacked default rather than silently
+  // disabling jitter (the "none" mode was removed because its renderer
+  // path failed to clear ECharts' cached per-point symbolOffset, leaving
+  // the previous mode's positions stuck on screen).
   // 1) Group by category.
   const groups = new Map<string, number[]>();
   for (let i = 0; i < points.length; i++) {
@@ -4923,11 +4951,12 @@ function buildElementSeries(
       }
 
       // Per-point horizontal jitter so overlapping observations are visible.
-      // "auto" → JMP-style stack jitter (deterministic, bin Y, spread side
-      //   by side around the X position). Best for reading every point.
-      // "uniform" / "normal" → random pixel offset of the requested span.
-      // "none" → no offset (points overlap).
-      const jitterMode = getOpt<string>(opts, "jitter", "auto");
+      // See computeJitterOffsets for full mode docs:
+      //   - "stacked" (default) → JMP-style stack jitter, deterministic,
+      //     binned by Y, spread side-by-side around the X position.
+      //   - "auto"              → legacy alias for "stacked".
+      //   - "uniform"/"normal"  → random horizontal noise.
+      const jitterMode = getOpt<string>(opts, "jitter", "stacked");
       const jitterLimit = Math.max(0, Math.min(1, getOpt<number>(opts, "jitterLimit", 0.5)));
       const offsets = computeJitterOffsets(points, jitterMode, jitterLimit);
 

@@ -2193,7 +2193,12 @@ function PointsOptions({ options, onChange, t }: OptionsEditorProps) {
   const summary = getOpt<string>(options, "summaryStat", "none");
   const errInterval = getOpt<string>(options, "errorInterval", "auto");
   const intStyle = getOpt<string>(options, "intervalStyle", "errorBar");
-  const jitter = getOpt<string>(options, "jitter", "auto");
+  // Default is "stacked" — "auto" remains a legacy value (older specs).
+  // The renderer treats both the same; here we only need to make sure
+  // the <select> shows a sensible selection for legacy values too, so
+  // collapse "auto" → "stacked" for the dropdown's selected value.
+  const jitterRaw = getOpt<string>(options, "jitter", "stacked");
+  const jitter = jitterRaw === "auto" ? "stacked" : jitterRaw;
   const jitterLimit = getOpt<number>(options, "jitterLimit", 0.5);
   return (
     <>
@@ -2238,8 +2243,7 @@ function PointsOptions({ options, onChange, t }: OptionsEditorProps) {
           value={jitter}
           onChange={(e) => onChange({ jitter: e.target.value })}
         >
-          <option value="auto">{t("graph.opt.auto")}</option>
-          <option value="none">{t("graph.opt.summary.none")}</option>
+          <option value="stacked">{t("graph.opt.jitterMode.stacked")}</option>
           <option value="uniform">{t("graph.opt.jitterMode.uniform")}</option>
           <option value="normal">{t("graph.opt.jitterMode.normal")}</option>
         </select>
@@ -2359,7 +2363,9 @@ function LineOptions({ options, onChange, t }: OptionsEditorProps) {
 }
 
 function BoxplotOptions({ options, onChange, t }: OptionsEditorProps) {
-  const jitter = getOpt<string>(options, "jitter", "auto");
+  // See PointsOptions for the "auto" → "stacked" legacy mapping rationale.
+  const jitterRaw = getOpt<string>(options, "jitter", "stacked");
+  const jitter = jitterRaw === "auto" ? "stacked" : jitterRaw;
   const outliers = getOpt<boolean>(options, "outliers", true);
   const boxType = getOpt<string>(options, "boxType", "outlier");
   const boxStyle = getOpt<string>(options, "boxStyle", "normal");
@@ -2373,8 +2379,7 @@ function BoxplotOptions({ options, onChange, t }: OptionsEditorProps) {
           value={jitter}
           onChange={(e) => onChange({ jitter: e.target.value })}
         >
-          <option value="auto">{t("graph.opt.auto")}</option>
-          <option value="none">{t("graph.opt.summary.none")}</option>
+          <option value="stacked">{t("graph.opt.jitterMode.stacked")}</option>
           <option value="uniform">{t("graph.opt.jitterMode.uniform")}</option>
           <option value="normal">{t("graph.opt.jitterMode.normal")}</option>
         </select>
