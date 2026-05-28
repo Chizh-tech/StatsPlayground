@@ -2404,6 +2404,7 @@ function BoxplotOptions({ options, onChange, t }: OptionsEditorProps) {
 function HistogramOptions({ options, onChange, t }: OptionsEditorProps) {
   const histStyle = getOpt<string>(options, "histStyle", "bar");
   const smoothness = getOpt<number>(options, "smoothness", 0.5);
+  const histHeight = getOpt<number>(options, "histHeight", 1);
   const showCounts = getOpt<boolean>(options, "showCounts", false);
   const showPercents = getOpt<boolean>(options, "showPercents", false);
   return (
@@ -2433,6 +2434,17 @@ function HistogramOptions({ options, onChange, t }: OptionsEditorProps) {
           />
         </OptRow>
       )}
+      <OptRow label={t("graph.opt.histHeight")}>
+        <input
+          type="range"
+          className="gb-slider"
+          min={0.1}
+          max={1}
+          step={0.05}
+          value={histHeight}
+          onChange={(e) => onChange({ histHeight: parseFloat(e.target.value) })}
+        />
+      </OptRow>
       <OptRow label={t("graph.opt.showCounts")}>
         <input
           type="checkbox"

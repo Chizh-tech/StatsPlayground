@@ -550,6 +550,11 @@ type RenderHistCatBarOpts = {
   theme: GraphTheme;
   /** Override the per-bar opacity (e.g. shadowgram layers use ~0.18). */
   layerOpacity?: number;
+  /** Fraction of the cat slot the longest bar should fill, in [0.1, 1.0].
+   *  1.0 keeps the legacy default (85% of the slot, leaving a ~15% safe
+   *  gap from the next category divider). User-controlled via the
+   *  "histogram height" slider. */
+  heightScale?: number;
 };
 type HistBarInfo = {
   cat: string;
@@ -580,7 +585,12 @@ function renderHistCatBar(
   // Reserve ~15% of the slot on the trailing edge so the longest bar
   // doesn't touch the next category's divider line.
   const rightSafePct = 0.15;
-  const maxBarExtent = Math.max(0, slotPx * (1 - rightSafePct) - insetMargin);
+  // User-controlled "histogram height" scale in [0.1, 1.0]. 1.0 keeps
+  // the legacy fill; values < 1.0 shrink every bar proportionally so
+  // the histogram occupies a smaller fraction of the cat slot.
+  const heightScale = Math.max(0.1, Math.min(1, opts.heightScale ?? 1));
+  const maxBarExtent =
+    Math.max(0, slotPx * (1 - rightSafePct) - insetMargin) * heightScale;
   const barExtent =
     catMaxCount > 0 ? (count / catMaxCount) * maxBarExtent : 0;
 
@@ -2256,6 +2266,14 @@ function buildSingleOption(
     const smoothness = Math.max(0, Math.min(1, getOpt<number>(opts, "smoothness", 0.5)));
     const showCounts = getOpt<boolean>(opts, "showCounts", false);
     const showPercents = getOpt<boolean>(opts, "showPercents", false);
+    // "Histogram height" — fraction of the cat slot the longest bar
+    // fills in MODE C. Default 1.0 = legacy (~85% of slot, leaving a
+    // safe gap before the next category divider). Range clamped to
+    // [0.1, 1.0]; user-controlled via the GraphBuilder slider.
+    const histHeight = Math.max(
+      0.1,
+      Math.min(1, getOpt<number>(opts, "histHeight", 1)),
+    );
 
     // Resolve the iteration list of groups, shared by both modes.
     // With no grouping, fall back to a single ungrouped layer keyed
@@ -2681,10 +2699,12 @@ function buildSingleOption(
                 : api.size([0, 1])[1];
               const insetMargin = 1;
               const rightSafePct = 0.15;
-              const maxBarExtent = Math.max(
-                0,
-                slotPx * (1 - rightSafePct) - insetMargin,
-              );
+              // User "histogram height" scale (closed over from MODE C scope).
+              // See `renderHistCatBar` for the rationale; same formula keeps
+              // polygon/KDE silhouettes proportional to the bar version.
+              const maxBarExtent =
+                Math.max(0, slotPx * (1 - rightSafePct) - insetMargin) *
+                histHeight;
 
               // Start/end "phantom anchor" points — clamped INSIDE
               // the visible axis range so the polygon closes cleanly
@@ -2877,6 +2897,7 @@ function buildSingleOption(
                   showPercents: false,
                   theme,
                   layerOpacity: 0.18,
+                  heightScale: histHeight,
                 });
               },
               z: 1,
@@ -2943,6 +2964,7 @@ function buildSingleOption(
               showCounts,
               showPercents,
               theme,
+              heightScale: histHeight,
             });
           },
           // Render below scatter/box outlines so they remain readable

@@ -461,6 +461,7 @@
       "box": { "outlier": "Outlier", "quantile": "Quantile", "normal": "Normal", "notched": "Notched" },
       "histStyle": "Histogram Style",
       "smoothness": "Smoothness",
+      "histHeight": "Histogram Height",
       "showCounts": "Show Counts",
       "showPercents": "Show Percents",
       "histStyles": { "bar": "Bar", "polygon": "Polygon", "kde": "Kernel Density", "shadowgram": "Shadowgram" }
