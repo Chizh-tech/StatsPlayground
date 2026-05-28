@@ -2211,147 +2211,6 @@ function computeNiceBounds(
   };
 }
 
-/** Enumerate the exact major-tick values in [min, max] stepping by
- *  `interval`. Returned values are precision-snapped to the interval's
- *  natural decimal place so accumulation drift doesn't produce labels
- *  like `4.30000000004`. */
-function enumerateNiceTicks(min: number, max: number, interval: number): number[] {
-  if (!Number.isFinite(min) || !Number.isFinite(max) || !(interval > 0) || max < min) {
-    return [];
-  }
-  // Pick a precision a few digits beyond the interval's natural
-  // precision so accumulation drift doesn't surface in tick labels.
-  const prec = Math.max(0, -Math.floor(Math.log10(interval)) + 6);
-  const round = (v: number): number => Number(v.toFixed(prec));
-  const count = Math.round((max - min) / interval);
-  const values: number[] = [];
-  for (let i = 0; i <= count; i++) {
-    values.push(round(min + i * interval));
-  }
-  return values;
-}
-
-/** Build an EChartsOption fragment that pins the exact major-tick
- *  positions via `axisTick.customValues` + `axisLabel.customValues`.
- *
- *  Why this is needed: ECharts' value-axis tick generator
- *  (`scale.getTicks` in `Interval.js`) unconditionally pushes an
- *  EXTRA tick at `extent[1]` whenever the data extent is wider than
- *  the niceExtent (i.e. almost always when `min`/`max` are pinned
- *  outside the nice grid). That extra tick produces a tiny unlabeled
- *  stub at the very top/right of the plot frame — the artifact the
- *  user kept reporting at the axis ends. The theme's
- *  `showMinLabel/showMaxLabel: false` only hides the LABEL, not the
- *  tick mark.
- *
- *  With `customValues`, ECharts' `createAxisTicks` short-circuits to
- *  `parseTickLabelCustomValues` (see
- *  echarts/lib/coord/axisTickLabelBuilder.js) and draws ticks ONLY at
- *  the enumerated values — the extent-pushing branch in
- *  `scale.getTicks` is never reached.
- *
- *  Also forces `showMinLabel/showMaxLabel: true` on the same axis
- *  because the theme's defaults (set to `false` to suppress noisy
- *  float boundary labels on raw-data-fit axes) would otherwise hide
- *  the labels at the first/last customValues. Once customValues is
- *  in play, the boundary values come from `computeNiceBounds` /
- *  `computeSharedRanges` and are guaranteed nice (e.g. `4.0` / `4.7`,
- *  never `4.7000000003`), so showing them is safe. */
-function buildCustomTickFragment(values: number[]): EChartsOption {
-  if (values.length === 0) return {};
-  return {
-    axisTick: { customValues: values },
-    axisLabel: {
-      customValues: values,
-      showMinLabel: true,
-      showMaxLabel: true,
-    },
-  };
-}
-
-/** Build the customValues fragment for a value axis, snapped to a
- *  nice tick grid that spans the EFFECTIVE axis extent (i.e. whatever
- *  ECharts will actually render, after merging user-pinned bounds /
- *  shared faceted bounds / the data-driven auto-fit).
- *
- *  Why this isn't just `enumerateNiceTicks(fit.min, fit.max, fit.interval)`:
- *  the user can pin the axis to a wider range than the data fit
- *  (via the axis dialog, the drag-to-pan gesture, or a faceted
- *  `sharedRanges` that pads beyond this panel's local data) — those
- *  pinned bounds win in `buildAxisOverrides` / the `sharedRanges`
- *  spread and become the actual extent ECharts paints. If
- *  customValues only covers the narrower fit range, the area between
- *  the fit edge and the wider extent shows up as a blank, unlabeled
- *  stretch of axis with the data clustered in the middle — exactly
- *  the "axis only shows numbers for the part with data" bug.
- *
- *  Logic:
- *    1. Effective bounds = user pin (if set) ELSE shared (if set)
- *       ELSE fit. Caller passes whichever applies as `fitMin/Max` and
- *       overlays `userMin/Max` separately.
- *    2. Effective interval = user pin (if > 0) ELSE fit / shared
- *       ELSE a fresh `niceStep` over the effective range. The fresh
- *       step matters when the user pinned a much wider range than
- *       the fit — the fit interval would be too dense, producing a
- *       wall of labels.
- *    3. Snap the effective min UP and max DOWN to the interval grid
- *       so every enumerated tick sits inside the axis extent (an
- *       enumerated tick outside the extent renders as a stub at the
- *       extreme end — exactly the artifact this helper exists to
- *       prevent).
- *
- *  Returns `{ fragment: {}, interval: null }` when there's not enough
- *  info to produce a sensible tick list, leaving the callsite's other
- *  axis options untouched. Otherwise returns the customValues fragment
- *  AND the effective interval — the caller pins `interval` on the
- *  axis option so ECharts' internal `scale.getTicks()` (which drives
- *  `splitLine` and the `minorTick` / `minorSplitLine` subdivisions)
- *  uses the SAME step as our `customValues`. Without that pin, major
- *  tick marks (from customValues) and the splitLine / minor ticks
- *  (from scale.getTicks) would land on different positions whenever
- *  ECharts' auto-pick disagrees with our `niceStep` — minors looked
- *  like they "missed" the majors they're supposed to subdivide. */
-function buildAxisCustomTicks(
-  fitMin: number | null,
-  fitMax: number | null,
-  fitInterval: number | null,
-  userMin: number | null,
-  userMax: number | null,
-  userInterval: number | null,
-): { fragment: EChartsOption; interval: number | null } {
-  const effMin = userMin ?? fitMin;
-  const effMax = userMax ?? fitMax;
-  if (effMin == null || effMax == null || !(effMax > effMin)) {
-    return { fragment: {}, interval: null };
-  }
-  let effInterval: number | null = null;
-  if (userInterval != null && userInterval > 0) effInterval = userInterval;
-  // Recompute the interval when the user pinned bounds wider than
-  // the fit (the fit-interval was sized for the narrower range and
-  // would over-tick the wider extent). When the bounds came purely
-  // from the fit OR fit ⊇ user, keep the fit interval to preserve
-  // the original auto-tick density.
-  else if (
-    fitInterval != null && fitInterval > 0 &&
-    (fitMin == null || fitMax == null ||
-      (effMin >= fitMin - fitInterval * 1e-6 &&
-       effMax <= fitMax + fitInterval * 1e-6))
-  ) {
-    effInterval = fitInterval;
-  } else {
-    effInterval = niceStep(effMax - effMin, AUTO_TARGET_TICKS);
-  }
-  if (!(effInterval > 0)) return { fragment: {}, interval: null };
-  const eps = effInterval * 1e-9;
-  const tickLo = Math.ceil(effMin / effInterval - eps) * effInterval;
-  const tickHi = Math.floor(effMax / effInterval + eps) * effInterval;
-  if (tickHi < tickLo) return { fragment: {}, interval: effInterval };
-  return {
-    fragment: buildCustomTickFragment(enumerateNiceTicks(tickLo, tickHi, effInterval)),
-    interval: effInterval,
-  };
-}
-
 /** Build a Y-axis option fragment that expands the auto-fitted range
  *  to encompass every finite ref-line Y value. Returns `{}` when
  *  there's nothing to expand for, so the caller can spread it
@@ -4101,66 +3960,6 @@ function buildSingleOption(
       const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), spec.autoSpecX, theme, "x");
       if (refCarrierX) series.push(refCarrierX);
 
-      // Pin axisTick + axisLabel customValues for the histogram axes.
-      // Same rationale as the main scatter/box/line path: ECharts'
-      // Interval.js#getTicks unconditionally pushes an extra tick at
-      // extent[1] when extent[1] > lastNiceTick, which the theme's
-      // showMaxLabel:false leaves as an unlabeled stub at the very
-      // top/right of the plot frame. Using customValues short-circuits
-      // createAxisTicks past that boundary-push branch.
-      //
-      // X: the bin grid (gridLo..gridHi) already snaps to xFit.interval
-      //    multiples via histBinGrid, so we use the bin extent as the
-      //    natural fit. `buildAxisCustomTicks` then expands to whatever
-      //    the user pinned on `spec.xAxis` (drag / dialog) so a wider
-      //    pinned extent still gets labels across the full axis.
-      let histXCustomTicks: EChartsOption = {};
-      if (xFit && xFit.interval > 0) {
-        const xUserMin = Number.isFinite(spec.xAxis?.min as number) ? (spec.xAxis!.min as number) : null;
-        const xUserMax = Number.isFinite(spec.xAxis?.max as number) ? (spec.xAxis!.max as number) : null;
-        const xUserInterval =
-          Number.isFinite(spec.xAxis?.tickInterval as number) && (spec.xAxis!.tickInterval as number) > 0
-            ? (spec.xAxis!.tickInterval as number)
-            : null;
-        const xTicks = buildAxisCustomTicks(
-          gridLo, gridHi, xFit.interval,
-          xUserMin, xUserMax, xUserInterval,
-        );
-        histXCustomTicks = xTicks.interval != null
-          ? { ...xTicks.fragment, interval: xTicks.interval }
-          : xTicks.fragment;
-      }
-      // Y: derive nice bounds from the per-bin total counts. For
-      //    stacked grouped bars this is the displayed bar height; for
-      //    overlay (max-per-bin display) it's an upper bound, which
-      //    leaves a bit of headroom but never clips. Refs from spec
-      //    are folded in so user/auto-spec Y ref lines stay visible.
-      let histYCustomTicks: EChartsOption = {};
-      const histYMax = totalCounts.length > 0 ? Math.max(...totalCounts) : 0;
-      const histYFit = computeNiceBounds(
-        0,
-        Number.isFinite(histYMax) && histYMax > 0 ? histYMax : undefined,
-        collectRefLineYs(spec),
-        AUTO_TARGET_TICKS,
-      );
-      {
-        const yUserMin = Number.isFinite(spec.yAxis?.min as number) ? (spec.yAxis!.min as number) : null;
-        const yUserMax = Number.isFinite(spec.yAxis?.max as number) ? (spec.yAxis!.max as number) : null;
-        const yUserInterval =
-          Number.isFinite(spec.yAxis?.tickInterval as number) && (spec.yAxis!.tickInterval as number) > 0
-            ? (spec.yAxis!.tickInterval as number)
-            : null;
-        const yTicks = buildAxisCustomTicks(
-          histYFit ? histYFit.min : null,
-          histYFit ? histYFit.max : null,
-          histYFit ? histYFit.interval : null,
-          yUserMin, yUserMax, yUserInterval,
-        );
-        histYCustomTicks = yTicks.interval != null
-          ? { ...yTicks.fragment, interval: yTicks.interval }
-          : yTicks.fragment;
-      }
-
       return {
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
@@ -4188,62 +3987,49 @@ function buildSingleOption(
         // bounding box so it still visually anchors to the data point.
         tooltip: { trigger: "axis", confine: true, appendToBody: true },
         xAxis: mergeAxis(
-          mergeAxis(
-            {
-              type: "value",
-              name: xField?.name,
-              nameLocation: "middle",
-              nameGap: 28,
-              ...axis,
-              // Auto-enable minor ticks — mirrors the main path so an
-              // exclusive histogram chart inherits the same denser grid
-              // by default. User overrides still win via mergeAxis. The
-              // `...axis.minorTick` spread preserves theme.minorTick.
-              // lineStyle (color + 0.5px width) so minor tick marks
-              // render at the same stroke width as the majors instead
-              // of ECharts' default 1px (which made them look thicker).
-              minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
-              // Faceted histograms still benefit from a shared X span so the
-              // bin centers are visually comparable across panels.
-              ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
-              ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
-              // Single-panel: expand auto-fit so vertical ref lines drawn
-              // outside the data extent stay visible. The shared-range
-              // spreads above already include refXs via computeSharedRanges,
-              // so this only matters when those are absent.
-              ...(sharedRanges?.xMin == null && sharedRanges?.xMax == null
-                ? buildXAxisRefLineExpand(collectRefLineXs(spec))
-                : {}),
-            },
-            // See histXCustomTicks above — short-circuits ECharts'
-            // boundary-push to eliminate unlabeled tick stubs at the
-            // right end of the histogram X axis.
-            histXCustomTicks,
-          ),
+          {
+            type: "value",
+            name: xField?.name,
+            nameLocation: "middle",
+            nameGap: 28,
+            ...axis,
+            // Auto-enable minor ticks — mirrors the main path so an
+            // exclusive histogram chart inherits the same denser grid
+            // by default. User overrides still win via mergeAxis. The
+            // `...axis.minorTick` spread preserves theme.minorTick.
+            // lineStyle (color + 0.5px width) so minor tick marks
+            // render at the same stroke width as the majors instead
+            // of ECharts' default 1px (which made them look thicker).
+            minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
+            // Faceted histograms still benefit from a shared X span so the
+            // bin centers are visually comparable across panels.
+            ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
+            ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
+            // Single-panel: expand auto-fit so vertical ref lines drawn
+            // outside the data extent stay visible. The shared-range
+            // spreads above already include refXs via computeSharedRanges,
+            // so this only matters when those are absent.
+            ...(sharedRanges?.xMin == null && sharedRanges?.xMax == null
+              ? buildXAxisRefLineExpand(collectRefLineXs(spec))
+              : {}),
+          },
           buildAxisOverrides(spec.xAxis),
         ),
         yAxis: mergeAxis(
-          mergeAxis(
-            {
-              type: "value",
-              name: i18n.t("graph.frequency"),
-              nameLocation: "middle",
-              nameGap: 40,
-              ...axis,
-              // Auto-enable minor ticks on the frequency axis too.
-              // See the X-axis comment above for the spread rationale.
-              minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
-              // Expand auto-fit so ref lines (manual or auto-spec) stay
-              // visible on the frequency axis. User-pinned min/max from
-              // `buildAxisOverrides` still wins via the merge spread.
-              ...buildYAxisRefLineExpand(collectRefLineYs(spec)),
-            },
-            // Same boundary-stub suppression as the X axis above. For
-            // the frequency Y axis the stub is rare in practice (counts
-            // are integers that often coincide with niceExtent), but
-            // the fix is cheap and keeps both axes symmetric.
-            histYCustomTicks,
-          ),
+          {
+            type: "value",
+            name: i18n.t("graph.frequency"),
+            nameLocation: "middle",
+            nameGap: 40,
+            ...axis,
+            // Auto-enable minor ticks on the frequency axis too.
+            // See the X-axis comment above for the spread rationale.
+            minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
+            // Expand auto-fit so ref lines (manual or auto-spec) stay
+            // visible on the frequency axis. User-pinned min/max from
+            // `buildAxisOverrides` still wins via the merge spread.
+            ...buildYAxisRefLineExpand(collectRefLineYs(spec)),
+          },
           buildAxisOverrides(spec.yAxis),
         ),
         series,
@@ -4519,41 +4305,35 @@ function buildSingleOption(
   //     back to `scale: true` when there's no finite X data so ECharts
   //     auto-fits without forcing the axis to include 0.
   let xFinalBounds: EChartsOption = {};
-  // Companion fragment carrying `axisTick.customValues` /
-  // `axisLabel.customValues` for the value-X path. Pinning the exact
-  // tick set bypasses ECharts' boundary-push behavior in
-  // `Interval.js#getTicks` that was producing unlabeled tick stubs at
-  // the right end of the plot frame. Merged into the X axis option
-  // BEFORE `buildAxisOverrides` so user pins still win.
-  //
-  // The tick list MUST span the effective axis extent (post-merge of
-  // user pins / sharedRanges / fit), not just the data fit — when the
-  // user drags or pins the axis wider than the data range, customValues
-  // limited to the fit leave the over-pinned portion blank. We capture
-  // fit values + user pins separately and let `buildAxisCustomTicks`
-  // figure out the effective range.
-  let xCustomTicks: EChartsOption = {};
   if (!xIsCategory && !xIsTime && xField) {
-    // Capture the "natural" fit values from either shared ranges
-    // (faceted) or a local nice-snap fit over data + refs. These act
-    // as defaults; user pins on `spec.xAxis` win in the helper below.
-    let xFitMin: number | null = null;
-    let xFitMax: number | null = null;
-    let xFitInterval: number | null = null;
     if (sharedRanges?.xMin != null || sharedRanges?.xMax != null) {
-      // Use exact shared bounds — no pad. `customValues` below
-      // prevents ECharts from auto-stamping a tick at extent[1].
-      if (sharedRanges.xMin != null) xFinalBounds.min = sharedRanges.xMin;
-      if (sharedRanges.xMax != null) xFinalBounds.max = sharedRanges.xMax;
+      // Pad axis bounds by HALF A MINOR interval (major / (AUTO_MINOR_SPLIT * 2))
+      // so the axis ends BETWEEN the last labeled major tick and the
+      // first minor tick beyond it. ECharts auto-extends minor ticks
+      // past the last major tick to fill the visible axis, so a
+      // bigger pad would leave one or two unlabeled minor stubs at
+      // the very top/right of the plot frame — exactly the artifact
+      // the user reported. This tiny pad is visually imperceptible
+      // (~0.5 % of the axis span at default densities) but pushes the
+      // boundary off every tick grid.
+      //
+      // Rationale for picking pad over `customValues`: pinning
+      // customValues makes major tick MARKS land at our positions but
+      // leaves splitLine + minorTick driven by ECharts'
+      // scale.getTicks(), which uses an independently-computed
+      // interval. The two sources disagree → "majors and minors
+      // looked like two separate things". The pad approach lets
+      // ECharts auto-tick the WHOLE axis from a single source so
+      // every tick / gridline / minor is aligned by construction.
+      const xPad = (sharedRanges.xInterval ?? 0) / (AUTO_MINOR_SPLIT * 2);
+      if (sharedRanges.xMin != null) xFinalBounds.min = sharedRanges.xMin - xPad;
+      if (sharedRanges.xMax != null) xFinalBounds.max = sharedRanges.xMax + xPad;
       // Deliberately NOT spreading sharedRanges.xInterval — see the
       // matching note in yFinalBounds. With identical min/max across
       // panels, ECharts' auto-tick picks an identical interval; pinning
       // would re-introduce the Phase-4 drag bug where setOption merges
       // keep the old step alive after a drag changes min/max, making
       // tick values drift off the nice grid.
-      xFitMin = sharedRanges.xMin ?? null;
-      xFitMax = sharedRanges.xMax ?? null;
-      xFitInterval = sharedRanges.xInterval ?? null;
     } else if (xIdx >= 0) {
       let dataMin = Infinity;
       let dataMax = -Infinity;
@@ -4579,42 +4359,19 @@ function buildSingleOption(
       // already on a clean grid via computeNiceBounds, ECharts'
       // auto-tick picks identical positions on initial render.
       //
-      // No pad on the bounds — the `customValues` fragment below
-      // bypasses the boundary-push tick generation in
-      // `Interval.js#getTicks`, so we don't need to push the bounds
-      // off the nice grid to dodge an extra stub.
+      // Half-MINOR-interval pad — see sharedRanges branch above for
+      // the rationale. Pushes the axis bounds OFF the tick grid so
+      // ECharts doesn't stamp a tick (major OR minor) at the very
+      // top/right of the plot frame.
       xFinalBounds = fit
-        ? { min: fit.min, max: fit.max }
+        ? {
+            min: fit.min - fit.interval / (AUTO_MINOR_SPLIT * 2),
+            max: fit.max + fit.interval / (AUTO_MINOR_SPLIT * 2),
+          }
         : { scale: true };
-      if (fit) {
-        xFitMin = fit.min;
-        xFitMax = fit.max;
-        xFitInterval = fit.interval;
-      }
     } else {
       xFinalBounds = { scale: true };
     }
-    // Read user pins from `spec.xAxis` so customValues spans the
-    // FULL extent ECharts will render — see `buildAxisCustomTicks`.
-    const xUserMin = Number.isFinite(spec.xAxis?.min as number) ? (spec.xAxis!.min as number) : null;
-    const xUserMax = Number.isFinite(spec.xAxis?.max as number) ? (spec.xAxis!.max as number) : null;
-    const xUserInterval =
-      Number.isFinite(spec.xAxis?.tickInterval as number) && (spec.xAxis!.tickInterval as number) > 0
-        ? (spec.xAxis!.tickInterval as number)
-        : null;
-    const xTicks = buildAxisCustomTicks(
-      xFitMin, xFitMax, xFitInterval,
-      xUserMin, xUserMax, xUserInterval,
-    );
-    // Pin `interval` alongside customValues so ECharts' internal scale
-    // (which drives splitLine + minorTick subdivisions) uses the same
-    // step as our major tick marks. Without this, splitLine and the
-    // minor ticks would land between our majors whenever ECharts'
-    // auto-pick disagrees with our `niceStep`. User-pinned interval
-    // still wins via `buildAxisOverrides` below.
-    xCustomTicks = xTicks.interval != null
-      ? { ...xTicks.fragment, interval: xTicks.interval }
-      : xTicks.fragment;
   }
   const xAxisBase = xIsCategory
     ? {
@@ -4703,18 +4460,7 @@ function buildSingleOption(
   // survive instead of being clobbered by the user's `axisLine.show`.
   // The deep merge order is base → user, so user-pinned scalars (min,
   // max, interval) win over the auto-fit values baked into the base.
-  //
-  // `xCustomTicks` is merged between the base and the user override
-  // so the user can still clobber `axisTick.customValues` /
-  // `axisLabel.customValues` via an explicit override (e.g. by
-  // emitting their own customValues), and so that user-pinned `min`
-  // / `max` filter the rendered ticks naturally (ECharts'
-  // `parseTickLabelCustomValues` drops customValues outside the
-  // current axis extent).
-  const xAxis = mergeAxis(
-    mergeAxis(xAxisBase, xCustomTicks),
-    buildAxisOverrides(spec.xAxis),
-  );
+  const xAxis = mergeAxis(xAxisBase, buildAxisOverrides(spec.xAxis));
 
   // Append user-defined reference line carriers. Two separate carriers
   // (one per axis) so each can be silently skipped when its axis isn't
@@ -4780,20 +4526,12 @@ function buildSingleOption(
   // extension produced. User-pinned min/max/interval still win via
   // `mergeAxis` → `buildAxisOverrides`'s spread further down.
   let yFinalBounds: EChartsOption;
-  // Companion to xCustomTicks — see comment there. Both axes need the
-  // same protection because the boundary-push artifact applies to any
-  // value axis whose extent is wider than its nice extent. The tick
-  // list MUST span the effective post-merge extent (user pin ∪
-  // sharedRanges ∪ fit) so a user-pinned wider range doesn't leave
-  // the over-pinned portion blank — see `buildAxisCustomTicks`.
-  let yCustomTicks: EChartsOption = {};
-  let yFitMin: number | null = null;
-  let yFitMax: number | null = null;
-  let yFitInterval: number | null = null;
   if (sharedRanges?.yMin != null || sharedRanges?.yMax != null) {
     yFinalBounds = {};
-    if (sharedRanges.yMin != null) yFinalBounds.min = sharedRanges.yMin;
-    if (sharedRanges.yMax != null) yFinalBounds.max = sharedRanges.yMax;
+    // Half-MINOR-interval pad — see xFinalBounds above for rationale.
+    const yPad = (sharedRanges.yInterval ?? 0) / (AUTO_MINOR_SPLIT * 2);
+    if (sharedRanges.yMin != null) yFinalBounds.min = sharedRanges.yMin - yPad;
+    if (sharedRanges.yMax != null) yFinalBounds.max = sharedRanges.yMax + yPad;
     // Deliberately NOT spreading sharedRanges.yInterval, even though
     // computeSharedRanges still emits it for potential future
     // consumers. Phase 4 (commit 54b0642) established that any
@@ -4804,9 +4542,6 @@ function buildSingleOption(
     // ("刻度数字一直在动"). With identical min/max across panels,
     // ECharts' auto-tick picks an identical interval per panel anyway,
     // so we get the same visual density without the drag regression.
-    yFitMin = sharedRanges.yMin ?? null;
-    yFitMax = sharedRanges.yMax ?? null;
-    yFitInterval = sharedRanges.yInterval ?? null;
   } else {
     let dataMin = Infinity;
     let dataMax = -Infinity;
@@ -4827,34 +4562,15 @@ function buildSingleOption(
       AUTO_TARGET_TICKS,
     );
     // See xFinalBounds above: emit min/max only so ECharts auto-ticks.
-    // No pad — `customValues` below prevents the boundary-push tick.
+    // Half-MINOR-interval pad pushes the axis bounds OFF the tick
+    // grid so no tick (major or minor) lands at the very top or
+    // bottom of the plot frame.
     yFinalBounds = fit
-      ? { min: fit.min, max: fit.max }
+      ? {
+          min: fit.min - fit.interval / (AUTO_MINOR_SPLIT * 2),
+          max: fit.max + fit.interval / (AUTO_MINOR_SPLIT * 2),
+        }
       : { scale: true };
-    if (fit) {
-      yFitMin = fit.min;
-      yFitMax = fit.max;
-      yFitInterval = fit.interval;
-    }
-  }
-  // Read user pins from `spec.yAxis` so customValues spans the full
-  // extent ECharts will render — see `buildAxisCustomTicks`.
-  {
-    const yUserMin = Number.isFinite(spec.yAxis?.min as number) ? (spec.yAxis!.min as number) : null;
-    const yUserMax = Number.isFinite(spec.yAxis?.max as number) ? (spec.yAxis!.max as number) : null;
-    const yUserInterval =
-      Number.isFinite(spec.yAxis?.tickInterval as number) && (spec.yAxis!.tickInterval as number) > 0
-        ? (spec.yAxis!.tickInterval as number)
-        : null;
-    const yTicks = buildAxisCustomTicks(
-      yFitMin, yFitMax, yFitInterval,
-      yUserMin, yUserMax, yUserInterval,
-    );
-    // Pin `interval` so splitLine + minorTick subdivisions align with
-    // our customValues — see the matching note on `xCustomTicks` above.
-    yCustomTicks = yTicks.interval != null
-      ? { ...yTicks.fragment, interval: yTicks.interval }
-      : yTicks.fragment;
   }
 
   return {
@@ -4889,26 +4605,20 @@ function buildSingleOption(
     legend: undefined,
     xAxis,
     yAxis: mergeAxis(
-      mergeAxis(
-        {
-          type: "value",
-          ...axis,
-          // Auto-enable minor ticks on the Y value axis — same rationale
-          // as `xAxis` above. User overrides (including explicit-off
-          // via `minorTickCount = 0`) merge in below. The
-          // `...axis.minorTick` spread preserves theme lineStyle so
-          // minors render at the same 0.5px stroke as the majors.
-          minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
-          // Pre-computed bounds (faceted shared OR local nice-snap fit).
-          // User-pinned overrides from `buildAxisOverrides` still win
-          // via the merge spread below.
-          ...yFinalBounds,
-        },
-        // Pin axisTick + axisLabel customValues so ECharts' boundary
-        // tick-push (Interval.js#getTicks) doesn't stamp an unlabeled
-        // stub at the top of the plot frame. See `buildCustomTickFragment`.
-        yCustomTicks,
-      ),
+      {
+        type: "value",
+        ...axis,
+        // Auto-enable minor ticks on the Y value axis — same rationale
+        // as `xAxis` above. User overrides (including explicit-off
+        // via `minorTickCount = 0`) merge in below. The
+        // `...axis.minorTick` spread preserves theme lineStyle so
+        // minors render at the same 0.5px stroke as the majors.
+        minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
+        // Pre-computed bounds (faceted shared OR local nice-snap fit).
+        // User-pinned overrides from `buildAxisOverrides` still win
+        // via the merge spread below.
+        ...yFinalBounds,
+      },
       buildAxisOverrides(spec.yAxis),
     ),
     series,
