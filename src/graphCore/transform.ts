@@ -2892,24 +2892,33 @@ function buildSingleOption(
       const xPinMax = spec.xAxis?.max;
       if (Number.isFinite(xPinMin)) xLoForBins = xPinMin as number;
       if (Number.isFinite(xPinMax)) xHiForBins = xPinMax as number;
-      const autoBinCount = computeAutoBinCount(
-        xLoForBins,
-        xHiForBins,
-        spec.xAxis,
-      );
-      // Tick-aligned bin grid. `histogramBins` would anchor the grid
-      // at the data extent (= min of `allXs`), which lands on a
-      // non-nice multiple whenever the user has drag-zoomed the axis;
-      // the resulting bin edges then drift off ECharts' minor tick
-      // positions and look misaligned until the user happens to drag
-      // back onto a nice multiple. Build the grid manually instead:
-      // pick `width` from the auto bin count, snap `gridLo` down to
-      // the nearest multiple of `width`, and extend until at least
-      // `xHiForBins` is covered. Bin EDGES then sit on the same
-      // nice ladder ECharts uses for its minor ticks.
-      const rawSpan = xHiForBins - xLoForBins;
-      const rawWidth = rawSpan > 0 && autoBinCount > 0 ? rawSpan / autoBinCount : 1;
-      const width = rawWidth > 0 ? rawWidth : 1;
+      // Tick-aligned bin grid. Two invariants must hold for bars to
+      // sit on ECharts' minor tick lines:
+      //   (1) `width` MUST equal ECharts' minor tick step exactly:
+      //       `niceStep(span, BIN_GRID_TARGET_TICKS) / minorSplit`
+      //       — i.e. the same major step ECharts auto-picks divided
+      //       by the same `minorTick.splitNumber` we configure on the
+      //       axis. An older version of this code re-derived width
+      //       as `span / round(span/width)` after rounding the bin
+      //       count to an integer, which silently shifted width off
+      //       the exact minor-tick step (e.g. span=0.11 → rounded
+      //       count=28 → width=0.003928 instead of the correct 0.004).
+      //   (2) `gridLo` MUST snap to a multiple of `width` (= multiple
+      //       of the minor tick ladder), otherwise drag-zooming to a
+      //       non-nice axis min leaves bin edges at offsets ECharts'
+      //       ticks never visit.
+      // `histogramBins` would violate both invariants (anchors at
+      // data min, derives width from rounded count), so build the
+      // grid manually:
+      const xMinorSplit = resolveMinorSplit(spec.xAxis);
+      const xSpan = xHiForBins - xLoForBins;
+      const userXStep = spec.xAxis?.tickInterval;
+      const xMajorStep =
+        Number.isFinite(userXStep as number) && (userXStep as number) > 0
+          ? (userXStep as number)
+          : niceStep(xSpan, BIN_GRID_TARGET_TICKS);
+      const width =
+        xMajorStep > 0 && xMinorSplit > 0 ? xMajorStep / xMinorSplit : 1;
       const gridLo = Number.isFinite(xLoForBins)
         ? Math.floor(xLoForBins / width) * width
         : 0;
