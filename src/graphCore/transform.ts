@@ -1429,9 +1429,18 @@ function computeJitterOffsets(
   // is ~6px, give a little air around it so dots don't kiss.
   const SYMBOL_PX = 6;
   const SPACING = SYMBOL_PX + 1;
-  // Maximum total horizontal spread per category (capped at the typical
-  // category band ~ 60px). `limit` (0..1) scales it.
-  const MAX_SPREAD = 60 * (limit > 0 ? limit : 1);
+  // Maximum total horizontal spread per category. The cap below
+  // (120px) is sized to roughly fill a typical category band on a
+  // ~600px chart — narrower than that and JMP-style stack jitter
+  // collapses onto a single visible line for small buckets.
+  //
+  // `limit` is the user's 0..1 slider. PRIOR BUG: the fallback was
+  // `limit > 0 ? limit : 1`, so dragging the slider to 0 silently
+  // promoted MAX_SPREAD to its maximum (the opposite of what 0 should
+  // mean). Now `limit === 0` truly disables horizontal spread — the
+  // points pile back onto a single column at the category center,
+  // exactly as the slider position suggests.
+  const MAX_SPREAD = 120 * Math.max(0, Math.min(1, limit));
 
   if (mode === "uniform" || mode === "normal") {
     const half = MAX_SPREAD / 2;
@@ -1472,6 +1481,12 @@ function computeJitterOffsets(
 
   const offs: Array<[number, number]> = new Array(points.length);
   for (let i = 0; i < points.length; i++) offs[i] = [0, 0];
+
+  // Slider at 0 means "no horizontal spread" — leave every offset at
+  // [0, 0] and return early. Skipping the bucket loop also avoids the
+  // `spacing = min(SPACING, MAX_SPREAD/(n-1))` branch resolving to 0/0
+  // (which would be moot but is messier than this explicit short-circuit).
+  if (MAX_SPREAD <= 0) return offs;
 
   groups.forEach((idxs) => {
     // Bin indices within this category.
