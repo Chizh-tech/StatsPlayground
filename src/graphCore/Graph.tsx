@@ -755,11 +755,91 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       if (dragState && !dragState.captured) finishDrag(true);
     };
 
+    // ----- Wheel-zoom shortcuts (pan mode only) ----------------------
+    // Pan mode:
+    //   Ctrl + wheel         → zoom Y axis around cursor
+    //   Ctrl + Shift + wheel → zoom X axis around cursor
+    // Brush (select) mode:
+    //   wheel is left alone (lets the user scroll the surrounding page).
+    //
+    // Zoom is multiplicative around the value under the cursor so the
+    // point under the pointer stays fixed in screen space. The new
+    // bounds are pushed live via `schedulePatch` (rAF-coalesced) for
+    // smoothness, and a debounced `commit` fires `onAxisRangeChange`
+    // once the wheel goes idle so the parent state finally syncs.
+    let wheelCommitTimer: number | null = null;
+    let wheelLastBounds: { x?: { min: number; max: number }; y?: { min: number; max: number } } = {};
+    const flushWheelCommit = () => {
+      wheelCommitTimer = null;
+      const cb = onAxisRangeChangeRef.current;
+      if (!cb) { wheelLastBounds = {}; return; }
+      if (wheelLastBounds.x) cb("x", wheelLastBounds.x.min, wheelLastBounds.x.max);
+      if (wheelLastBounds.y) cb("y", wheelLastBounds.y.min, wheelLastBounds.y.max);
+      wheelLastBounds = {};
+    };
+    const onWheel = (e: WheelEvent) => {
+      // Only the Ctrl-modifier shortcut applies; bare wheel is a
+      // pass-through so the outer page can still scroll. Brush mode
+      // also disables the shortcut — the user is mid-selection and
+      // shouldn't have the chart re-scale under their cursor.
+      if (brushModeRef.current) return;
+      if (!e.ctrlKey) return;
+      if (!onAxisRangeChangeRef.current) return;
+      const rect = el.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      const r = getGridRect();
+      if (!r) return;
+      // Cursor must be inside the plotting area for the zoom to make
+      // sense (zooming around a pixel that maps to nothing produces
+      // weird ranges).
+      if (px < r.x || px > r.x + r.width || py < r.y || py > r.y + r.height) return;
+      const which: "x" | "y" = e.shiftKey ? "x" : "y";
+      const bounds = readAxisBounds(which);
+      if (!bounds) return;
+      e.preventDefault();
+      // Scroll up (deltaY < 0) zooms IN (range shrinks); scroll down
+      // zooms OUT. Use an exponential factor so trackpads (small deltas)
+      // and mouse wheels (large deltas) both feel proportional. 0.001
+      // gives a comfortable ~10% per standard mouse notch (deltaY≈100).
+      const factor = Math.exp(e.deltaY * 0.0015);
+      // Pivot: the data value currently under the cursor pixel.
+      const finder = which === "y" ? { yAxisIndex: 0 } : { xAxisIndex: 0 };
+      let pivot: number;
+      try {
+        pivot = Number(inst.convertFromPixel(finder, which === "y" ? py : px));
+      } catch { return; }
+      if (!Number.isFinite(pivot)) return;
+      let newMin = pivot - (pivot - bounds.min) * factor;
+      let newMax = pivot + (bounds.max - pivot) * factor;
+      // Guard against degenerate or inverted ranges.
+      if (!Number.isFinite(newMin) || !Number.isFinite(newMax) || newMax <= newMin) return;
+      // Sanity floor: don't let the user zoom so far in that floating
+      // point loses precision.
+      const span = newMax - newMin;
+      const origSpan = bounds.max - bounds.min;
+      if (span < origSpan * 1e-6) return;
+      // Apply live (rAF-coalesced), and remember the latest bounds so
+      // the debounced commit can fire onAxisRangeChange once idle.
+      if (which === "y") {
+        schedulePatch({ yAxis: { min: newMin, max: newMax } });
+        wheelLastBounds.y = { min: newMin, max: newMax };
+      } else {
+        schedulePatch({ xAxis: { min: newMin, max: newMax } });
+        wheelLastBounds.x = { min: newMin, max: newMax };
+      }
+      if (wheelCommitTimer) window.clearTimeout(wheelCommitTimer);
+      wheelCommitTimer = window.setTimeout(flushWheelCommit, 220);
+    };
+
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", onPointerUp);
     el.addEventListener("pointercancel", onPointerCancel);
     el.addEventListener("pointerleave", onPointerLeave);
+    // `passive: false` so the Ctrl/Ctrl+Shift+wheel handler can call
+    // preventDefault() and stop the browser's page scroll / pinch-zoom.
+    el.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("mouseup", onWindowMouseUpSafety);
 
     return () => {
@@ -770,7 +850,9 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       el.removeEventListener("pointerup", onPointerUp);
       el.removeEventListener("pointercancel", onPointerCancel);
       el.removeEventListener("pointerleave", onPointerLeave);
+      el.removeEventListener("wheel", onWheel);
       window.removeEventListener("mouseup", onWindowMouseUpSafety);
+      if (wheelCommitTimer) { window.clearTimeout(wheelCommitTimer); wheelCommitTimer = null; }
       if (scheduledFrame) {
         cancelAnimationFrame(scheduledFrame);
         scheduledFrame = 0;
