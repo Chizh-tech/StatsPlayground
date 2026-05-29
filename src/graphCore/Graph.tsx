@@ -468,12 +468,20 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       if (inBody) {
         const xb = readAxisBounds("x");
         const yb = readAxisBounds("y");
-        if (!xb || !yb) return null;
-        return {
-          mode: "xy-pan",
-          startXMin: xb.min, startXMax: xb.max, xPxRange: r.width,
-          startYMin: yb.min, startYMax: yb.max, yPxRange: r.height,
-        };
+        if (!xb && !yb) return null;
+        if (xb && yb) {
+          return {
+            mode: "xy-pan",
+            startXMin: xb.min, startXMax: xb.max, xPxRange: r.width,
+            startYMin: yb.min, startYMax: yb.max, yPxRange: r.height,
+          };
+        }
+        // Only one axis has a numeric range (the other is categorical or
+        // unset). Fall back to single-axis pan for the valid axis.
+        if (xb) {
+          return { mode: "x-pan", startXMin: xb.min, startXMax: xb.max, xPxRange: r.width };
+        }
+        return { mode: "y-pan", startYMin: yb!.min, startYMax: yb!.max, yPxRange: r.height };
       }
       return null;
     };
