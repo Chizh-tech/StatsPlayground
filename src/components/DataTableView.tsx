@@ -735,6 +735,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const resizingRef = useRef<{ colIdx: number; startX: number; startW: number } | null>(null);
   const isDraggingRef = useRef(false);
   const didDragRef = useRef(false);
+  // Ctrl/Cmd+drag on cells creates an additive rectangular region that
+  // unions into selectedCells on mouseup. While the drag is in flight,
+  // `pendingCtrlRect` is rendered as a live preview (merged into cellsByRow
+  // so cells inside it show as selected without yet being committed).
+  const isCtrlDraggingRef = useRef(false);
+  const [pendingCtrlRect, setPendingCtrlRect] = useState<CellRange | null>(null);
   const isDraggingRowRef = useRef(false);
   const isDraggingColRef = useRef(false);
   const didDragColRef = useRef(false);
@@ -1424,8 +1430,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   // Returns a Map: rowIdx → Set<colIdx>. Lookup misses produce undefined,
   // which we pass straight to TableRow so untouched rows keep `undefined`
   // (a stable identity) as their prop.
+  //
+  // Also merges in the in-flight `pendingCtrlRect` (Ctrl+drag preview) so
+  // cells inside the dragged rectangle render as selected before mouseup
+  // commits them to selectedCells.
   const cellsByRow = useMemo(() => {
-    if (selectedCells.size === 0) return null;
+    if (selectedCells.size === 0 && !pendingCtrlRect) return null;
     const m = new Map<number, Set<number>>();
     for (const key of selectedCells) {
       const ci = key.indexOf(",");
@@ -1440,8 +1450,19 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       }
       set.add(c);
     }
+    if (pendingCtrlRect) {
+      const { r1, c1, r2, c2 } = normalizeRange(pendingCtrlRect);
+      for (let r = r1; r <= r2; r++) {
+        let set = m.get(r);
+        if (!set) {
+          set = new Set<number>();
+          m.set(r, set);
+        }
+        for (let c = c1; c <= c2; c++) set.add(c);
+      }
+    }
     return m;
-  }, [selectedCells]);
+  }, [selectedCells, pendingCtrlRect]);
 
   // Stable callback identities for memoized TableRow children — proxy to the
   // latest closures via refs so the props passed to <TableRow> never change
@@ -2573,32 +2594,118 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     containerRef.current?.focus();
     setCornerSelected(false);
 
-    // Ctrl/Cmd+click on a cell toggles that single cell in the
-    // non-contiguous `selectedCells` set. The clicked cell becomes the new
-    // active cell (focus moves there, Excel-style). When entering multi-cell
-    // mode for the first time (selectedCells is empty), we also seed the
-    // set with the prior activeCell so the previously-focused cell stays
-    // selected — otherwise the very first Ctrl+click would effectively just
-    // move focus instead of building a multi-selection.
+    // Ctrl/Cmd+click and Ctrl/Cmd+drag on cells extend the non-contiguous
+    // `selectedCells` set:
+    //
+    //   - Click (no movement): toggle that single cell. Excel-style with
+    //     one tweak: on the very first Ctrl interaction we seed the set
+    //     with the prior activeCell so the previously-focused cell stays
+    //     visible — without this the first Ctrl+click would effectively
+    //     just move focus instead of building a multi-selection.
+    //
+    //   - Drag (mouse moved to a different cell): commit the dragged
+    //     rectangle as a union into selectedCells (additive — already-
+    //     selected cells inside the rect stay selected). This lets the
+    //     user paint multiple disjoint rectangular regions by holding
+    //     Ctrl and dragging in different areas.
+    //
+    // During the drag, `pendingCtrlRect` renders as a live preview by
+    // being merged into cellsByRow; on mouseup we move it into the
+    // committed selectedCells Set.
     //
     // The subsequent onClick event hits handleCellClick, which has a
-    // Ctrl/Cmd-modifier guard at the top that returns early — preventing it
-    // from wiping selectedCells with setSelectedCells(EMPTY_CELL_SET).
+    // Ctrl/Cmd-modifier guard at the top that returns early — preventing
+    // it from wiping selectedCells with setSelectedCells(EMPTY_CELL_SET).
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
-      const clickedKey = cellKey(row, col);
-      const next = new Set(selectedCells);
-      if (next.size === 0 && activeCell &&
+      // Seed the persistent set with the prior activeCell on the first
+      // Ctrl interaction so it doesn't get "lost" when we move active to
+      // the clicked cell.
+      if (selectedCells.size === 0 && activeCell &&
           (activeCell.row !== row || activeCell.col !== col)) {
-        next.add(cellKey(activeCell.row, activeCell.col));
+        const seed = new Set<string>();
+        seed.add(cellKey(activeCell.row, activeCell.col));
+        setSelectedCells(seed);
       }
-      if (next.has(clickedKey)) next.delete(clickedKey);
-      else next.add(clickedKey);
-      setSelectedCells(next);
       setActiveCell({ row, col });
       setSelection(null);
       setSelectedRows(EMPTY_NUM_SET);
       setSelectedCols(EMPTY_NUM_SET);
+
+      isCtrlDraggingRef.current = true;
+      setPendingCtrlRect({ startRow: row, startCol: col, endRow: row, endCol: col });
+      document.body.style.userSelect = "none";
+
+      // Same coalescing pattern as the normal drag: skip same-cell moves,
+      // at most one setPendingCtrlRect per animation frame.
+      let lastR = row;
+      let lastC = col;
+      let pendingRaf = 0;
+
+      const onCtrlMove = (ev: MouseEvent) => {
+        if (!isCtrlDraggingRef.current) return;
+        startAutoScroll(ev);
+        const target = document.elementFromPoint(ev.clientX, ev.clientY);
+        if (!target) return;
+        const td = (target as Element).closest("td.sp-cell") as HTMLElement | null;
+        if (!td) return;
+        const ri = td.dataset.row;
+        const ci = td.dataset.col;
+        if (ri == null || ci == null) return;
+        const nr = Number(ri);
+        const nc = Number(ci);
+        if (!Number.isFinite(nr) || !Number.isFinite(nc)) return;
+        if (nr === lastR && nc === lastC) return;
+        lastR = nr;
+        lastC = nc;
+        if (pendingRaf) return;
+        pendingRaf = requestAnimationFrame(() => {
+          pendingRaf = 0;
+          setPendingCtrlRect((prev) => prev ? { ...prev, endRow: lastR, endCol: lastC } : null);
+        });
+      };
+
+      const onCtrlUp = () => {
+        isCtrlDraggingRef.current = false;
+        stopAutoScroll();
+        if (pendingRaf) {
+          cancelAnimationFrame(pendingRaf);
+          pendingRaf = 0;
+        }
+        document.body.style.userSelect = "";
+        document.removeEventListener("mousemove", onCtrlMove);
+        document.removeEventListener("mouseup", onCtrlUp);
+        setPendingCtrlRect(null);
+
+        const r1 = Math.min(row, lastR);
+        const r2 = Math.max(row, lastR);
+        const c1 = Math.min(col, lastC);
+        const c2 = Math.max(col, lastC);
+        if (r1 === r2 && c1 === c2) {
+          // Pure click on a single cell — toggle it.
+          setSelectedCells((prev) => {
+            const next = new Set(prev);
+            const k = cellKey(row, col);
+            if (next.has(k)) next.delete(k);
+            else next.add(k);
+            return next;
+          });
+        } else {
+          // Drag covered multiple cells — union the whole rectangle. We
+          // do not toggle here: Excel's additive Ctrl+drag never removes
+          // cells, even if some inside the new rect were already selected.
+          setSelectedCells((prev) => {
+            const next = new Set(prev);
+            for (let r = r1; r <= r2; r++) {
+              for (let c = c1; c <= c2; c++) next.add(cellKey(r, c));
+            }
+            return next;
+          });
+        }
+      };
+
+      document.addEventListener("mousemove", onCtrlMove);
+      document.addEventListener("mouseup", onCtrlUp);
       return;
     }
 
