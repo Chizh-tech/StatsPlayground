@@ -10,6 +10,7 @@ import { useDataStore } from "@/stores/useDataStore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useHistoryStore } from "@/stores/useHistoryStore";
 import { useTableZoomStore } from "@/stores/useTableZoomStore";
+import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { modKey, shiftKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { inferFieldType, type FieldRef, type GraphData } from "@/graphCore";
@@ -1108,6 +1109,61 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const toDataIdx = useCallback((vi: number): number =>
     displayIdxMap ? displayIdxMap[vi] : vi,
     [displayIdxMap]);
+
+  // ----- Cross-view cell pick (Graph → Table) -----------------------
+  // The GraphBuilder writes a `{rowId, colName}` slot into
+  // useTableSelectionStore whenever the user clicks a scatter point.
+  // We consume it here: translate `rowId` → display-row index (going
+  // through `data.rows`' `_row_id` column and then through the current
+  // filter's index map), translate `colName` → visible column index,
+  // then drive activeCell + selection so the existing auto-scroll
+  // effect brings the cell into view.
+  //
+  // Re-runs when the pick OR the tick counter for this dataset changes
+  // — the tick bump lets the user re-pick the same cell and still get
+  // a fresh scroll-into-view (object identity alone wouldn't).
+  // Filter changes also re-run so a previously-hidden row that becomes
+  // visible after the user widens their filter gets selected.
+  const pickedCell = useTableSelectionStore((s) => s.byDataset[datasetId] ?? null);
+  const pickedTick = useTableSelectionStore((s) => s.ticks[datasetId] ?? 0);
+  useEffect(() => {
+    if (!pickedCell) return;
+    if (!data || rowIdIdx < 0) return;
+    // Resolve the data-row index by scanning data.rows for the
+    // matching _row_id. Datasets are typically <1M rows and this fires
+    // only on user click, so a linear scan is fine — building a
+    // rowId→idx map would waste memory for the much more common case
+    // where the user never picks a graph point at all.
+    let dataIdx = -1;
+    const rows = data.rows as unknown[][];
+    for (let i = 0; i < rows.length; i++) {
+      if (Number(rows[i]?.[rowIdIdx]) === pickedCell.rowId) {
+        dataIdx = i;
+        break;
+      }
+    }
+    if (dataIdx < 0) return; // row was deleted since the pick was made
+    // Translate data-index → visible display-index. The current
+    // tableFilters may have filtered the row out — when that happens
+    // we silently bail (highlighting an invisible row would be
+    // confusing). Users can clear the filter to reveal it.
+    let displayIdx: number;
+    if (displayIdxMap) {
+      displayIdx = displayIdxMap.indexOf(dataIdx);
+      if (displayIdx < 0) return;
+    } else {
+      displayIdx = dataIdx;
+    }
+    const colIdx = cols.indexOf(pickedCell.colName);
+    if (colIdx < 0) return; // column was renamed/dropped
+    setActiveCell({ row: displayIdx, col: colIdx });
+    setSelection({ startRow: displayIdx, startCol: colIdx, endRow: displayIdx, endCol: colIdx });
+    setSelectedRows(EMPTY_NUM_SET);
+    setSelectedCols(EMPTY_NUM_SET);
+    // pickedTick: see comment above — included so identical re-picks
+    // still re-trigger the scroll-into-view effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedCell, pickedTick, data, rowIdIdx, displayIdxMap, cols]);
 
   // Sync status info to global status bar
   useEffect(() => {

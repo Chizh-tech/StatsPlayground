@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as echarts from "echarts";
 import type { GraphSpec, GraphData } from "./types";
 import { getGraphTheme } from "./theme";
-import { buildGraph } from "./transform";
+import { buildGraph, type ScatterPointPick } from "./transform";
 import { useThemeStore } from "@/stores/useThemeStore";
 
 interface GraphProps {
@@ -57,9 +57,18 @@ interface GraphProps {
    * meaningless there.
    */
   onAxisRangeChange?: (axis: "x" | "y", min: number, max: number) => void;
+  /**
+   * Fired when the user clicks a scatter point that originated from a
+   * real source row. The payload identifies the dataset row (via
+   * `_row_id`) and the user-visible column the point came from
+   * (original Y field, or the source column in multi-column melt mode).
+   * Aggregated summary dots / boxplot outliers / synthetic overlays do
+   * NOT carry pick metadata and therefore never invoke this callback.
+   */
+  onPointClick?: (pick: ScatterPointPick) => void;
 }
 
-export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange }: GraphProps) {
+export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onPointClick }: GraphProps) {
   // 订阅主题变化以触发重渲染
   const themeMode = useThemeStore((s) => s.mode);
 
@@ -98,6 +107,7 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
           onYAxisDblClick={onYAxisDblClick}
           onXAxisDblClick={onXAxisDblClick}
           onAxisRangeChange={onAxisRangeChange}
+          onPointClick={onPointClick}
         />
       ))}
     </div>
@@ -111,9 +121,10 @@ interface GraphPanelProps {
   onYAxisDblClick?: () => void;
   onXAxisDblClick?: () => void;
   onAxisRangeChange?: (axis: "x" | "y", min: number, max: number) => void;
+  onPointClick?: (pick: ScatterPointPick) => void;
 }
 
-function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange }: GraphPanelProps) {
+function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onPointClick }: GraphPanelProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
   // Keep the latest callbacks in refs so the Zrender dblclick handler
@@ -122,6 +133,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
   const onYAxisDblClickRef = useRef(onYAxisDblClick);
   const onXAxisDblClickRef = useRef(onXAxisDblClick);
   const onAxisRangeChangeRef = useRef(onAxisRangeChange);
+  const onPointClickRef = useRef(onPointClick);
   useEffect(() => {
     onYAxisDblClickRef.current = onYAxisDblClick;
   }, [onYAxisDblClick]);
@@ -131,6 +143,9 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
   useEffect(() => {
     onAxisRangeChangeRef.current = onAxisRangeChange;
   }, [onAxisRangeChange]);
+  useEffect(() => {
+    onPointClickRef.current = onPointClick;
+  }, [onPointClick]);
 
   // 初始化 / 销毁
   useEffect(() => {
@@ -202,6 +217,28 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       else if (inXAxis && xCb) xCb();
     };
     zr.on("dblclick", zrHandler);
+
+    // ----- Point click → bridge to DataTableView -----------------------
+    // ECharts dispatches `click` events with `params.componentType =
+    // "series"` for every series interaction. We narrow to scatter (the
+    // only series carrying source-row metadata) and read the `__pick`
+    // tag that transform.ts attached to raw scatter items. Aggregated
+    // summary dots / boxplot outliers / synthetic overlays emit data
+    // tuples without `__pick` and are silently ignored — they don't map
+    // to a single source row, so a "jump to cell" gesture would be
+    // ambiguous.
+    const onSeriesClick = (params: any) => {
+      const cb = onPointClickRef.current;
+      if (!cb) return;
+      if (params?.componentType !== "series") return;
+      if (params?.seriesType !== "scatter") return;
+      const item = params?.data as { __pick?: ScatterPointPick } | unknown;
+      if (!item || typeof item !== "object") return;
+      const pick = (item as { __pick?: ScatterPointPick }).__pick;
+      if (!pick || typeof pick.rowId !== "number" || pick.rowId < 0) return;
+      cb(pick);
+    };
+    inst.on("click", onSeriesClick);
 
     // ----- Drag-zoom / drag-pan via native pointer events ------------
     // Mental model the user asked for: the canvas is a *viewport* onto
@@ -595,6 +632,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
 
     return () => {
       zr.off("dblclick", zrHandler);
+      inst.off("click", onSeriesClick);
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("pointermove", onPointerMove);
       el.removeEventListener("pointerup", onPointerUp);

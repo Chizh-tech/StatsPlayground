@@ -27,6 +27,7 @@ import type { FilterRuleItem } from "@/types/filter";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPaletteStore";
+import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
 import { FilterPanel, applyFilters } from "@/components/filter";
@@ -85,6 +86,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const { t } = useTranslation();
   const updateItem = useGraphBuilderStore((s) => s.updateItem);
   const markDirty = useProjectStore((s) => s.markDirty);
+  // Cross-view bridge: click a scatter point → highlight the matching
+  // cell in the DataTableView for `dataset.id` next time it mounts.
+  const pickCell = useTableSelectionStore((s) => s.pick);
 
   const [columns, setColumns] = useState<FieldRef[]>([]);
   const [colSqlTypes, setColSqlTypes] = useState<string[]>([]);
@@ -1528,6 +1532,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     } else {
                       setXAxisConfig({ ...(item.xAxis ?? {}), min, max });
                     }
+                  }}
+                  onPointClick={(pick) => {
+                    // Bridge to DataTableView: stash the source row + col
+                    // on the per-dataset selection slot. The matching
+                    // table view subscribes and surfaces the cell the
+                    // next time it mounts (or immediately if it's
+                    // already mounted). See useTableSelectionStore for
+                    // why we re-emit through the store rather than
+                    // coupling the two views directly.
+                    pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
                   }}
                 />
               )}

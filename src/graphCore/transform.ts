@@ -39,6 +39,33 @@ const SHADE_RATIO_POINT = -0.2;
 const SHADE_RATIO_LINE = 0;
 const SHADE_RATIO_FILL = 0.55;
 
+/** Hidden columns the renderer recognises in `GraphData.columns`. */
+// Backend-issued stable row identifier — present on every dataset query
+// result, used as the bridge back to the corresponding DataTableView cell
+// when the user clicks a scatter point.
+const ROW_ID_COL = "_row_id";
+// Synthetic "variable" column introduced by GraphBuilder's multi-column
+// melt mode. When present, the original source column for a melted point
+// is the row's value in this column (not the renderer's `yIdx` column,
+// which would be the synthetic `__sp_value__`).
+const MELT_VAR_COL = "__sp_variable__";
+
+/** Marker attached to scatter `data` items so the GraphBuilder can map
+ *  a click back to the source dataset row and the user-visible column.
+ *  Optional — emitted only for raw scatter (not for aggregated summary
+ *  dots, where a point represents many rows and "the" source row is
+ *  undefined). */
+export interface ScatterPointPick {
+  /** Value of the dataset's `_row_id` for the source row, or `-1` when
+   *  the dataset lacked an `_row_id` column (e.g. derived/synthetic
+   *  data — clicks on these are ignored downstream). */
+  rowId: number;
+  /** User-visible column name. In multi-column melt mode this is the
+   *  ORIGINAL column the point's value came from (read from
+   *  `__sp_variable__`), never the synthetic melt column. */
+  colName: string;
+}
+
 /** Mix `hex` toward black (ratio<0) or white (ratio>0). ratio in [-1,1]. */
 function shade(hex: string, ratio: number): string {
   if (!hex || ratio === 0) return hex;
@@ -4744,8 +4771,17 @@ function buildElementSeries(
   const useRowIdx = xIdx < 0;
   const SINGLE_X = "";
 
+  // Pre-resolve the hidden columns we attach to scatter points so a
+  // GraphBuilder click can map a dot back to the source DataTableView
+  // cell. Both are optional — datasets without _row_id (synthetic
+  // overlays, derived data) emit `rowId: -1`, and non-melt charts fall
+  // back to the bound Y field name as the source column.
+  const rowIdColIdx = data.columns.indexOf(ROW_ID_COL);
+  const meltVarColIdx = data.columns.indexOf(MELT_VAR_COL);
+  const yColName = yIdx >= 0 ? data.columns[yIdx] : "";
+
   // 取 (x, y[, size]) 数组
-  const points: Array<{ x: unknown; y: number; size?: number }> = [];
+  const points: Array<{ x: unknown; y: number; size?: number; rowId: number; colName: string }> = [];
   for (const i of rowIdxs) {
     const xv = useRowIdx ? SINGLE_X : data.rows[i][xIdx];
     // When a real X column is bound, drop rows whose X is missing so
@@ -4755,7 +4791,9 @@ function buildElementSeries(
     const yv = toNum(data.rows[i][yIdx]);
     if (!Number.isFinite(yv)) continue;
     const sv = sizeIdx >= 0 ? toNum(data.rows[i][sizeIdx]) : undefined;
-    points.push({ x: xv, y: yv, size: sv });
+    const rid = rowIdColIdx >= 0 ? Number(data.rows[i][rowIdColIdx]) : -1;
+    const col = meltVarColIdx >= 0 ? String(data.rows[i][meltVarColIdx] ?? "") : yColName;
+    points.push({ x: xv, y: yv, size: sv, rowId: Number.isFinite(rid) ? rid : -1, colName: col });
   }
   if (points.length === 0) return null;
 
@@ -4840,6 +4878,16 @@ function buildElementSeries(
           data: points.map((p, i) => {
             const value = xIsCategory ? [toStr(p.x), p.y] : [toNum(p.x), p.y];
             const off = offsets ? offsets[i] : null;
+            // Always emit object form when we have a real source row to
+            // attach — the GraphBuilder's onPointClick reads `__pick`
+            // from `params.data`. Falling back to the tuple-only form
+            // when there's no rowId keeps the legacy hot path for
+            // synthetic data identical to before.
+            if (p.rowId >= 0) {
+              const item: any = { value, __pick: { rowId: p.rowId, colName: p.colName } };
+              if (off) item.symbolOffset = off;
+              return item;
+            }
             return off ? { value, symbolOffset: off } : value;
           }),
           z: 5,

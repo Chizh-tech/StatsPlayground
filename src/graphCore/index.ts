@@ -1,7 +1,7 @@
 /** Graph Core 模块出口 */
 export { Graph } from "./Graph";
 export { getGraphTheme, buildAxisCommon } from "./theme";
-export { buildGraph, isMissing, type BuiltGraph } from "./transform";
+export { buildGraph, isMissing, type BuiltGraph, type ScatterPointPick } from "./transform";
 export {
   inferFieldType,
   DEFAULT_GROUP_KEY,
