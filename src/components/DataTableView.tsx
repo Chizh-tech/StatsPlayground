@@ -2618,11 +2618,25 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     // it from wiping selectedCells with setSelectedCells(EMPTY_CELL_SET).
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
-      // Seed the persistent set with the prior activeCell on the first
-      // Ctrl interaction so it doesn't get "lost" when we move active to
-      // the clicked cell.
-      if (selectedCells.size === 0 && activeCell &&
-          (activeCell.row !== row || activeCell.col !== col)) {
+      // Seed the persistent set so prior committed selections survive
+      // the new Ctrl operation:
+      //   (1) Rectangular `selection` exists: fold every cell in it into
+      //       selectedCells. Otherwise the setSelection(null) below would
+      //       wipe the first region, leaving only the new Ctrl-drag.
+      //   (2) Only activeCell exists (no rect, set was empty): include
+      //       the previously-focused cell so it doesn't get lost when
+      //       active moves to the clicked cell.
+      //   (3) selectedCells already non-empty + no rect: nothing to
+      //       seed; existing set persists naturally.
+      if (selection) {
+        const { r1, c1, r2, c2 } = normalizeRange(selection);
+        const seed = new Set(selectedCells);
+        for (let r = r1; r <= r2; r++) {
+          for (let c = c1; c <= c2; c++) seed.add(cellKey(r, c));
+        }
+        setSelectedCells(seed);
+      } else if (selectedCells.size === 0 && activeCell &&
+                 (activeCell.row !== row || activeCell.col !== col)) {
         const seed = new Set<string>();
         seed.add(cellKey(activeCell.row, activeCell.col));
         setSelectedCells(seed);
