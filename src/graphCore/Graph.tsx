@@ -388,11 +388,18 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         return false;
       }
     };
-    // Read current numeric bounds for one axis by sampling the data
-    // values at the two grid corners — works whether the user has
-    // pinned a manual min/max or is on auto-fit.
+    // Read current visible bounds for one axis by sampling the pixel
+    // positions at the two grid corners via convertFromPixel.
+    //
+    // Works for BOTH value-type axes (returns data units) and category
+    // axes (returns float indices, e.g. -0.5 … n-0.5). ECharts honors
+    // float-index min/max on category axes when set via setOption, which
+    // is how smooth pan/zoom on discrete axes is achieved without
+    // data-level resampling.
+    //
+    // Inverse axes are excluded: their coordinate system is flipped, so
+    // the drag-delta sign convention would be wrong for all callers.
     const readAxisBounds = (which: "x" | "y"): { min: number; max: number } | null => {
-      if (getAxisType(which) === "category") return null;
       if (isAxisInverse(which)) return null;
       const r = getGridRect();
       if (!r) return null;
@@ -656,10 +663,12 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         if (st.mode === "y-min") newYMin = st.startYMin + yDelta;
         else if (st.mode === "y-max") newYMax = st.startYMax + yDelta;
         else { newYMin = st.startYMin + yDelta; newYMax = st.startYMax + yDelta; }
-        const floor = Math.abs(ySpan) * 0.001;
-        if (newYMax - newYMin < floor) {
-          if (st.mode === "y-min") newYMin = newYMax - floor;
-          else if (st.mode === "y-max") newYMax = newYMin + floor;
+        // For category axes (index-space), ensure at least 1 category is visible;
+        // for numeric axes keep the 0.1%-of-span precision floor.
+        const yFloor = getAxisType("y") === "category" ? 1.0 : Math.abs(ySpan) * 0.001;
+        if (newYMax - newYMin < yFloor) {
+          if (st.mode === "y-min") newYMin = newYMax - yFloor;
+          else if (st.mode === "y-max") newYMax = newYMin + yFloor;
         }
         st.lastYMin = newYMin;
         st.lastYMax = newYMax;
@@ -683,10 +692,10 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         if (st.mode === "x-min") newXMin = st.startXMin + xDelta;
         else if (st.mode === "x-max") newXMax = st.startXMax + xDelta;
         else { newXMin = st.startXMin + xDelta; newXMax = st.startXMax + xDelta; }
-        const floor = Math.abs(xSpan) * 0.001;
-        if (newXMax - newXMin < floor) {
-          if (st.mode === "x-min") newXMin = newXMax - floor;
-          else if (st.mode === "x-max") newXMax = newXMin + floor;
+        const xFloor = getAxisType("x") === "category" ? 1.0 : Math.abs(xSpan) * 0.001;
+        if (newXMax - newXMin < xFloor) {
+          if (st.mode === "x-min") newXMin = newXMax - xFloor;
+          else if (st.mode === "x-max") newXMax = newXMin + xFloor;
         }
         st.lastXMin = newXMin;
         st.lastXMax = newXMax;
@@ -822,11 +831,11 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       let newMax = pivot + (bounds.max - pivot) * factor;
       // Guard against degenerate or inverted ranges.
       if (!Number.isFinite(newMin) || !Number.isFinite(newMax) || newMax <= newMin) return;
-      // Sanity floor: don't let the user zoom so far in that floating
-      // point loses precision.
+      // Sanity floor: for category axes keep at least 1 category visible;
+      // for numeric axes guard against floating-point precision loss.
       const span = newMax - newMin;
-      const origSpan = bounds.max - bounds.min;
-      if (span < origSpan * 1e-6) return;
+      const minSpan = getAxisType(which) === "category" ? 1.0 : (bounds.max - bounds.min) * 1e-6;
+      if (span < minSpan) return;
       // Apply live (rAF-coalesced), and remember the latest bounds so
       // the debounced commit can fire onAxisRangeChange once idle.
       if (which === "y") {

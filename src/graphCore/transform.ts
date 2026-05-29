@@ -2310,9 +2310,11 @@ function buildXAxisRefLineExpand(refXs: number[]): EChartsOption {
  *  emits keys for fields the user has actually pinned — undefined
  *  fields stay auto.
  *
- *  Numeric bounds (`min` / `max` / `interval`) only have an effect on
- *  value-type axes — ECharts silently ignores them on category and
- *  time axes, so emitting them unconditionally is safe. The decimal
+ *  Numeric bounds (`min` / `max`) have an effect on ALL axis types —
+ *  ECharts accepts numeric-index min/max on category axes to control the
+ *  visible window (this is how smooth pan/zoom on category axes works).
+ *  `interval` (tick-step) is numeric-only; ECharts ignores it on category
+ *  and time axes, so emitting it unconditionally is safe. The decimal
  *  formatter passes string axis values (category labels) through
  *  unchanged so we never corrupt category fallbacks.
  *
