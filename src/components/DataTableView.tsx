@@ -1699,6 +1699,14 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       didDragRef.current = false;
       return;
     }
+    // Ctrl/Cmd+click on a cell is handled in handleCellMouseDown as a row
+    // toggle (non-contiguous row selection). The click event that follows
+    // mousedown must NOT fall through to the default branch below, or it
+    // would call setSelectedRows(EMPTY_NUM_SET) and wipe the toggle. We
+    // check the modifier directly instead of relying on a time-based flag
+    // (suppressSelectionRef + rAF) because the rAF can fire before the
+    // click event when React is busy rendering between rapid clicks.
+    if (e && (e.ctrlKey || e.metaKey)) return;
     // If a menu was just dismissed or resize just finished, don't change selection
     if (suppressSelectionRef.current || hasMenuOpen()) return;
     if (e && (e.shiftKey) && activeCell) {
@@ -2508,7 +2516,9 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
     // Ctrl/Cmd+click: toggle the entire row in selectedRows (non-contiguous
     // row selection from cell clicks — mirrors what row-header Ctrl+click
-    // already does, but reachable from any cell in the row).
+    // already does, but reachable from any cell in the row). The following
+    // onClick event is filtered out by handleCellClick's Ctrl-modifier
+    // guard, so we don't need a suppression flag here.
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const newSet = new Set(selectedRows);
@@ -2519,10 +2529,6 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       setSelection(null);
       setSelectedCols(EMPTY_NUM_SET);
       rowAnchorRef.current = row;
-      // Suppress the onClick that fires right after mousedown so it
-      // doesn't call handleCellClick and clear selectedRows again.
-      suppressSelectionRef.current = true;
-      requestAnimationFrame(() => { suppressSelectionRef.current = false; });
       return;
     }
 
