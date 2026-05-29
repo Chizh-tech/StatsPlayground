@@ -2652,6 +2652,13 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     // (handleRowSelect) early-returns without applying the toggle.
     // Letting handleRowSelect own the Ctrl branch is race-free.
     if (e.ctrlKey || e.metaKey) {
+      // Also clear any stale didDragRowRef left over from a prior drag whose
+      // mouseup landed on a different row than mousedown — in that case the
+      // browser does not fire a click event, so handleRowSelect never had a
+      // chance to consume + reset the flag. Without this reset, the FIRST
+      // Ctrl+click after such a drag would be swallowed by handleRowSelect's
+      // didDragRowRef early-return guard.
+      didDragRowRef.current = false;
       e.preventDefault();
       return;
     }
@@ -2749,6 +2756,16 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     // columns; and would set didDragColRef=true, causing the subsequent
     // click to early-return so the toggle never lands.
     if (e.ctrlKey || e.metaKey) {
+      // Also clear any stale didDragColRef left over from a prior multi-column
+      // drag. When the user drag-selects a range (mousedown on col A, mouseup
+      // on col B, A!=B), the browser fires NO click event because mouseup
+      // target differs from mousedown target — so handleColSelect never runs
+      // to consume + reset the flag. Without this reset, the FIRST Ctrl+click
+      // afterwards is swallowed by handleColSelect's didDragColRef guard,
+      // requiring a second click to actually toggle. This is the most common
+      // path on column headers because columns are selected almost exclusively
+      // via header drag/click.
+      didDragColRef.current = false;
       e.preventDefault();
       return;
     }
