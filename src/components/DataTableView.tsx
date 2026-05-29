@@ -2506,6 +2506,22 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     containerRef.current?.focus();
     setCornerSelected(false);
 
+    // Ctrl/Cmd+click: toggle the entire row in selectedRows (non-contiguous
+    // row selection from cell clicks — mirrors what row-header Ctrl+click
+    // already does, but reachable from any cell in the row).
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const newSet = new Set(selectedRows);
+      if (newSet.has(row)) newSet.delete(row);
+      else newSet.add(row);
+      setSelectedRows(newSet);
+      setActiveCell(null);
+      setSelection(null);
+      setSelectedCols(EMPTY_NUM_SET);
+      rowAnchorRef.current = row;
+      return;
+    }
+
     if (e.shiftKey && activeCell) {
       // Shift+click: extend selection
       setSelection({
