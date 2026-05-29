@@ -1339,7 +1339,15 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     });
   }, [activeCell, selection, selectedRows, selectedCols, data, displayRows, cols, visibleColCount, setStatusInfo, tableFilters, t]);
 
-  // Precompute active row/col ranges for className computation
+  // Precompute active row/col ranges for className computation.
+  // Row/col headers light up for:
+  //   - the active cell
+  //   - any cell inside the contiguous `selection` rectangle
+  //   - any cell inside the discrete `selectedCells` set (non-contiguous)
+  //   - any cell inside the in-flight `pendingCtrlRect` (Ctrl+drag preview)
+  // Whole-row / whole-column selections (`selectedRows`/`selectedCols`)
+  // already light up their own headers via the dedicated `sp-row-selected-hdr`
+  // / `sp-col-selected` classes, so we don't fold them in here.
   const activeRowRange = useMemo(() => {
     const set = new Set<number>();
     if (activeCell) set.add(activeCell.row);
@@ -1347,8 +1355,18 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       const { r1, r2 } = normalizeRange(selection);
       for (let i = r1; i <= r2; i++) set.add(i);
     }
+    for (const key of selectedCells) {
+      const ci = key.indexOf(",");
+      if (ci < 0) continue;
+      const r = Number(key.slice(0, ci));
+      if (Number.isFinite(r)) set.add(r);
+    }
+    if (pendingCtrlRect) {
+      const { r1, r2 } = normalizeRange(pendingCtrlRect);
+      for (let i = r1; i <= r2; i++) set.add(i);
+    }
     return set;
-  }, [activeCell, selection]);
+  }, [activeCell, selection, selectedCells, pendingCtrlRect]);
 
   const activeColRange = useMemo(() => {
     const set = new Set<number>();
@@ -1357,8 +1375,18 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       const { c1, c2 } = normalizeRange(selection);
       for (let i = c1; i <= c2; i++) set.add(i);
     }
+    for (const key of selectedCells) {
+      const ci = key.indexOf(",");
+      if (ci < 0) continue;
+      const c = Number(key.slice(ci + 1));
+      if (Number.isFinite(c)) set.add(c);
+    }
+    if (pendingCtrlRect) {
+      const { c1, c2 } = normalizeRange(pendingCtrlRect);
+      for (let i = c1; i <= c2; i++) set.add(i);
+    }
     return set;
-  }, [activeCell, selection]);
+  }, [activeCell, selection, selectedCells, pendingCtrlRect]);
 
   // Virtual scrolling: compute visible row range
   // wrapperSize is kept in state via ResizeObserver so virtualization recomputes
