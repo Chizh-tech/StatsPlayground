@@ -2644,6 +2644,17 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     if (hasMenuOpen() || suppressSelectionRef.current) return;
     setCornerSelected(false);
     if (e.button !== 0) return;
+    // Ctrl/Cmd+click is a discrete row-toggle for non-contiguous selection;
+    // it must NOT enter drag mode. The smallest mouse jitter between mousedown
+    // and mouseup would otherwise (a) run onMouseMove's range-builder and
+    // overwrite the existing Set with {rowIdx}, wiping previously-toggled
+    // rows, and (b) set didDragRowRef=true so the subsequent click
+    // (handleRowSelect) early-returns without applying the toggle.
+    // Letting handleRowSelect own the Ctrl branch is race-free.
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      return;
+    }
     e.preventDefault();
     isDraggingRowRef.current = true;
     didDragRowRef.current = false;
@@ -2731,6 +2742,16 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     if (hasMenuOpen() || suppressSelectionRef.current) return;
     setCornerSelected(false);
     if (e.button !== 0) return;
+    // Same rationale as handleRowHeaderMouseDown: Ctrl/Cmd+click is a
+    // discrete column-toggle that must skip drag setup. A 1-pixel mouse
+    // jitter inside onMouseMove would otherwise rebuild selectedCols as
+    // {colIdx} (range start==end), wiping the previously Ctrl-toggled
+    // columns; and would set didDragColRef=true, causing the subsequent
+    // click to early-return so the toggle never lands.
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      return;
+    }
     e.preventDefault();
     isDraggingColRef.current = true;
     didDragColRef.current = false;
