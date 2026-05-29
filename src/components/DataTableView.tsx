@@ -1184,32 +1184,41 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickedCell, pickedTick, data, rowIdIdx, displayIdxMap, cols]);
 
-  // ----- Cross-view multi-row highlight (Graph brush → Table) ---------
-  // The GraphBuilder writes a `rowIds` array when the user finishes a
-  // rubber-band drag. We translate each _row_id → display-row index,
-  // set selectedRows to the resulting Set, clear the cell selection, and
-  // scroll the viewport to the first matched row.
-  const pickedRowIds = useTableSelectionStore((s) => s.rowsByDataset[datasetId] ?? null);
-  const pickedRowTick = useTableSelectionStore((s) => s.rowTicks[datasetId] ?? 0);
+  // ----- Cross-view multi-cell highlight (Graph brush → Table) --------
+  // GraphBuilder writes an array of (rowId, colName) picks when the user
+  // finishes a rubber-band drag over a scatter plot. Each scatter point
+  // corresponds to one (row, column) cell, so we translate every pick
+  // into `selectedCells` (non-contiguous cell selection model). Other
+  // selection modes are cleared. The viewport is scrolled to the first
+  // matched row so the result is visible immediately.
+  const pickedCells = useTableSelectionStore((s) => s.cellsByDataset[datasetId] ?? null);
+  const pickedCellsTick = useTableSelectionStore((s) => s.cellTicks[datasetId] ?? 0);
   useEffect(() => {
-    if (!pickedRowIds || pickedRowIds.length === 0) {
+    if (!pickedCells || pickedCells.length === 0) {
       // Empty array = "clear" gesture (tiny rect with no points inside).
-      if (pickedRowIds !== null) {
+      if (pickedCells !== null) {
         setSelectedRows(EMPTY_NUM_SET);
-        setActiveCell(null);
-        setSelection(null);
         setSelectedCols(EMPTY_NUM_SET);
         setSelectedCells(EMPTY_CELL_SET);
+        setActiveCell(null);
+        setSelection(null);
       }
       return;
     }
     if (!data || rowIdIdx < 0) return;
     const rows = data.rows as unknown[][];
-    const displayIdxs = new Set<number>();
-    for (const rowId of pickedRowIds) {
+    // Pre-build a colName → colIdx lookup. `cols` already excludes
+    // `_row_id`, so the resulting index is the display column index.
+    const colIdxByName = new Map<string, number>();
+    for (let i = 0; i < cols.length; i++) colIdxByName.set(cols[i], i);
+    const cellSet = new Set<string>();
+    let firstRow = Infinity;
+    for (const pk of pickedCells) {
+      const colIdx = colIdxByName.get(pk.colName);
+      if (colIdx === undefined) continue;
       let dataIdx = -1;
       for (let i = 0; i < rows.length; i++) {
-        if (Number(rows[i]?.[rowIdIdx]) === rowId) { dataIdx = i; break; }
+        if (Number(rows[i]?.[rowIdIdx]) === pk.rowId) { dataIdx = i; break; }
       }
       if (dataIdx < 0) continue;
       let displayIdx: number;
@@ -1219,18 +1228,18 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       } else {
         displayIdx = dataIdx;
       }
-      displayIdxs.add(displayIdx);
+      cellSet.add(cellKey(displayIdx, colIdx));
+      if (displayIdx < firstRow) firstRow = displayIdx;
     }
-    if (displayIdxs.size === 0) return;
-    setSelectedRows(displayIdxs);
+    if (cellSet.size === 0) return;
+    setSelectedCells(cellSet);
+    setSelectedRows(EMPTY_NUM_SET);
+    setSelectedCols(EMPTY_NUM_SET);
     setActiveCell(null);
     setSelection(null);
-    setSelectedCols(EMPTY_NUM_SET);
-    setSelectedCells(EMPTY_CELL_SET);
     // Scroll to the first selected row.
-    const firstRow = Math.min(...Array.from(displayIdxs));
     const wrapper = tableRef.current;
-    if (wrapper) {
+    if (wrapper && firstRow !== Infinity) {
       const headerH = Math.max(1, Math.round(BASE_HEADER_HEIGHT * zoom));
       const rowTop = firstRow * ROW_HEIGHT + headerH;
       const rowBottom = rowTop + ROW_HEIGHT;
@@ -1241,7 +1250,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickedRowIds, pickedRowTick, data, rowIdIdx, displayIdxMap]);
+  }, [pickedCells, pickedCellsTick, data, rowIdIdx, displayIdxMap, cols]);
 
   // Sync status info to global status bar
   useEffect(() => {

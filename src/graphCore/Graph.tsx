@@ -76,12 +76,14 @@ interface GraphProps {
    */
   brushMode?: boolean;
   /**
-   * Fired when the user finishes a rubber-band brush gesture. Receives the
-   * array of `_row_id` values for every scatter point inside the selection
-   * rectangle. An empty array means the user drew a negligibly-small rect
-   * (treated as "clear"). Only fired when `brushMode` is true.
+   * Fired on pointer-up with the set of (rowId, colName) cells that fell
+   * inside the brush rectangle. Each scatter point corresponds to a
+   * specific (row, column) cell; the consumer typically maps each pick
+   * to the matching table cell. Always called with an array (possibly
+   * empty — empty when the rect was too tiny or didn't cover any points,
+   * treated as "clear"). Only fired when `brushMode` is true.
    */
-  onBrushSelect?: (rowIds: number[]) => void;
+  onBrushSelect?: (picks: ScatterPointPick[]) => void;
 }
 
 export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onPointClick, brushMode, onBrushSelect }: GraphProps) {
@@ -141,7 +143,7 @@ interface GraphPanelProps {
   onAxisRangeChange?: (axis: "x" | "y", min: number, max: number) => void;
   onPointClick?: (pick: ScatterPointPick) => void;
   brushMode?: boolean;
-  onBrushSelect?: (rowIds: number[]) => void;
+  onBrushSelect?: (picks: ScatterPointPick[]) => void;
 }
 
 function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onPointClick, brushMode, onBrushSelect }: GraphPanelProps) {
@@ -194,16 +196,18 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       "border:1.5px solid #4e9cf5;background:rgba(78,156,245,0.10);z-index:10;box-sizing:border-box;";
     el.appendChild(brushOverlay);
 
-    // Hit-test: given two pointer-pixel corners, return all scatter rowIds
-    // whose pixel position falls inside the rect.
-    const hitTestBrush = (x1: number, y1: number, x2: number, y2: number): number[] => {
+    // Hit-test: given two pointer-pixel corners, return all scatter
+    // (rowId, colName) picks whose pixel position falls inside the rect.
+    // Dedup by `${rowId}|${colName}` since two scatter series sharing the
+    // same source column (e.g. group-faceted) can both emit the same cell.
+    const hitTestBrush = (x1: number, y1: number, x2: number, y2: number): ScatterPointPick[] => {
       const minX = Math.min(x1, x2);
       const maxX = Math.max(x1, x2);
       const minY = Math.min(y1, y2);
       const maxY = Math.max(y1, y2);
       if (maxX - minX < 2 && maxY - minY < 2) return [];
-      const rowIds: number[] = [];
-      const seen = new Set<number>();
+      const picks: ScatterPointPick[] = [];
+      const seen = new Set<string>();
       try {
         const opt = inst.getOption() as { series?: { type?: string; data?: unknown[] }[] };
         const series = opt.series ?? [];
@@ -216,19 +220,21 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
             if (!item || typeof item !== "object") continue;
             const pick = item.__pick;
             if (!pick || typeof pick.rowId !== "number" || pick.rowId < 0) continue;
-            if (seen.has(pick.rowId)) continue;
+            if (!pick.colName) continue;
+            const key = `${pick.rowId}|${pick.colName}`;
+            if (seen.has(key)) continue;
             const val = item.value;
             if (!Array.isArray(val) || val.length < 2) continue;
             const px = inst.convertToPixel({ seriesIndex: si }, val as [number, number]);
             if (!px) continue;
             if (px[0] >= minX && px[0] <= maxX && px[1] >= minY && px[1] <= maxY) {
-              seen.add(pick.rowId);
-              rowIds.push(pick.rowId);
+              seen.add(key);
+              picks.push({ rowId: pick.rowId, colName: pick.colName });
             }
           }
         }
       } catch { /* ignore layout errors if chart not fully rendered */ }
-      return rowIds;
+      return picks;
     };
 
 
@@ -722,8 +728,8 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         try { el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
         const st = brushState;
         brushState = null;
-        const rowIds = hitTestBrush(st.startPx, st.startPy, st.curPx, st.curPy);
-        onBrushSelectRef.current?.(rowIds);
+        const picks = hitTestBrush(st.startPx, st.startPy, st.curPx, st.curPy);
+        onBrushSelectRef.current?.(picks);
         return;
       }
       if (!dragState || e.pointerId !== dragState.pointerId) return;

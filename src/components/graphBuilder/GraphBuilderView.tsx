@@ -89,8 +89,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // Cross-view bridge: click a scatter point → highlight the matching
   // cell in the DataTableView for `dataset.id` next time it mounts.
   const pickCell = useTableSelectionStore((s) => s.pick);
-  // Cross-view bridge: rubber-band brush → highlight multiple rows.
-  const pickRows = useTableSelectionStore((s) => s.pickRows);
+  // Cross-view bridge: rubber-band brush → highlight the matching cells
+  // (one cell per scatter point, identified by rowId + colName).
+  const pickCells = useTableSelectionStore((s) => s.pickCells);
 
   // "pan" = default axis drag/zoom, "select" = rubber-band multi-row brush.
   const [cursorMode, setCursorMode] = useState<"pan" | "select">("pan");
@@ -1551,8 +1552,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
                   }}
                   brushMode={cursorMode === "select"}
-                  onBrushSelect={(rowIds) => {
-                    pickRows(dataset.id, rowIds);
+                  onBrushSelect={(picks) => {
+                    pickCells(dataset.id, picks);
                   }}
                 />
               )}

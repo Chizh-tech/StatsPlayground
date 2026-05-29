@@ -51,6 +51,24 @@ interface State {
   rowTicks: Record<string, number>;
   /** Replace the multi-row pick for `datasetId`. */
   pickRows: (datasetId: string, rowIds: number[]) => void;
+
+  /**
+   * Multi-CELL picks written by the rubber-band brush on a scatter plot.
+   * Each point in a scatter plot corresponds to a specific (row, column)
+   * cell, so the brush should highlight cells, not whole rows. Entries
+   * are `{ rowId, colName }` pairs; the consuming DataTableView translates
+   * them into its `selectedCells` Set.
+   *
+   * This is distinct from `rowsByDataset` (used by gestures that genuinely
+   * imply whole-row selection, e.g. a future row-level brush) and from
+   * `byDataset` (single-cell pick from a point click).
+   *
+   * Pass an empty array to clear without removing the key (subscribers
+   * still re-run their effect — same idiom as the other slots).
+   */
+  cellsByDataset: Record<string, CellPick[] | null>;
+  cellTicks: Record<string, number>;
+  pickCells: (datasetId: string, picks: CellPick[]) => void;
 }
 
 export const useTableSelectionStore = create<State>((set) => ({
@@ -68,5 +86,13 @@ export const useTableSelectionStore = create<State>((set) => ({
     set((s) => ({
       rowsByDataset: { ...s.rowsByDataset, [datasetId]: rowIds },
       rowTicks: { ...s.rowTicks, [datasetId]: (s.rowTicks[datasetId] ?? 0) + 1 },
+    })),
+
+  cellsByDataset: {},
+  cellTicks: {},
+  pickCells: (datasetId, picks) =>
+    set((s) => ({
+      cellsByDataset: { ...s.cellsByDataset, [datasetId]: picks },
+      cellTicks: { ...s.cellTicks, [datasetId]: (s.cellTicks[datasetId] ?? 0) + 1 },
     })),
 }));
