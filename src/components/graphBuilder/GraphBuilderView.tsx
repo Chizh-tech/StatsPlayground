@@ -94,7 +94,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const pickCells = useTableSelectionStore((s) => s.pickCells);
 
   // "pan" = default axis drag/zoom, "select" = rubber-band multi-row brush.
-  const [cursorMode, setCursorMode] = useState<"pan" | "select">("pan");
+  // Default is "select" — most common gesture is inspecting points; pan is
+  // a less-frequent mode used for navigating an already-zoomed view.
+  const [cursorMode, setCursorMode] = useState<"pan" | "select">("select");
 
   const [columns, setColumns] = useState<FieldRef[]>([]);
   const [colSqlTypes, setColSqlTypes] = useState<string[]>([]);
@@ -1322,15 +1324,49 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               <span className="gb-tb-badge">{filters.length}</span>
             )}
           </button>
-          <button
-            className={`gb-tb-btn${cursorMode === "select" ? " gb-tb-btn-active" : ""}`}
-            onClick={() => setCursorMode((m) => m === "select" ? "pan" : "select")}
-            title={t("graph.brushSelect.tooltip", {
-              defaultValue: "Toggle rubber-band selection: drag on the chart to highlight matching rows in the linked table.",
-            })}
+          <div
+            className="gb-cursor-mode"
+            role="radiogroup"
+            aria-label={t("graph.cursorMode.label", { defaultValue: "Cursor mode" })}
           >
-            {t("graph.brushSelect.label", { defaultValue: "Select" })}
-          </button>
+            <span
+              className={`gb-cursor-mode-thumb gb-cursor-mode-thumb-${cursorMode}`}
+              aria-hidden="true"
+            />
+            <button
+              type="button"
+              role="radio"
+              aria-checked={cursorMode === "pan"}
+              className={`gb-cursor-mode-opt${cursorMode === "pan" ? " is-active" : ""}`}
+              onClick={() => setCursorMode("pan")}
+              title={t("graph.cursorMode.panTitle", {
+                defaultValue: "Pan mode: drag axes to scroll/zoom the chart.",
+              })}
+            >
+              {/* Open-hand / grab icon */}
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8 11V5.5a1.5 1.5 0 1 1 3 0V11" />
+                <path d="M11 10V4.5a1.5 1.5 0 1 1 3 0V11" />
+                <path d="M14 10.5V6a1.5 1.5 0 1 1 3 0v8" />
+                <path d="M17 10.5a1.5 1.5 0 1 1 3 0V15a6 6 0 0 1-6 6h-1.5a5 5 0 0 1-4-2L5 14.5a1.6 1.6 0 0 1 2.5-2L9 14" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={cursorMode === "select"}
+              className={`gb-cursor-mode-opt${cursorMode === "select" ? " is-active" : ""}`}
+              onClick={() => setCursorMode("select")}
+              title={t("graph.cursorMode.selectTitle", {
+                defaultValue: "Select mode: drag on the chart to rubber-band-select points (highlights matching cells in the linked table).",
+              })}
+            >
+              {/* Mouse arrow / pointer icon */}
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                <path d="M5 3.2 5 18.1c0 .8 1 1.2 1.6.6l3.3-3.3 2.2 4.7c.3.5.9.8 1.4.5l1.7-.8c.5-.3.8-.9.5-1.4l-2.2-4.7 4.6-.4c.8-.1 1.1-1.1.5-1.6L6.5 2.7c-.6-.5-1.5-.1-1.5.5Z" />
+              </svg>
+            </button>
+          </div>
         </div>
         <div className="gb-toolbar-spacer" />
       </div>

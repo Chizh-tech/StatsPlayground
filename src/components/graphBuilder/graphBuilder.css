@@ -1790,3 +1790,68 @@
   text-align: center;
 }
 
+/* Cursor-mode segmented slider (Pan / Select).
+   Layout: a rounded "slot" track with two icon buttons side-by-side; an
+   absolutely-positioned thumb slides between the two halves to mark the
+   active option. Width is calculated so each option is exactly half the
+   track minus padding. The thumb has its own transition so the move feels
+   like a physical slider, not a button toggle. */
+.gb-cursor-mode {
+  --gb-cm-pad: 3px;
+  --gb-cm-opt-w: 28px;
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  padding: var(--gb-cm-pad);
+  border: 1px solid var(--border-input);
+  border-radius: 999px;
+  background: var(--bg-btn-secondary);
+  height: 26px;
+  box-sizing: border-box;
+}
+
+.gb-cursor-mode-thumb {
+  position: absolute;
+  top: var(--gb-cm-pad);
+  bottom: var(--gb-cm-pad);
+  width: var(--gb-cm-opt-w);
+  background: var(--bg-cell-selected);
+  border: 1px solid var(--fg-accent);
+  border-radius: 999px;
+  transition: left 160ms ease;
+  pointer-events: none;
+}
+
+.gb-cursor-mode-thumb-pan    { left: var(--gb-cm-pad); }
+.gb-cursor-mode-thumb-select { left: calc(var(--gb-cm-pad) + var(--gb-cm-opt-w)); }
+
+.gb-cursor-mode-opt {
+  position: relative;
+  z-index: 1;
+  width: var(--gb-cm-opt-w);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: var(--fg-muted);
+  border-radius: 999px;
+  transition: color 120ms ease;
+}
+
+.gb-cursor-mode-opt:hover {
+  color: var(--fg-primary);
+}
+
+.gb-cursor-mode-opt.is-active {
+  color: var(--fg-primary);
+}
+
+.gb-cursor-mode-opt:focus-visible {
+  outline: 2px solid var(--fg-accent);
+  outline-offset: 1px;
+}
+
