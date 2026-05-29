@@ -2837,22 +2837,102 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     if (hasMenuOpen() || suppressSelectionRef.current) return;
     setCornerSelected(false);
     if (e.button !== 0) return;
-    // Ctrl/Cmd+click is a discrete row-toggle for non-contiguous selection;
-    // it must NOT enter drag mode. The smallest mouse jitter between mousedown
-    // and mouseup would otherwise (a) run onMouseMove's range-builder and
-    // overwrite the existing Set with {rowIdx}, wiping previously-toggled
-    // rows, and (b) set didDragRowRef=true so the subsequent click
-    // (handleRowSelect) early-returns without applying the toggle.
-    // Letting handleRowSelect own the Ctrl branch is race-free.
+    // Ctrl/Cmd: support both pure-click row toggle and drag-additive
+    // multi-row paint. Strategy:
+    //
+    //   - We register mousemove/mouseup handlers up front. While dragging,
+    //     `selectedRows` is shown as snapshot ∪ (anchor..current) — additive,
+    //     so previously selected rows stay highlighted even when the cursor
+    //     leaves them.
+    //   - If the cursor never crosses to another row (pure click), we leave
+    //     `didDragRowRef` cleared and let the trailing click reach
+    //     handleRowSelect, whose own Ctrl branch handles single-row toggle.
+    //     This avoids the "1px jitter wipes the selection" failure mode the
+    //     prior fix originally had: tiny mouse movement within the same row
+    //     simply doesn't matter because we key off row-index change, not
+    //     pixel motion.
+    //   - If the user did cross to another row, we commit the range and
+    //     set `didDragRowRef = true` so the trailing click (if any) early-
+    //     returns instead of re-toggling the anchor row.
+    //
+    // The stale-flag reset at the top still matters: it covers prior drags
+    // whose mouseup target differed from mousedown target — those produce
+    // no click event, so handleRowSelect never had a chance to consume +
+    // reset the flag.
     if (e.ctrlKey || e.metaKey) {
-      // Also clear any stale didDragRowRef left over from a prior drag whose
-      // mouseup landed on a different row than mousedown — in that case the
-      // browser does not fire a click event, so handleRowSelect never had a
-      // chance to consume + reset the flag. Without this reset, the FIRST
-      // Ctrl+click after such a drag would be swallowed by handleRowSelect's
-      // didDragRowRef early-return guard.
       didDragRowRef.current = false;
       e.preventDefault();
+
+      const snapshot = new Set(selectedRows);
+      const anchorRow = rowIdx;
+      isDraggingRowRef.current = true;
+      setIsDragging(true);
+      document.body.style.userSelect = "none";
+
+      let lastRow = rowIdx;
+      let didMoveToOtherRow = false;
+      let pendingRaf = 0;
+
+      const commitRange = () => {
+        const start = Math.min(anchorRow, lastRow);
+        const end = Math.max(anchorRow, lastRow);
+        const newSet = new Set(snapshot);
+        for (let i = start; i <= end; i++) newSet.add(i);
+        setSelectedRows(newSet);
+      };
+
+      const onMouseMove = (ev: MouseEvent) => {
+        if (!isDraggingRowRef.current) return;
+        startAutoScroll(ev);
+        const target = document.elementFromPoint(ev.clientX, ev.clientY);
+        if (!target) return;
+        const td = (target as Element).closest("td.sp-row-hdr") as HTMLElement | null;
+        if (!td) return;
+        const riStr = td.dataset.rowHdr;
+        if (riStr == null) return;
+        const ri = Number(riStr);
+        if (!Number.isFinite(ri)) return;
+        if (ri === lastRow) return;
+        if (!didMoveToOtherRow) {
+          didMoveToOtherRow = true;
+          // First cross-row move: switch the table out of cell-mode so the
+          // visual is purely row-selection from this point onward.
+          setSelectedCols(EMPTY_NUM_SET);
+          setSelectedCells(EMPTY_CELL_SET);
+          setSelection(null);
+          setActiveCell(null);
+        }
+        lastRow = ri;
+        if (pendingRaf) return;
+        pendingRaf = requestAnimationFrame(() => {
+          pendingRaf = 0;
+          commitRange();
+        });
+      };
+
+      const onMouseUp = () => {
+        isDraggingRowRef.current = false;
+        setIsDragging(false);
+        stopAutoScroll();
+        if (pendingRaf) {
+          cancelAnimationFrame(pendingRaf);
+          pendingRaf = 0;
+          commitRange();
+        }
+        document.body.style.userSelect = "";
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        if (didMoveToOtherRow) {
+          didDragRowRef.current = true;
+          rowAnchorRef.current = lastRow;
+        }
+        // If !didMoveToOtherRow, leave didDragRowRef cleared so the click
+        // event reaches handleRowSelect for the single-row Ctrl-toggle.
+      };
+
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+      containerRef.current?.focus();
       return;
     }
     e.preventDefault();
@@ -2944,24 +3024,80 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     if (hasMenuOpen() || suppressSelectionRef.current) return;
     setCornerSelected(false);
     if (e.button !== 0) return;
-    // Same rationale as handleRowHeaderMouseDown: Ctrl/Cmd+click is a
-    // discrete column-toggle that must skip drag setup. A 1-pixel mouse
-    // jitter inside onMouseMove would otherwise rebuild selectedCols as
-    // {colIdx} (range start==end), wiping the previously Ctrl-toggled
-    // columns; and would set didDragColRef=true, causing the subsequent
-    // click to early-return so the toggle never lands.
+    // Ctrl/Cmd: same dual click-or-drag handling as handleRowHeaderMouseDown.
+    // Pure click → trailing click event hits handleColSelect for single-col
+    // toggle; drag across columns → additive range commit on mouseup.
+    // See handleRowHeaderMouseDown for the full rationale.
     if (e.ctrlKey || e.metaKey) {
-      // Also clear any stale didDragColRef left over from a prior multi-column
-      // drag. When the user drag-selects a range (mousedown on col A, mouseup
-      // on col B, A!=B), the browser fires NO click event because mouseup
-      // target differs from mousedown target — so handleColSelect never runs
-      // to consume + reset the flag. Without this reset, the FIRST Ctrl+click
-      // afterwards is swallowed by handleColSelect's didDragColRef guard,
-      // requiring a second click to actually toggle. This is the most common
-      // path on column headers because columns are selected almost exclusively
-      // via header drag/click.
       didDragColRef.current = false;
       e.preventDefault();
+
+      const snapshot = new Set(selectedCols);
+      const anchorCol = colIdx;
+      isDraggingColRef.current = true;
+      setIsDragging(true);
+      document.body.style.userSelect = "none";
+
+      let lastCol = colIdx;
+      let didMoveToOtherCol = false;
+      let pendingRaf = 0;
+
+      const commitRange = () => {
+        const start = Math.min(anchorCol, lastCol);
+        const end = Math.max(anchorCol, lastCol);
+        const newSet = new Set(snapshot);
+        for (let i = start; i <= end; i++) newSet.add(i);
+        setSelectedCols(newSet);
+      };
+
+      const onMouseMove = (ev: MouseEvent) => {
+        if (!isDraggingColRef.current) return;
+        startAutoScroll(ev);
+        const target = document.elementFromPoint(ev.clientX, ev.clientY);
+        if (!target) return;
+        const th = (target as Element).closest("th.sp-col-hdr") as HTMLElement | null;
+        if (!th) return;
+        const ciStr = th.dataset.colHdr;
+        if (ciStr == null) return;
+        const ci = Number(ciStr);
+        if (!Number.isFinite(ci) || ci < 0) return;
+        if (ci === lastCol) return;
+        if (!didMoveToOtherCol) {
+          didMoveToOtherCol = true;
+          setSelectedRows(EMPTY_NUM_SET);
+          setSelectedCells(EMPTY_CELL_SET);
+          setSelection(null);
+          setActiveCell(null);
+        }
+        lastCol = ci;
+        if (pendingRaf) return;
+        pendingRaf = requestAnimationFrame(() => {
+          pendingRaf = 0;
+          commitRange();
+        });
+      };
+
+      const onMouseUp = () => {
+        isDraggingColRef.current = false;
+        setIsDragging(false);
+        stopAutoScroll();
+        if (pendingRaf) {
+          cancelAnimationFrame(pendingRaf);
+          pendingRaf = 0;
+          commitRange();
+        }
+        document.body.style.userSelect = "";
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        if (didMoveToOtherCol) {
+          didDragColRef.current = true;
+          colAnchorRef.current = lastCol;
+        }
+      };
+
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+      containerRef.current?.focus();
       return;
     }
     e.preventDefault();
