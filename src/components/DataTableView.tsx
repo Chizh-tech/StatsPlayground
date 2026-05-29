@@ -60,6 +60,12 @@ const COLUMN_OVERSCAN = 4; // extra columns left/right of viewport
 // Shared empty Set so resetting "selected rows/cols" to empty doesn't
 // allocate a new reference every time and trigger downstream re-renders.
 const EMPTY_NUM_SET: ReadonlySet<number> = new Set<number>();
+// Stable empty set for `selectedCells` so identity-equality reset paths
+// (and React.memo prop comparison) stay stable across renders. Each entry
+// is the string `"row,col"` keyed by display-row index + column index — the
+// same coordinate space used by `activeCell` and `selection`.
+const EMPTY_CELL_SET: ReadonlySet<string> = new Set<string>();
+const cellKey = (row: number, col: number) => `${row},${col}`;
 
 type FormatKind = "asis" | "fixed" | "percent" | "scientific" | "currency";
 
@@ -141,6 +147,14 @@ interface TableRowProps {
   /** Selection clamped to this row: -1/-1 if row is outside the selection. */
   selStartCol: number;
   selEndCol: number;
+  /**
+   * Set of column indices in THIS row that are individually selected via
+   * Ctrl/Cmd+click (non-contiguous cell selection). Pass `undefined` when
+   * the row has no Ctrl-selected cells so the prop stays referentially
+   * stable (undefined === undefined) and React.memo doesn't re-render
+   * unrelated rows whenever the global selectedCells Set changes.
+   */
+  selectedColsInRow?: ReadonlySet<number>;
   // Column virtualization window
   visStart: number;
   visEnd: number;
@@ -154,7 +168,7 @@ interface TableRowProps {
 const TableRow = React.memo(function TableRow({
   ri, displayRow, colFormats, isRowSelected, isRowActive,
   activeCol, selectedCols, editingCol, editValue, editInputRef,
-  selStartCol, selEndCol,
+  selStartCol, selEndCol, selectedColsInRow,
   visStart, visEnd, leftSpacerW, rightSpacerW,
   onEditValueChange, onCommitEdit, onCancelEdit,
 }: TableRowProps) {
@@ -166,7 +180,9 @@ const TableRow = React.memo(function TableRow({
     const isColSelected = selectedCols.has(ci);
     const isCellActive = activeCol === ci && isRowActive && !isRowSelected && !isColSelected;
     const isCellEditing = editingCol === ci;
-    const isCellSelected = selStartCol >= 0 && ci >= selStartCol && ci <= selEndCol;
+    const inRect = selStartCol >= 0 && ci >= selStartCol && ci <= selEndCol;
+    const inDiscrete = selectedColsInRow ? selectedColsInRow.has(ci) : false;
+    const isCellSelected = inRect || inDiscrete;
     cells.push(
       <td
         key={ci}
@@ -655,6 +671,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const [editValue, setEditValue] = useState("");
   const [selectedRows, setSelectedRows] = useState<ReadonlySet<number>>(EMPTY_NUM_SET);
   const [selectedCols, setSelectedCols] = useState<ReadonlySet<number>>(EMPTY_NUM_SET);
+  // Non-contiguous, individually-toggled cells (Ctrl/Cmd+click on a cell).
+  // Distinct from `selection` (rectangular range) and `selectedRows`
+  // (whole-row sets). A cell is rendered "selected" if it falls inside the
+  // rectangular range OR is present here. Keys are `"row,col"` in display
+  // coordinates (same as activeCell / selection).
+  const [selectedCells, setSelectedCells] = useState<ReadonlySet<string>>(EMPTY_CELL_SET);
   const [colMenu, setColMenu] = useState<{ colIdx: number; x: number; y: number } | null>(null);
   const [rowMenu, setRowMenu] = useState<{ rowIdx: number; x: number; y: number } | null>(null);
   const [showAddCol, setShowAddCol] = useState(false);
@@ -876,6 +898,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setEditCell(null);
     setSelectedRows(EMPTY_NUM_SET);
     setSelectedCols(EMPTY_NUM_SET);
+    setSelectedCells(EMPTY_CELL_SET);
     setSelection(null);
     setColMenu(null);
     setRowMenu(null);
@@ -1151,6 +1174,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setSelection({ startRow: displayIdx, startCol: colIdx, endRow: displayIdx, endCol: colIdx });
     setSelectedRows(EMPTY_NUM_SET);
     setSelectedCols(EMPTY_NUM_SET);
+    setSelectedCells(EMPTY_CELL_SET);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickedCell, pickedTick, data, rowIdIdx, displayIdxMap, cols]);
 
@@ -1169,6 +1193,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         setActiveCell(null);
         setSelection(null);
         setSelectedCols(EMPTY_NUM_SET);
+        setSelectedCells(EMPTY_CELL_SET);
       }
       return;
     }
@@ -1195,6 +1220,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setActiveCell(null);
     setSelection(null);
     setSelectedCols(EMPTY_NUM_SET);
+    setSelectedCells(EMPTY_CELL_SET);
     // Scroll to the first selected row.
     const firstRow = Math.min(...Array.from(displayIdxs));
     const wrapper = tableRef.current;
@@ -1390,6 +1416,32 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   }, [colVirtRange.startIdx, colVirtRange.endIdx]);
   // Normalized selection range (memoized once per selection change).
   const selRangeNorm = useMemo(() => selection ? normalizeRange(selection) : null, [selection]);
+
+  // Bucket the discrete cell selection by row so each TableRow can receive a
+  // referentially-stable per-row Set. Without this, every TableRow would have
+  // to filter the global Set on every render, and React.memo would never
+  // skip re-renders of rows that don't have any Ctrl-selected cells.
+  // Returns a Map: rowIdx → Set<colIdx>. Lookup misses produce undefined,
+  // which we pass straight to TableRow so untouched rows keep `undefined`
+  // (a stable identity) as their prop.
+  const cellsByRow = useMemo(() => {
+    if (selectedCells.size === 0) return null;
+    const m = new Map<number, Set<number>>();
+    for (const key of selectedCells) {
+      const ci = key.indexOf(",");
+      if (ci < 0) continue;
+      const r = Number(key.slice(0, ci));
+      const c = Number(key.slice(ci + 1));
+      if (!Number.isFinite(r) || !Number.isFinite(c)) continue;
+      let set = m.get(r);
+      if (!set) {
+        set = new Set<number>();
+        m.set(r, set);
+      }
+      set.add(c);
+    }
+    return m;
+  }, [selectedCells]);
 
   // Stable callback identities for memoized TableRow children — proxy to the
   // latest closures via refs so the props passed to <TableRow> never change
@@ -1699,13 +1751,14 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       didDragRef.current = false;
       return;
     }
-    // Ctrl/Cmd+click on a cell is handled in handleCellMouseDown as a row
-    // toggle (non-contiguous row selection). The click event that follows
-    // mousedown must NOT fall through to the default branch below, or it
-    // would call setSelectedRows(EMPTY_NUM_SET) and wipe the toggle. We
-    // check the modifier directly instead of relying on a time-based flag
-    // (suppressSelectionRef + rAF) because the rAF can fire before the
-    // click event when React is busy rendering between rapid clicks.
+    // Ctrl/Cmd+click on a cell is handled in handleCellMouseDown as a
+    // cell-level toggle (non-contiguous cell selection). The click event
+    // that follows mousedown must NOT fall through to the default branch
+    // below, or it would call setSelectedCells(EMPTY_CELL_SET) and wipe
+    // the toggle. We check the modifier directly instead of relying on a
+    // time-based flag (suppressSelectionRef + rAF) because the rAF can
+    // fire before the click event when React is busy rendering between
+    // rapid clicks.
     if (e && (e.ctrlKey || e.metaKey)) return;
     // If a menu was just dismissed or resize just finished, don't change selection
     if (suppressSelectionRef.current || hasMenuOpen()) return;
@@ -1724,6 +1777,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setEditCell(null);
     setSelectedRows(EMPTY_NUM_SET);
     setSelectedCols(EMPTY_NUM_SET);
+    setSelectedCells(EMPTY_CELL_SET);
     setColMenu(null);
     setRowMenu(null);
     setCornerSelected(false);
@@ -2218,6 +2272,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setSelection(null);
     setSelectedRows(EMPTY_NUM_SET);
     setSelectedCols(EMPTY_NUM_SET);
+    setSelectedCells(EMPTY_CELL_SET);
     setCornerSelected(true);
   };
 
@@ -2299,6 +2354,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         });
         setSelectedRows(EMPTY_NUM_SET);
         setSelectedCols(EMPTY_NUM_SET);
+        setSelectedCells(EMPTY_CELL_SET);
         setCornerSelected(false);
         return;
       }
@@ -2415,6 +2471,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       } else {
         setActiveCell({ row: targetRow, col: targetCol });
         setSelection(null);
+        setSelectedCells(EMPTY_CELL_SET);
       }
       return;
     }
@@ -2423,6 +2480,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       case "Tab":
         e.preventDefault();
         setSelection(null);
+        setSelectedCells(EMPTY_CELL_SET);
         if (e.shiftKey) {
           if (col > 0) setActiveCell({ row, col: col - 1 });
           else if (row > 0) setActiveCell({ row: row - 1, col: maxCol });
@@ -2439,6 +2497,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         tabAnchorColRef.current = null;
         setActiveCell({ row: nextRow, col: nextCol });
         setSelection(null);
+        setSelectedCells(EMPTY_CELL_SET);
         break;
       }
       case "F2": {
@@ -2514,21 +2573,32 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     containerRef.current?.focus();
     setCornerSelected(false);
 
-    // Ctrl/Cmd+click: toggle the entire row in selectedRows (non-contiguous
-    // row selection from cell clicks — mirrors what row-header Ctrl+click
-    // already does, but reachable from any cell in the row). The following
-    // onClick event is filtered out by handleCellClick's Ctrl-modifier
-    // guard, so we don't need a suppression flag here.
+    // Ctrl/Cmd+click on a cell toggles that single cell in the
+    // non-contiguous `selectedCells` set. The clicked cell becomes the new
+    // active cell (focus moves there, Excel-style). When entering multi-cell
+    // mode for the first time (selectedCells is empty), we also seed the
+    // set with the prior activeCell so the previously-focused cell stays
+    // selected — otherwise the very first Ctrl+click would effectively just
+    // move focus instead of building a multi-selection.
+    //
+    // The subsequent onClick event hits handleCellClick, which has a
+    // Ctrl/Cmd-modifier guard at the top that returns early — preventing it
+    // from wiping selectedCells with setSelectedCells(EMPTY_CELL_SET).
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
-      const newSet = new Set(selectedRows);
-      if (newSet.has(row)) newSet.delete(row);
-      else newSet.add(row);
-      setSelectedRows(newSet);
-      setActiveCell(null);
+      const clickedKey = cellKey(row, col);
+      const next = new Set(selectedCells);
+      if (next.size === 0 && activeCell &&
+          (activeCell.row !== row || activeCell.col !== col)) {
+        next.add(cellKey(activeCell.row, activeCell.col));
+      }
+      if (next.has(clickedKey)) next.delete(clickedKey);
+      else next.add(clickedKey);
+      setSelectedCells(next);
+      setActiveCell({ row, col });
       setSelection(null);
+      setSelectedRows(EMPTY_NUM_SET);
       setSelectedCols(EMPTY_NUM_SET);
-      rowAnchorRef.current = row;
       return;
     }
 
@@ -2554,6 +2624,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setEditCell(null);
     setSelectedRows(EMPTY_NUM_SET);
     setSelectedCols(EMPTY_NUM_SET);
+    setSelectedCells(EMPTY_CELL_SET);
 
     document.body.style.userSelect = "none";
 
@@ -2636,6 +2707,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     }
     setSelectedRows(newSet);
     setSelectedCols(EMPTY_NUM_SET);
+    setSelectedCells(EMPTY_CELL_SET);
     setSelection(null);
     setActiveCell(null);
   };
@@ -2679,6 +2751,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
           setSelectedRows(new Set([rowIdx]));
           setSelectedCols(EMPTY_NUM_SET);
+          setSelectedCells(EMPTY_CELL_SET);
           setSelection(null);
         }
       }
@@ -2741,6 +2814,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     }
     setSelectedCols(newSet);
     setSelectedRows(EMPTY_NUM_SET);
+    setSelectedCells(EMPTY_CELL_SET);
     setSelection(null);
     setActiveCell(null);
   };
@@ -2788,6 +2862,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
           setSelectedCols(new Set([colIdx]));
           setSelectedRows(EMPTY_NUM_SET);
+          setSelectedCells(EMPTY_CELL_SET);
           setSelection(null);
         }
       }
@@ -2977,6 +3052,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     }
     setSelectedCols(newSet);
     setSelectedRows(EMPTY_NUM_SET);
+    setSelectedCells(EMPTY_CELL_SET);
     setSelection(null);
     setActiveCell(null);
     // Scroll the column into view in the grid
@@ -3007,6 +3083,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setSelection({ startRow: row, startCol: col, endRow: row, endCol: col });
     setSelectedRows(EMPTY_NUM_SET);
     setSelectedCols(EMPTY_NUM_SET);
+    setSelectedCells(EMPTY_CELL_SET);
   };
   moveDownAfterCommitRef.current = () => {
     if (!activeCell) return;
@@ -3458,6 +3535,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
                     editInputRef={editInputRef}
                     selStartCol={selStartCol}
                     selEndCol={selEndCol}
+                    selectedColsInRow={cellsByRow?.get(ri)}
                     visStart={colVirtRange.startIdx}
                     visEnd={colVirtRange.endIdx}
                     leftSpacerW={colVirtRange.leftSpacerW}
