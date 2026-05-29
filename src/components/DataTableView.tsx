@@ -2519,6 +2519,10 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       setSelection(null);
       setSelectedCols(EMPTY_NUM_SET);
       rowAnchorRef.current = row;
+      // Suppress the onClick that fires right after mousedown so it
+      // doesn't call handleCellClick and clear selectedRows again.
+      suppressSelectionRef.current = true;
+      requestAnimationFrame(() => { suppressSelectionRef.current = false; });
       return;
     }
 
