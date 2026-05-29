@@ -1129,11 +1129,6 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   useEffect(() => {
     if (!pickedCell) return;
     if (!data || rowIdIdx < 0) return;
-    // Resolve the data-row index by scanning data.rows for the
-    // matching _row_id. Datasets are typically <1M rows and this fires
-    // only on user click, so a linear scan is fine — building a
-    // rowId→idx map would waste memory for the much more common case
-    // where the user never picks a graph point at all.
     let dataIdx = -1;
     const rows = data.rows as unknown[][];
     for (let i = 0; i < rows.length; i++) {
@@ -1142,11 +1137,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         break;
       }
     }
-    if (dataIdx < 0) return; // row was deleted since the pick was made
-    // Translate data-index → visible display-index. The current
-    // tableFilters may have filtered the row out — when that happens
-    // we silently bail (highlighting an invisible row would be
-    // confusing). Users can clear the filter to reveal it.
+    if (dataIdx < 0) return;
     let displayIdx: number;
     if (displayIdxMap) {
       displayIdx = displayIdxMap.indexOf(dataIdx);
@@ -1155,15 +1146,70 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       displayIdx = dataIdx;
     }
     const colIdx = cols.indexOf(pickedCell.colName);
-    if (colIdx < 0) return; // column was renamed/dropped
+    if (colIdx < 0) return;
     setActiveCell({ row: displayIdx, col: colIdx });
     setSelection({ startRow: displayIdx, startCol: colIdx, endRow: displayIdx, endCol: colIdx });
     setSelectedRows(EMPTY_NUM_SET);
     setSelectedCols(EMPTY_NUM_SET);
-    // pickedTick: see comment above — included so identical re-picks
-    // still re-trigger the scroll-into-view effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickedCell, pickedTick, data, rowIdIdx, displayIdxMap, cols]);
+
+  // ----- Cross-view multi-row highlight (Graph brush → Table) ---------
+  // The GraphBuilder writes a `rowIds` array when the user finishes a
+  // rubber-band drag. We translate each _row_id → display-row index,
+  // set selectedRows to the resulting Set, clear the cell selection, and
+  // scroll the viewport to the first matched row.
+  const pickedRowIds = useTableSelectionStore((s) => s.rowsByDataset[datasetId] ?? null);
+  const pickedRowTick = useTableSelectionStore((s) => s.rowTicks[datasetId] ?? 0);
+  useEffect(() => {
+    if (!pickedRowIds || pickedRowIds.length === 0) {
+      // Empty array = "clear" gesture (tiny rect with no points inside).
+      if (pickedRowIds !== null) {
+        setSelectedRows(EMPTY_NUM_SET);
+        setActiveCell(null);
+        setSelection(null);
+        setSelectedCols(EMPTY_NUM_SET);
+      }
+      return;
+    }
+    if (!data || rowIdIdx < 0) return;
+    const rows = data.rows as unknown[][];
+    const displayIdxs = new Set<number>();
+    for (const rowId of pickedRowIds) {
+      let dataIdx = -1;
+      for (let i = 0; i < rows.length; i++) {
+        if (Number(rows[i]?.[rowIdIdx]) === rowId) { dataIdx = i; break; }
+      }
+      if (dataIdx < 0) continue;
+      let displayIdx: number;
+      if (displayIdxMap) {
+        displayIdx = displayIdxMap.indexOf(dataIdx);
+        if (displayIdx < 0) continue;
+      } else {
+        displayIdx = dataIdx;
+      }
+      displayIdxs.add(displayIdx);
+    }
+    if (displayIdxs.size === 0) return;
+    setSelectedRows(displayIdxs);
+    setActiveCell(null);
+    setSelection(null);
+    setSelectedCols(EMPTY_NUM_SET);
+    // Scroll to the first selected row.
+    const firstRow = Math.min(...Array.from(displayIdxs));
+    const wrapper = tableRef.current;
+    if (wrapper) {
+      const headerH = Math.max(1, Math.round(BASE_HEADER_HEIGHT * zoom));
+      const rowTop = firstRow * ROW_HEIGHT + headerH;
+      const rowBottom = rowTop + ROW_HEIGHT;
+      const viewTop = wrapper.scrollTop;
+      const viewBottom = viewTop + wrapper.clientHeight;
+      if (rowTop < viewTop + headerH || rowBottom > viewBottom) {
+        wrapper.scrollTop = rowTop - headerH;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedRowIds, pickedRowTick, data, rowIdIdx, displayIdxMap]);
 
   // Sync status info to global status bar
   useEffect(() => {

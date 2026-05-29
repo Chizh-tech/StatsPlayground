@@ -66,9 +66,25 @@ interface GraphProps {
    * NOT carry pick metadata and therefore never invoke this callback.
    */
   onPointClick?: (pick: ScatterPointPick) => void;
+  /**
+   * When true, pointer gestures on the chart body enter rubber-band
+   * selection mode instead of the default pan/zoom mode. A drag rectangle
+   * is drawn as a transparent blue overlay; on release, all scatter points
+   * whose pixel coordinates fall inside the rect are collected and reported
+   * through `onBrushSelect`. Axis-strip pan/zoom is suppressed while this
+   * mode is active.
+   */
+  brushMode?: boolean;
+  /**
+   * Fired when the user finishes a rubber-band brush gesture. Receives the
+   * array of `_row_id` values for every scatter point inside the selection
+   * rectangle. An empty array means the user drew a negligibly-small rect
+   * (treated as "clear"). Only fired when `brushMode` is true.
+   */
+  onBrushSelect?: (rowIds: number[]) => void;
 }
 
-export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onPointClick }: GraphProps) {
+export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onPointClick, brushMode, onBrushSelect }: GraphProps) {
   // 订阅主题变化以触发重渲染
   const themeMode = useThemeStore((s) => s.mode);
 
@@ -108,6 +124,8 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
           onXAxisDblClick={onXAxisDblClick}
           onAxisRangeChange={onAxisRangeChange}
           onPointClick={onPointClick}
+          brushMode={brushMode}
+          onBrushSelect={onBrushSelect}
         />
       ))}
     </div>
@@ -122,9 +140,11 @@ interface GraphPanelProps {
   onXAxisDblClick?: () => void;
   onAxisRangeChange?: (axis: "x" | "y", min: number, max: number) => void;
   onPointClick?: (pick: ScatterPointPick) => void;
+  brushMode?: boolean;
+  onBrushSelect?: (rowIds: number[]) => void;
 }
 
-function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onPointClick }: GraphPanelProps) {
+function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onPointClick, brushMode, onBrushSelect }: GraphPanelProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
   // Keep the latest callbacks in refs so the Zrender dblclick handler
@@ -146,6 +166,10 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
   useEffect(() => {
     onPointClickRef.current = onPointClick;
   }, [onPointClick]);
+  const brushModeRef = useRef(brushMode);
+  const onBrushSelectRef = useRef(onBrushSelect);
+  useEffect(() => { brushModeRef.current = brushMode; }, [brushMode]);
+  useEffect(() => { onBrushSelectRef.current = onBrushSelect; }, [onBrushSelect]);
 
   // 初始化 / 销毁
   useEffect(() => {
@@ -155,7 +179,59 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     const ro = new ResizeObserver(() => inst.resize());
     ro.observe(ref.current);
 
-    // ----- Y / X axis double-click -----------------------------------
+    // ----- Rubber-band brush overlay ---------------------------------
+    // A transparent abs-positioned div painted over the ECharts canvas
+    // while the user draws a selection rectangle in brushMode. We create
+    // it imperatively so the JSX of GraphPanel stays unchanged. ECharts
+    // does NOT clear the container's children after init, so appending
+    // here is safe. The overlay has pointer-events:none so input always
+    // reaches the container element (which owns our pointer handlers).
+    const el = ref.current;
+    el.style.position = "relative";
+    const brushOverlay = document.createElement("div");
+    brushOverlay.style.cssText =
+      "display:none;position:absolute;pointer-events:none;" +
+      "border:1.5px solid #4e9cf5;background:rgba(78,156,245,0.10);z-index:10;box-sizing:border-box;";
+    el.appendChild(brushOverlay);
+
+    // Hit-test: given two pointer-pixel corners, return all scatter rowIds
+    // whose pixel position falls inside the rect.
+    const hitTestBrush = (x1: number, y1: number, x2: number, y2: number): number[] => {
+      const minX = Math.min(x1, x2);
+      const maxX = Math.max(x1, x2);
+      const minY = Math.min(y1, y2);
+      const maxY = Math.max(y1, y2);
+      if (maxX - minX < 2 && maxY - minY < 2) return [];
+      const rowIds: number[] = [];
+      const seen = new Set<number>();
+      try {
+        const opt = inst.getOption() as { series?: { type?: string; data?: unknown[] }[] };
+        const series = opt.series ?? [];
+        for (let si = 0; si < series.length; si++) {
+          const s = series[si];
+          if (s.type !== "scatter") continue;
+          const items = s.data ?? [];
+          for (let di = 0; di < items.length; di++) {
+            const item = items[di] as { __pick?: ScatterPointPick; value?: unknown[] } | null;
+            if (!item || typeof item !== "object") continue;
+            const pick = item.__pick;
+            if (!pick || typeof pick.rowId !== "number" || pick.rowId < 0) continue;
+            if (seen.has(pick.rowId)) continue;
+            const val = item.value;
+            if (!Array.isArray(val) || val.length < 2) continue;
+            const px = inst.convertToPixel({ seriesIndex: si }, val as [number, number]);
+            if (!px) continue;
+            if (px[0] >= minX && px[0] <= maxX && px[1] >= minY && px[1] <= maxY) {
+              seen.add(pick.rowId);
+              rowIds.push(pick.rowId);
+            }
+          }
+        }
+      } catch { /* ignore layout errors if chart not fully rendered */ }
+      return rowIds;
+    };
+
+
     // ECharts' component-targeted `inst.on('dblclick', { componentType:
     // 'yAxis' }, ...)` only fires when the user dblclicks an axis label
     // or the axis line itself — empty space inside the axis strip (tick
@@ -272,7 +348,6 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     // (which would explode near the anchored edge). Skipped on category
     // axes (numeric min/max meaningless) and on inverted axes (sign
     // flip not handled).
-    const el = ref.current;
     type GridLike = { x: number; y: number; width: number; height: number } | undefined;
     const getGridRect = (): GridLike => {
       try {
@@ -408,6 +483,10 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     };
     let dragState: DragState | null = null;
 
+    // ----- Brush (rubber-band) state ----------------------------------
+    type BrushState = { startPx: number; startPy: number; curPx: number; curPy: number; pointerId: number };
+    let brushState: BrushState | null = null;
+
     // requestAnimationFrame-coalesced setOption pump. Pointermove on
     // a high-end mouse fires at 120-240 Hz; ECharts can't keep up if
     // we call setOption that often, which is felt as "the picture
@@ -462,10 +541,21 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
-      if (!onAxisRangeChangeRef.current) return;
       const rect = el.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
+
+      // Brush mode: capture the start point immediately and take pointer
+      // ownership so we can draw the rect even if the cursor leaves the panel.
+      if (brushModeRef.current) {
+        brushState = { startPx: px, startPy: py, curPx: px, curPy: py, pointerId: e.pointerId };
+        try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+        e.preventDefault();
+        return;
+      }
+
+      // Pan / zoom mode (requires onAxisRangeChange).
+      if (!onAxisRangeChangeRef.current) return;
       const grip = getAxisGrip(px, py);
       if (!grip) return;
       dragState = {
@@ -486,12 +576,32 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      // Brush drag in progress: update the overlay rect.
+      if (brushState) {
+        if (e.pointerId !== brushState.pointerId) return;
+        const rect = el.getBoundingClientRect();
+        brushState.curPx = e.clientX - rect.left;
+        brushState.curPy = e.clientY - rect.top;
+        const x1 = Math.min(brushState.startPx, brushState.curPx);
+        const y1 = Math.min(brushState.startPy, brushState.curPy);
+        brushOverlay.style.display = "block";
+        brushOverlay.style.left = x1 + "px";
+        brushOverlay.style.top = y1 + "px";
+        brushOverlay.style.width = Math.abs(brushState.curPx - brushState.startPx) + "px";
+        brushOverlay.style.height = Math.abs(brushState.curPy - brushState.startPy) + "px";
+        return;
+      }
+
       // Hover cursor when not dragging — gives the user a hint about
       // what mode the next mousedown will start.
       if (!dragState) {
         const rect = el.getBoundingClientRect();
         const px = e.clientX - rect.left;
         const py = e.clientY - rect.top;
+        if (brushModeRef.current) {
+          el.style.cursor = "crosshair";
+          return;
+        }
         const g = getAxisGrip(px, py);
         el.style.cursor = g ? cursorForMode(g.mode, false) : "";
         return;
@@ -606,20 +716,36 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     };
 
     const onPointerUp = (e: PointerEvent) => {
+      // Brush: hide overlay, run hit-test, fire callback.
+      if (brushState && e.pointerId === brushState.pointerId) {
+        brushOverlay.style.display = "none";
+        try { el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+        const st = brushState;
+        brushState = null;
+        const rowIds = hitTestBrush(st.startPx, st.startPy, st.curPx, st.curPy);
+        onBrushSelectRef.current?.(rowIds);
+        return;
+      }
       if (!dragState || e.pointerId !== dragState.pointerId) return;
       finishDrag(true);
     };
     const onPointerCancel = (e: PointerEvent) => {
+      if (brushState && e.pointerId === brushState.pointerId) {
+        brushOverlay.style.display = "none";
+        brushState = null;
+        return;
+      }
       if (!dragState || e.pointerId !== dragState.pointerId) return;
       finishDrag(false);
     };
     const onPointerLeave = () => {
-      if (!dragState) el.style.cursor = "";
+      if (!dragState && !brushState) el.style.cursor = "";
     };
     // Global safety net: if for any reason we miss the pointerup
     // (window blur, devtools steal, etc.), end the drag on the next
     // global mouseup so the cursor never gets "stuck".
     const onWindowMouseUpSafety = () => {
+      if (brushState) { brushOverlay.style.display = "none"; brushState = null; return; }
       if (dragState && !dragState.captured) finishDrag(true);
     };
 
@@ -643,6 +769,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         cancelAnimationFrame(scheduledFrame);
         scheduledFrame = 0;
       }
+      brushOverlay.remove();
       ro.disconnect();
       inst.dispose();
       chartRef.current = null;

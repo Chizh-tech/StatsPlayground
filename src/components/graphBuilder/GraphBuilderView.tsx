@@ -89,6 +89,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // Cross-view bridge: click a scatter point → highlight the matching
   // cell in the DataTableView for `dataset.id` next time it mounts.
   const pickCell = useTableSelectionStore((s) => s.pick);
+  // Cross-view bridge: rubber-band brush → highlight multiple rows.
+  const pickRows = useTableSelectionStore((s) => s.pickRows);
+
+  // "pan" = default axis drag/zoom, "select" = rubber-band multi-row brush.
+  const [cursorMode, setCursorMode] = useState<"pan" | "select">("pan");
 
   const [columns, setColumns] = useState<FieldRef[]>([]);
   const [colSqlTypes, setColSqlTypes] = useState<string[]>([]);
@@ -1316,6 +1321,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               <span className="gb-tb-badge">{filters.length}</span>
             )}
           </button>
+          <button
+            className={`gb-tb-btn${cursorMode === "select" ? " gb-tb-btn-active" : ""}`}
+            onClick={() => setCursorMode((m) => m === "select" ? "pan" : "select")}
+            title={t("graph.brushSelect.tooltip", {
+              defaultValue: "Toggle rubber-band selection: drag on the chart to highlight matching rows in the linked table.",
+            })}
+          >
+            {t("graph.brushSelect.label", { defaultValue: "Select" })}
+          </button>
         </div>
         <div className="gb-toolbar-spacer" />
       </div>
@@ -1534,14 +1548,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     }
                   }}
                   onPointClick={(pick) => {
-                    // Bridge to DataTableView: stash the source row + col
-                    // on the per-dataset selection slot. The matching
-                    // table view subscribes and surfaces the cell the
-                    // next time it mounts (or immediately if it's
-                    // already mounted). See useTableSelectionStore for
-                    // why we re-emit through the store rather than
-                    // coupling the two views directly.
                     pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
+                  }}
+                  brushMode={cursorMode === "select"}
+                  onBrushSelect={(rowIds) => {
+                    pickRows(dataset.id, rowIds);
                   }}
                 />
               )}

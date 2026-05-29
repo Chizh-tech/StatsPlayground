@@ -41,6 +41,16 @@ interface State {
   /** Replace the pick for `datasetId`. Pass `null` to clear without
    *  un-tracking the dataset (subscribers still re-run their effect). */
   pick: (datasetId: string, sel: CellPick | null) => void;
+
+  /**
+   * Multi-row picks written by the rubber-band brush gesture in GraphBuilder.
+   * Each entry is an array of `_row_id` values from the source dataset.
+   * Pass an empty array to clear the selection without removing the key.
+   */
+  rowsByDataset: Record<string, number[] | null>;
+  rowTicks: Record<string, number>;
+  /** Replace the multi-row pick for `datasetId`. */
+  pickRows: (datasetId: string, rowIds: number[]) => void;
 }
 
 export const useTableSelectionStore = create<State>((set) => ({
@@ -50,5 +60,13 @@ export const useTableSelectionStore = create<State>((set) => ({
     set((s) => ({
       byDataset: { ...s.byDataset, [datasetId]: sel },
       ticks: { ...s.ticks, [datasetId]: (s.ticks[datasetId] ?? 0) + 1 },
+    })),
+
+  rowsByDataset: {},
+  rowTicks: {},
+  pickRows: (datasetId, rowIds) =>
+    set((s) => ({
+      rowsByDataset: { ...s.rowsByDataset, [datasetId]: rowIds },
+      rowTicks: { ...s.rowTicks, [datasetId]: (s.rowTicks[datasetId] ?? 0) + 1 },
     })),
 }));
