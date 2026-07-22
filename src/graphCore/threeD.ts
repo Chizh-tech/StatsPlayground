@@ -217,17 +217,14 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   // 记录每组占用的 series 下标 + 其主题色，之后为每组建一个作用于这些
   // series 的 visualMap，让曲面/散点沿 Z 在该色调深→浅之间渐变。
   const groupSeries: { color: string; indices: number[] }[] = [];
+  const surfIndices: number[] = [];
 
-  // 全局 Z 值范围（所有数据）——所有分组的深度渐变共用同一标尺。
-  const zIdx = zf ? data.columns.indexOf(zf.name) : -1;
-  let gZmin = Infinity, gZmax = -Infinity;
-  if (zIdx >= 0) {
-    for (const r of data.rows) {
-      const z = Number(r[zIdx]);
-      if (Number.isFinite(z)) { if (z < gZmin) gZmin = z; if (z > gZmax) gZmax = z; }
-    }
-  }
-  const useDepth = zIdx >= 0 && gZmax > gZmin;
+  // 渐变标尺范围。对 surface plot 用「实际曲面（插值网格）」的
+  // 最高/最低（比原始数据范围更紧凑，对比度更高）；无曲面
+  // （纯散点）时用散点 Z 范围。
+  const hasZ = !!zf;
+  let smin = Infinity, smax = -Infinity; // 曲面网格
+  let pmin = Infinity, pmax = -Infinity; // 散点
 
   const addLayers = (gdata: GraphData, name: string, color: string) => {
     const indices: number[] = [];
@@ -238,13 +235,16 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
           type: "surface",
           name,
           data: s.verts,
-          // useDepth: 用 color 着色，由该组 visualMap 按顶点 Z 取深浅色调；
-          // 否则退回 lambert 明暗的纯色。
-          shading: useDepth ? "color" : "lambert",
+          // hasZ: 用 color 着色，由该组 visualMap 按顶点 Z 取深浅色调（若
+          // Z 无有效范围，后面会回退为 lambert）；无 Z 时直接纯色。
+          shading: hasZ ? "color" : "lambert",
           itemStyle: { color },
           wireframe: { show: false },
         });
+        surfIndices.push(series.length - 1);
         indices.push(series.length - 1);
+        if (s.zmin < smin) smin = s.zmin;
+        if (s.zmax > smax) smax = s.zmax;
       }
     }
     if (pointsEl) {
@@ -258,6 +258,8 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
           itemStyle: { color, opacity: 0.9 },
         });
         indices.push(series.length - 1);
+        if (sc.zmin < pmin) pmin = sc.zmin;
+        if (sc.zmax > pmax) pmax = sc.zmax;
       }
     }
     if (indices.length) groupSeries.push({ color, indices });
@@ -292,6 +294,12 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
     return { option: null, hint: { key: "graph.threeD.notEnough", def: "Need at least 3 rows with numeric values." } };
   }
 
+  // 标尺：有曲面则用曲面网格极值（对比度更高），否则用散点 Z 范围。
+  const hasSurfRange = smax > smin;
+  const rmin = hasSurfRange ? smin : pmin;
+  const rmax = hasSurfRange ? smax : pmax;
+  const useDepth = hasZ && rmax > rmin;
+
   const axisCommon = {
     nameTextStyle: { color: theme.fgSecondary },
     axisLine: { lineStyle: { color: theme.axisLine } },
@@ -319,7 +327,7 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
     series,
   };
 
-  // 每组一个作用域 visualMap：沿 Z（全局 min→max）渲染该组色调。
+  // 每组一个作用域 visualMap：沿 Z（曲面极值 min→max）渲染该组色调。
   // 越低越深、越高越浅：inRange 从 min→max 为 [深, 主题色, 浅]，
   // 主题色居中在中段清晰可辨。show:false 隐藏色条。
   if (useDepth) {
@@ -328,10 +336,13 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       show: false,
       dimension: 2,
       seriesIndex: g.indices,
-      min: gZmin,
-      max: gZmax,
+      min: rmin,
+      max: rmax,
       inRange: { color: [shade(g.color, -0.4), g.color, shade(g.color, 0.6)] },
     }));
+  } else {
+    // Z 无有效范围：把 color 着色的曲面回退为 lambert 纯色。
+    for (const i of surfIndices) (series[i] as Record<string, unknown>).shading = "lambert";
   }
 
   if (grouped) {
