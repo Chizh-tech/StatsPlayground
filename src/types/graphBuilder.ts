@@ -4,7 +4,7 @@
  * 引用一个数据表作为数据源，自身仅保存编码与元素配置。
  */
 
-import type { ChartElement, FieldRef, GroupStyleMap, RefLineY, RefLineX, YAxisConfig, GradientConfig } from "@/graphCore";
+import type { ChartElement, FieldRef, GroupStyleMap, RefLineY, RefLineX, YAxisConfig } from "@/graphCore";
 import type { FilterRuleItem } from "./filter";
 
 export type GraphSlotKey =
@@ -125,14 +125,4 @@ export interface GraphBuilderItem {
    *  保留在项目中，只是槽位隐藏、3D 图形不渲染；再次开启即恢复。
    *  `undefined` 视为关闭。 */
   threeD?: boolean;
-
-  /** 渐变着色配置（当前用于 3D 曲面 / 散点按图例分组着色）。
-   *  - `mode`：`"color"` 彩色渐变（按 Z 值在 low→high 两端色之间连续
-   *    取色，中间自动补全）；`"solid"` 纯色渐变（每个图例分组取一个
-   *    纯色，其深浅由该组的代表值在全局标尺 [min,max] 上的位置决定）。
-   *    默认：单图例 → color，多图例 → solid。
-   *  - `low` / `high`：两端颜色（最浅 / 最深）。
-   *  - `min` / `max`：标尺两端代表的数字；`undefined` 时用全部数据
-   *    （所有分组）共同计算的全局最小 / 最大，确保各图例共用同一维度。 */
-  gradient?: GradientConfig;
 }

@@ -71,11 +71,15 @@ export interface MarkStyle {
 }
 
 /** Per-group style: every chart element belonging to the group inherits
- *  these line / fill / point sub-styles, regardless of its kind. */
+ *  these line / fill / point sub-styles, regardless of its kind. The
+ *  `gradient` mark is used by 3D surfaces / scatter — each legend group
+ *  gets its own gradient color (theme-assigned, user-overridable), just
+ *  like line / fill / point. */
 export interface GroupStyle {
   line?: MarkStyle;
   fill?: MarkStyle;
   point?: MarkStyle;
+  gradient?: MarkStyle;
 }
 
 /** Map of group key (the category value from the Color/Overlay encoding,
@@ -377,20 +381,6 @@ export interface GraphSpec {
    *  self-contained canvas renderer instead of the 2D ECharts path.
    *  `undefined` / false = normal 2D rendering. */
   threeD?: boolean;
-  /** Gradient coloring config for grouped 3D surfaces / scatter. */
-  gradient?: GradientConfig;
-}
-
-/** Gradient coloring config. `mode` "color" = per-value continuous
- *  gradient between `low`→`high`; "solid" = one solid color per legend
- *  group whose shade is that group's position on the global [min,max]
- *  scale. `min`/`max` undefined → computed globally across all groups. */
-export interface GradientConfig {
-  mode?: "color" | "solid";
-  low?: string;
-  high?: string;
-  min?: number;
-  max?: number;
 }
 
 /** 原始数据：列式 */

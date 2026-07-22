@@ -503,7 +503,8 @@
     "mark": {
       "line": "线",
       "fill": "填充",
-      "point": "点"
+      "point": "点",
+      "gradient": "渐变"
     },
     "refLine": {
       "title": "辅助线",

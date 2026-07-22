@@ -503,7 +503,8 @@
     "mark": {
       "line": "Line",
       "fill": "Fill",
-      "point": "Point"
+      "point": "Point",
+      "gradient": "Gradient"
     },
     "refLine": {
       "title": "Reference Lines",

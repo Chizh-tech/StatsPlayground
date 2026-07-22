@@ -24,5 +24,4 @@ export {
   type YAxisConfig,
   type GridLineStyle,
   type AutoSpec,
-  type GradientConfig,
 } from "./types";

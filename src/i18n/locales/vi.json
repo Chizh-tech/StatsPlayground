@@ -503,7 +503,8 @@
     "mark": {
       "line": "Đường",
       "fill": "Tô",
-      "point": "Điểm"
+      "point": "Điểm",
+      "gradient": "Chuyển sắc"
     },
     "refLine": {
       "title": "Đường tham chiếu",

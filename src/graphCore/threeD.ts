@@ -13,34 +13,12 @@
 import type { GraphSpec, GraphData } from "./types";
 import type { GraphTheme } from "./theme";
 import { isMissing } from "./transform";
+import { DEFAULT_GROUP_KEY } from "./types";
 
 /** 曲面网格顶点数（N×N）。 */
 const GRID_N = 48;
 /** 3D 散点上限。 */
 const POINT_CAP = 8000;
-
-/** viridis 色阶（低→高），用于按 Z 值着色。 */
-export const VIRIDIS_HEX = ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"];
-
-/** 默认渐变两端色（浅蓝 → 深蓝）。 */
-const DEFAULT_LOW = "#cfe3ff";
-const DEFAULT_HIGH = "#0b3d91";
-
-/** 解析 #rgb / #rrggbb 为 [r,g,b]。 */
-function hexToRgb(hex: string): [number, number, number] {
-  let h = hex.replace("#", "").trim();
-  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
-  const n = parseInt(h, 16);
-  if (!Number.isFinite(n) || h.length !== 6) return [128, 128, 128];
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-/** 在两端色之间按 t∈[0,1] 线性取色，返回 css rgb。 */
-function lerpColor(low: string, high: string, t: number): string {
-  const a = hexToRgb(low);
-  const b = hexToRgb(high);
-  const f = Math.max(0, Math.min(1, t));
-  return `rgb(${Math.round(a[0] + (b[0] - a[0]) * f)},${Math.round(a[1] + (b[1] - a[1]) * f)},${Math.round(a[2] + (b[2] - a[2]) * f)})`;
-}
 
 type SurfaceStat = "mean" | "median";
 
@@ -211,89 +189,29 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   }
 
   // 分组：当绑定了 Overlay（图例）列时，按其值把数据切成多组，
-  // 每组各自成一张 surface / 一簇 scatter3D。
+  // 每组各自成一张 surface / 一簇 scatter3D，颜色取该组「渐变」标记的
+  // 颜色（主题自动为每个图例分配不同色，用户可切换，跟点/线/面一致）。
   const overlay = spec.encoding.overlay;
   const styles = spec.styles ?? {};
-  const groupColorFallback = (key: string): string => {
+  const colorOf = (key: string): string => {
     const s = styles[key];
-    return s?.fill?.color || s?.point?.color || s?.line?.color || "#4a6cf7";
+    return s?.gradient?.color || s?.fill?.color || s?.point?.color || "#4a6cf7";
   };
-
-  const zIdx = zf ? data.columns.indexOf(zf.name) : -1;
-
-  // 分组列表（首次出现顺序去重）。
-  let gi = -1;
-  const groups: string[] = [];
-  if (overlay) {
-    gi = data.columns.indexOf(overlay.name);
-    if (gi >= 0) {
-      const seen = new Set<string>();
-      for (const row of data.rows) {
-        const gv = row[gi];
-        if (isMissing(gv)) continue;
-        const k = String(gv);
-        if (!seen.has(k)) { seen.add(k); groups.push(k); }
-      }
-    }
-  }
-  const grouped = groups.length > 0 && gi >= 0;
-
-  // 每组的行 + 代表值（Z 均值），用于纯色渐变按全局标尺定深浅。
-  interface GInfo { key: string; rows: unknown[][]; meanZ: number }
-  const groupInfos: GInfo[] = [];
-  if (grouped) {
-    for (const gkey of groups) {
-      const rows = data.rows.filter((r) => String(r[gi]) === gkey);
-      let sum = 0, cnt = 0;
-      if (zIdx >= 0) {
-        for (const r of rows) {
-          const z = Number(r[zIdx]);
-          if (Number.isFinite(z)) { sum += z; cnt++; }
-        }
-      }
-      groupInfos.push({ key: gkey, rows, meanZ: cnt ? sum / cnt : 0 });
-    }
-  }
-
-  // 渐变配置。默认：单图例 → color，多图例 → solid。
-  const grad = spec.gradient ?? {};
-  const mode: "color" | "solid" = grad.mode ?? (grouped ? "solid" : "color");
-  const low = grad.low ?? DEFAULT_LOW;
-  const high = grad.high ?? DEFAULT_HIGH;
-
-  // 全局 Z 值范围（所有数据）——彩色渐变（color）标尺默认用它。
-  let gZmin = Infinity, gZmax = -Infinity;
-  if (zIdx >= 0) {
-    for (const r of data.rows) {
-      const z = Number(r[zIdx]);
-      if (Number.isFinite(z)) { if (z < gZmin) gZmin = z; if (z > gZmax) gZmax = z; }
-    }
-  }
-  // 纯色渐变（solid）标尺默认用各组代表值（均值）范围，铺满深浅两端。
-  let meanMin = Infinity, meanMax = -Infinity;
-  for (const g of groupInfos) {
-    if (g.meanZ < meanMin) meanMin = g.meanZ;
-    if (g.meanZ > meanMax) meanMax = g.meanZ;
-  }
-  const solidMin = grad.min ?? (Number.isFinite(meanMin) ? meanMin : 0);
-  const solidMax = grad.max ?? (Number.isFinite(meanMax) ? meanMax : 1);
-  const solidSpan = solidMax - solidMin || 1;
 
   const series: Record<string, unknown>[] = [];
   const legendData: string[] = [];
 
-  const addLayers = (gdata: GraphData, name: string | null, color: string | null) => {
+  const addLayers = (gdata: GraphData, name: string, color: string) => {
     if (surfaceEl && xf && yf && zf) {
       const s = buildSurfaceData(gdata, xf.name, yf.name, zf.name, GRID_N, stat);
       if (s) {
         series.push({
           type: "surface",
-          name: name ?? zf.name,
+          name,
           data: s.verts,
-          // 纯色（有 color）用 lambert 明暗；彩色渐变（无 color）用 color
-          // 着色 + visualMap 按顶点 Z 取色。
-          shading: color ? "lambert" : "color",
-          ...(color ? { itemStyle: { color } } : {}),
+          // lambert 明暗让纯色曲面沿高度/朝向自然呈现渐变感，各组不同色。
+          shading: "lambert",
+          itemStyle: { color },
           wireframe: { show: false },
         });
       }
@@ -303,32 +221,38 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       if (sc) {
         series.push({
           type: "scatter3D",
-          name: name ?? (zf?.name ?? "points"),
+          name,
           data: sc.pts,
           symbolSize: 6,
-          ...(color ? { itemStyle: { color, opacity: 0.9 } } : { itemStyle: { opacity: 0.9, borderWidth: 0.5, borderColor: "rgba(0,0,0,0.3)" } }),
+          itemStyle: { color, opacity: 0.9 },
         });
       }
     }
   };
 
-  if (grouped) {
-    for (const g of groupInfos) {
-      // 有 Z：solid → 按全局标尺取渐变纯色；color → null（由 visualMap 着色）。
-      // 无 Z：退回该组的样式色（区分不同组）。
-      const color =
-        zIdx < 0
-          ? groupColorFallback(g.key)
-          : mode === "solid"
-            ? lerpColor(low, high, (g.meanZ - solidMin) / solidSpan)
-            : null;
-      addLayers({ columns: data.columns, rows: g.rows as unknown[][] }, g.key, color);
-      legendData.push(g.key);
+  let grouped = false;
+  if (overlay) {
+    const gi = data.columns.indexOf(overlay.name);
+    if (gi >= 0) {
+      // 首次出现顺序去重分组。
+      const seen = new Set<string>();
+      const groups: string[] = [];
+      for (const row of data.rows) {
+        const gv = row[gi];
+        if (isMissing(gv)) continue;
+        const k = String(gv);
+        if (!seen.has(k)) { seen.add(k); groups.push(k); }
+      }
+      grouped = groups.length > 0;
+      for (const gkey of groups) {
+        const rows = data.rows.filter((r) => String(r[gi]) === gkey);
+        addLayers({ columns: data.columns, rows }, gkey, colorOf(gkey));
+        legendData.push(gkey);
+      }
     }
-  } else {
-    // 单组：color → 按 Z 色阶；solid → 单一纯色（取深端）。
-    const color = mode === "solid" && zIdx >= 0 ? lerpColor(low, high, 1) : null;
-    addLayers(data, null, color);
+  }
+  if (!grouped) {
+    addLayers(data, zf?.name ?? "series", colorOf(DEFAULT_GROUP_KEY));
   }
 
   if (series.length === 0) {
@@ -368,22 +292,6 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       data: legendData,
       top: 4,
       textStyle: { color: theme.fgSecondary },
-    };
-  }
-
-  // 彩色渐变：按 Z 值在 low→high 之间连续着色。
-  if (mode === "color" && zIdx >= 0 && gZmax > gZmin) {
-    option.visualMap = {
-      show: true,
-      dimension: 2,
-      min: grad.min ?? gZmin,
-      max: grad.max ?? gZmax,
-      calculable: true,
-      realtime: false,
-      inRange: { color: [low, high] },
-      textStyle: { color: theme.fgDim },
-      right: 8,
-      top: "center",
     };
   }
 
