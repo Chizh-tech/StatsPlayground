@@ -103,6 +103,29 @@ pub fn add_column(
 }
 
 #[tauri::command]
+pub fn insert_column_at(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    col_name: String,
+    col_type: String,
+    at_index: usize,
+) -> Result<(), AppError> {
+    let service = DataService::new(&state);
+    service.insert_column_at(&dataset_id, &col_name, &col_type, at_index)
+}
+
+#[tauri::command]
+pub fn reorder_column(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    from: usize,
+    to: usize,
+) -> Result<(), AppError> {
+    let service = DataService::new(&state);
+    service.reorder_column(&dataset_id, from, to)
+}
+
+#[tauri::command]
 pub fn delete_column(
     state: State<'_, AppState>,
     dataset_id: String,

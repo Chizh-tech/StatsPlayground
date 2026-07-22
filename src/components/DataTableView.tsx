@@ -506,13 +506,18 @@ interface ColsPanelListProps {
   colExtras: ReadonlyArray<Record<string, unknown> | null>;
   onItemClick: (colIdx: number, e: React.MouseEvent) => void;
   onItemContextMenu: (e: React.MouseEvent, colIdx: number) => void;
+  /** Move the column at `from` to visible index `to` (drag-to-reorder). */
+  onReorder: (from: number, to: number) => void;
 }
 
 const ColsPanelList = React.memo(function ColsPanelList({
-  cols, colTypes, selectedCols, colExtras, onItemClick, onItemContextMenu,
+  cols, colTypes, selectedCols, colExtras, onItemClick, onItemContextMenu, onReorder,
 }: ColsPanelListProps) {
   const { t } = useTranslation();
   const labelOf = typeLabelOf(t);
+  // Index of the row currently being dragged, and the row it is hovering over.
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [overIdx, setOverIdx] = useState<number | null>(null);
   return (
     <div className="sp-cols-panel-list">
       {cols.map((name, ci) => {
@@ -521,12 +526,26 @@ const ColsPanelList = React.memo(function ColsPanelList({
         const extras = colExtras[ci];
         const extraSummary = extras ? summarizeExtraKinds(extras, t) : "";
         const extraCount = extras ? Object.keys(extras).length : 0;
+        const isDragging = dragIdx === ci;
+        const isDropTarget = overIdx === ci && dragIdx !== null && dragIdx !== ci;
         return (
           <div
             key={ci}
-            className={`sp-cols-panel-item${isSel ? " sp-cols-panel-item-selected" : ""}`}
+            className={`sp-cols-panel-item${isSel ? " sp-cols-panel-item-selected" : ""}${isDragging ? " sp-cols-panel-item-dragging" : ""}${isDropTarget ? " sp-cols-panel-item-dropbelow" : ""}`}
             onClick={(e) => onItemClick(ci, e)}
             onContextMenu={(e) => onItemContextMenu(e, ci)}
+            onDragOver={(e) => {
+              if (dragIdx === null) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (overIdx !== ci) setOverIdx(ci);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragIdx !== null && dragIdx !== ci) onReorder(dragIdx, ci);
+              setDragIdx(null);
+              setOverIdx(null);
+            }}
             title={`${colLetter(ci)}  ${name}  (${tLabel})${extraSummary ? "\n" + t("dataTable.colsPanelExtraTooltip", { summary: extraSummary }) : ""}`}
           >
             <span className="sp-cols-panel-item-type">{tLabel}</span>
@@ -536,6 +555,18 @@ const ColsPanelList = React.memo(function ColsPanelList({
                 📎{extraCount}
               </span>
             )}
+            <span
+              className="sp-cols-panel-item-drag"
+              draggable
+              title={t("dataTable.colsPanelDragHandle", { defaultValue: "Drag to reorder" })}
+              onClick={(e) => e.stopPropagation()}
+              onDragStart={(e) => {
+                setDragIdx(ci);
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", String(ci));
+              }}
+              onDragEnd={() => { setDragIdx(null); setOverIdx(null); }}
+            >☰</span>
           </div>
         );
       })}
@@ -701,6 +732,9 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const [showInsertMultiCols, setShowInsertMultiCols] = useState(false);
   const [insertColCount, setInsertColCount] = useState("3");
   const [insertColType, setInsertColType] = useState("VARCHAR");
+  // Visible index the multi-column insert should land after (null = append at
+  // end). Captured when the dialog is opened from a column context menu.
+  const [insertColAnchor, setInsertColAnchor] = useState<number | null>(null);
   const [colWidths, setColWidths] = useState<number[]>([]);
   const [colFormats, setColFormats] = useState<ColumnFormat[]>([]);
   const colFormatsRef = useRef<ColumnFormat[]>([]);
@@ -1532,6 +1566,10 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const stableColsPanelCtxMenu = useCallback((e: React.MouseEvent, colIdx: number) => {
     colsPanelCtxMenuRef.current(e, colIdx);
   }, []);
+  const colsPanelReorderRef = useRef<(from: number, to: number) => void>(() => {});
+  const stableColsPanelReorder = useCallback((from: number, to: number) => {
+    colsPanelReorderRef.current(from, to);
+  }, []);
 
   // Stable proxy refs for the formula bar so it can be memoized.
   const writeActiveCellRef = useRef<(value: string) => Promise<boolean>>(async () => false);
@@ -1634,6 +1672,18 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     recordAction(t("history.addColumn"));
   };
 
+  // Insert a single blank column immediately after the given visible index
+  // (used by the column header context menu so "insert column" lands next to
+  // the right-clicked column instead of at the far end).
+  const handleInsertColumnAfter = async (index: number) => {
+    const name = generateColName(cols);
+    await dataService.insertColumnAt(datasetId, name, "VARCHAR", index + 1);
+    setColMenu(null);
+    await load();
+    await refreshAndMarkDirty();
+    recordAction(t("history.addColumn"));
+  };
+
   const handleAddColumn = async () => {
     const name = newColName.trim();
     if (!name) return;
@@ -1649,18 +1699,41 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const handleInsertMultiCols = async () => {
     const count = parseInt(insertColCount, 10);
     if (isNaN(count) || count < 1) return;
+    const anchor = insertColAnchor;
     const currentNames = [...cols];
     for (let i = 0; i < count; i++) {
       const name = generateColName(currentNames);
-      currentNames.push(name);
-      await dataService.addColumn(datasetId, name, insertColType);
+      if (anchor == null) {
+        // No anchor (opened from a non-column context): append at the end.
+        currentNames.push(name);
+        await dataService.addColumn(datasetId, name, insertColType);
+      } else {
+        // Insert right after the right-clicked column, keeping the batch in
+        // order: anchor+1, anchor+2, …
+        const at = anchor + 1 + i;
+        currentNames.splice(at, 0, name);
+        await dataService.insertColumnAt(datasetId, name, insertColType, at);
+      }
     }
     setShowInsertMultiCols(false);
     setInsertColCount("3");
     setInsertColType("VARCHAR");
+    setInsertColAnchor(null);
     await load();
     await refreshAndMarkDirty();
     recordAction(t("history.addColumnsBatch"));
+  };
+
+  // Reorder a column by dragging its handle in the COLUMNS side panel.
+  // `from`/`to` are visible column indices; the backend renumbers col_index
+  // and remaps any stored display props so widths/formats/extras follow.
+  const handleColsPanelReorder = async (from: number, to: number) => {
+    if (from === to) return;
+    await dataService.reorderColumn(datasetId, from, to);
+    setSelectedCols(EMPTY_NUM_SET);
+    await load();
+    await refreshAndMarkDirty();
+    recordAction(t("history.reorderColumn", { defaultValue: "Reorder columns" }));
   };
 
   const handleDeleteColumn = async (colName: string) => {
@@ -3366,6 +3439,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   // up latest closure state).
   colsPanelClickRef.current = handleColsPanelItemClick;
   colsPanelCtxMenuRef.current = handleColContextMenu;
+  colsPanelReorderRef.current = handleColsPanelReorder;
 
   // Wire up FormulaBar proxies + derive its inputs.
   writeActiveCellRef.current = async (v: string) => {
@@ -3644,6 +3718,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
               colExtras={colExtras}
               onItemClick={stableColsPanelClick}
               onItemContextMenu={stableColsPanelCtxMenu}
+              onReorder={stableColsPanelReorder}
             />
           </div>
           {/* Splitter: drag to resize the columns panel width. */}
@@ -3894,10 +3969,10 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
               <div className="sp-ctx-item" onClick={handleStartBatchColProps}>
                 {t("dataTable.ctxColPropsBatch", { n: selectedCols.size })}
               </div>
-              <div className="sp-ctx-item" onClick={() => { handleAddColumnQuick(); setColMenu(null); }}>
+              <div className="sp-ctx-item" onClick={() => handleInsertColumnAfter(colMenu.colIdx)}>
                 {t("dataTable.ctxInsertCol")}
               </div>
-              <div className="sp-ctx-item" onClick={() => { setShowInsertMultiCols(true); setColMenu(null); }}>
+              <div className="sp-ctx-item" onClick={() => { setInsertColAnchor(colMenu.colIdx); setShowInsertMultiCols(true); setColMenu(null); }}>
                 {t("dataTable.ctxInsertMultiCols")}
               </div>
               <div className="sp-ctx-sep" />
@@ -3913,10 +3988,10 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
               <div className="sp-ctx-item" onClick={() => handleStartRenameCol(colMenu.colIdx)}>
                 {t("dataTable.ctxColProps")}
               </div>
-              <div className="sp-ctx-item" onClick={() => { handleAddColumnQuick(); setColMenu(null); }}>
+              <div className="sp-ctx-item" onClick={() => handleInsertColumnAfter(colMenu.colIdx)}>
                 {t("dataTable.ctxInsertCol")}
               </div>
-              <div className="sp-ctx-item" onClick={() => { setShowInsertMultiCols(true); setColMenu(null); }}>
+              <div className="sp-ctx-item" onClick={() => { setInsertColAnchor(colMenu.colIdx); setShowInsertMultiCols(true); setColMenu(null); }}>
                 {t("dataTable.ctxInsertMultiCols")}
               </div>
               <div className="sp-ctx-sep" />
@@ -3972,7 +4047,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
           <div className="sp-ctx-item" onClick={() => { handleAddColumnQuick(); setCornerMenu(null); }}>
             {t("dataTable.ctxInsertCol")}
           </div>
-          <div className="sp-ctx-item" onClick={() => { setShowInsertMultiCols(true); setCornerMenu(null); }}>
+          <div className="sp-ctx-item" onClick={() => { setInsertColAnchor(null); setShowInsertMultiCols(true); setCornerMenu(null); }}>
             {t("dataTable.ctxInsertMultiCols")}
           </div>
           <div className="sp-ctx-sep" />
@@ -4039,7 +4114,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
       {/* Insert multi-cols dialog */}
       {showInsertMultiCols && (
-        <div className="sp-dialog-overlay" onClick={() => setShowInsertMultiCols(false)}>
+        <div className="sp-dialog-overlay" onClick={() => { setShowInsertMultiCols(false); setInsertColAnchor(null); }}>
           <div className="sp-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="sp-dialog-title">{t("dataTable.insertMultiColsTitle")}</div>
             <div className="sp-dialog-body">
@@ -4059,7 +4134,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
               </select>
             </div>
             <div className="sp-dialog-actions">
-              <button className="sp-dialog-btn" onClick={() => setShowInsertMultiCols(false)}>{t("common.cancel")}</button>
+              <button className="sp-dialog-btn" onClick={() => { setShowInsertMultiCols(false); setInsertColAnchor(null); }}>{t("common.cancel")}</button>
               <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={handleInsertMultiCols}>{t("common.confirm")}</button>
             </div>
           </div>

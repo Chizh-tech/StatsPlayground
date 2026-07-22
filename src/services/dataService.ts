@@ -40,6 +40,14 @@ export const dataService = {
   addColumn: (datasetId: string, colName: string, colType: string) =>
     invoke<void>("add_column", { datasetId, colName, colType }),
 
+  /** 在指定位置插入列（0 基，位于可见列中的索引） */
+  insertColumnAt: (datasetId: string, colName: string, colType: string, atIndex: number) =>
+    invoke<void>("insert_column_at", { datasetId, colName, colType, atIndex }),
+
+  /** 调整列顺序（将 from 处的列移动到 to 处） */
+  reorderColumn: (datasetId: string, from: number, to: number) =>
+    invoke<void>("reorder_column", { datasetId, from, to }),
+
   /** 删除列 */
   deleteColumn: (datasetId: string, colName: string) =>
     invoke<void>("delete_column", { datasetId, colName }),

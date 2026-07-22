@@ -26,6 +26,8 @@ pub fn run() {
             commands::data_commands::delete_row,
             commands::data_commands::rename_dataset,
             commands::data_commands::add_column,
+            commands::data_commands::insert_column_at,
+            commands::data_commands::reorder_column,
             commands::data_commands::delete_column,
             commands::data_commands::rename_column,
             commands::data_commands::change_column_type,

@@ -2,6 +2,28 @@ use crate::error::AppError;
 use crate::models::table::{DatasetMeta, TableQueryResult};
 use crate::state::AppState;
 
+/// Compute the new index of a column originally at `idx` after a single column
+/// is moved from `from` to `to`. Mirrors an array `remove(from) + insert(to)`.
+fn remap_moved_index(idx: usize, from: usize, to: usize) -> usize {
+    if idx == from {
+        to
+    } else if from < to {
+        // Columns in (from, to] slide one slot left.
+        if idx > from && idx <= to {
+            idx - 1
+        } else {
+            idx
+        }
+    } else {
+        // from > to: columns in [to, from) slide one slot right.
+        if idx >= to && idx < from {
+            idx + 1
+        } else {
+            idx
+        }
+    }
+}
+
 pub struct DataService<'a> {
     state: &'a AppState,
 }
@@ -84,6 +106,58 @@ impl<'a> DataService<'a> {
     pub fn add_column(&self, dataset_id: &str, col_name: &str, col_type: &str) -> Result<(), AppError> {
         let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
         db.add_column(dataset_id, col_name, col_type)
+    }
+
+    /// Insert a column at a specific visible index and shift any stored display
+    /// props (width/format/extras) at/after that index one slot right so they
+    /// stay aligned with the new column layout.
+    pub fn insert_column_at(
+        &self,
+        dataset_id: &str,
+        col_name: &str,
+        col_type: &str,
+        at_index: usize,
+    ) -> Result<(), AppError> {
+        {
+            let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+            db.insert_column_at(dataset_id, col_name, col_type, at_index as i32)?;
+        }
+        let mut display = self
+            .state
+            .column_display
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        if let Some(props) = display.get_mut(dataset_id) {
+            for p in props.iter_mut() {
+                if p.col_index >= at_index {
+                    p.col_index += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Move a column from visible index `from` to `to`, remapping stored display
+    /// props so they follow their column to the new position.
+    pub fn reorder_column(&self, dataset_id: &str, from: usize, to: usize) -> Result<(), AppError> {
+        {
+            let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+            db.reorder_column(dataset_id, from as i32, to as i32)?;
+        }
+        if from == to {
+            return Ok(());
+        }
+        let mut display = self
+            .state
+            .column_display
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        if let Some(props) = display.get_mut(dataset_id) {
+            for p in props.iter_mut() {
+                p.col_index = remap_moved_index(p.col_index, from, to);
+            }
+        }
+        Ok(())
     }
 
     pub fn delete_column(&self, dataset_id: &str, col_name: &str) -> Result<(), AppError> {

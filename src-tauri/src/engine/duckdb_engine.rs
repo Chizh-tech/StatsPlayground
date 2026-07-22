@@ -899,6 +899,104 @@ impl DuckDbEngine {
         Ok(())
     }
 
+    /// Insert a new column at a specific visible index (0-based among user
+    /// columns). The column is always appended physically — display order is
+    /// driven entirely by `_meta_columns.col_index`, so physical position is
+    /// irrelevant — then `col_index` values are shifted so the new column lands
+    /// at `at_index`. `at_index` is clamped to `[0, col_count]`.
+    pub fn insert_column_at(
+        &self,
+        dataset_id: &str,
+        col_name: &str,
+        col_type: &str,
+        at_index: i32,
+    ) -> Result<(), AppError> {
+        let table_name = format!("dataset_{}", dataset_id.replace('-', "_"));
+
+        // Clamp the target index to the current column count.
+        let col_count: i32 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM _meta_columns WHERE dataset_id = $1",
+                params![dataset_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let at = at_index.clamp(0, col_count);
+
+        // ALTER TABLE to add the column (appended physically).
+        self.conn.execute(
+            &format!("ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}", table_name, col_name, col_type),
+            [],
+        )?;
+
+        // Shift existing columns at/after the insertion point one slot right.
+        // DuckDB evaluates the UPDATE set-based, mirroring the decrement used
+        // by `delete_column`, so no primary-key clash occurs.
+        self.conn.execute(
+            "UPDATE _meta_columns SET col_index = col_index + 1 WHERE dataset_id = $1 AND col_index >= $2",
+            params![dataset_id, at],
+        )?;
+
+        // Register the new column at the freed slot.
+        self.conn.execute(
+            "INSERT INTO _meta_columns (dataset_id, col_index, col_name, col_type) VALUES ($1, $2, $3, $4)",
+            params![dataset_id, at, col_name, col_type],
+        )?;
+
+        // Update col_count
+        self.conn.execute(
+            "UPDATE _meta_datasets SET col_count = col_count + 1 WHERE id = $1",
+            params![dataset_id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Move a user column from visible index `from` to visible index `to`,
+    /// renumbering every `col_index` so they stay contiguous `0..n`. Both
+    /// indices are clamped to the valid range; a no-op move returns `Ok`.
+    pub fn reorder_column(&self, dataset_id: &str, from: i32, to: i32) -> Result<(), AppError> {
+        // Read the current column order.
+        let mut names: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT col_name FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
+            )?;
+            stmt.query_map(params![dataset_id], |row| row.get::<_, String>(0))?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+
+        let n = names.len() as i32;
+        if n == 0 {
+            return Ok(());
+        }
+        let from = from.clamp(0, n - 1);
+        let to = to.clamp(0, n - 1);
+        if from == to {
+            return Ok(());
+        }
+
+        // Apply the move within the ordered name list.
+        let moved = names.remove(from as usize);
+        names.insert(to as usize, moved);
+
+        // Offset every col_index out of the target range `0..n` first so the
+        // subsequent per-column assignment can't hit a primary-key clash.
+        self.conn.execute(
+            "UPDATE _meta_columns SET col_index = col_index + $1 WHERE dataset_id = $2",
+            params![n + 1000, dataset_id],
+        )?;
+        for (i, name) in names.iter().enumerate() {
+            self.conn.execute(
+                "UPDATE _meta_columns SET col_index = $1 WHERE dataset_id = $2 AND col_name = $3",
+                params![i as i32, dataset_id, name],
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Delete a column from a dataset
     pub fn delete_column(&self, dataset_id: &str, col_name: &str) -> Result<(), AppError> {
         let table_name = format!("dataset_{}", dataset_id.replace('-', "_"));

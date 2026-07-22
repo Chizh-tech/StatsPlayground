@@ -935,6 +935,36 @@
   white-space: nowrap;
 }
 
+/* Drag handle (☰) for reordering columns from the COLUMNS side panel. */
+.sp-cols-panel-item-drag {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--fg-secondary);
+  cursor: grab;
+  opacity: 0;
+  user-select: none;
+}
+.sp-cols-panel-item:hover .sp-cols-panel-item-drag,
+.sp-cols-panel-item-selected .sp-cols-panel-item-drag {
+  opacity: 0.6;
+}
+.sp-cols-panel-item-drag:hover {
+  opacity: 1;
+}
+.sp-cols-panel-item-drag:active {
+  cursor: grabbing;
+}
+.sp-cols-panel-item-dragging {
+  opacity: 0.5;
+}
+/* Drop indicator: a line under the row the dragged column will land on. */
+.sp-cols-panel-item-dropbelow {
+  box-shadow: inset 0 -2px 0 var(--fg-accent);
+}
+
 /* Additional column properties editor (inside column dialog) */
 .sp-extras-editor {
   margin-top: 10px;
