@@ -22,6 +22,20 @@ const POINT_CAP = 8000;
 
 type SurfaceStat = "mean" | "median";
 
+/** 将 #rrggbb 向黑（ratio<0）或白（ratio>0）混合，ratio∈[-1,1]。 */
+function shade(hex: string, ratio: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const h = m[1];
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const mix = (c: number) => (ratio < 0 ? Math.round(c * (1 + ratio)) : Math.round(c + (255 - c) * ratio));
+  const cl = (n: number) => Math.max(0, Math.min(255, n));
+  const hx = (n: number) => cl(n).toString(16).padStart(2, "0");
+  return `#${hx(mix(r))}${hx(mix(g))}${hx(mix(b))}`;
+}
+
 interface XYZ { xi: number; yi: number; zi: number }
 
 function colIndices(data: GraphData, x?: string, y?: string, z?: string): XYZ {
@@ -200,8 +214,23 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
 
   const series: Record<string, unknown>[] = [];
   const legendData: string[] = [];
+  // 记录每组占用的 series 下标 + 其主题色，之后为每组建一个作用于这些
+  // series 的 visualMap，让曲面/散点沿 Z 在该色调深→浅之间渐变。
+  const groupSeries: { color: string; indices: number[] }[] = [];
+
+  // 全局 Z 值范围（所有数据）——所有分组的深度渐变共用同一标尺。
+  const zIdx = zf ? data.columns.indexOf(zf.name) : -1;
+  let gZmin = Infinity, gZmax = -Infinity;
+  if (zIdx >= 0) {
+    for (const r of data.rows) {
+      const z = Number(r[zIdx]);
+      if (Number.isFinite(z)) { if (z < gZmin) gZmin = z; if (z > gZmax) gZmax = z; }
+    }
+  }
+  const useDepth = zIdx >= 0 && gZmax > gZmin;
 
   const addLayers = (gdata: GraphData, name: string, color: string) => {
+    const indices: number[] = [];
     if (surfaceEl && xf && yf && zf) {
       const s = buildSurfaceData(gdata, xf.name, yf.name, zf.name, GRID_N, stat);
       if (s) {
@@ -209,11 +238,13 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
           type: "surface",
           name,
           data: s.verts,
-          // lambert 明暗让纯色曲面沿高度/朝向自然呈现渐变感，各组不同色。
-          shading: "lambert",
+          // useDepth: 用 color 着色，由该组 visualMap 按顶点 Z 取深浅色调；
+          // 否则退回 lambert 明暗的纯色。
+          shading: useDepth ? "color" : "lambert",
           itemStyle: { color },
           wireframe: { show: false },
         });
+        indices.push(series.length - 1);
       }
     }
     if (pointsEl) {
@@ -226,8 +257,10 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
           symbolSize: 6,
           itemStyle: { color, opacity: 0.9 },
         });
+        indices.push(series.length - 1);
       }
     }
+    if (indices.length) groupSeries.push({ color, indices });
   };
 
   let grouped = false;
@@ -285,6 +318,20 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
     },
     series,
   };
+
+  // 每组一个作用域 visualMap：沿 Z（全局 min→max）从浅到深渲染该组色调。
+  // 3-stop [浅, 主题色, 深] 让主题色在中段清晰可辨。show:false 隐藏色条。
+  if (useDepth) {
+    option.visualMap = groupSeries.map((g) => ({
+      type: "continuous",
+      show: false,
+      dimension: 2,
+      seriesIndex: g.indices,
+      min: gZmin,
+      max: gZmax,
+      inRange: { color: [shade(g.color, 0.6), g.color, shade(g.color, -0.4)] },
+    }));
+  }
 
   if (grouped) {
     option.legend = {
