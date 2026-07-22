@@ -176,10 +176,6 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
   useEffect(() => {
     onAxisRangeChangeRef.current = onAxisRangeChange;
   }, [onAxisRangeChange]);
-  const onAxisContextMenuRef = useRef(onAxisContextMenu);
-  useEffect(() => {
-    onAxisContextMenuRef.current = onAxisContextMenu;
-  }, [onAxisContextMenu]);
   useEffect(() => {
     onPointClickRef.current = onPointClick;
   }, [onPointClick]);
@@ -906,24 +902,13 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     };
 
     // ----- Right-click on an axis strip → context menu ---------------
-    // Registered through zrender's own event bus (exactly like the
-    // dblclick handler above) rather than a native DOM `contextmenu`
-    // listener on the container: in the Tauri WebView the raw DOM
-    // contextmenu event does not reliably reach a listener on `el`, but
-    // zrender's normalized event fires for empty areas (axis strips)
-    // just like dblclick does. zrender reports zr-relative offsetX /
-    // offsetY; we classify those into an axis strip and derive viewport
-    // coords from the container rect so the menu pins at the cursor.
-    const zrContextHandler = (e: { offsetX: number; offsetY: number; event?: MouseEvent }) => {
-      const cb = onAxisContextMenuRef.current;
-      if (!cb) return;
-      const axis = axisStripAt(e.offsetX, e.offsetY);
-      if (!axis) return;
-      e.event?.preventDefault();
-      const rect = el.getBoundingClientRect();
-      cb(axis, rect.left + e.offsetX, rect.top + e.offsetY);
-    };
-    zr.on("contextmenu", zrContextHandler);
+    // Handled in the React layer via `onContextMenu` on the chart div
+    // (see the JSX below) — React's root-level event delegation is the
+    // one contextmenu path that works reliably in the Tauri WebView
+    // (both a native listener on `el` and zrender's own event bus proved
+    // unreliable here, while the app's other right-click menus all use
+    // React `onContextMenu`). The handler lives at component scope so it
+    // can read the freshest `onAxisContextMenu` prop directly.
 
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
@@ -937,7 +922,6 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
 
     return () => {
       zr.off("dblclick", zrHandler);
-      zr.off("contextmenu", zrContextHandler);
       inst.off("click", onSeriesClick);
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("pointermove", onPointerMove);
@@ -963,6 +947,47 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     chartRef.current?.setOption(option as echarts.EChartsCoreOption, true);
   }, [option]);
 
+  // Right-click on an axis strip → open the axis context menu. Handled
+  // here in the React layer (root-level event delegation) because that
+  // is the contextmenu path that fires reliably in the Tauri WebView —
+  // the same mechanism every other right-click menu in the app uses.
+  // Coordinates are resolved against the chart div and classified into
+  // the left (Y) / bottom (X) axis strips using the live grid rect.
+  const handleAxisContextMenu = (e: React.MouseEvent) => {
+    const cb = onAxisContextMenu;
+    const inst = chartRef.current;
+    const el = ref.current;
+    if (!cb || !inst || !el) return;
+    const rect = el.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    // Grid rect (chart-relative CSS pixels); undefined before first layout.
+    let r: { x: number; y: number; width: number; height: number } | undefined;
+    try {
+      const grid = (inst as unknown as { getModel?: () => { getComponent?: (t: string, i: number) => unknown } })
+        .getModel?.()
+        ?.getComponent?.("grid", 0) as
+        | { coordinateSystem?: { getRect?: () => { x: number; y: number; width: number; height: number } } }
+        | undefined;
+      r = grid?.coordinateSystem?.getRect?.();
+    } catch {
+      /* fall through to the geometric fallback */
+    }
+    const panelW = el.clientWidth;
+    const panelH = el.clientHeight;
+    let axis: "x" | "y" | null = null;
+    if (r) {
+      if (px >= 0 && px < r.x && py >= r.y && py <= r.y + r.height) axis = "y";
+      else if (py > r.y + r.height && py <= panelH && px >= r.x && px <= r.x + r.width) axis = "x";
+    } else {
+      if (px >= 0 && px <= Math.min(80, panelW * 0.18) && py >= 0 && py <= panelH) axis = "y";
+      else if (py <= panelH && py >= panelH - Math.min(60, panelH * 0.18) && px >= 0 && px <= panelW) axis = "x";
+    }
+    if (!axis) return;
+    e.preventDefault();
+    cb(axis, e.clientX, e.clientY);
+  };
+
   return (
     <div
       style={{
@@ -984,7 +1009,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
           {title}
         </div>
       )}
-      <div ref={ref} style={{ flex: 1, minHeight: 0 }} />
+      <div ref={ref} style={{ flex: 1, minHeight: 0 }} onContextMenu={handleAxisContextMenu} />
     </div>
   );
 }
