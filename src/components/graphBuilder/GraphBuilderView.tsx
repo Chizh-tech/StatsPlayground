@@ -1701,39 +1701,34 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           />
         </div>
 
-        {/* Splitter: center | right — hidden in 3D (surface plots don't
-            use the legend / style panel). */}
-        {!item.threeD && (
-          <>
-            <div
-              className="gb-splitter"
-              onMouseDown={startSideResize("right")}
-              onDoubleClick={() => setRightWidth(220)}
-              title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
-            />
+        {/* Splitter: center | right */}
+        <div
+          className="gb-splitter"
+          onMouseDown={startSideResize("right")}
+          onDoubleClick={() => setRightWidth(220)}
+          title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
+        />
 
-            {/* Legend + Style editor:
-                - 顶部 Overlay 槽：拖入分类列即按其值生成图例分组；
-                - 中间图例列表：每行对应一个分组（无 Overlay 时显示 "All"）；
-                - 底部样式编辑器：针对当前选中的图例条目，分别设置线/填充/点。
-                无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
-            <LegendStylePanel
-              data={data}
-              encoding={encoding}
-              elements={elements}
-              groupStyles={item.groupStyles ?? {}}
-              groupKeys={groupKeys}
-              effectiveStyles={effectiveStyles}
-              hiddenGroups={item.hiddenGroups ?? []}
-              toggleGroupHidden={toggleGroupHidden}
-              setGroupStyle={setGroupStyle}
-              resetAllGroupStyles={resetAllGroupStyles}
-              onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
-              onClearOverlay={() => clearSlot("overlay")}
-              width={rightWidth}
-            />
-          </>
-        )}
+        {/* Legend + Style editor:
+            - 顶部 Overlay 槽：拖入分类列即按其值生成图例分组；
+            - 中间图例列表：每行对应一个分组（无 Overlay 时显示 "All"）；
+            - 底部样式编辑器：针对当前选中的图例条目，分别设置线/填充/点。
+            无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
+        <LegendStylePanel
+          data={data}
+          encoding={encoding}
+          elements={elements}
+          groupStyles={item.groupStyles ?? {}}
+          groupKeys={groupKeys}
+          effectiveStyles={effectiveStyles}
+          hiddenGroups={item.hiddenGroups ?? []}
+          toggleGroupHidden={toggleGroupHidden}
+          setGroupStyle={setGroupStyle}
+          resetAllGroupStyles={resetAllGroupStyles}
+          onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
+          onClearOverlay={() => clearSlot("overlay")}
+          width={rightWidth}
+        />
       </div>
 
       {/* Y-axis settings dialog. Opened by double-clicking the Y axis;
