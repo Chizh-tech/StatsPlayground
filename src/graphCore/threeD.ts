@@ -319,8 +319,9 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
     series,
   };
 
-  // 每组一个作用域 visualMap：沿 Z（全局 min→max）从浅到深渲染该组色调。
-  // 3-stop [浅, 主题色, 深] 让主题色在中段清晰可辨。show:false 隐藏色条。
+  // 每组一个作用域 visualMap：沿 Z（全局 min→max）渲染该组色调。
+  // 越低越深、越高越浅：inRange 从 min→max 为 [深, 主题色, 浅]，
+  // 主题色居中在中段清晰可辨。show:false 隐藏色条。
   if (useDepth) {
     option.visualMap = groupSeries.map((g) => ({
       type: "continuous",
@@ -329,7 +330,7 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       seriesIndex: g.indices,
       min: gZmin,
       max: gZmax,
-      inRange: { color: [shade(g.color, 0.6), g.color, shade(g.color, -0.4)] },
+      inRange: { color: [shade(g.color, -0.4), g.color, shade(g.color, 0.6)] },
     }));
   }
 
