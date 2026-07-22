@@ -100,16 +100,25 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
   // 订阅主题变化以触发重渲染
   const themeMode = useThemeStore((s) => s.mode);
 
+  // 使用 3D 场景的条件：处于 3D 模式，且存在「支持 3D 的」启用图层
+  // （surface 曲面，或 points 3D 散点）。若 3D 模式下只有 2D-only 图层
+  // （箱线/直方等），退回普通 2D ECharts —— 即概念上的 z=0 平面平面图。
+  const use3DScene =
+    !!spec.threeD &&
+    (spec.elements ?? []).some(
+      (e) => e.enabled !== false && (e.kind === "surface" || e.kind === "points"),
+    );
+
   const built = useMemo(() => {
-    // 3D 模式走独立的自绘曲面渲染器，跳过昂贵的 2D 面板构建。
-    if (spec.threeD) return { cols: 1, rows: 1, panels: [] as ReturnType<typeof buildGraph>["panels"] };
+    // 3D 场景走独立的自绘渲染器，跳过昂贵的 2D 面板构建。
+    if (use3DScene) return { cols: 1, rows: 1, panels: [] as ReturnType<typeof buildGraph>["panels"] };
     const theme = getGraphTheme();
     return buildGraph(spec, data, theme, valueOrders);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spec, data, themeMode, valueOrders]);
 
-  // 3D 曲面：hooks 之后再分支返回，保证 hooks 调用顺序稳定。
-  if (spec.threeD) {
+  // 3D 场景：hooks 之后再分支返回，保证 hooks 调用顺序稳定。
+  if (use3DScene) {
     return (
       <div className={`gc-graph${className ? " " + className : ""}`} style={{ width: "100%", height: "100%" }}>
         <Surface3D spec={spec} data={data} />

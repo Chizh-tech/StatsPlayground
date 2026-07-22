@@ -61,11 +61,26 @@ const CHART_TYPE_DEFS: ChartTypeDef[] = [
   { kind: "surface", icon: "◪" },
 ];
 
-/** Layer kinds that only make sense in 3D mode. The layer list and the
- *  Add-Layer popover filter on this so 3D shows only 3D-capable layers
- *  and 2D hides them (and vice-versa). Both sets persist on the item —
- *  toggling 3D just changes which subset is shown, never deletes. */
-const THREE_D_KINDS = new Set<ElementKind>(["surface"]);
+/** Per-layer dimensionality support:
+ *  - "2d"   : renders only in the flat X-Y plot (boxplot, histogram, …).
+ *             In 3D mode a chart made only of 2D layers renders as the
+ *             normal flat plot (the "z=0 plane"); any Z binding is ignored.
+ *  - "3d"   : renders only in the 3D scene (surface). Activating one locks
+ *             the chart to 3D and disables the 2D toggle.
+ *  - "both" : renders in 2D (X-Y) and, in 3D, gains a Z height (points).
+ *  All kinds are always listed in the layer panel regardless of mode —
+ *  the mode only changes how each renders. */
+type LayerDim = "2d" | "3d" | "both";
+const LAYER_DIM: Record<ElementKind, LayerDim> = {
+  points: "both",
+  line: "2d",
+  bar: "2d",
+  histogram: "2d",
+  boxplot: "2d",
+  smoother: "2d",
+  fitline: "2d",
+  surface: "3d",
+};
 
 /** 数据类型对应的小图标 */
 function fieldTypeIcon(t: FieldType): string {
@@ -1320,14 +1335,33 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     markDirty();
   }, [item.id, item.encoding, item.xAxis, item.yAxis, item.refLinesX, item.refLinesY, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, item.multiX, item.multiY, updateItem, markDirty]);
 
+  /** True when an active layer only renders in 3D (surface) — the chart
+   *  is then locked to 3D and the 2D toggle is disabled. */
+  const lockedThreeD = useMemo(
+    () => finalElements.some((e) => e.enabled !== false && LAYER_DIM[e.kind] === "3d"),
+    [finalElements],
+  );
+
   /** Toggle 3D mode. Flips `item.threeD`. Turning it OFF is
    *  non-destructive: `encoding.z` / `encoding.groupZ` stay in the
    *  item so the Z / Group Z bindings reappear when 3D is re-enabled;
-   *  they are simply hidden and not rendered while off. */
+   *  they are simply hidden and not rendered while off. No-op while a
+   *  3D-only layer (surface) locks the chart to 3D. */
   const toggleThreeD = useCallback(() => {
+    if (lockedThreeD) return;
     updateItem(item.id, { threeD: !item.threeD });
     markDirty();
-  }, [item.id, item.threeD, updateItem, markDirty]);
+  }, [item.id, item.threeD, lockedThreeD, updateItem, markDirty]);
+
+  // A 3D-only layer (surface) forces the chart into 3D and disables the
+  // 2D toggle. Auto-enable 3D the moment such a layer becomes active so
+  // adding a Surface layer in 2D flips straight to the 3D scene.
+  useEffect(() => {
+    if (lockedThreeD && !item.threeD) {
+      updateItem(item.id, { threeD: true });
+      markDirty();
+    }
+  }, [lockedThreeD, item.threeD, item.id, updateItem, markDirty]);
 
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
@@ -1406,9 +1440,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             className={`gb-tb-btn${item.threeD ? " gb-tb-btn-active" : ""}`}
             onClick={toggleThreeD}
             aria-pressed={!!item.threeD}
-            title={t("graph.threeD.toggleTitle", {
-              defaultValue: "Toggle 3D mode: adds Z and Group Z channels and renders a 3D surface from X / Y / Z.",
-            })}
+            disabled={lockedThreeD}
+            title={
+              lockedThreeD
+                ? t("graph.threeD.locked", {
+                    defaultValue: "Locked to 3D by a Surface layer. Remove it to return to 2D.",
+                  })
+                : t("graph.threeD.toggleTitle", {
+                    defaultValue: "Toggle 3D mode: adds Z and Group Z channels and renders a 3D surface from X / Y / Z.",
+                  })
+            }
           >
             {t("graph.threeD.label", { defaultValue: "3D" })}
           </button>
@@ -1495,7 +1536,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               <div className="gb-layer-list">
                 {elements
                   .filter((el) => el.enabled !== false)
-                  .filter((el) => (item.threeD ? THREE_D_KINDS.has(el.kind) : !THREE_D_KINDS.has(el.kind)))
                   .map((el) => (
                     <LayerCard
                       key={el.kind}
@@ -1509,7 +1549,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   ))}
                 <AddLayerCard
                   availableKinds={CHART_TYPE_DEFS.map((c) => c.kind).filter(
-                    (k) => !activeKinds.has(k) && (item.threeD ? THREE_D_KINDS.has(k) : !THREE_D_KINDS.has(k)),
+                    (k) => !activeKinds.has(k),
                   )}
                   onAdd={addElement}
                   t={t}
