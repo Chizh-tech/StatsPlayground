@@ -762,8 +762,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       autoSpecX,
       yAxis: item.yAxis,
       xAxis: item.xAxis,
+      threeD: item.threeD,
     };
-  }, [effectiveEncoding, meltInfo, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.refLinesX, item.yAxis, item.xAxis, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, specByCol]);
+  }, [effectiveEncoding, meltInfo, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.refLinesX, item.yAxis, item.xAxis, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, item.threeD, specByCol]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -1311,6 +1312,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     markDirty();
   }, [item.id, item.encoding, item.xAxis, item.yAxis, item.refLinesX, item.refLinesY, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, item.multiX, item.multiY, updateItem, markDirty]);
 
+  /** Toggle 3D mode. Flips `item.threeD`. Turning it OFF is
+   *  non-destructive: `encoding.z` / `encoding.groupZ` stay in the
+   *  item so the Z / Group Z bindings reappear when 3D is re-enabled;
+   *  they are simply hidden and not rendered while off. */
+  const toggleThreeD = useCallback(() => {
+    updateItem(item.id, { threeD: !item.threeD });
+    markDirty();
+  }, [item.id, item.threeD, updateItem, markDirty]);
+
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
   );
@@ -1383,6 +1393,17 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               </svg>
             </button>
           </div>
+          <button
+            type="button"
+            className={`gb-tb-btn${item.threeD ? " gb-tb-btn-active" : ""}`}
+            onClick={toggleThreeD}
+            aria-pressed={!!item.threeD}
+            title={t("graph.threeD.toggleTitle", {
+              defaultValue: "Toggle 3D mode: adds Z and Group Z channels and renders a 3D surface from X / Y / Z.",
+            })}
+          >
+            {t("graph.threeD.label", { defaultValue: "3D" })}
+          </button>
         </div>
         <div className="gb-toolbar-spacer" />
       </div>
@@ -1512,6 +1533,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
           {/* 画布 + 左侧 Y 轴槽 + 右侧 Group Y 槽 */}
           <div className="gb-canvas-row">
+            {/* Z 轴槽 — 仅 3D 模式，位于 Y 轴拖动区左侧 */}
+            {item.threeD && (
+              <Slot
+                slot="z"
+                label="Z"
+                field={encoding.z}
+                onDrop={(e) => handleDropOnSlot("z", e)}
+                onClear={() => clearSlot("z")}
+                onContextMenu={(x, y) => setSlotCtxMenu({ slot: "z", x, y })}
+                orientation="vertical-left"
+              />
+            )}
             <Slot
               slot="y"
               label="Y"
@@ -1563,7 +1596,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 <div className="gb-empty gb-error">{error}</div>
               ) : !data ? (
                 <div className="gb-empty">{t("graph.noData")}</div>
-              ) : !encoding.x && !encoding.y && !(item.multiX?.length) && !(item.multiY?.length) && !activeKinds.has("histogram") ? (
+              ) : !item.threeD && !encoding.x && !encoding.y && !(item.multiX?.length) && !(item.multiY?.length) && !activeKinds.has("histogram") ? (
                 // Drag-hint shows only when neither axis is bound (and
                 // there's no histogram). Y-only renders a vertical strip
                 // and X-only renders a horizontal strip (mirror), so the
@@ -1620,6 +1653,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupY", x, y })}
               orientation="vertical-right"
             />
+            {/* Group Z 槽 — 仅 3D 模式，位于 Group Y 右侧 */}
+            {item.threeD && (
+              <Slot
+                slot="groupZ"
+                label="Group Z"
+                field={encoding.groupZ}
+                onDrop={(e) => handleDropOnSlot("groupZ", e)}
+                onClear={() => clearSlot("groupZ")}
+                onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupZ", x, y })}
+                orientation="vertical-right"
+              />
+            )}
           </div>
 
           {/* X 轴槽 */}

@@ -10,11 +10,13 @@ import type { FilterRuleItem } from "./filter";
 export type GraphSlotKey =
   | "x"
   | "y"
+  | "z"
   | "color"
   | "size"
   | "overlay"
   | "groupX"
   | "groupY"
+  | "groupZ"
   | "wrap";
 
 export interface GraphBuilderItem {
@@ -116,4 +118,11 @@ export interface GraphBuilderItem {
  *  是图在 spprj 内被放置到的位置。该映射由 `useFolderStore.graphFolders`
  *  统一管理，保存时单独传给后端，绝不持久化在 .spgh 文件体里。 */
   createdAt: string;
+
+  /** 3D 模式开关。开启后中心绘图区切换为三维渲染，并显示 Z /
+   *  Group Z 编码槽（Z 在 Y 轴拖动区左侧，Group Z 在 Group Y 右侧）。
+   *  关闭时 Z / Group Z 的编码（`encoding.z` / `encoding.groupZ`）仍
+   *  保留在项目中，只是槽位隐藏、3D 图形不渲染；再次开启即恢复。
+   *  `undefined` 视为关闭。 */
+  threeD?: boolean;
 }

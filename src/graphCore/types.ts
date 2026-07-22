@@ -278,6 +278,8 @@ export interface Encoding {
   x?: FieldRef;
   /** Y 轴 */
   y?: FieldRef;
+  /** Z 轴（仅 3D 模式使用） */
+  z?: FieldRef;
   /** 颜色编码（分组着色 / 连续色阶） */
   color?: FieldRef;
   /** 尺寸编码 */
@@ -288,6 +290,8 @@ export interface Encoding {
   groupX?: FieldRef;
   /** 纵向分面 */
   groupY?: FieldRef;
+  /** 深度分面（仅 3D 模式使用） */
+  groupZ?: FieldRef;
   /** 自动换行分面 */
   wrap?: FieldRef;
 }
@@ -367,6 +371,11 @@ export interface GraphSpec {
    *  but `inverse` / axis-line / tick-position / gridline settings
    *  apply to all three. */
   xAxis?: YAxisConfig;
+  /** When true the chart is rendered in 3D (surface plot) from the
+   *  `encoding.x` / `encoding.y` / `encoding.z` channels using the
+   *  self-contained canvas renderer instead of the 2D ECharts path.
+   *  `undefined` / false = normal 2D rendering. */
+  threeD?: boolean;
 }
 
 /** 原始数据：列式 */
