@@ -420,7 +420,8 @@
       "histogram": "Histogram",
       "boxplot": "Boxplot",
       "smoother": "Làm mịn",
-      "fitline": "Đường khớp"
+      "fitline": "Đường khớp",
+      "surface": "Bề mặt"
     },
     "frequency": "Tần suất",
     "startOver": "Bắt đầu lại",

@@ -420,7 +420,8 @@
       "histogram": "直方圖",
       "boxplot": "盒鬚圖",
       "smoother": "平滑",
-      "fitline": "擬合線"
+      "fitline": "擬合線",
+      "surface": "曲面"
     },
     "frequency": "頻次",
     "startOver": "重新開始",

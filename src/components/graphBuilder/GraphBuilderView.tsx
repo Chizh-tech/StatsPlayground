@@ -58,7 +58,14 @@ const CHART_TYPE_DEFS: ChartTypeDef[] = [
   { kind: "fitline", icon: "ƒ" },
   { kind: "boxplot", icon: "⊟" },
   { kind: "histogram", icon: "▥" },
+  { kind: "surface", icon: "◪" },
 ];
+
+/** Layer kinds that only make sense in 3D mode. The layer list and the
+ *  Add-Layer popover filter on this so 3D shows only 3D-capable layers
+ *  and 2D hides them (and vice-versa). Both sets persist on the item —
+ *  toggling 3D just changes which subset is shown, never deletes. */
+const THREE_D_KINDS = new Set<ElementKind>(["surface"]);
 
 /** 数据类型对应的小图标 */
 function fieldTypeIcon(t: FieldType): string {
@@ -1185,6 +1192,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       if (kind === "fitline") {
         next.options = { fitType: "polynomial", degree: 1 };
       }
+      if (kind === "surface") next.options = { stat: "mean" };
       return [...prev, next];
     });
   }, [setElements]);
@@ -1487,6 +1495,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               <div className="gb-layer-list">
                 {elements
                   .filter((el) => el.enabled !== false)
+                  .filter((el) => (item.threeD ? THREE_D_KINDS.has(el.kind) : !THREE_D_KINDS.has(el.kind)))
                   .map((el) => (
                     <LayerCard
                       key={el.kind}
@@ -1500,7 +1509,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   ))}
                 <AddLayerCard
                   availableKinds={CHART_TYPE_DEFS.map((c) => c.kind).filter(
-                    (k) => !activeKinds.has(k),
+                    (k) => !activeKinds.has(k) && (item.threeD ? THREE_D_KINDS.has(k) : !THREE_D_KINDS.has(k)),
                   )}
                   onAdd={addElement}
                   t={t}
@@ -1692,34 +1701,39 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           />
         </div>
 
-        {/* Splitter: center | right */}
-        <div
-          className="gb-splitter"
-          onMouseDown={startSideResize("right")}
-          onDoubleClick={() => setRightWidth(220)}
-          title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
-        />
+        {/* Splitter: center | right — hidden in 3D (surface plots don't
+            use the legend / style panel). */}
+        {!item.threeD && (
+          <>
+            <div
+              className="gb-splitter"
+              onMouseDown={startSideResize("right")}
+              onDoubleClick={() => setRightWidth(220)}
+              title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
+            />
 
-        {/* Legend + Style editor:
-            - 顶部 Overlay 槽：拖入分类列即按其值生成图例分组；
-            - 中间图例列表：每行对应一个分组（无 Overlay 时显示 "All"）；
-            - 底部样式编辑器：针对当前选中的图例条目，分别设置线/填充/点。
-            无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
-        <LegendStylePanel
-          data={data}
-          encoding={encoding}
-          elements={elements}
-          groupStyles={item.groupStyles ?? {}}
-          groupKeys={groupKeys}
-          effectiveStyles={effectiveStyles}
-          hiddenGroups={item.hiddenGroups ?? []}
-          toggleGroupHidden={toggleGroupHidden}
-          setGroupStyle={setGroupStyle}
-          resetAllGroupStyles={resetAllGroupStyles}
-          onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
-          onClearOverlay={() => clearSlot("overlay")}
-          width={rightWidth}
-        />
+            {/* Legend + Style editor:
+                - 顶部 Overlay 槽：拖入分类列即按其值生成图例分组；
+                - 中间图例列表：每行对应一个分组（无 Overlay 时显示 "All"）；
+                - 底部样式编辑器：针对当前选中的图例条目，分别设置线/填充/点。
+                无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
+            <LegendStylePanel
+              data={data}
+              encoding={encoding}
+              elements={elements}
+              groupStyles={item.groupStyles ?? {}}
+              groupKeys={groupKeys}
+              effectiveStyles={effectiveStyles}
+              hiddenGroups={item.hiddenGroups ?? []}
+              toggleGroupHidden={toggleGroupHidden}
+              setGroupStyle={setGroupStyle}
+              resetAllGroupStyles={resetAllGroupStyles}
+              onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
+              onClearOverlay={() => clearSlot("overlay")}
+              width={rightWidth}
+            />
+          </>
+        )}
       </div>
 
       {/* Y-axis settings dialog. Opened by double-clicking the Y axis;
@@ -2337,6 +2351,9 @@ function LayerCard({
         {kind === "fitline" && (
           <FitLineOptions options={options} onChange={onChangeOptions} t={t} />
         )}
+        {kind === "surface" && (
+          <SurfaceOptions options={options} onChange={onChangeOptions} t={t} />
+        )}
       </div>
     </div>
   );
@@ -2674,6 +2691,28 @@ function HistogramOptions({ options, onChange, t }: OptionsEditorProps) {
           checked={showPercents}
           onChange={(e) => onChange({ showPercents: e.target.checked })}
         />
+      </OptRow>
+    </>
+  );
+}
+
+/** Surface (3D) options panel — the aggregation statistic used when
+ *  building the Z grid. Points falling in the same grid cell are
+ *  reduced to a single Z via this statistic (mean or median) before
+ *  the empty cells are filled by interpolation. */
+function SurfaceOptions({ options, onChange, t }: OptionsEditorProps) {
+  const stat = getOpt<string>(options, "stat", "mean");
+  return (
+    <>
+      <OptRow label={t("graph.opt.surfaceStat", { defaultValue: "Statistic" })}>
+        <select
+          className="gb-opt-select"
+          value={stat}
+          onChange={(e) => onChange({ stat: e.target.value })}
+        >
+          <option value="mean">{t("graph.opt.summary.mean", { defaultValue: "Mean" })}</option>
+          <option value="median">{t("graph.opt.summary.median", { defaultValue: "Median" })}</option>
+        </select>
       </OptRow>
     </>
   );

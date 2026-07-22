@@ -420,7 +420,8 @@
       "histogram": "Histogram",
       "boxplot": "Box plot",
       "smoother": "Smoother",
-      "fitline": "Fit Line"
+      "fitline": "Fit Line",
+      "surface": "Surface"
     },
     "frequency": "Count",
     "startOver": "Start Over",
