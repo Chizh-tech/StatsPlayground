@@ -1532,7 +1532,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           />
 
           {/* 画布 + 左侧 Y 轴槽 + 右侧 Group Y 槽 */}
-          <div className="gb-canvas-row">
+          <div
+            className="gb-canvas-row"
+            style={
+              item.threeD
+                ? // 3D: 追加 Z（最左）与 Group Z（最右）两条 28px 轨道，
+                  // 保持 [Z][Y][canvas][GroupY][GroupZ] 五列布局。
+                  { gridTemplateColumns: "28px 28px 1fr 28px 28px" }
+                : undefined
+            }
+          >
             {/* Z 轴槽 — 仅 3D 模式，位于 Y 轴拖动区左侧 */}
             {item.threeD && (
               <Slot
