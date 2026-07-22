@@ -10,7 +10,7 @@ import * as echarts from "echarts";
 import type { GraphSpec, GraphData } from "./types";
 import { getGraphTheme } from "./theme";
 import { buildGraph, type ScatterPointPick } from "./transform";
-import { Surface3D } from "./Surface3D";
+import { Chart3D } from "./Chart3D";
 import { useThemeStore } from "@/stores/useThemeStore";
 
 interface GraphProps {
@@ -121,7 +121,7 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
   if (use3DScene) {
     return (
       <div className={`gc-graph${className ? " " + className : ""}`} style={{ width: "100%", height: "100%" }}>
-        <Surface3D spec={spec} data={data} />
+        <Chart3D spec={spec} data={data} />
       </div>
     );
   }

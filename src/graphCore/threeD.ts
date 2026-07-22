@@ -1,0 +1,279 @@
+/**
+ * threeD.ts — 基于 echarts-gl 的 3D 场景 option 构建。
+ *
+ * 由 <Chart3D> 使用。把 GraphSpec（3D 模式 + surface / points 图层）
+ * 与列式数据转成 echarts-gl 的 grid3D + series-surface / series-scatter3D
+ * option。曲面数据仍在前端做分箱聚合（均值/中位数）+ IDW 填补成规则
+ * 网格后交给 echarts-gl（echarts-gl 的 surface 需要规则网格顺序数据）。
+ *
+ * 由于 echarts-gl 未提供官方 TS 类型，这里的 option 以宽松对象构造，
+ * 交给 setOption 时按 echarts 的 core option 处理。
+ */
+
+import type { GraphSpec, GraphData } from "./types";
+import type { GraphTheme } from "./theme";
+
+/** 曲面网格顶点数（N×N）。 */
+const GRID_N = 48;
+/** 3D 散点上限。 */
+const POINT_CAP = 8000;
+
+/** viridis 色阶（低→高），用于按 Z 值着色。 */
+export const VIRIDIS_HEX = ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"];
+
+type SurfaceStat = "mean" | "median";
+
+interface XYZ { xi: number; yi: number; zi: number }
+
+function colIndices(data: GraphData, x?: string, y?: string, z?: string): XYZ {
+  return {
+    xi: x ? data.columns.indexOf(x) : -1,
+    yi: y ? data.columns.indexOf(y) : -1,
+    zi: z ? data.columns.indexOf(z) : -1,
+  };
+}
+
+/** 分箱聚合（mean/median）+ IDW 填补，返回按行优先展开的 [x,y,z] 顶点。 */
+function buildSurfaceData(
+  data: GraphData,
+  xName: string,
+  yName: string,
+  zName: string,
+  n: number,
+  stat: SurfaceStat,
+): { verts: number[][]; zmin: number; zmax: number } | null {
+  const { xi, yi, zi } = colIndices(data, xName, yName, zName);
+  if (xi < 0 || yi < 0 || zi < 0) return null;
+
+  const xs: number[] = [];
+  const ys: number[] = [];
+  const zs: number[] = [];
+  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+  for (const row of data.rows) {
+    const x = Number(row[xi]);
+    const y = Number(row[yi]);
+    const z = Number(row[zi]);
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+      xs.push(x); ys.push(y); zs.push(z);
+      if (x < xmin) xmin = x; if (x > xmax) xmax = x;
+      if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+    }
+  }
+  const p = xs.length;
+  if (p < 3) return null;
+  const dx = xmax - xmin || 1;
+  const dy = ymax - ymin || 1;
+
+  const cells: (number[] | undefined)[] = new Array(n * n);
+  for (let k = 0; k < p; k++) {
+    let gi = Math.round(((xs[k] - xmin) / dx) * (n - 1));
+    let gj = Math.round(((ys[k] - ymin) / dy) * (n - 1));
+    if (gi < 0) gi = 0; else if (gi > n - 1) gi = n - 1;
+    if (gj < 0) gj = 0; else if (gj > n - 1) gj = n - 1;
+    (cells[gj * n + gi] ??= []).push(zs[k]);
+  }
+
+  const zg = new Float64Array(n * n);
+  const filled = new Uint8Array(n * n);
+  const occ: { gi: number; gj: number; v: number }[] = [];
+  for (let idx = 0; idx < n * n; idx++) {
+    const arr = cells[idx];
+    if (!arr || arr.length === 0) continue;
+    let v: number;
+    if (stat === "median") {
+      arr.sort((a, b) => a - b);
+      const m = arr.length;
+      v = m % 2 ? arr[(m - 1) / 2] : (arr[m / 2 - 1] + arr[m / 2]) / 2;
+    } else {
+      let s = 0;
+      for (const z of arr) s += z;
+      v = s / arr.length;
+    }
+    zg[idx] = v;
+    filled[idx] = 1;
+    occ.push({ gi: idx % n, gj: Math.floor(idx / n), v });
+  }
+  if (occ.length === 0) return null;
+
+  for (let gj = 0; gj < n; gj++) {
+    for (let gi = 0; gi < n; gi++) {
+      const idx = gj * n + gi;
+      if (filled[idx]) continue;
+      let num = 0, den = 0, exact = NaN;
+      for (const o of occ) {
+        const ddx = (gi - o.gi) / (n - 1);
+        const ddy = (gj - o.gj) / (n - 1);
+        const d2 = ddx * ddx + ddy * ddy;
+        if (d2 < 1e-9) { exact = o.v; break; }
+        const wgt = 1 / (d2 * d2);
+        num += wgt * o.v;
+        den += wgt;
+      }
+      zg[idx] = Number.isFinite(exact) ? exact : den > 0 ? num / den : 0;
+    }
+  }
+
+  const verts: number[][] = [];
+  let zmin = Infinity, zmax = -Infinity;
+  for (let gj = 0; gj < n; gj++) {
+    const yv = ymin + (dy * gj) / (n - 1);
+    for (let gi = 0; gi < n; gi++) {
+      const xv = xmin + (dx * gi) / (n - 1);
+      const zv = zg[gj * n + gi];
+      verts.push([xv, yv, zv]);
+      if (zv < zmin) zmin = zv;
+      if (zv > zmax) zmax = zv;
+    }
+  }
+  return { verts, zmin, zmax };
+}
+
+/** 抽取 3D 散点 [x,y,z]（Z 缺省时 z=0）。 */
+function buildScatterData(
+  data: GraphData,
+  xName: string,
+  yName: string,
+  zName: string | undefined,
+): { pts: number[][]; zmin: number; zmax: number } | null {
+  const { xi, yi, zi } = colIndices(data, xName, yName, zName);
+  if (xi < 0 || yi < 0) return null;
+  const pts: number[][] = [];
+  let zmin = Infinity, zmax = -Infinity;
+  for (const row of data.rows) {
+    const x = Number(row[xi]);
+    const y = Number(row[yi]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    let z = 0;
+    if (zi >= 0) {
+      z = Number(row[zi]);
+      if (!Number.isFinite(z)) continue;
+    }
+    pts.push([x, y, z]);
+    if (z < zmin) zmin = z; if (z > zmax) zmax = z;
+  }
+  if (pts.length === 0) return null;
+  if (zi < 0) { zmin = 0; zmax = 0; }
+  let out = pts;
+  if (pts.length > POINT_CAP) {
+    out = [];
+    const step = pts.length / POINT_CAP;
+    for (let i = 0; i < POINT_CAP; i++) out.push(pts[Math.floor(i * step)]);
+  }
+  return { pts: out, zmin, zmax };
+}
+
+export interface Build3DResult {
+  /** echarts-gl option（宽松类型）。空表示还不足以渲染。 */
+  option: Record<string, unknown> | null;
+  /** 无法渲染时的提示 key + 默认文案。 */
+  hint?: { key: string; def: string };
+}
+
+/** 构建 3D option。当绑定不足时返回 hint。 */
+export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphTheme): Build3DResult {
+  const xf = spec.encoding.x;
+  const yf = spec.encoding.y;
+  const zf = spec.encoding.z;
+  const els = spec.elements ?? [];
+  const surfaceEl = els.find((e) => e.kind === "surface" && e.enabled !== false);
+  const pointsEl = els.find((e) => e.kind === "points" && e.enabled !== false);
+  const stat: SurfaceStat = surfaceEl?.options?.stat === "median" ? "median" : "mean";
+
+  if (!surfaceEl && !pointsEl) {
+    return { option: null, hint: { key: "graph.threeD.addSurface", def: "Add a Surface or Scatter layer to render in 3D." } };
+  }
+  if (!xf || !yf) {
+    return { option: null, hint: { key: "graph.threeD.dragXY", def: "Drag columns onto X and Y (and Z) to build a 3D chart." } };
+  }
+  if (surfaceEl && !zf) {
+    return { option: null, hint: { key: "graph.threeD.dragHint", def: "Drag a column onto Z to build a 3D surface." } };
+  }
+
+  const series: Record<string, unknown>[] = [];
+  let zmin = Infinity, zmax = -Infinity;
+
+  if (surfaceEl && xf && yf && zf) {
+    const s = buildSurfaceData(data, xf.name, yf.name, zf.name, GRID_N, stat);
+    if (s) {
+      series.push({
+        type: "surface",
+        name: zf.name,
+        data: s.verts,
+        shading: "color",
+        wireframe: { show: false },
+        silent: false,
+      });
+      if (s.zmin < zmin) zmin = s.zmin;
+      if (s.zmax > zmax) zmax = s.zmax;
+    }
+  }
+  if (pointsEl) {
+    const sc = buildScatterData(data, xf.name, yf.name, zf?.name);
+    if (sc) {
+      series.push({
+        type: "scatter3D",
+        name: zf?.name ?? "points",
+        data: sc.pts,
+        symbolSize: 6,
+        itemStyle: { opacity: 0.9, borderWidth: 0.5, borderColor: "rgba(0,0,0,0.3)" },
+      });
+      if (sc.zmin < zmin) zmin = sc.zmin;
+      if (sc.zmax > zmax) zmax = sc.zmax;
+    }
+  }
+
+  if (series.length === 0) {
+    return { option: null, hint: { key: "graph.threeD.notEnough", def: "Need at least 3 rows with numeric values." } };
+  }
+
+  const hasZRange = Number.isFinite(zmin) && Number.isFinite(zmax) && zmax > zmin;
+
+  const axisCommon = {
+    nameTextStyle: { color: theme.fgSecondary },
+    axisLine: { lineStyle: { color: theme.axisLine } },
+    axisLabel: { color: theme.fgDim },
+    splitLine: { lineStyle: { color: theme.gridLine } },
+  };
+
+  const option: Record<string, unknown> = {
+    backgroundColor: theme.bgCanvas,
+    tooltip: {},
+    xAxis3D: { type: "value", name: xf.name, ...axisCommon },
+    yAxis3D: { type: "value", name: yf.name, ...axisCommon },
+    zAxis3D: { type: "value", name: zf?.name ?? "", ...axisCommon },
+    grid3D: {
+      boxWidth: 100,
+      boxDepth: 100,
+      boxHeight: 100,
+      axisPointer: { lineStyle: { color: theme.fgDim } },
+      viewControl: {
+        // 拖动旋转、滚轮缩放（echarts-gl 原生）。
+        autoRotate: false,
+        rotateSensitivity: 1,
+        zoomSensitivity: 1,
+      },
+      light: {
+        main: { intensity: 1.2, shadow: false, alpha: 40, beta: 40 },
+        ambient: { intensity: 0.3 },
+      },
+    },
+    series,
+  };
+
+  if (hasZRange) {
+    option.visualMap = {
+      show: true,
+      dimension: 2,
+      min: zmin,
+      max: zmax,
+      calculable: true,
+      realtime: false,
+      inRange: { color: VIRIDIS_HEX },
+      textStyle: { color: theme.fgDim },
+      right: 8,
+      top: "center",
+    };
+  }
+
+  return { option };
+}
