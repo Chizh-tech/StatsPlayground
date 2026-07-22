@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } fr
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle, type GradientConfig } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -785,8 +785,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       yAxis: item.yAxis,
       xAxis: item.xAxis,
       threeD: item.threeD,
+      gradient: item.gradient,
     };
-  }, [effectiveEncoding, meltInfo, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.refLinesX, item.yAxis, item.xAxis, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, item.threeD, specByCol]);
+  }, [effectiveEncoding, meltInfo, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.refLinesX, item.yAxis, item.xAxis, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, item.threeD, item.gradient, specByCol]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -826,6 +827,23 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     updateItem(item.id, { groupStyles: {} });
     markDirty();
   }, [item.id, item.groupStyles, updateItem, markDirty]);
+
+  /** Update the gradient coloring config (3D grouped surfaces / scatter).
+   *  Passing `undefined` (or an all-empty object) resets to auto. */
+  const setGradient = useCallback(
+    (next: GradientConfig | undefined) => {
+      const empty =
+        !next ||
+        (next.mode === undefined &&
+          next.low === undefined &&
+          next.high === undefined &&
+          next.min === undefined &&
+          next.max === undefined);
+      updateItem(item.id, { gradient: empty ? undefined : next });
+      markDirty();
+    },
+    [item.id, updateItem, markDirty],
+  );
 
   /** Replace the Y-axis reference-line list on this graph item. The
    *  RefLinesEditor below builds the next array (immutable add / patch /
@@ -1768,6 +1786,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
           onClearOverlay={() => clearSlot("overlay")}
           width={rightWidth}
+          threeD={!!item.threeD}
+          gradient={item.gradient}
+          setGradient={setGradient}
         />
       </div>
 
@@ -3146,9 +3167,14 @@ interface LegendStylePanelProps {
   onDropOverlay: (e: React.DragEvent) => void;
   onClearOverlay: () => void;
   width: number;
+  /** Whether the chart is in 3D mode — the Gradient section only applies
+   *  to (and is only shown for) 3D grouped surfaces / scatter for now. */
+  threeD: boolean;
+  gradient: GradientConfig | undefined;
+  setGradient: (next: GradientConfig | undefined) => void;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width, threeD, gradient, setGradient }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // `data` and `elements` are still part of the public prop contract for
@@ -3261,6 +3287,22 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
   const selectedStyle = effectiveStyleOf(selected);
   const storedSelected = groupStyles[selected] ?? {};
 
+  // Gradient section state (3D grouped coloring). Defaults mirror
+  // build3DOption: single legend → color gradient, multi → solid; the
+  // two end colors default to a light→dark blue ramp.
+  const gradMode: "color" | "solid" = gradient?.mode ?? (groupKeys.length > 1 ? "solid" : "color");
+  const gradLow = gradient?.low ?? "#cfe3ff";
+  const gradHigh = gradient?.high ?? "#0b3d91";
+  const gradEmpty =
+    !gradient ||
+    (gradient.mode === undefined && gradient.low === undefined && gradient.high === undefined && gradient.min === undefined && gradient.max === undefined);
+  const patchGradient = (patch: Partial<GradientConfig>) => setGradient({ ...gradient, ...patch });
+  const parseGradNum = (s: string): number | undefined => {
+    if (s.trim() === "") return undefined;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
   return (
     <div className="gb-legend" style={{ width }}>
       {/* Unified panel header bar (matches Table column panel + LAYERS) */}
@@ -3350,6 +3392,67 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
               {t("graph.style.reset")}
             </button>
           </div>
+
+          {/* Gradient (3D only): controls how grouped surfaces / scatter
+              are colored. Color gradient = continuous by Z between two end
+              colors; Solid gradient = one solid shade per legend group on a
+              shared global scale. */}
+          {threeD && (
+            <div className="gb-style-section">
+              <div className="gb-style-section-title" title={t("graph.gradient.hint", { defaultValue: "How grouped 3D surfaces / points are colored. The lightest/darkest scale is shared across all groups." })}>
+                {t("graph.gradient.title", { defaultValue: "Gradient" })}
+              </div>
+              <div className="gb-style-row">
+                <label className="gb-axis-radio">
+                  <input
+                    type="radio"
+                    name="gb-grad-mode"
+                    checked={gradMode === "color"}
+                    onChange={() => patchGradient({ mode: "color" })}
+                  />
+                  <span>{t("graph.gradient.color", { defaultValue: "Color gradient" })}</span>
+                </label>
+                <label className="gb-axis-radio">
+                  <input
+                    type="radio"
+                    name="gb-grad-mode"
+                    checked={gradMode === "solid"}
+                    onChange={() => patchGradient({ mode: "solid" })}
+                  />
+                  <span>{t("graph.gradient.solid", { defaultValue: "Solid gradient" })}</span>
+                </label>
+              </div>
+              <div className="gb-style-row">
+                <span className="gb-opt-label">{t("graph.gradient.low", { defaultValue: "Lightest" })}</span>
+                <input type="color" value={gradLow} onChange={(e) => patchGradient({ low: e.target.value })} />
+                <span className="gb-opt-label">{t("graph.gradient.high", { defaultValue: "Darkest" })}</span>
+                <input type="color" value={gradHigh} onChange={(e) => patchGradient({ high: e.target.value })} />
+              </div>
+              <div className="gb-style-row">
+                <span className="gb-opt-label">{t("graph.gradient.min", { defaultValue: "Lightest =" })}</span>
+                <input
+                  type="number"
+                  className="gb-axis-num gb-axis-num-narrow"
+                  value={gradient?.min ?? ""}
+                  placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
+                  onChange={(e) => patchGradient({ min: parseGradNum(e.target.value) })}
+                />
+                <span className="gb-opt-label">{t("graph.gradient.max", { defaultValue: "Darkest =" })}</span>
+                <input
+                  type="number"
+                  className="gb-axis-num gb-axis-num-narrow"
+                  value={gradient?.max ?? ""}
+                  placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
+                  onChange={(e) => patchGradient({ max: parseGradNum(e.target.value) })}
+                />
+              </div>
+              {!gradEmpty && (
+                <button className="gb-style-reset" onClick={() => setGradient(undefined)}>
+                  {t("graph.gradient.reset", { defaultValue: "Reset gradient" })}
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Color theme — one-click recolor of Line/Fill/Point. Each
               theme assigns a darker shade to Point, base shade to Line
