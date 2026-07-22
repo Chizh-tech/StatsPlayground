@@ -984,7 +984,12 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       else if (py <= panelH && py >= panelH - Math.min(60, panelH * 0.18) && px >= 0 && px <= panelW) axis = "x";
     }
     if (!axis) return;
+    // stopPropagation is essential: without it this same contextmenu
+    // event keeps bubbling to the document-level close listener the
+    // consumer registers while the menu is open, which would close the
+    // menu on the very click that opened it (matches the slot menu).
     e.preventDefault();
+    e.stopPropagation();
     cb(axis, e.clientX, e.clientY);
   };
 
