@@ -531,6 +531,10 @@
     "xAxisSettings": {
       "title": "Cài đặt trục X"
     },
+    "axisCtx": {
+      "settings": "Cài đặt trục",
+      "resetZoom": "Đặt lại thu phóng"
+    },
     "axis": {
       "title": "Trục",
       "range": "Phạm vi",

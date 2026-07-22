@@ -58,6 +58,15 @@ interface GraphProps {
    */
   onAxisRangeChange?: (axis: "x" | "y", min: number, max: number) => void;
   /**
+   * Fired when the user right-clicks anywhere inside an axis strip (the
+   * left Y-axis margin or the bottom X-axis margin). Reports which axis
+   * was hit plus the viewport coordinates of the cursor so the consumer
+   * can pin a context menu there (axis settings / reset zoom). The
+   * default browser context menu is suppressed only when an axis strip
+   * is hit; right-clicks in the plot body are left untouched.
+   */
+  onAxisContextMenu?: (axis: "x" | "y", clientX: number, clientY: number) => void;
+  /**
    * Fired when the user clicks a scatter point that originated from a
    * real source row. The payload identifies the dataset row (via
    * `_row_id`) and the user-visible column the point came from
@@ -86,7 +95,7 @@ interface GraphProps {
   onBrushSelect?: (picks: ScatterPointPick[]) => void;
 }
 
-export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onPointClick, brushMode, onBrushSelect }: GraphProps) {
+export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onAxisContextMenu, onPointClick, brushMode, onBrushSelect }: GraphProps) {
   // 订阅主题变化以触发重渲染
   const themeMode = useThemeStore((s) => s.mode);
 
@@ -125,6 +134,7 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
           onYAxisDblClick={onYAxisDblClick}
           onXAxisDblClick={onXAxisDblClick}
           onAxisRangeChange={onAxisRangeChange}
+          onAxisContextMenu={onAxisContextMenu}
           onPointClick={onPointClick}
           brushMode={brushMode}
           onBrushSelect={onBrushSelect}
@@ -141,12 +151,13 @@ interface GraphPanelProps {
   onYAxisDblClick?: () => void;
   onXAxisDblClick?: () => void;
   onAxisRangeChange?: (axis: "x" | "y", min: number, max: number) => void;
+  onAxisContextMenu?: (axis: "x" | "y", clientX: number, clientY: number) => void;
   onPointClick?: (pick: ScatterPointPick) => void;
   brushMode?: boolean;
   onBrushSelect?: (picks: ScatterPointPick[]) => void;
 }
 
-function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onPointClick, brushMode, onBrushSelect }: GraphPanelProps) {
+function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onAxisContextMenu, onPointClick, brushMode, onBrushSelect }: GraphPanelProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
   // Keep the latest callbacks in refs so the Zrender dblclick handler
@@ -165,6 +176,10 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
   useEffect(() => {
     onAxisRangeChangeRef.current = onAxisRangeChange;
   }, [onAxisRangeChange]);
+  const onAxisContextMenuRef = useRef(onAxisContextMenu);
+  useEffect(() => {
+    onAxisContextMenuRef.current = onAxisContextMenu;
+  }, [onAxisContextMenu]);
   useEffect(() => {
     onPointClickRef.current = onPointClick;
   }, [onPointClick]);
@@ -493,6 +508,41 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       return null;
     };
 
+    // True when a panel-local pixel lands in either axis strip (the left
+    // Y-axis margin or the bottom X-axis margin) rather than the plotting
+    // body. In brush (select) mode we use this to LET axis clicks flow
+    // through to ECharts' zrender dblclick handler instead of starting a
+    // rubber-band selection — so double-clicking an axis opens the axis
+    // settings dialog in select mode too, matching pan mode. The
+    // geometric fallback mirrors the zrHandler margins (80px / 18% left,
+    // 60px / 18% bottom) so both agree on what counts as "on the axis"
+    // when the grid rect isn't laid out yet. Returns WHICH axis strip was
+    // hit ("y" for the left margin, "x" for the bottom margin) or null —
+    // the right-click context-menu handler needs the identity, and Y is
+    // preferred when both margins overlap (bottom-left corner) to match
+    // the dblclick zrHandler's historical default.
+    const axisStripAt = (px: number, py: number): "x" | "y" | null => {
+      const panelH = el?.clientHeight ?? 0;
+      const panelW = el?.clientWidth ?? 0;
+      const r = getGridRect();
+      if (r) {
+        const inYStrip = px >= 0 && px < r.x && py >= r.y && py <= r.y + r.height;
+        const inXStrip = py > r.y + r.height && py <= panelH && px >= r.x && px <= r.x + r.width;
+        if (inYStrip) return "y";
+        if (inXStrip) return "x";
+        return null;
+      }
+      const inLeftMargin =
+        px >= 0 && px <= Math.min(80, panelW * 0.18) && py >= 0 && py <= panelH;
+      const inBottomMargin =
+        py <= panelH && py >= panelH - Math.min(60, panelH * 0.18) && px >= 0 && px <= panelW;
+      if (inLeftMargin) return "y";
+      if (inBottomMargin) return "x";
+      return null;
+    };
+    const isInAxisStrip = (px: number, py: number): boolean =>
+      axisStripAt(px, py) !== null;
+
     const DRAG_THRESHOLD_PX = 3;
     type DragState = Grip & {
       startPx: number; startPy: number;
@@ -569,6 +619,10 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       // Brush mode: capture the start point immediately and take pointer
       // ownership so we can draw the rect even if the cursor leaves the panel.
       if (brushModeRef.current) {
+        // …but NOT when the click lands on an axis strip. There we let the
+        // event flow through to ECharts so a double-click opens the axis
+        // settings dialog in select mode too (matching pan mode).
+        if (isInAxisStrip(px, py)) return;
         brushState = { startPx: px, startPy: py, curPx: px, curPy: py, pointerId: e.pointerId };
         try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
         e.preventDefault();
@@ -620,7 +674,10 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         const px = e.clientX - rect.left;
         const py = e.clientY - rect.top;
         if (brushModeRef.current) {
-          el.style.cursor = "crosshair";
+          // Axis strips aren't part of the rubber-band area — show the
+          // default arrow there so the double-click-to-open-settings
+          // affordance reads correctly; crosshair over the plot body.
+          el.style.cursor = isInAxisStrip(px, py) ? "" : "crosshair";
           return;
         }
         const g = getAxisGrip(px, py);
@@ -772,12 +829,13 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       if (dragState && !dragState.captured) finishDrag(true);
     };
 
-    // ----- Wheel-zoom shortcuts (pan mode only) ----------------------
-    // Pan mode:
+    // ----- Wheel-zoom shortcuts (both modes) -------------------------
     //   Ctrl + wheel         → zoom Y axis around cursor
     //   Ctrl + Shift + wheel → zoom X axis around cursor
-    // Brush (select) mode:
-    //   wheel is left alone (lets the user scroll the surrounding page).
+    // The Ctrl-modifier shortcut works in BOTH pan and select (brush)
+    // modes — it's an explicit zoom gesture that never conflicts with a
+    // rubber-band drag (which uses the plain left-button). Bare wheel is
+    // always a pass-through so the outer page can still scroll.
     //
     // Zoom is multiplicative around the value under the cursor so the
     // point under the pointer stays fixed in screen space. The new
@@ -796,10 +854,8 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     };
     const onWheel = (e: WheelEvent) => {
       // Only the Ctrl-modifier shortcut applies; bare wheel is a
-      // pass-through so the outer page can still scroll. Brush mode
-      // also disables the shortcut — the user is mid-selection and
-      // shouldn't have the chart re-scale under their cursor.
-      if (brushModeRef.current) return;
+      // pass-through so the outer page can still scroll. Works in both
+      // pan and select modes.
       if (!e.ctrlKey) return;
       if (!onAxisRangeChangeRef.current) return;
       const rect = el.getBoundingClientRect();
@@ -849,6 +905,23 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       wheelCommitTimer = window.setTimeout(flushWheelCommit, 220);
     };
 
+    // ----- Right-click on an axis strip → context menu ---------------
+    // Right-clicking the Y-axis margin or the X-axis margin opens a small
+    // menu (axis settings / reset zoom) anchored at the cursor. We only
+    // swallow the native browser menu when an axis strip is actually hit;
+    // right-clicks elsewhere in the panel keep their default behavior.
+    const onContextMenu = (e: MouseEvent) => {
+      const cb = onAxisContextMenuRef.current;
+      if (!cb) return;
+      const rect = el.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      const axis = axisStripAt(px, py);
+      if (!axis) return;
+      e.preventDefault();
+      cb(axis, e.clientX, e.clientY);
+    };
+
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", onPointerUp);
@@ -858,6 +931,11 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     // preventDefault() and stop the browser's page scroll / pinch-zoom.
     el.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("mouseup", onWindowMouseUpSafety);
+    // Capture phase: zrender attaches its own contextmenu handler to the
+    // chart viewport and can stop propagation before a bubble-phase
+    // listener on `el` would see it. Listening in the capture phase runs
+    // us first (document → el → canvas), so the axis menu opens reliably.
+    el.addEventListener("contextmenu", onContextMenu, true);
 
     return () => {
       zr.off("dblclick", zrHandler);
@@ -869,6 +947,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       el.removeEventListener("pointerleave", onPointerLeave);
       el.removeEventListener("wheel", onWheel);
       window.removeEventListener("mouseup", onWindowMouseUpSafety);
+      el.removeEventListener("contextmenu", onContextMenu, true);
       if (wheelCommitTimer) { window.clearTimeout(wheelCommitTimer); wheelCommitTimer = null; }
       if (scheduledFrame) {
         cancelAnimationFrame(scheduledFrame);

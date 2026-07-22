@@ -190,6 +190,22 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       document.removeEventListener("contextmenu", close);
     };
   }, [slotCtxMenu]);
+  // Right-click context menu on an axis strip (fired from <Graph>).
+  // Offers "Axis settings" (opens the same dialog as the double-click
+  // gesture) and "Reset zoom" (clears the pinned min/max on that axis).
+  // Closed on any outside click / other contextmenu, mirroring the slot
+  // menu above.
+  const [axisCtxMenu, setAxisCtxMenu] = useState<{ axis: "x" | "y"; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!axisCtxMenu) return;
+    const close = () => setAxisCtxMenu(null);
+    document.addEventListener("click", close);
+    document.addEventListener("contextmenu", close);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("contextmenu", close);
+    };
+  }, [axisCtxMenu]);
   // Auto-close the manager when its slot leaves multi-mode (cols
   // dropped below 2 via deletion in the manager itself, slot-clear,
   // swap XY, start-over, etc.). Without this, the next time the user
@@ -1584,6 +1600,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                       setXAxisConfig({ ...(item.xAxis ?? {}), min, max });
                     }
                   }}
+                  onAxisContextMenu={(axis, x, y) => setAxisCtxMenu({ axis, x, y })}
                   onPointClick={(pick) => {
                     pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
                   }}
@@ -1749,6 +1766,52 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           >
             {t("graph.slotCtx.clear", { defaultValue: "Clear slot" })}
           </div>
+        </div>
+      )}
+      {/* Right-click context menu on an axis strip. Two actions:
+          - Axis settings: opens the same dialog as double-clicking the
+            axis (Y or X depending on which strip was right-clicked).
+          - Reset zoom: clears the pinned min/max on that axis, restoring
+            automatic bounds while preserving other axis overrides. The
+            item is disabled when no manual range is currently pinned. */}
+      {axisCtxMenu && (
+        <div
+          ref={ctxMenuRef}
+          className="sp-ctx-menu"
+          style={{ left: axisCtxMenu.x, top: axisCtxMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <div
+            className="sp-ctx-item"
+            onClick={() => {
+              if (axisCtxMenu.axis === "y") setYAxisDialogOpen(true);
+              else setXAxisDialogOpen(true);
+              setAxisCtxMenu(null);
+            }}
+          >
+            {t("graph.axisCtx.settings", { defaultValue: "Axis settings" })}
+          </div>
+          {(() => {
+            const cfg = axisCtxMenu.axis === "y" ? item.yAxis : item.xAxis;
+            const zoomed = !!cfg && (cfg.min !== undefined || cfg.max !== undefined);
+            return (
+              <div
+                className={`sp-ctx-item${zoomed ? "" : " sp-ctx-disabled"}`}
+                aria-disabled={!zoomed}
+                onClick={() => {
+                  if (!zoomed) return;
+                  const next = { ...(cfg ?? {}), min: undefined, max: undefined };
+                  const setter =
+                    axisCtxMenu.axis === "y" ? setYAxisConfig : setXAxisConfig;
+                  setter(isAxisConfigEmpty(next) ? undefined : next);
+                  setAxisCtxMenu(null);
+                }}
+              >
+                {t("graph.axisCtx.resetZoom", { defaultValue: "Reset zoom" })}
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>

@@ -531,6 +531,10 @@
     "xAxisSettings": {
       "title": "X Axis Settings"
     },
+    "axisCtx": {
+      "settings": "Axis settings",
+      "resetZoom": "Reset zoom"
+    },
     "axis": {
       "title": "Axis",
       "range": "Range",

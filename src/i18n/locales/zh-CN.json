@@ -531,6 +531,10 @@
     "xAxisSettings": {
       "title": "X 轴设置"
     },
+    "axisCtx": {
+      "settings": "轴设置",
+      "resetZoom": "重置轴缩放"
+    },
     "axis": {
       "title": "坐标轴",
       "range": "区间",
