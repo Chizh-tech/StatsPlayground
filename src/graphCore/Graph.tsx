@@ -906,21 +906,24 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     };
 
     // ----- Right-click on an axis strip → context menu ---------------
-    // Right-clicking the Y-axis margin or the X-axis margin opens a small
-    // menu (axis settings / reset zoom) anchored at the cursor. We only
-    // swallow the native browser menu when an axis strip is actually hit;
-    // right-clicks elsewhere in the panel keep their default behavior.
-    const onContextMenu = (e: MouseEvent) => {
+    // Registered through zrender's own event bus (exactly like the
+    // dblclick handler above) rather than a native DOM `contextmenu`
+    // listener on the container: in the Tauri WebView the raw DOM
+    // contextmenu event does not reliably reach a listener on `el`, but
+    // zrender's normalized event fires for empty areas (axis strips)
+    // just like dblclick does. zrender reports zr-relative offsetX /
+    // offsetY; we classify those into an axis strip and derive viewport
+    // coords from the container rect so the menu pins at the cursor.
+    const zrContextHandler = (e: { offsetX: number; offsetY: number; event?: MouseEvent }) => {
       const cb = onAxisContextMenuRef.current;
       if (!cb) return;
-      const rect = el.getBoundingClientRect();
-      const px = e.clientX - rect.left;
-      const py = e.clientY - rect.top;
-      const axis = axisStripAt(px, py);
+      const axis = axisStripAt(e.offsetX, e.offsetY);
       if (!axis) return;
-      e.preventDefault();
-      cb(axis, e.clientX, e.clientY);
+      e.event?.preventDefault();
+      const rect = el.getBoundingClientRect();
+      cb(axis, rect.left + e.offsetX, rect.top + e.offsetY);
     };
+    zr.on("contextmenu", zrContextHandler);
 
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
@@ -931,14 +934,10 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     // preventDefault() and stop the browser's page scroll / pinch-zoom.
     el.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("mouseup", onWindowMouseUpSafety);
-    // Capture phase: zrender attaches its own contextmenu handler to the
-    // chart viewport and can stop propagation before a bubble-phase
-    // listener on `el` would see it. Listening in the capture phase runs
-    // us first (document → el → canvas), so the axis menu opens reliably.
-    el.addEventListener("contextmenu", onContextMenu, true);
 
     return () => {
       zr.off("dblclick", zrHandler);
+      zr.off("contextmenu", zrContextHandler);
       inst.off("click", onSeriesClick);
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("pointermove", onPointerMove);
@@ -947,7 +946,6 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       el.removeEventListener("pointerleave", onPointerLeave);
       el.removeEventListener("wheel", onWheel);
       window.removeEventListener("mouseup", onWindowMouseUpSafety);
-      el.removeEventListener("contextmenu", onContextMenu, true);
       if (wheelCommitTimer) { window.clearTimeout(wheelCommitTimer); wheelCommitTimer = null; }
       if (scheduledFrame) {
         cancelAnimationFrame(scheduledFrame);
