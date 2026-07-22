@@ -12,6 +12,7 @@
 
 import type { GraphSpec, GraphData } from "./types";
 import type { GraphTheme } from "./theme";
+import { isMissing } from "./transform";
 
 /** 曲面网格顶点数（N×N）。 */
 const GRID_N = 48;
@@ -189,37 +190,74 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
     return { option: null, hint: { key: "graph.threeD.dragHint", def: "Drag a column onto Z to build a 3D surface." } };
   }
 
+  // 分组：当绑定了 Overlay（图例）列时，按其值把数据切成多组，
+  // 每组各自成一张 surface / 一簇 scatter3D，颜色取该组的样式色。
+  const overlay = spec.encoding.overlay;
+  const styles = spec.styles ?? {};
+  const groupColor = (key: string): string => {
+    const s = styles[key];
+    return s?.fill?.color || s?.point?.color || s?.line?.color || "#4a6cf7";
+  };
+
   const series: Record<string, unknown>[] = [];
   let zmin = Infinity, zmax = -Infinity;
+  const legendData: string[] = [];
 
-  if (surfaceEl && xf && yf && zf) {
-    const s = buildSurfaceData(data, xf.name, yf.name, zf.name, GRID_N, stat);
-    if (s) {
-      series.push({
-        type: "surface",
-        name: zf.name,
-        data: s.verts,
-        shading: "color",
-        wireframe: { show: false },
-        silent: false,
-      });
-      if (s.zmin < zmin) zmin = s.zmin;
-      if (s.zmax > zmax) zmax = s.zmax;
+  const addLayers = (gdata: GraphData, name: string | null, color: string | null) => {
+    if (surfaceEl && xf && yf && zf) {
+      const s = buildSurfaceData(gdata, xf.name, yf.name, zf.name, GRID_N, stat);
+      if (s) {
+        series.push({
+          type: "surface",
+          name: name ?? zf.name,
+          data: s.verts,
+          // 分组时用 lambert 明暗的纯色曲面区分各组；无分组时用色阶按 Z 着色。
+          shading: color ? "lambert" : "color",
+          ...(color ? { itemStyle: { color } } : {}),
+          wireframe: { show: false },
+        });
+        if (s.zmin < zmin) zmin = s.zmin;
+        if (s.zmax > zmax) zmax = s.zmax;
+      }
     }
-  }
-  if (pointsEl) {
-    const sc = buildScatterData(data, xf.name, yf.name, zf?.name);
-    if (sc) {
-      series.push({
-        type: "scatter3D",
-        name: zf?.name ?? "points",
-        data: sc.pts,
-        symbolSize: 6,
-        itemStyle: { opacity: 0.9, borderWidth: 0.5, borderColor: "rgba(0,0,0,0.3)" },
-      });
-      if (sc.zmin < zmin) zmin = sc.zmin;
-      if (sc.zmax > zmax) zmax = sc.zmax;
+    if (pointsEl) {
+      const sc = buildScatterData(gdata, xf!.name, yf!.name, zf?.name);
+      if (sc) {
+        series.push({
+          type: "scatter3D",
+          name: name ?? (zf?.name ?? "points"),
+          data: sc.pts,
+          symbolSize: 6,
+          ...(color ? { itemStyle: { color, opacity: 0.9 } } : { itemStyle: { opacity: 0.9, borderWidth: 0.5, borderColor: "rgba(0,0,0,0.3)" } }),
+        });
+        if (sc.zmin < zmin) zmin = sc.zmin;
+        if (sc.zmax > zmax) zmax = sc.zmax;
+      }
     }
+  };
+
+  if (overlay) {
+    const gi = data.columns.indexOf(overlay.name);
+    if (gi >= 0) {
+      // 保持首次出现顺序的去重分组。
+      const seen = new Set<string>();
+      const groups: string[] = [];
+      for (const row of data.rows) {
+        const gv = row[gi];
+        if (isMissing(gv)) continue;
+        const k = String(gv);
+        if (!seen.has(k)) { seen.add(k); groups.push(k); }
+      }
+      for (const gkey of groups) {
+        const rows = data.rows.filter((r) => String(r[gi]) === gkey);
+        addLayers({ columns: data.columns, rows }, gkey, groupColor(gkey));
+        legendData.push(gkey);
+      }
+    } else {
+      addLayers(data, null, null);
+    }
+  } else {
+    addLayers(data, null, null);
   }
 
   if (series.length === 0) {
@@ -227,6 +265,8 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   }
 
   const hasZRange = Number.isFinite(zmin) && Number.isFinite(zmax) && zmax > zmin;
+  // 分组时各组已是纯色，不用 Z 值色阶；仅单组（无 Overlay）用色阶。
+  const grouped = legendData.length > 0;
 
   const axisCommon = {
     nameTextStyle: { color: theme.fgSecondary },
@@ -260,7 +300,16 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
     series,
   };
 
-  if (hasZRange) {
+  if (grouped) {
+    // 图例：列出各分组，可点击切换显隐（echarts 原生按 series.name 匹配）。
+    option.legend = {
+      type: "scroll",
+      data: legendData,
+      top: 4,
+      textStyle: { color: theme.fgSecondary },
+    };
+  } else if (hasZRange) {
+    // 单组：按 Z 值色阶着色（彩色渐变）。
     option.visualMap = {
       show: true,
       dimension: 2,
