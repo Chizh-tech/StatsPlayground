@@ -10,6 +10,7 @@ import * as echarts from "echarts";
 import type { GraphSpec, GraphData } from "./types";
 import { getGraphTheme } from "./theme";
 import { buildGraph, type ScatterPointPick } from "./transform";
+import { Surface3D } from "./Surface3D";
 import { useThemeStore } from "@/stores/useThemeStore";
 
 interface GraphProps {
@@ -100,10 +101,21 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
   const themeMode = useThemeStore((s) => s.mode);
 
   const built = useMemo(() => {
+    // 3D 模式走独立的自绘曲面渲染器，跳过昂贵的 2D 面板构建。
+    if (spec.threeD) return { cols: 1, rows: 1, panels: [] as ReturnType<typeof buildGraph>["panels"] };
     const theme = getGraphTheme();
     return buildGraph(spec, data, theme, valueOrders);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spec, data, themeMode, valueOrders]);
+
+  // 3D 曲面：hooks 之后再分支返回，保证 hooks 调用顺序稳定。
+  if (spec.threeD) {
+    return (
+      <div className={`gc-graph${className ? " " + className : ""}`} style={{ width: "100%", height: "100%" }}>
+        <Surface3D spec={spec} data={data} />
+      </div>
+    );
+  }
 
   return (
     <div
