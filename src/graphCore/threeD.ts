@@ -279,7 +279,11 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
         if (!seen.has(k)) { seen.add(k); groups.push(k); }
       }
       grouped = groups.length > 0;
+      // 响应图例面板的「隐藏分组」（眼睛开关）：被隐藏的组不生成任何
+      // series，也不出现在图例中——与 2D 行为一致。
+      const hidden = new Set(spec.hiddenGroups ?? []);
       for (const gkey of groups) {
+        if (hidden.has(gkey)) continue;
         const rows = data.rows.filter((r) => String(r[gi]) === gkey);
         addLayers({ columns: data.columns, rows }, gkey, colorOf(gkey));
         legendData.push(gkey);
