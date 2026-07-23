@@ -348,42 +348,44 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       const top0 = 12;
       const barW = 40;
       const barH = 12;
-      const elements: Record<string, unknown>[] = [];
-      groupSeries.forEach((g, i) => {
-        // 每行统一以 rowH 的中心线对齐，色条与文字都居中在该中心线上。
-        const cy = top0 + i * rowH + barH / 2;
-        // 渐变色条（左深右浅，与曲面 Z 深浅一致）。
-        elements.push({
-          type: "rect",
-          right: 10,
-          top: cy - barH / 2,
-          shape: { width: barW, height: barH, r: 2 },
-          style: {
-            fill: {
-              type: "linear",
-              x: 0, y: 0, x2: 1, y2: 0,
-              colorStops: [
-                { offset: 0, color: shade(g.color, -0.4) },
-                { offset: 0.5, color: g.color },
-                { offset: 1, color: shade(g.color, 0.6) },
-              ],
+      // 每行一个 group（右上角锚定），内部子元素用局部 x/y 定位——这样
+      // 文字的 textVerticalAlign:middle 相对 y 精确居中，色条与文字对齐。
+      const elements = groupSeries.map((g, i) => ({
+        type: "group",
+        right: 10,
+        top: top0 + i * rowH,
+        children: [
+          {
+            type: "text",
+            x: -(barW + 6),
+            y: barH / 2,
+            style: {
+              text: g.name,
+              textAlign: "right",
+              textVerticalAlign: "middle",
+              fill: theme.fgSecondary,
+              font: "11px sans-serif",
             },
           },
-        });
-        // 组名（右对齐，位于色条左侧；完整显示，不截断）。
-        elements.push({
-          type: "text",
-          right: 10 + barW + 6,
-          top: cy,
-          style: {
-            text: g.name,
-            textAlign: "right",
-            textVerticalAlign: "middle",
-            fill: theme.fgSecondary,
-            font: "11px sans-serif",
+          {
+            type: "rect",
+            x: -barW,
+            y: 0,
+            shape: { width: barW, height: barH, r: 2 },
+            style: {
+              fill: {
+                type: "linear",
+                x: 0, y: 0, x2: 1, y2: 0,
+                colorStops: [
+                  { offset: 0, color: shade(g.color, -0.4) },
+                  { offset: 0.5, color: g.color },
+                  { offset: 1, color: shade(g.color, 0.6) },
+                ],
+              },
+            },
           },
-        });
-      });
+        ],
+      }));
       option.graphic = { elements };
     }
   } else {
