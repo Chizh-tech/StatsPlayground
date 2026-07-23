@@ -329,27 +329,63 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
     series,
   };
 
-  // 顶部图例：仅当存在 surface 图层（用到渐变着色）时，在右上角为每个
-  // 分组显示一根「渐变条」（该组色调的深→浅 visualMap）。纯散点不显示
-  // 色条（但仍用 visualMap 着色，show:false）。
+  // 顶部图例：仅当存在 surface 图层（用到渐变着色）时，在右上角画一个
+  // 紧凑的自定义图例——每行是「组名 + 一小段渐变色条」。visualMap 只负责
+  // 给曲面/散点着色（show:false），图例外观由 graphic 元素精确排版。
   if (useDepth) {
-    const showBars = !!surfaceEl;
-    option.visualMap = groupSeries.map((g, i) => ({
+    option.visualMap = groupSeries.map((g) => ({
       type: "continuous",
-      show: showBars,
+      show: false,
       dimension: 2,
       seriesIndex: g.indices,
       min: rmin,
       max: rmax,
       inRange: { color: [shade(g.color, -0.4), g.color, shade(g.color, 0.6)] },
-      calculable: false,
-      itemWidth: 12,
-      itemHeight: 40,
-      right: 12,
-      top: 16 + i * 52,
-      text: [g.name.length > 14 ? g.name.slice(0, 13) + "\u2026" : g.name, ""],
-      textStyle: { color: theme.fgSecondary, fontSize: 10 },
     }));
+
+    if (surfaceEl && groupSeries.length > 0) {
+      const rowH = 20;
+      const top0 = 12;
+      const barW = 40;
+      const barH = 10;
+      const elements: Record<string, unknown>[] = [];
+      groupSeries.forEach((g, i) => {
+        const y = top0 + i * rowH;
+        // 渐变色条（左深右浅，与曲面 Z 深浅一致）。
+        elements.push({
+          type: "rect",
+          right: 10,
+          top: y,
+          shape: { width: barW, height: barH, r: 2 },
+          style: {
+            fill: {
+              type: "linear",
+              x: 0, y: 0, x2: 1, y2: 0,
+              colorStops: [
+                { offset: 0, color: shade(g.color, -0.4) },
+                { offset: 0.5, color: g.color },
+                { offset: 1, color: shade(g.color, 0.6) },
+              ],
+            },
+          },
+        });
+        // 组名（右对齐，位于色条左侧）。
+        const label = g.name.length > 18 ? g.name.slice(0, 17) + "\u2026" : g.name;
+        elements.push({
+          type: "text",
+          right: 10 + barW + 6,
+          top: y + barH / 2,
+          style: {
+            text: label,
+            textAlign: "right",
+            textVerticalAlign: "middle",
+            fill: theme.fgSecondary,
+            font: "11px sans-serif",
+          },
+        });
+      });
+      option.graphic = { elements };
+    }
   } else {
     // Z 无有效范围：把 color 着色的曲面回退为 lambert 纯色。
     for (const i of surfIndices) (series[i] as Record<string, unknown>).shading = "lambert";
