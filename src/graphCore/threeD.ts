@@ -344,18 +344,19 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
     }));
 
     if (surfaceEl && groupSeries.length > 0) {
-      const rowH = 20;
+      const rowH = 22;
       const top0 = 12;
       const barW = 40;
-      const barH = 10;
+      const barH = 12;
       const elements: Record<string, unknown>[] = [];
       groupSeries.forEach((g, i) => {
-        const y = top0 + i * rowH;
+        // 每行统一以 rowH 的中心线对齐，色条与文字都居中在该中心线上。
+        const cy = top0 + i * rowH + barH / 2;
         // 渐变色条（左深右浅，与曲面 Z 深浅一致）。
         elements.push({
           type: "rect",
           right: 10,
-          top: y,
+          top: cy - barH / 2,
           shape: { width: barW, height: barH, r: 2 },
           style: {
             fill: {
@@ -369,14 +370,13 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
             },
           },
         });
-        // 组名（右对齐，位于色条左侧）。
-        const label = g.name.length > 18 ? g.name.slice(0, 17) + "\u2026" : g.name;
+        // 组名（右对齐，位于色条左侧；完整显示，不截断）。
         elements.push({
           type: "text",
           right: 10 + barW + 6,
-          top: y + barH / 2,
+          top: cy,
           style: {
-            text: label,
+            text: g.name,
             textAlign: "right",
             textVerticalAlign: "middle",
             fill: theme.fgSecondary,
