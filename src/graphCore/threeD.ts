@@ -261,18 +261,8 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   const scOpts = (pointsEl?.options ?? {}) as Record<string, unknown>;
   const summaryStat = String(scOpts.summaryStat ?? "none");
   const errInterval = String(scOpts.errorInterval ?? "auto");
-  const intStyle = String(scOpts.intervalStyle ?? "sphere") === "bar" ? "bar" : "sphere";
+  const intStyle = String(scOpts.intervalStyle ?? "errorBar") === "band" ? "band" : "errorBar";
   const summarize = summaryStat !== "none" && !!zf;
-  // 原始 Z 数据跨度，用于把误差映射为球体像素大小。
-  const zColIdx = zf ? data.columns.indexOf(zf.name) : -1;
-  let zdMin = Infinity, zdMax = -Infinity;
-  if (zColIdx >= 0) {
-    for (const r of data.rows) {
-      const z = Number(r[zColIdx]);
-      if (Number.isFinite(z)) { if (z < zdMin) zdMin = z; if (z > zdMax) zdMax = z; }
-    }
-  }
-  const zSpan = zdMax > zdMin ? zdMax - zdMin : 1;
 
   const addLayers = (gdata: GraphData, name: string, color: string) => {
     const indices: number[] = [];
@@ -312,59 +302,62 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
           if (sc.zmax > pmax) pmax = sc.zmax;
         }
       } else {
-        // 汇总：每组一个中心点 (meanX, meanY, agg(Z))；误差以球体/竖条表示。
+        // 汇总：按 (X, Y) 坐标分箱，每个位置画一个点 (x, y, agg(Z))；
+        // 误差沿 Z 方向绘制（误差棒 / 色带），跟 2D 选项一致。
         const xi = gdata.columns.indexOf(xf.name);
         const yi = gdata.columns.indexOf(yf.name);
         const zi = gdata.columns.indexOf(zf!.name);
-        let sx = 0, sy = 0, cnt = 0;
-        const zs: number[] = [];
+        const cells = new Map<string, { x: number; y: number; zs: number[] }>();
         for (const r of gdata.rows) {
           const x = Number(r[xi]);
           const y = Number(r[yi]);
           const z = Number(r[zi]);
-          if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-            sx += x; sy += y; zs.push(z); cnt++;
-          }
+          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+          const key = `${x}|${y}`;
+          let c = cells.get(key);
+          if (!c) { c = { x, y, zs: [] }; cells.set(key, c); }
+          c.zs.push(z);
         }
-        if (cnt > 0) {
-          const mx = sx / cnt;
-          const my = sy / cnt;
-          const az = aggZ(zs, summaryStat);
+        const pts: number[][] = [];
+        const errSegs: { coords: number[][] }[] = [];
+        for (const c of cells.values()) {
+          const az = aggZ(c.zs, summaryStat);
+          pts.push([c.x, c.y, az]);
           if (az < pmin) pmin = az;
           if (az > pmax) pmax = az;
-          const e = errInterval === "none" ? 0 : errMagnitude(zs, errInterval);
-          // 误差指示（画在中心点之下，纯色 group 色）。
-          if (e > 0) {
-            if (intStyle === "bar") {
-              series.push({
-                type: "line3D",
-                name: `${name}__err`,
-                data: [[mx, my, az - e], [mx, my, az + e]],
-                lineStyle: { color, width: 4, opacity: 0.9 },
-                silent: true,
-              });
+          if (errInterval !== "none") {
+            const e = errMagnitude(c.zs, errInterval);
+            if (e > 0) {
+              errSegs.push({ coords: [[c.x, c.y, az - e], [c.x, c.y, az + e]] });
               if (az - e < pmin) pmin = az - e;
               if (az + e > pmax) pmax = az + e;
-            } else {
-              // 球体：半透明大点，像素大小随误差相对整体 Z 跨度缩放。
-              const sphereSize = 16 + Math.min(80, (e / zSpan) * 320);
-              series.push({
-                type: "scatter3D",
-                name: `${name}__err`,
-                data: [[mx, my, az]],
-                symbolSize: sphereSize,
-                itemStyle: { color, opacity: 0.22 },
-                silent: true,
-              });
             }
           }
-          // 中心汇总点（纯色，较大，置于误差指示之上）。
+        }
+        if (pts.length) {
+          // 误差指示（先画，位于点之下）：沿 Z 的多段线；band = 粗且半透明。
+          if (errSegs.length) {
+            series.push({
+              type: "lines3D",
+              coordinateSystem: "cartesian3D",
+              name: `${name}__err`,
+              data: errSegs,
+              lineStyle: {
+                color,
+                width: intStyle === "band" ? 8 : 2,
+                opacity: intStyle === "band" ? 0.28 : 0.9,
+              },
+              effect: { show: false },
+              silent: true,
+            });
+          }
+          // 汇总点（纯色 group 色）。
           series.push({
             type: "scatter3D",
             name,
-            data: [[mx, my, az]],
-            symbolSize: 14,
-            itemStyle: { color, opacity: 1, borderWidth: 1, borderColor: "rgba(0,0,0,0.35)" },
+            data: pts,
+            symbolSize: 8,
+            itemStyle: { color, opacity: 1, borderWidth: 0.5, borderColor: "rgba(0,0,0,0.3)" },
           });
         }
       }

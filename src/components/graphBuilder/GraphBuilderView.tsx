@@ -2739,14 +2739,15 @@ function HistogramOptions({ options, onChange, t }: OptionsEditorProps) {
 }
 
 /** 3D scatter options — mirrors the 2D scatter's Summary Stat / Error
- *  Interval, but drops Jitter (meaningless in 3D) and renders the error
- *  interval as a Sphere (a translucent halo sized by the error) or a 3D
- *  error Bar (a vertical line3D through the summary point). */
+ *  Interval, but drops Jitter (meaningless in 3D). The summary reduces
+ *  each (X, Y) location to one point at its Z statistic; the error
+ *  interval is drawn along Z as an Error Bar or a Band, same choices as
+ *  2D. */
 function Scatter3DOptions({ options, onChange, t }: OptionsEditorProps) {
   const summary = getOpt<string>(options, "summaryStat", "none");
   const errInterval = getOpt<string>(options, "errorInterval", "auto");
-  const rawStyle = getOpt<string>(options, "intervalStyle", "sphere");
-  const intStyle = rawStyle === "sphere" || rawStyle === "bar" ? rawStyle : "sphere";
+  const rawStyle = getOpt<string>(options, "intervalStyle", "errorBar");
+  const intStyle = rawStyle === "band" ? "band" : "errorBar";
   return (
     <>
       <OptRow label={t("graph.opt.summaryStat")}>
@@ -2780,8 +2781,8 @@ function Scatter3DOptions({ options, onChange, t }: OptionsEditorProps) {
           value={intStyle}
           onChange={(e) => onChange({ intervalStyle: e.target.value })}
         >
-          <option value="sphere">{t("graph.opt.style.sphere", { defaultValue: "Sphere" })}</option>
-          <option value="bar">{t("graph.opt.style.errorBar")}</option>
+          <option value="errorBar">{t("graph.opt.style.errorBar")}</option>
+          <option value="band">{t("graph.opt.style.band")}</option>
         </select>
       </OptRow>
     </>
