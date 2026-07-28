@@ -458,7 +458,7 @@
       "auto": "Auto",
       "summary": { "none": "None", "mean": "Mean", "median": "Median", "sum": "Sum" },
       "interval": { "stdErr": "Std Err", "stdDev": "Std Dev", "ci95": "95% CI" },
-      "style": { "errorBar": "Error Bar", "band": "Band" },
+      "style": { "errorBar": "Error Bar", "band": "Band", "sphere": "Sphere" },
       "jitterMode": { "stacked": "Stacked", "uniform": "Uniform", "normal": "Normal" },
       "conn": { "line": "Line", "step": "Step", "spline": "Spline" },
       "fillMode": { "toZero": "To Zero", "between": "Between" },

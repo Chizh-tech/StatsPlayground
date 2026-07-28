@@ -46,6 +46,38 @@ function colIndices(data: GraphData, x?: string, y?: string, z?: string): XYZ {
   };
 }
 
+/** 聚合一组 z 值（mean / median / sum）。 */
+function aggZ(zs: number[], stat: string): number {
+  const n = zs.length;
+  if (n === 0) return 0;
+  if (stat === "sum") { let s = 0; for (const z of zs) s += z; return s; }
+  if (stat === "median") {
+    const a = [...zs].sort((p, q) => p - q);
+    const m = a.length;
+    return m % 2 ? a[(m - 1) / 2] : (a[m / 2 - 1] + a[m / 2]) / 2;
+  }
+  let s = 0;
+  for (const z of zs) s += z;
+  return s / n;
+}
+
+/** 误差幅度：stdErr / stdDev / ci95（auto → stdErr）。样本 <2 返回 0。 */
+function errMagnitude(zs: number[], kind: string): number {
+  const n = zs.length;
+  if (n < 2) return 0;
+  let mean = 0;
+  for (const z of zs) mean += z;
+  mean /= n;
+  let ss = 0;
+  for (const z of zs) { const d = z - mean; ss += d * d; }
+  const sd = Math.sqrt(ss / (n - 1));
+  const se = sd / Math.sqrt(n);
+  const k = kind === "auto" ? "stdErr" : kind;
+  if (k === "stdDev") return sd;
+  if (k === "ci95") return 1.96 * se;
+  return se;
+}
+
 /** 分箱聚合（mean/median）+ IDW 填补，返回按行优先展开的 [x,y,z] 顶点。 */
 function buildSurfaceData(
   data: GraphData,
@@ -225,6 +257,23 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   let smin = Infinity, smax = -Infinity; // 曲面网格
   let pmin = Infinity, pmax = -Infinity; // 散点
 
+  // 3D 散点设置（继承自 2D 散点）：汇总统计、误差区间、区间样式。
+  const scOpts = (pointsEl?.options ?? {}) as Record<string, unknown>;
+  const summaryStat = String(scOpts.summaryStat ?? "none");
+  const errInterval = String(scOpts.errorInterval ?? "auto");
+  const intStyle = String(scOpts.intervalStyle ?? "sphere") === "bar" ? "bar" : "sphere";
+  const summarize = summaryStat !== "none" && !!zf;
+  // 原始 Z 数据跨度，用于把误差映射为球体像素大小。
+  const zColIdx = zf ? data.columns.indexOf(zf.name) : -1;
+  let zdMin = Infinity, zdMax = -Infinity;
+  if (zColIdx >= 0) {
+    for (const r of data.rows) {
+      const z = Number(r[zColIdx]);
+      if (Number.isFinite(z)) { if (z < zdMin) zdMin = z; if (z > zdMax) zdMax = z; }
+    }
+  }
+  const zSpan = zdMax > zdMin ? zdMax - zdMin : 1;
+
   const addLayers = (gdata: GraphData, name: string, color: string) => {
     const indices: number[] = [];
     if (surfaceEl && xf && yf && zf) {
@@ -246,19 +295,78 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
         if (s.zmax > smax) smax = s.zmax;
       }
     }
-    if (pointsEl) {
-      const sc = buildScatterData(gdata, xf!.name, yf!.name, zf?.name);
-      if (sc) {
-        series.push({
-          type: "scatter3D",
-          name,
-          data: sc.pts,
-          symbolSize: 6,
-          itemStyle: { color, opacity: 0.9 },
-        });
-        indices.push(series.length - 1);
-        if (sc.zmin < pmin) pmin = sc.zmin;
-        if (sc.zmax > pmax) pmax = sc.zmax;
+    if (pointsEl && xf && yf) {
+      if (!summarize) {
+        // 原始散点：全部点，参与深度渐变着色。
+        const sc = buildScatterData(gdata, xf.name, yf.name, zf?.name);
+        if (sc) {
+          series.push({
+            type: "scatter3D",
+            name,
+            data: sc.pts,
+            symbolSize: 6,
+            itemStyle: { color, opacity: 0.9 },
+          });
+          indices.push(series.length - 1);
+          if (sc.zmin < pmin) pmin = sc.zmin;
+          if (sc.zmax > pmax) pmax = sc.zmax;
+        }
+      } else {
+        // 汇总：每组一个中心点 (meanX, meanY, agg(Z))；误差以球体/竖条表示。
+        const xi = gdata.columns.indexOf(xf.name);
+        const yi = gdata.columns.indexOf(yf.name);
+        const zi = gdata.columns.indexOf(zf!.name);
+        let sx = 0, sy = 0, cnt = 0;
+        const zs: number[] = [];
+        for (const r of gdata.rows) {
+          const x = Number(r[xi]);
+          const y = Number(r[yi]);
+          const z = Number(r[zi]);
+          if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+            sx += x; sy += y; zs.push(z); cnt++;
+          }
+        }
+        if (cnt > 0) {
+          const mx = sx / cnt;
+          const my = sy / cnt;
+          const az = aggZ(zs, summaryStat);
+          if (az < pmin) pmin = az;
+          if (az > pmax) pmax = az;
+          const e = errInterval === "none" ? 0 : errMagnitude(zs, errInterval);
+          // 误差指示（画在中心点之下，纯色 group 色）。
+          if (e > 0) {
+            if (intStyle === "bar") {
+              series.push({
+                type: "line3D",
+                name: `${name}__err`,
+                data: [[mx, my, az - e], [mx, my, az + e]],
+                lineStyle: { color, width: 4, opacity: 0.9 },
+                silent: true,
+              });
+              if (az - e < pmin) pmin = az - e;
+              if (az + e > pmax) pmax = az + e;
+            } else {
+              // 球体：半透明大点，像素大小随误差相对整体 Z 跨度缩放。
+              const sphereSize = 16 + Math.min(80, (e / zSpan) * 320);
+              series.push({
+                type: "scatter3D",
+                name: `${name}__err`,
+                data: [[mx, my, az]],
+                symbolSize: sphereSize,
+                itemStyle: { color, opacity: 0.22 },
+                silent: true,
+              });
+            }
+          }
+          // 中心汇总点（纯色，较大，置于误差指示之上）。
+          series.push({
+            type: "scatter3D",
+            name,
+            data: [[mx, my, az]],
+            symbolSize: 14,
+            itemStyle: { color, opacity: 1, borderWidth: 1, borderColor: "rgba(0,0,0,0.35)" },
+          });
+        }
       }
     }
     if (indices.length) groupSeries.push({ name, color, indices });

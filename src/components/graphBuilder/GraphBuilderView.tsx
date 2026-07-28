@@ -2376,7 +2376,7 @@ function LayerCard({
           <PointsOptions options={options} onChange={onChangeOptions} t={t} />
         )}
         {kind === "scatter3d" && (
-          <PointsOptions options={options} onChange={onChangeOptions} t={t} />
+          <Scatter3DOptions options={options} onChange={onChangeOptions} t={t} />
         )}
         {kind === "line" && (
           <LineOptions options={options} onChange={onChangeOptions} t={t} />
@@ -2733,6 +2733,56 @@ function HistogramOptions({ options, onChange, t }: OptionsEditorProps) {
           checked={showPercents}
           onChange={(e) => onChange({ showPercents: e.target.checked })}
         />
+      </OptRow>
+    </>
+  );
+}
+
+/** 3D scatter options — mirrors the 2D scatter's Summary Stat / Error
+ *  Interval, but drops Jitter (meaningless in 3D) and renders the error
+ *  interval as a Sphere (a translucent halo sized by the error) or a 3D
+ *  error Bar (a vertical line3D through the summary point). */
+function Scatter3DOptions({ options, onChange, t }: OptionsEditorProps) {
+  const summary = getOpt<string>(options, "summaryStat", "none");
+  const errInterval = getOpt<string>(options, "errorInterval", "auto");
+  const rawStyle = getOpt<string>(options, "intervalStyle", "sphere");
+  const intStyle = rawStyle === "sphere" || rawStyle === "bar" ? rawStyle : "sphere";
+  return (
+    <>
+      <OptRow label={t("graph.opt.summaryStat")}>
+        <select
+          className="gb-opt-select"
+          value={summary}
+          onChange={(e) => onChange({ summaryStat: e.target.value })}
+        >
+          <option value="none">{t("graph.opt.summary.none")}</option>
+          <option value="mean">{t("graph.opt.summary.mean")}</option>
+          <option value="median">{t("graph.opt.summary.median")}</option>
+          <option value="sum">{t("graph.opt.summary.sum")}</option>
+        </select>
+      </OptRow>
+      <OptRow label={t("graph.opt.errorInterval")}>
+        <select
+          className="gb-opt-select"
+          value={errInterval}
+          onChange={(e) => onChange({ errorInterval: e.target.value })}
+        >
+          <option value="auto">{t("graph.opt.auto")}</option>
+          <option value="none">{t("graph.opt.summary.none")}</option>
+          <option value="stdErr">{t("graph.opt.interval.stdErr")}</option>
+          <option value="stdDev">{t("graph.opt.interval.stdDev")}</option>
+          <option value="ci95">{t("graph.opt.interval.ci95")}</option>
+        </select>
+      </OptRow>
+      <OptRow label={t("graph.opt.intervalStyle")}>
+        <select
+          className="gb-opt-select"
+          value={intStyle}
+          onChange={(e) => onChange({ intervalStyle: e.target.value })}
+        >
+          <option value="sphere">{t("graph.opt.style.sphere", { defaultValue: "Sphere" })}</option>
+          <option value="bar">{t("graph.opt.style.errorBar")}</option>
+        </select>
       </OptRow>
     </>
   );

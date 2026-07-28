@@ -458,7 +458,7 @@
       "auto": "自動",
       "summary": { "none": "無", "mean": "均值", "median": "中位數", "sum": "總和" },
       "interval": { "stdErr": "標準誤", "stdDev": "標準差", "ci95": "95% 置信區間" },
-      "style": { "errorBar": "誤差棒", "band": "色帶" },
+      "style": { "errorBar": "誤差棒", "band": "色帶", "sphere": "球體" },
       "jitterMode": { "stacked": "堆疊", "uniform": "均勻", "normal": "常態" },
       "conn": { "line": "直線", "step": "階梯", "spline": "曲線" },
       "fillMode": { "toZero": "到零填充", "between": "區間填充" },
