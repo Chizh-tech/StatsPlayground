@@ -1855,3 +1855,61 @@
   outline-offset: 1px;
 }
 
+/* 2D / 3D segmented toggle — same pill styling as the cursor-mode
+   switch, but with text options ("2D" / "3D") so it needs wider slots. */
+.gb-dim-mode {
+  --gb-dm-pad: 3px;
+  --gb-dm-opt-w: 30px;
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  padding: var(--gb-dm-pad);
+  border: 1px solid var(--border-input);
+  border-radius: 999px;
+  background: var(--bg-btn-secondary);
+  height: 26px;
+  box-sizing: border-box;
+}
+
+.gb-dim-mode-thumb {
+  position: absolute;
+  top: var(--gb-dm-pad);
+  bottom: var(--gb-dm-pad);
+  width: var(--gb-dm-opt-w);
+  background: var(--bg-cell-selected);
+  border: 1px solid var(--fg-accent);
+  border-radius: 999px;
+  transition: left 160ms ease;
+  pointer-events: none;
+}
+
+.gb-dim-mode-thumb-2d { left: var(--gb-dm-pad); }
+.gb-dim-mode-thumb-3d { left: calc(var(--gb-dm-pad) + var(--gb-dm-opt-w)); }
+
+.gb-dim-mode-opt {
+  position: relative;
+  z-index: 1;
+  width: var(--gb-dm-opt-w);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: var(--fg-muted);
+  border-radius: 999px;
+  transition: color 120ms ease;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.gb-dim-mode-opt:hover { color: var(--fg-primary); }
+.gb-dim-mode-opt.is-active { color: var(--fg-primary); }
+.gb-dim-mode-opt:disabled { cursor: not-allowed; opacity: 0.55; }
+.gb-dim-mode-opt:focus-visible {
+  outline: 2px solid var(--fg-accent);
+  outline-offset: 1px;
+}
+

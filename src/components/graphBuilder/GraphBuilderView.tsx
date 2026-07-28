@@ -1435,24 +1435,46 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               </svg>
             </button>
           </div>
-          <button
-            type="button"
-            className={`gb-tb-btn${item.threeD ? " gb-tb-btn-active" : ""}`}
-            onClick={toggleThreeD}
-            aria-pressed={!!item.threeD}
-            disabled={lockedThreeD}
-            title={
-              lockedThreeD
-                ? t("graph.threeD.locked", {
-                    defaultValue: "Locked to 3D by a Surface layer. Remove it to return to 2D.",
-                  })
-                : t("graph.threeD.toggleTitle", {
-                    defaultValue: "Toggle 3D mode: adds Z and Group Z channels and renders a 3D surface from X / Y / Z.",
-                  })
-            }
+          {/* 2D / 3D segmented toggle — styled like the cursor-mode pill. */}
+          <div
+            className="gb-dim-mode"
+            role="radiogroup"
+            aria-label={t("graph.dimMode.label", { defaultValue: "2D / 3D mode" })}
           >
-            {t("graph.threeD.label", { defaultValue: "3D" })}
-          </button>
+            <span
+              className={`gb-dim-mode-thumb gb-dim-mode-thumb-${item.threeD ? "3d" : "2d"}`}
+              aria-hidden="true"
+            />
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!item.threeD}
+              className={`gb-dim-mode-opt${!item.threeD ? " is-active" : ""}`}
+              onClick={() => { if (item.threeD) toggleThreeD(); }}
+              disabled={lockedThreeD}
+              title={
+                lockedThreeD
+                  ? t("graph.threeD.locked", {
+                      defaultValue: "Locked to 3D by a Surface layer. Remove it to return to 2D.",
+                    })
+                  : t("graph.dimMode.twoDTitle", { defaultValue: "2D mode" })
+              }
+            >
+              2D
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!!item.threeD}
+              className={`gb-dim-mode-opt${item.threeD ? " is-active" : ""}`}
+              onClick={() => { if (!item.threeD) toggleThreeD(); }}
+              title={t("graph.dimMode.threeDTitle", {
+                defaultValue: "3D mode: adds Z and Group Z channels and renders a 3D surface from X / Y / Z.",
+              })}
+            >
+              3D
+            </button>
+          </div>
         </div>
         <div className="gb-toolbar-spacer" />
       </div>
