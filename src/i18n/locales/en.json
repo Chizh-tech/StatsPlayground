@@ -421,6 +421,7 @@
       "boxplot": "Box plot",
       "smoother": "Smoother",
       "fitline": "Fit Line",
+      "scatter3d": "Scatter",
       "surface": "Surface"
     },
     "frequency": "Count",

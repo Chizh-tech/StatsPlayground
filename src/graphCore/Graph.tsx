@@ -100,14 +100,10 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
   // 订阅主题变化以触发重渲染
   const themeMode = useThemeStore((s) => s.mode);
 
-  // 使用 3D 场景的条件：处于 3D 模式，且存在「支持 3D 的」启用图层
-  // （surface 曲面，或 points 3D 散点）。若 3D 模式下只有 2D-only 图层
-  // （箱线/直方等），退回普通 2D ECharts —— 即概念上的 z=0 平面平面图。
-  const use3DScene =
-    !!spec.threeD &&
-    (spec.elements ?? []).some(
-      (e) => e.enabled !== false && (e.kind === "surface" || e.kind === "points"),
-    );
+  // 使用 3D 场景的条件：处于 3D 模式即可。2D 与 3D 图层完全分开，
+  // 3D 模式只显示 3D 图层（surface / scatter3d）；无 3D 图层时由
+  // Chart3D 显示提示。
+  const use3DScene = !!spec.threeD;
 
   const built = useMemo(() => {
     // 3D 场景走独立的自绘渲染器，跳过昂贵的 2D 面板构建。

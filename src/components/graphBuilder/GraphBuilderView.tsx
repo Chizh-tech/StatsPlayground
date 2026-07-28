@@ -58,27 +58,24 @@ const CHART_TYPE_DEFS: ChartTypeDef[] = [
   { kind: "fitline", icon: "ƒ" },
   { kind: "boxplot", icon: "⊟" },
   { kind: "histogram", icon: "▥" },
+  { kind: "scatter3d", icon: "●" },
   { kind: "surface", icon: "◪" },
 ];
 
-/** Per-layer dimensionality support:
- *  - "2d"   : renders only in the flat X-Y plot (boxplot, histogram, …).
- *             In 3D mode a chart made only of 2D layers renders as the
- *             normal flat plot (the "z=0 plane"); any Z binding is ignored.
- *  - "3d"   : renders only in the 3D scene (surface). Activating one locks
- *             the chart to 3D and disables the 2D toggle.
- *  - "both" : renders in 2D (X-Y) and, in 3D, gains a Z height (points).
- *  All kinds are always listed in the layer panel regardless of mode —
- *  the mode only changes how each renders. */
-type LayerDim = "2d" | "3d" | "both";
+/** Per-layer dimensionality. 2D and 3D layers are fully separate sets:
+ *  the layer panel + Add popover only show the set matching the current
+ *  mode, and each layer card carries a 2D / 3D badge. Both sets persist
+ *  on the item — switching mode just changes which subset is shown. */
+type LayerDim = "2d" | "3d";
 const LAYER_DIM: Record<ElementKind, LayerDim> = {
-  points: "both",
+  points: "2d",
   line: "2d",
   bar: "2d",
   histogram: "2d",
   boxplot: "2d",
   smoother: "2d",
   fitline: "2d",
+  scatter3d: "3d",
   surface: "3d",
 };
 
@@ -1335,33 +1332,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     markDirty();
   }, [item.id, item.encoding, item.xAxis, item.yAxis, item.refLinesX, item.refLinesY, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, item.multiX, item.multiY, updateItem, markDirty]);
 
-  /** True when an active layer only renders in 3D (surface) — the chart
-   *  is then locked to 3D and the 2D toggle is disabled. */
-  const lockedThreeD = useMemo(
-    () => finalElements.some((e) => e.enabled !== false && LAYER_DIM[e.kind] === "3d"),
-    [finalElements],
-  );
-
   /** Toggle 3D mode. Flips `item.threeD`. Turning it OFF is
-   *  non-destructive: `encoding.z` / `encoding.groupZ` stay in the
-   *  item so the Z / Group Z bindings reappear when 3D is re-enabled;
-   *  they are simply hidden and not rendered while off. No-op while a
-   *  3D-only layer (surface) locks the chart to 3D. */
+   *  non-destructive: the 3D layers (surface / scatter3d) and the
+   *  Z / Group Z encodings stay in the item, just hidden while in 2D,
+   *  and reappear when 3D is re-enabled. 2D and 3D layer sets are fully
+   *  separate, so switching mode is always allowed. */
   const toggleThreeD = useCallback(() => {
-    if (lockedThreeD) return;
     updateItem(item.id, { threeD: !item.threeD });
     markDirty();
-  }, [item.id, item.threeD, lockedThreeD, updateItem, markDirty]);
-
-  // A 3D-only layer (surface) forces the chart into 3D and disables the
-  // 2D toggle. Auto-enable 3D the moment such a layer becomes active so
-  // adding a Surface layer in 2D flips straight to the 3D scene.
-  useEffect(() => {
-    if (lockedThreeD && !item.threeD) {
-      updateItem(item.id, { threeD: true });
-      markDirty();
-    }
-  }, [lockedThreeD, item.threeD, item.id, updateItem, markDirty]);
+  }, [item.id, item.threeD, updateItem, markDirty]);
 
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
@@ -1451,14 +1430,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               aria-checked={!item.threeD}
               className={`gb-dim-mode-opt${!item.threeD ? " is-active" : ""}`}
               onClick={() => { if (item.threeD) toggleThreeD(); }}
-              disabled={lockedThreeD}
-              title={
-                lockedThreeD
-                  ? t("graph.threeD.locked", {
-                      defaultValue: "Locked to 3D by a Surface layer. Remove it to return to 2D.",
-                    })
-                  : t("graph.dimMode.twoDTitle", { defaultValue: "2D mode" })
-              }
+              title={t("graph.dimMode.twoDTitle", { defaultValue: "2D mode" })}
             >
               2D
             </button>
@@ -1558,6 +1530,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               <div className="gb-layer-list">
                 {elements
                   .filter((el) => el.enabled !== false)
+                  .filter((el) => LAYER_DIM[el.kind] === (item.threeD ? "3d" : "2d"))
                   .map((el) => (
                     <LayerCard
                       key={el.kind}
@@ -1571,7 +1544,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   ))}
                 <AddLayerCard
                   availableKinds={CHART_TYPE_DEFS.map((c) => c.kind).filter(
-                    (k) => !activeKinds.has(k),
+                    (k) => !activeKinds.has(k) && LAYER_DIM[k] === (item.threeD ? "3d" : "2d"),
                   )}
                   onAdd={addElement}
                   t={t}
@@ -2382,6 +2355,9 @@ function LayerCard({
       <div className="gb-layer-head">
         <span className="gb-layer-icon">{def?.icon ?? "▦"}</span>
         <span className="gb-layer-title">{label}</span>
+        <span className={`gb-layer-dim gb-layer-dim-${LAYER_DIM[kind]}`}>
+          {LAYER_DIM[kind] === "3d" ? "3D" : "2D"}
+        </span>
         <button
           className="gb-layer-x"
           onClick={onRemove}

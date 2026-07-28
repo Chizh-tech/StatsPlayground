@@ -421,6 +421,7 @@
       "boxplot": "箱线图",
       "smoother": "平滑",
       "fitline": "拟合线",
+      "scatter3d": "散点",
       "surface": "曲面"
     },
     "frequency": "频次",

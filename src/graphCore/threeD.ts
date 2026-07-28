@@ -189,7 +189,7 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   const zf = spec.encoding.z;
   const els = spec.elements ?? [];
   const surfaceEl = els.find((e) => e.kind === "surface" && e.enabled !== false);
-  const pointsEl = els.find((e) => e.kind === "points" && e.enabled !== false);
+  const pointsEl = els.find((e) => e.kind === "scatter3d" && e.enabled !== false);
   const stat: SurfaceStat = surfaceEl?.options?.stat === "median" ? "median" : "mean";
 
   if (!surfaceEl && !pointsEl) {

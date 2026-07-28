@@ -268,6 +268,24 @@
   text-overflow: ellipsis;
 }
 
+/* 2D / 3D badge on each layer card. */
+.gb-layer-dim {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border-input);
+  color: var(--fg-secondary);
+  background: var(--bg-btn-secondary);
+}
+.gb-layer-dim-3d {
+  color: var(--fg-accent);
+  border-color: var(--fg-accent);
+}
+
 .gb-layer-x {
   flex: 0 0 auto;
   background: transparent;
