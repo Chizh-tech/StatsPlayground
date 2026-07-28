@@ -1205,6 +1205,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         next.options = { fitType: "polynomial", degree: 1 };
       }
       if (kind === "surface") next.options = { stat: "mean" };
+      // 3D 散点先继承已有 2D 散点（points）的设置作为默认。
+      if (kind === "scatter3d") {
+        const pts = prev.find((e) => e.kind === "points");
+        next.options = { ...(pts?.options ?? {}) };
+      }
       return [...prev, next];
     });
   }, [setElements]);
@@ -2368,6 +2373,9 @@ function LayerCard({
       </div>
       <div className="gb-layer-body">
         {kind === "points" && (
+          <PointsOptions options={options} onChange={onChangeOptions} t={t} />
+        )}
+        {kind === "scatter3d" && (
           <PointsOptions options={options} onChange={onChangeOptions} t={t} />
         )}
         {kind === "line" && (
