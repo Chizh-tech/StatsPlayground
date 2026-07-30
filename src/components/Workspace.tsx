@@ -1099,9 +1099,7 @@ export function Workspace() {
             >
               <path d="M8 5l8 7-8 7V5z" />
             </svg>
-            <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
-              <path d="M88 152C88 121 113 96 144 96L242 96C260 96 277 104 289 117L322 152L496 152C527 152 552 177 552 208L552 480C552 511 527 536 496 536L144 536C113 536 88 511 88 480L88 152z" />
-            </svg>
+            <i className="ds-icon fa-solid fa-folder" aria-hidden="true" />
             {renamingFolder === fp ? (
               <input
                 className="ds-rename-input"
@@ -1147,9 +1145,7 @@ export function Workspace() {
             setCtxMenu({ kind: "table", id: ds.id, x: e.clientX, y: e.clientY });
           }}
         >
-          <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
-            <path d="M480 96C515.3 96 544 124.7 544 160L544 480C544 515.3 515.3 544 480 544L160 544L153.5 543.7C121.2 540.4 96 513.1 96 480L96 160C96 124.7 124.7 96 160 96L480 96zM160 384L160 480L288 480L288 384L160 384zM352 384L352 480L480 480L480 384L352 384zM160 320L288 320L288 224L160 224L160 320zM352 320L480 320L480 224L352 224L352 320z" />
-          </svg>
+          <i className="ds-icon fa-solid fa-table" aria-hidden="true" />
           {renamingId === ds.id ? (
             <input
               ref={renameInputRef}
@@ -1195,9 +1191,7 @@ export function Workspace() {
           }}
           title={sourceDs ? t("workspace.datasourceLabel", { name: sourceDs.name }) : t("workspace.datasourceDeleted")}
         >
-          <svg className="ds-icon" width="14" height="14" viewBox="0 0 640 640" fill="currentColor">
-            <path d="M96 96C113.7 96 128 110.3 128 128L128 480C128 488.8 135.2 496 144 496L544 496C561.7 496 576 510.3 576 528C576 545.7 561.7 560 544 560L144 560C99.8 560 64 524.2 64 480L64 128C64 110.3 78.3 96 96 96zM216 392C202.7 392 192 381.3 192 368C192 354.7 202.7 344 216 344L264 344C277.3 344 288 354.7 288 368L288 416C288 429.3 277.3 440 264 440C250.7 440 240 429.3 240 416L240 408L216 408L216 392zM320 200C320 186.7 330.7 176 344 176C357.3 176 368 186.7 368 200L368 416C368 429.3 357.3 440 344 440C330.7 440 320 429.3 320 416L320 200zM416 280C416 266.7 426.7 256 440 256C453.3 256 464 266.7 464 280L464 416C464 429.3 453.3 440 440 440C426.7 440 416 429.3 416 416L416 280zM512 320C525.3 320 536 330.7 536 344L536 416C536 429.3 525.3 440 512 440C498.7 440 488 429.3 488 416L488 344C488 330.7 498.7 320 512 320zM240 248C240 234.7 250.7 224 264 224C277.3 224 288 234.7 288 248L288 296C288 309.3 277.3 320 264 320C250.7 320 240 309.3 240 296L240 248z" />
-          </svg>
+          <i className="ds-icon fa-solid fa-chart-pie" aria-hidden="true" />
           {renamingId === gb.id ? (
             <input
               ref={renameInputRef}
@@ -1296,9 +1290,7 @@ export function Workspace() {
           onClick={handleSave}
           title={t("common.saveWith", { key: modKey })}
         >
-          <svg width="20" height="20" viewBox="0 0 640 640" fill="currentColor">
-            <path d="M160 144C151.2 144 144 151.2 144 160L144 480C144 488.8 151.2 496 160 496L480 496C488.8 496 496 488.8 496 480L496 237.3C496 233.1 494.3 229 491.3 226L416 150.6L416 240C416 257.7 401.7 272 384 272L224 272C206.3 272 192 257.7 192 240L192 144L160 144zM240 144L240 224L368 224L368 144L240 144zM96 160C96 124.7 124.7 96 160 96L402.7 96C419.7 96 436 102.7 448 114.7L525.3 192C537.3 204 544 220.3 544 237.3L544 480C544 515.3 515.3 544 480 544L160 544C124.7 544 96 515.3 96 480L96 160zM256 384C256 348.7 284.7 320 320 320C355.3 320 384 348.7 384 384C384 419.3 355.3 448 320 448C284.7 448 256 419.3 256 384z"/>
-          </svg>
+          <i className="fa-solid fa-floppy-disk" aria-hidden="true" />
         </button>
       </div>
 
@@ -1338,18 +1330,14 @@ export function Workspace() {
                     title={t("menu.newFolder", { defaultValue: "New Folder" })}
                     onClick={() => handleCreateFolder(null)}
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M3 6.5C3 5.12 4.12 4 5.5 4h3.17c.66 0 1.3.26 1.77.73L11.83 6H18.5C19.88 6 21 7.12 21 8.5V18.5C21 19.88 19.88 21 18.5 21h-13C4.12 21 3 19.88 3 18.5V6.5zM13 11h-1.5V9.5a.5.5 0 1 0-1 0V11H9a.5.5 0 1 0 0 1h1.5v1.5a.5.5 0 1 0 1 0V12H13a.5.5 0 1 0 0-1z" />
-                    </svg>
+                    <i className="fa-solid fa-folder-plus" aria-hidden="true" />
                   </button>
                   <button
                     className="panel-action-btn"
                     title={t("menu.collapseAll", { defaultValue: "Collapse All" })}
                     onClick={() => fsCollapseAll()}
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M4 8h16v2H4zM4 14h16v2H4z" />
-                    </svg>
+                    <i className="fa-solid fa-down-left-and-up-right-to-center" aria-hidden="true" />
                   </button>
                 </div>
               </div>

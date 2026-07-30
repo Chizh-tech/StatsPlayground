@@ -219,6 +219,12 @@
   color: var(--fg-primary);
 }
 
+.menu-bar-save > i {
+  width: 20px;
+  font-size: 20px;
+  text-align: center;
+}
+
 /* Save toast */
 .save-toast {
   position: fixed;
@@ -359,6 +365,12 @@
   color: var(--fg-primary);
 }
 
+.panel-action-btn > i {
+  width: 14px;
+  font-size: 14px;
+  text-align: center;
+}
+
 .dataset-list {
   flex: 1;
   overflow-y: auto;
@@ -430,7 +442,10 @@
 
 .ds-icon {
   flex-shrink: 0;
+  width: 14px;
   color: var(--fg-ds-icon);
+  font-size: 14px;
+  text-align: center;
 }
 
 .ds-name {
