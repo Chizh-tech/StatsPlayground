@@ -1204,7 +1204,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       if (kind === "fitline") {
         next.options = { fitType: "polynomial", degree: 1 };
       }
-      if (kind === "surface") next.options = { stat: "mean" };
+      if (kind === "surface") next.options = { stat: "mean", smoothness: 0 };
       // 3D 散点先继承已有 2D 散点（points）的设置作为默认。
       if (kind === "scatter3d") {
         const pts = prev.find((e) => e.kind === "points");
@@ -2789,12 +2789,11 @@ function Scatter3DOptions({ options, onChange, t }: OptionsEditorProps) {
   );
 }
 
-/** Surface (3D) options panel — the aggregation statistic used when
- *  building the Z grid. Points falling in the same grid cell are
- *  reduced to a single Z via this statistic (mean or median) before
- *  the empty cells are filled by interpolation. */
+/** Surface (3D) options panel — aggregation statistic and optional
+ *  masked Z smoothing. A zero value preserves the observed faceted grid. */
 function SurfaceOptions({ options, onChange, t }: OptionsEditorProps) {
   const stat = getOpt<string>(options, "stat", "mean");
+  const smoothness = getOpt<number>(options, "smoothness", 0);
   return (
     <>
       <OptRow label={t("graph.opt.surfaceStat", { defaultValue: "Statistic" })}>
@@ -2806,6 +2805,17 @@ function SurfaceOptions({ options, onChange, t }: OptionsEditorProps) {
           <option value="mean">{t("graph.opt.summary.mean", { defaultValue: "Mean" })}</option>
           <option value="median">{t("graph.opt.summary.median", { defaultValue: "Median" })}</option>
         </select>
+      </OptRow>
+      <OptRow label={t("graph.opt.surfaceSmoothness", { defaultValue: "Smoothness" })}>
+        <input
+          type="range"
+          className="gb-slider"
+          min={0}
+          max={1}
+          step={0.05}
+          value={smoothness}
+          onChange={(e) => onChange({ smoothness: parseFloat(e.target.value) })}
+        />
       </OptRow>
     </>
   );

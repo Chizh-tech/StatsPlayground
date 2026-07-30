@@ -3,8 +3,8 @@
  *
  * 由 <Chart3D> 使用。把 GraphSpec（3D 模式 + surface / points 图层）
  * 与列式数据转成 echarts-gl 的 grid3D + series-surface / series-scatter3D
- * option。曲面数据仍在前端做分箱聚合（均值/中位数）+ IDW 填补成规则
- * 网格后交给 echarts-gl（echarts-gl 的 surface 需要规则网格顺序数据）。
+ * option。曲面数据在前端按原始 X/Y 坐标聚合（均值/中位数）成规则网格，
+ * 缺失组合保留为空洞，再交给 echarts-gl。
  *
  * 由于 echarts-gl 未提供官方 TS 类型，这里的 option 以宽松对象构造，
  * 交给 setOption 时按 echarts 的 core option 处理。
@@ -15,8 +15,6 @@ import type { GraphTheme } from "./theme";
 import { isMissing } from "./transform";
 import { DEFAULT_GROUP_KEY } from "./types";
 
-/** 曲面网格顶点数（N×N）。 */
-const GRID_N = 48;
 /** 3D 散点上限。 */
 const POINT_CAP = 8000;
 
@@ -78,99 +76,112 @@ function errMagnitude(zs: number[], kind: string): number {
   return se;
 }
 
-/** 分箱聚合（mean/median）+ IDW 填补，返回按行优先展开的 [x,y,z] 顶点。 */
+/** 按原始 X/Y 网格聚合，并可对有限 Z 做保留空洞的邻域平滑。 */
 function buildSurfaceData(
   data: GraphData,
   xName: string,
   yName: string,
   zName: string,
-  n: number,
   stat: SurfaceStat,
-): { verts: number[][]; zmin: number; zmax: number } | null {
+  smoothness: number,
+): { verts: number[][]; dataShape: [number, number]; zmin: number; zmax: number } | null {
   const { xi, yi, zi } = colIndices(data, xName, yName, zName);
   if (xi < 0 || yi < 0 || zi < 0) return null;
 
-  const xs: number[] = [];
-  const ys: number[] = [];
-  const zs: number[] = [];
-  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+  const xSet = new Set<number>();
+  const ySet = new Set<number>();
+  const observations: { x: number; y: number; z: number }[] = [];
   for (const row of data.rows) {
     const x = Number(row[xi]);
     const y = Number(row[yi]);
     const z = Number(row[zi]);
     if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-      xs.push(x); ys.push(y); zs.push(z);
-      if (x < xmin) xmin = x; if (x > xmax) xmax = x;
-      if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+      xSet.add(x);
+      ySet.add(y);
+      observations.push({ x, y, z });
     }
   }
-  const p = xs.length;
-  if (p < 3) return null;
-  const dx = xmax - xmin || 1;
-  const dy = ymax - ymin || 1;
+  const xs = [...xSet].sort((a, b) => a - b);
+  const ys = [...ySet].sort((a, b) => a - b);
+  const nx = xs.length;
+  const ny = ys.length;
+  if (nx < 2 || ny < 2) return null;
 
-  const cells: (number[] | undefined)[] = new Array(n * n);
-  for (let k = 0; k < p; k++) {
-    let gi = Math.round(((xs[k] - xmin) / dx) * (n - 1));
-    let gj = Math.round(((ys[k] - ymin) / dy) * (n - 1));
-    if (gi < 0) gi = 0; else if (gi > n - 1) gi = n - 1;
-    if (gj < 0) gj = 0; else if (gj > n - 1) gj = n - 1;
-    (cells[gj * n + gi] ??= []).push(zs[k]);
+  const xIndex = new Map(xs.map((x, i) => [x, i]));
+  const yIndex = new Map(ys.map((y, i) => [y, i]));
+  const cells: (number[] | undefined)[] = new Array(nx * ny);
+  for (const observation of observations) {
+    const i = xIndex.get(observation.x);
+    const j = yIndex.get(observation.y);
+    if (i === undefined || j === undefined) continue;
+    (cells[j * nx + i] ??= []).push(observation.z);
   }
 
-  const zg = new Float64Array(n * n);
-  const filled = new Uint8Array(n * n);
-  const occ: { gi: number; gj: number; v: number }[] = [];
-  for (let idx = 0; idx < n * n; idx++) {
-    const arr = cells[idx];
-    if (!arr || arr.length === 0) continue;
-    let v: number;
-    if (stat === "median") {
-      arr.sort((a, b) => a - b);
-      const m = arr.length;
-      v = m % 2 ? arr[(m - 1) / 2] : (arr[m / 2 - 1] + arr[m / 2]) / 2;
-    } else {
-      let s = 0;
-      for (const z of arr) s += z;
-      v = s / arr.length;
-    }
-    zg[idx] = v;
-    filled[idx] = 1;
-    occ.push({ gi: idx % n, gj: Math.floor(idx / n), v });
+  let values = new Float64Array(nx * ny);
+  values.fill(NaN);
+  for (let idx = 0; idx < cells.length; idx++) {
+    const cell = cells[idx];
+    if (cell?.length) values[idx] = aggZ(cell, stat);
   }
-  if (occ.length === 0) return null;
 
-  for (let gj = 0; gj < n; gj++) {
-    for (let gi = 0; gi < n; gi++) {
-      const idx = gj * n + gi;
-      if (filled[idx]) continue;
-      let num = 0, den = 0, exact = NaN;
-      for (const o of occ) {
-        const ddx = (gi - o.gi) / (n - 1);
-        const ddy = (gj - o.gj) / (n - 1);
-        const d2 = ddx * ddx + ddy * ddy;
-        if (d2 < 1e-9) { exact = o.v; break; }
-        const wgt = 1 / (d2 * d2);
-        num += wgt * o.v;
-        den += wgt;
+  let hasCompleteQuad = false;
+  for (let j = 0; j < ny - 1 && !hasCompleteQuad; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      if (
+        Number.isFinite(values[j * nx + i])
+        && Number.isFinite(values[j * nx + i + 1])
+        && Number.isFinite(values[(j + 1) * nx + i])
+        && Number.isFinite(values[(j + 1) * nx + i + 1])
+      ) {
+        hasCompleteQuad = true;
+        break;
       }
-      zg[idx] = Number.isFinite(exact) ? exact : den > 0 ? num / den : 0;
+    }
+  }
+  if (!hasCompleteQuad) return null;
+
+  const blend = Math.max(0, Math.min(1, smoothness));
+  if (blend > 0) {
+    const neighbors = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
+    for (let pass = 0; pass < 4; pass++) {
+      const next = new Float64Array(values.length);
+      next.fill(NaN);
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const idx = j * nx + i;
+          const current = values[idx];
+          if (!Number.isFinite(current)) continue;
+          let sum = 0;
+          let count = 0;
+          for (const [di, dj] of neighbors) {
+            const ni = i + di;
+            const nj = j + dj;
+            if (ni < 0 || ni >= nx || nj < 0 || nj >= ny) continue;
+            const neighbor = values[nj * nx + ni];
+            if (!Number.isFinite(neighbor)) continue;
+            sum += neighbor;
+            count++;
+          }
+          next[idx] = count > 0 ? current * (1 - blend) + (sum / count) * blend : current;
+        }
+      }
+      values = next;
     }
   }
 
   const verts: number[][] = [];
   let zmin = Infinity, zmax = -Infinity;
-  for (let gj = 0; gj < n; gj++) {
-    const yv = ymin + (dy * gj) / (n - 1);
-    for (let gi = 0; gi < n; gi++) {
-      const xv = xmin + (dx * gi) / (n - 1);
-      const zv = zg[gj * n + gi];
-      verts.push([xv, yv, zv]);
-      if (zv < zmin) zmin = zv;
-      if (zv > zmax) zmax = zv;
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const z = values[j * nx + i];
+      verts.push([xs[i], ys[j], z]);
+      if (Number.isFinite(z)) {
+        if (z < zmin) zmin = z;
+        if (z > zmax) zmax = z;
+      }
     }
   }
-  return { verts, zmin, zmax };
+  return { verts, dataShape: [ny, nx], zmin, zmax };
 }
 
 /** 抽取 3D 散点 [x,y,z]（Z 缺省时 z=0）。 */
@@ -223,6 +234,7 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   const surfaceEl = els.find((e) => e.kind === "surface" && e.enabled !== false);
   const pointsEl = els.find((e) => e.kind === "scatter3d" && e.enabled !== false);
   const stat: SurfaceStat = surfaceEl?.options?.stat === "median" ? "median" : "mean";
+  const surfaceSmoothness = Number(surfaceEl?.options?.smoothness ?? 0);
 
   if (!surfaceEl && !pointsEl) {
     return { option: null, hint: { key: "graph.threeD.addSurface", def: "Add a Surface or Scatter layer to render in 3D." } };
@@ -267,12 +279,13 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   const addLayers = (gdata: GraphData, name: string, color: string) => {
     const indices: number[] = [];
     if (surfaceEl && xf && yf && zf) {
-      const s = buildSurfaceData(gdata, xf.name, yf.name, zf.name, GRID_N, stat);
+      const s = buildSurfaceData(gdata, xf.name, yf.name, zf.name, stat, surfaceSmoothness);
       if (s) {
         series.push({
           type: "surface",
           name,
           data: s.verts,
+          dataShape: s.dataShape,
           // hasZ: 用 color 着色，由该组 visualMap 按顶点 Z 取深浅色调（若
           // Z 无有效范围，后面会回退为 lambert）；无 Z 时直接纯色。
           shading: hasZ ? "color" : "lambert",

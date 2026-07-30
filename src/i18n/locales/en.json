@@ -466,6 +466,7 @@
       "box": { "outlier": "Outlier", "quantile": "Quantile", "normal": "Normal", "notched": "Notched" },
       "histStyle": "Histogram Style",
       "smoothness": "Smoothness",
+      "surfaceSmoothness": "Smoothness",
       "histHeight": "Histogram Height",
       "showCounts": "Show Counts",
       "showPercents": "Show Percents",

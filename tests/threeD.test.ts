@@ -60,4 +60,45 @@ const intervalSeries = series.filter((item) => item.type === "line3D");
 assert.equal(intervalSeries.length, 1);
 assert.deepEqual(intervalSeries[0].data, [[1, 2, 10], [1, 2, 14]]);
 
-console.log("threeD summary interval regression passed");
+const surfaceData: GraphData = {
+  columns: ["x", "y", "z"],
+  rows: [
+    [0, 0, 0], [1, 0, 0], [2, 0, 0],
+    [0, 1, 0], [1, 1, 80], [1, 1, 120], [2, 1, 0],
+    [0, 2, 0], [1, 2, 0],
+  ],
+};
+
+const buildSurface = (smoothness?: number) => build3DOption({
+  encoding: spec.encoding,
+  elements: [{
+    kind: "surface",
+    options: {
+      stat: "mean",
+      ...(smoothness === undefined ? {} : { smoothness }),
+    },
+  }],
+}, surfaceData, theme);
+
+const rawSurface = buildSurface();
+assert.ok(rawSurface.option);
+const rawSeries = (rawSurface.option.series as Array<Record<string, unknown>>)
+  .find((item) => item.type === "surface");
+assert.ok(rawSeries);
+assert.deepEqual(rawSeries.dataShape, [3, 3]);
+
+const rawVertices = rawSeries.data as number[][];
+assert.equal(rawVertices.length, 9);
+assert.equal(rawVertices[4][2], 100);
+assert.equal(Number.isNaN(rawVertices[8][2]), true);
+
+const smoothSurface = buildSurface(0.5);
+assert.ok(smoothSurface.option);
+const smoothSeries = (smoothSurface.option.series as Array<Record<string, unknown>>)
+  .find((item) => item.type === "surface");
+assert.ok(smoothSeries);
+const smoothVertices = smoothSeries.data as number[][];
+assert.ok(smoothVertices[4][2] < 100);
+assert.equal(Number.isNaN(smoothVertices[8][2]), true);
+
+console.log("threeD regressions passed");
