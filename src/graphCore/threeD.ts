@@ -319,7 +319,7 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
           c.zs.push(z);
         }
         const pts: number[][] = [];
-        const errSegs: { coords: number[][] }[] = [];
+        const errSegs: number[][][] = [];
         for (const c of cells.values()) {
           const az = aggZ(c.zs, summaryStat);
           pts.push([c.x, c.y, az]);
@@ -328,7 +328,7 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
           if (errInterval !== "none") {
             const e = errMagnitude(c.zs, errInterval);
             if (e > 0) {
-              errSegs.push({ coords: [[c.x, c.y, az - e], [c.x, c.y, az + e]] });
+              errSegs.push([[c.x, c.y, az - e], [c.x, c.y, az + e]]);
               if (az - e < pmin) pmin = az - e;
               if (az + e > pmax) pmax = az + e;
             }
@@ -336,18 +336,17 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
         }
         if (pts.length) {
           // 误差指示（先画，位于点之下）：沿 Z 的多段线；band = 粗且半透明。
-          if (errSegs.length) {
+          for (let i = 0; i < errSegs.length; i++) {
             series.push({
-              type: "lines3D",
+              type: "line3D",
               coordinateSystem: "cartesian3D",
-              name: `${name}__err`,
-              data: errSegs,
+              name: `${name}__err_${i}`,
+              data: errSegs[i],
               lineStyle: {
                 color,
                 width: intStyle === "band" ? 8 : 2,
                 opacity: intStyle === "band" ? 0.28 : 0.9,
               },
-              effect: { show: false },
               silent: true,
             });
           }
