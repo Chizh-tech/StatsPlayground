@@ -9,6 +9,7 @@
 import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineX, RefLineStyle, BandRefLine, YAxisConfig, GridLineStyle, AutoSpec } from "./types";
 import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
+import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand";
 import i18n from "@/i18n";
 
 type EChartsOption = Record<string, unknown>;
@@ -931,47 +932,6 @@ function formatEquation(coefs: number[]): string {
     s += sign + term;
   }
   return s;
-}
-
-/** Render a filled band between two same-x line series via ECharts'
- *  stack-and-area trick: a transparent baseline series plus a stacked
- *  "delta" series whose areaStyle fills the gap. Shared by the fitline
- *  Fit / Prediction confidence bands. */
-function buildBandSeries(
-  lower: [number, number][],
-  upper: [number, number][],
-  color: string,
-  opacity: number,
-  idPrefix: string,
-): any[] {
-  if (lower.length === 0 || lower.length !== upper.length) return [];
-  return [
-    {
-      id: `${idPrefix}__lo`,
-      type: "line",
-      stack: `band-${idPrefix}`,
-      data: lower,
-      lineStyle: { opacity: 0 },
-      symbol: "none",
-      animation: false,
-      silent: true,
-      z: 2,
-      legendHoverLink: false,
-    },
-    {
-      id: `${idPrefix}__hi`,
-      type: "line",
-      stack: `band-${idPrefix}`,
-      data: upper.map((u, i) => [u[0], u[1] - lower[i][1]]),
-      lineStyle: { opacity: 0 },
-      symbol: "none",
-      areaStyle: { color, opacity },
-      animation: false,
-      silent: true,
-      z: 2,
-      legendHoverLink: false,
-    },
-  ];
 }
 
 /** Auto-tick density tuning constants. Both are deliberately "round"
@@ -2651,6 +2611,20 @@ function transposeSeriesData(s: any): any {
       }
       return row;
     });
+    out.id = `${s.id}__t`;
+  }
+  if (
+    seriesType === "custom" &&
+    typeof s.id === "string" &&
+    s.id.startsWith(FIT_BAND_ID_PREFIX) &&
+    !s.id.endsWith("__t") &&
+    Array.isArray(s.data)
+  ) {
+    out.data = s.data.map((row: any) =>
+      Array.isArray(row) && row.length >= 2
+        ? [row[1], row[0], ...row.slice(2)]
+        : row,
+    );
     out.id = `${s.id}__t`;
   }
   if (s.markLine && Array.isArray(s.markLine.data)) {
