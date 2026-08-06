@@ -109,9 +109,53 @@ assert.equal((rawSeries as any).shading, "lambert");
 assert.equal((smoothSeries as any).shading, "lambert");
 const rawLight = (rawSurface.option as any).grid3D.light as any;
 const smoothLight = (smoothSurface.option as any).grid3D.light as any;
-assert.equal(rawLight.main.intensity, 1.2);
-assert.equal(rawLight.ambient.intensity, 0.3);
-assert.equal(smoothLight.main.intensity, 0.3);
-assert.equal(smoothLight.ambient.intensity, 0.9);
+const EPS = 1e-12;
+assert.ok(Math.abs(rawLight.main.intensity - 1.2) < EPS);
+assert.ok(Math.abs(rawLight.ambient.intensity - 0.3) < EPS);
+assert.ok(Math.abs(smoothLight.main.intensity - 0.3) < EPS);
+assert.ok(Math.abs(smoothLight.ambient.intensity - 0.9) < EPS);
+
+// New: visualMap configuration must remain for emitted Lambert Surface.
+// It should be an array of continuous visualMaps with dimension 2, include
+// the surface series index, and preserve the color gradient array.
+const vmap = (smoothSurface.option as any).visualMap as any[] | undefined;
+assert.ok(Array.isArray(vmap));
+const firstVM = vmap[0];
+assert.equal(firstVM.type, "continuous");
+assert.equal(firstVM.dimension, 2);
+// seriesIndex may be an array — ensure it contains the surface series index.
+const vmSeriesIndex = firstVM.seriesIndex as number[] | number;
+const surfaceIndex = (smoothSurface.option as any).series.findIndex((s: any) => s.type === "surface");
+assert.ok(Array.isArray(vmSeriesIndex) ? vmSeriesIndex.includes(surfaceIndex) : vmSeriesIndex === surfaceIndex);
+// Color gradient retained — compare shape and approximate colors via toString
+assert.ok(Array.isArray(firstVM.inRange?.color) && firstVM.inRange.color.length === 3);
+
+// Scatter-only scene keeps main/ambient defaults 1.2/0.3
+const scatterOnly = build3DOption({ encoding: spec.encoding, elements: [spec.elements[0]] }, data, theme);
+assert.ok(scatterOnly.option);
+const scatterLight = (scatterOnly.option as any).grid3D.light as any;
+assert.ok(Math.abs(scatterLight.main.intensity - 1.2) < EPS);
+assert.ok(Math.abs(scatterLight.ambient.intensity - 0.3) < EPS);
+
+// Smoothness normalization: below 0 -> 0, above 1 -> 1, non-finite -> 0
+const below = buildSurface(-0.5);
+const above = buildSurface(2);
+const nan = buildSurface(Number.NaN);
+const inf = buildSurface(Infinity);
+const belowLight = (below.option as any).grid3D.light as any;
+const aboveLight = (above.option as any).grid3D.light as any;
+const nanLight = (nan.option as any).grid3D.light as any;
+const infLight = (inf.option as any).grid3D.light as any;
+// below equals s=0
+assert.ok(Math.abs(belowLight.main.intensity - rawLight.main.intensity) < EPS);
+assert.ok(Math.abs(belowLight.ambient.intensity - rawLight.ambient.intensity) < EPS);
+// above equals s=1
+assert.ok(Math.abs(aboveLight.main.intensity - smoothLight.main.intensity) < EPS);
+assert.ok(Math.abs(aboveLight.ambient.intensity - smoothLight.ambient.intensity) < EPS);
+// non-finite -> treated as 0
+assert.ok(Math.abs(nanLight.main.intensity - rawLight.main.intensity) < EPS);
+assert.ok(Math.abs(nanLight.ambient.intensity - rawLight.ambient.intensity) < EPS);
+assert.ok(Math.abs(infLight.main.intensity - rawLight.main.intensity) < EPS);
+assert.ok(Math.abs(infLight.ambient.intensity - rawLight.ambient.intensity) < EPS);
 
 console.log("threeD regressions passed");

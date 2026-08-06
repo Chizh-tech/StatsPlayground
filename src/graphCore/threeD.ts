@@ -391,8 +391,8 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   const useDepth = hasZ && rmax > rmin;
 
   const visualSmoothness = hasSurfaceSeries ? surfaceSmoothness : 0;
-  const mainIntensity = Number((1.2 - 0.9 * visualSmoothness).toFixed(12));
-  const ambientIntensity = Number((0.3 + 0.6 * visualSmoothness).toFixed(12));
+  const mainIntensity = 1.2 - 0.9 * visualSmoothness;
+  const ambientIntensity = 0.3 + 0.6 * visualSmoothness;
 
   const axisCommon = {
     nameTextStyle: { color: theme.fgSecondary },
