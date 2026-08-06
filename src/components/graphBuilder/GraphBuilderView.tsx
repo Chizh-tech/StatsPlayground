@@ -1395,13 +1395,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 defaultValue: "Pan mode: drag axes to scroll/zoom the chart.",
               })}
             >
-              {/* Open-hand / grab icon */}
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M8 11V5.5a1.5 1.5 0 1 1 3 0V11" />
-                <path d="M11 10V4.5a1.5 1.5 0 1 1 3 0V11" />
-                <path d="M14 10.5V6a1.5 1.5 0 1 1 3 0v8" />
-                <path d="M17 10.5a1.5 1.5 0 1 1 3 0V15a6 6 0 0 1-6 6h-1.5a5 5 0 0 1-4-2L5 14.5a1.6 1.6 0 0 1 2.5-2L9 14" />
-              </svg>
+              <i className="fa-regular fa-hand" aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -1413,10 +1407,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 defaultValue: "Select mode: drag on the chart to rubber-band-select points (highlights matching cells in the linked table).",
               })}
             >
-              {/* Mouse arrow / pointer icon */}
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                <path d="M5 3.2 5 18.1c0 .8 1 1.2 1.6.6l3.3-3.3 2.2 4.7c.3.5.9.8 1.4.5l1.7-.8c.5-.3.8-.9.5-1.4l-2.2-4.7 4.6-.4c.8-.1 1.1-1.1.5-1.6L6.5 2.7c-.6-.5-1.5-.1-1.5.5Z" />
-              </svg>
+              <i className="fa-solid fa-arrow-pointer" aria-hidden="true" />
             </button>
           </div>
           {/* 2D / 3D segmented toggle — styled like the cursor-mode pill. */}

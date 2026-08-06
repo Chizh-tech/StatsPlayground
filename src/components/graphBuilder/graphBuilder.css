@@ -1868,6 +1868,12 @@
   color: var(--fg-primary);
 }
 
+.gb-cursor-mode-opt > i {
+  width: 14px;
+  font-size: 14px;
+  text-align: center;
+}
+
 .gb-cursor-mode-opt:focus-visible {
   outline: 2px solid var(--fg-accent);
   outline-offset: 1px;
