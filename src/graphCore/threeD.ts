@@ -76,7 +76,7 @@ function errMagnitude(zs: number[], kind: string): number {
   return se;
 }
 
-/** 按原始 X/Y 网格聚合，并可对有限 Z 做保留空洞的邻域平滑。 */
+/** 按原始 X/Y 网格聚合，保留缺失位置为空洞（NaN）；不对 Z 值做邻域平滑。 */
 function buildSurfaceData(
   data: GraphData,
   xName: string,
