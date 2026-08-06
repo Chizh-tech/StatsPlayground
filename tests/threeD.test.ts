@@ -92,13 +92,26 @@ assert.equal(rawVertices.length, 9);
 assert.equal(rawVertices[4][2], 100);
 assert.equal(Number.isNaN(rawVertices[8][2]), true);
 
-const smoothSurface = buildSurface(0.5);
+// Previously smoothing modified geometry; now smoothing is visual-only.
+const smoothSurface = buildSurface(1);
 assert.ok(smoothSurface.option);
 const smoothSeries = (smoothSurface.option.series as Array<Record<string, unknown>>)
   .find((item) => item.type === "surface");
 assert.ok(smoothSeries);
 const smoothVertices = smoothSeries.data as number[][];
-assert.ok(smoothVertices[4][2] < 100);
+// Geometry must be identical, hole preserved.
+assert.deepEqual(rawVertices, smoothVertices);
 assert.equal(Number.isNaN(smoothVertices[8][2]), true);
+
+// Both surface series use Lambert shading and grid3D light intensities map to
+// visual smoothness: s=0 -> (1.2,0.3), s=1 -> (0.3,0.9).
+assert.equal((rawSeries as any).shading, "lambert");
+assert.equal((smoothSeries as any).shading, "lambert");
+const rawLight = (rawSurface.option as any).grid3D.light as any;
+const smoothLight = (smoothSurface.option as any).grid3D.light as any;
+assert.equal(rawLight.main.intensity, 1.2);
+assert.equal(rawLight.ambient.intensity, 0.3);
+assert.equal(smoothLight.main.intensity, 0.3);
+assert.equal(smoothLight.ambient.intensity, 0.9);
 
 console.log("threeD regressions passed");

@@ -83,7 +83,6 @@ function buildSurfaceData(
   yName: string,
   zName: string,
   stat: SurfaceStat,
-  smoothness: number,
 ): { verts: number[][]; dataShape: [number, number]; zmin: number; zmax: number } | null {
   const { xi, yi, zi } = colIndices(data, xName, yName, zName);
   if (xi < 0 || yi < 0 || zi < 0) return null;
@@ -140,34 +139,8 @@ function buildSurfaceData(
   }
   if (!hasCompleteQuad) return null;
 
-  const blend = Math.max(0, Math.min(1, smoothness));
-  if (blend > 0) {
-    const neighbors = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
-    for (let pass = 0; pass < 4; pass++) {
-      const next = new Float64Array(values.length);
-      next.fill(NaN);
-      for (let j = 0; j < ny; j++) {
-        for (let i = 0; i < nx; i++) {
-          const idx = j * nx + i;
-          const current = values[idx];
-          if (!Number.isFinite(current)) continue;
-          let sum = 0;
-          let count = 0;
-          for (const [di, dj] of neighbors) {
-            const ni = i + di;
-            const nj = j + dj;
-            if (ni < 0 || ni >= nx || nj < 0 || nj >= ny) continue;
-            const neighbor = values[nj * nx + ni];
-            if (!Number.isFinite(neighbor)) continue;
-            sum += neighbor;
-            count++;
-          }
-          next[idx] = count > 0 ? current * (1 - blend) + (sum / count) * blend : current;
-        }
-      }
-      values = next;
-    }
-  }
+  // NOTE: visual smoothing is applied via lighting only. Preserve raw
+  // aggregated values here and emit them unchanged.
 
   const verts: number[][] = [];
   let zmin = Infinity, zmax = -Infinity;
@@ -234,7 +207,10 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   const surfaceEl = els.find((e) => e.kind === "surface" && e.enabled !== false);
   const pointsEl = els.find((e) => e.kind === "scatter3d" && e.enabled !== false);
   const stat: SurfaceStat = surfaceEl?.options?.stat === "median" ? "median" : "mean";
-  const surfaceSmoothness = Number(surfaceEl?.options?.smoothness ?? 0);
+  const rawSurfaceSmoothness = Number(surfaceEl?.options?.smoothness ?? 0);
+  const surfaceSmoothness = Number.isFinite(rawSurfaceSmoothness)
+    ? Math.max(0, Math.min(1, rawSurfaceSmoothness))
+    : 0;
 
   if (!surfaceEl && !pointsEl) {
     return { option: null, hint: { key: "graph.threeD.addSurface", def: "Add a Surface or Scatter layer to render in 3D." } };
@@ -260,7 +236,7 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   // 记录每组占用的 series 下标 + 名称 + 主题色，之后为每组建一个作
   // 用于这些 series 的 visualMap（右上角渐变条），并着色其曲面/散点。
   const groupSeries: { name: string; color: string; indices: number[] }[] = [];
-  const surfIndices: number[] = [];
+  let hasSurfaceSeries = false;
 
   // 渐变标尺范围。对 surface plot 用「实际曲面（插值网格）」的
   // 最高/最低（比原始数据范围更紧凑，对比度更高）；无曲面
@@ -279,20 +255,19 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   const addLayers = (gdata: GraphData, name: string, color: string) => {
     const indices: number[] = [];
     if (surfaceEl && xf && yf && zf) {
-      const s = buildSurfaceData(gdata, xf.name, yf.name, zf.name, stat, surfaceSmoothness);
+      const s = buildSurfaceData(gdata, xf.name, yf.name, zf.name, stat);
       if (s) {
         series.push({
           type: "surface",
           name,
           data: s.verts,
           dataShape: s.dataShape,
-          // hasZ: 用 color 着色，由该组 visualMap 按顶点 Z 取深浅色调（若
-          // Z 无有效范围，后面会回退为 lambert）；无 Z 时直接纯色。
-          shading: hasZ ? "color" : "lambert",
+          // Surface uses Lambert shading; visual smoothing is done via lighting.
+          shading: "lambert",
           itemStyle: { color },
           wireframe: { show: false },
         });
-        surfIndices.push(series.length - 1);
+        hasSurfaceSeries = true;
         indices.push(series.length - 1);
         if (s.zmin < smin) smin = s.zmin;
         if (s.zmax > smax) smax = s.zmax;
@@ -415,6 +390,10 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   const rmax = hasSurfRange ? smax : pmax;
   const useDepth = hasZ && rmax > rmin;
 
+  const visualSmoothness = hasSurfaceSeries ? surfaceSmoothness : 0;
+  const mainIntensity = Number((1.2 - 0.9 * visualSmoothness).toFixed(12));
+  const ambientIntensity = Number((0.3 + 0.6 * visualSmoothness).toFixed(12));
+
   const axisCommon = {
     nameTextStyle: { color: theme.fgSecondary },
     axisLine: { lineStyle: { color: theme.axisLine } },
@@ -435,8 +414,8 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       axisPointer: { lineStyle: { color: theme.fgDim } },
       viewControl: { autoRotate: false, rotateSensitivity: 1, zoomSensitivity: 1 },
       light: {
-        main: { intensity: 1.2, shadow: false, alpha: 40, beta: 40 },
-        ambient: { intensity: 0.3 },
+        main: { intensity: mainIntensity, shadow: false, alpha: 40, beta: 40 },
+        ambient: { intensity: ambientIntensity },
       },
     },
     series,
@@ -501,9 +480,6 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       }));
       option.graphic = { elements };
     }
-  } else {
-    // Z 无有效范围：把 color 着色的曲面回退为 lambert 纯色。
-    for (const i of surfIndices) (series[i] as Record<string, unknown>).shading = "lambert";
   }
 
   return { option };
