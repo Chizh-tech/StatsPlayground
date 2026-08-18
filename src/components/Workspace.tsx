@@ -20,9 +20,12 @@ import { SqlQueryDialog } from "./SqlQueryDialog";
 import { HelpDialog } from "./HelpDialog";
 import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
 import { GraphBuilderView } from "./graphBuilder";
+import { TabulateView } from "./tabulate";
 import "./graphBuilder/graphBuilder.css";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
+import { useTabulateStore } from "@/stores/useTabulateStore";
 import type { GraphBuilderItem } from "@/types/graphBuilder";
+import type { TabulateItem } from "@/types/tabulate";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { modKey } from "@/utils/platform";
@@ -142,6 +145,7 @@ export function Workspace() {
   const { openProject } = useProjectStore();
   const { record: recordHistory, createSnapshot, restoreSnapshot, deleteSnapshot, reset: resetHistory } = useHistoryStore();
   const graphBuilders = useGraphBuilderStore((s) => s.items);
+  const tabulates = useTabulateStore((s) => s.items);
   const addGraphBuilder = useGraphBuilderStore((s) => s.addItem);
   const renameGraphBuilder = useGraphBuilderStore((s) => s.renameItem);
   const deleteGraphBuilder = useGraphBuilderStore((s) => s.deleteItem);
@@ -150,9 +154,15 @@ export function Workspace() {
   const loadGraphBuildersFromProject = useGraphBuilderStore((s) => s.loadFromProject);
   const gbCounter = useGraphBuilderStore((s) => s.counter);
   const bumpGbCounter = useGraphBuilderStore((s) => s.bumpCounter);
+  const addTabulate = useTabulateStore((s) => s.addItem);
+  const renameTabulate = useTabulateStore((s) => s.renameItem);
+  const deleteTabulate = useTabulateStore((s) => s.deleteItem);
+  const resetTabulates = useTabulateStore((s) => s.reset);
+  const loadTabulatesFromProject = useTabulateStore((s) => s.loadFromProject);
   const [activeTab, setActiveTab] = useState<"files" | "history">("files");
   /** 当前选中项的类型与 ID。代替原有的 viewMode 机制。 */
   const [activeGraphBuilderId, setActiveGraphBuilderId] = useState<string | null>(null);
+  const [activeTabulateId, setActiveTabulateId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [showPrefs, setShowPrefs] = useState(false);
@@ -166,6 +176,7 @@ export function Workspace() {
   const folders = useFolderStore((s) => s.folders);
   const tableFolders = useFolderStore((s) => s.tableFolders);
   const graphFolders = useFolderStore((s) => s.graphFolders);
+  const tabulateFolders = useFolderStore((s) => s.tabulateFolders);
   const collapsedFolders = useFolderStore((s) => s.collapsed);
   const fsCreateFolder = useFolderStore((s) => s.createFolder);
   const fsRenameFolder = useFolderStore((s) => s.renameFolder);
@@ -173,6 +184,7 @@ export function Workspace() {
   const fsMoveFolder = useFolderStore((s) => s.moveFolder);
   const fsSetTableFolder = useFolderStore((s) => s.setTableFolder);
   const fsSetGraphFolder = useFolderStore((s) => s.setGraphFolder);
+  const fsSetTabulateFolder = useFolderStore((s) => s.setTabulateFolder);
   const fsToggleCollapsed = useFolderStore((s) => s.toggleCollapsed);
   const fsCollapseAll = useFolderStore((s) => s.collapseAll);
   const fsLoadFromProject = useFolderStore((s) => s.loadFromProject);
@@ -192,6 +204,7 @@ export function Workspace() {
   type CtxMenu =
     | { kind: "table"; id: string; x: number; y: number }
     | { kind: "graph"; id: string; x: number; y: number }
+    | { kind: "tabulate"; id: string; x: number; y: number }
     | { kind: "folder"; path: string; x: number; y: number }
     | { kind: "empty"; x: number; y: number };
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
@@ -273,8 +286,9 @@ export function Workspace() {
   useEffect(() => {
     const dsIds = new Set(datasets.map((d) => d.id));
     const gbIds = new Set(graphBuilders.map((g) => g.id));
-    fsPrune(dsIds, gbIds);
-  }, [datasets, graphBuilders, fsPrune]);
+    const tabulateIds = new Set(tabulates.map((item) => item.id));
+    fsPrune(dsIds, gbIds, tabulateIds);
+  }, [datasets, graphBuilders, tabulates, fsPrune]);
 
   // Cmd/Ctrl+,: open preferences
   useEffect(() => {
@@ -330,6 +344,7 @@ export function Workspace() {
     await refreshDatasets();
     markDirty();
     setActiveGraphBuilderId(null);
+    setActiveTabulateId(null);
     setActiveDataset(meta.id);
     recordAction(t("history.newTable", { name }));
     // Enter rename mode
@@ -376,10 +391,39 @@ export function Workspace() {
     addGraphBuilder(item);
     setActiveDataset(null);
     setActiveGraphBuilderId(id);
+    setActiveTabulateId(null);
     markDirty();
     recordAction(t("history.newGraph", { name, source: ds.name }));
     setRenamingId(id);
     setRenameValue(name);
+  };
+
+  const handleCreateTabulate = () => {
+    if (!activeDatasetId) {
+      return;
+    }
+    const ds = datasets.find((d) => d.id === activeDatasetId);
+    if (!ds) return;
+    const id = crypto.randomUUID();
+    const item: TabulateItem = {
+      id,
+      name: useTabulateStore.getState().nextName(),
+      sourceDatasetId: activeDatasetId,
+      rowFields: [],
+      columnFields: [],
+      statistics: [],
+      includeRowTotals: true,
+      includeColumnTotals: true,
+      createdAt: new Date().toISOString(),
+    };
+    addTabulate(item);
+    setActiveDataset(null);
+    setActiveGraphBuilderId(null);
+    setActiveTabulateId(id);
+    markDirty();
+    recordAction(t("history.newTabulate", { name: item.name, source: ds.name }));
+    setRenamingId(id);
+    setRenameValue(item.name);
   };
 
   const handleRenameSubmit = async (id: string) => {
@@ -395,6 +439,16 @@ export function Workspace() {
         renameGraphBuilder(id, trimmed);
         markDirty();
         recordAction(t("history.renameGraph", { old: gb.name, new: trimmed }));
+      }
+      setRenamingId(null);
+      return;
+    }
+    const tabulate = useTabulateStore.getState().items.find((it) => it.id === id);
+    if (tabulate) {
+      if (trimmed !== tabulate.name) {
+        renameTabulate(id, trimmed);
+        markDirty();
+        recordAction(t("history.renameTabulate", { old: tabulate.name, new: trimmed }));
       }
       setRenamingId(null);
       return;
@@ -415,6 +469,14 @@ export function Workspace() {
     if (activeGraphBuilderId === id) setActiveGraphBuilderId(null);
     markDirty();
     if (it) recordAction(t("history.deleteGraph", { name: it.name }));
+  };
+
+  const handleDeleteTabulate = (id: string) => {
+    const item = useTabulateStore.getState().items.find((entry) => entry.id === id);
+    deleteTabulate(id);
+    if (activeTabulateId === id) setActiveTabulateId(null);
+    markDirty();
+    if (item) recordAction(t("history.deleteTabulate", { name: item.name }));
   };
 
   const handleDeleteDataset = async (id: string) => {
@@ -563,7 +625,10 @@ export function Workspace() {
       // Per issue #7 the .sptb file carries no folder info; the imported
       // table lands at the project root. The user can drag it into a
       // folder afterwards.
+      setActiveGraphBuilderId(null);
+      setActiveTabulateId(null);
       setActiveDataset(result.id);
+      markDirty();
     } catch (e) {
       alert(t("alert.importTableFailed") + String(e));
     } finally {
@@ -607,7 +672,10 @@ export function Workspace() {
         id = `gb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       }
       addGraphBuilder({ ...item, id });
+      setActiveDataset(null);
+      setActiveTabulateId(null);
       setActiveGraphBuilderId(id);
+      markDirty();
     } catch (e) {
       alert(t("alert.importGraphFailed") + String(e));
     }
@@ -625,6 +693,7 @@ export function Workspace() {
       folders,
       tableFolders,
       graphFolders,
+      tabulateFolders,
     };
     if (!project?.filePath) {
       const filePath = await save({
@@ -633,9 +702,9 @@ export function Workspace() {
         filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
       });
       if (!filePath) return; // User cancelled
-      await saveProject(filePath, [], snapshots, gbItems, folderPayload);
+      await saveProject(filePath, [], snapshots, gbItems, folderPayload, tabulates);
     } else {
-      await saveProject(undefined, [], snapshots, gbItems, folderPayload);
+      await saveProject(undefined, [], snapshots, gbItems, folderPayload, tabulates);
     }
     showToast(t("common.saved"), 1500);
   };
@@ -655,8 +724,10 @@ export function Workspace() {
   const handleCloseProject = async () => {
     setActiveDataset(null);
     setActiveGraphBuilderId(null);
+    setActiveTabulateId(null);
     resetHistory();
     resetGraphBuilders();
+    resetTabulates();
     fsReset();
     await initProject();
     await refreshDatasets();
@@ -670,6 +741,12 @@ export function Workspace() {
       multiple: false,
     });
     if (selected) {
+      setActiveDataset(null);
+      setActiveGraphBuilderId(null);
+      setActiveTabulateId(null);
+      resetHistory();
+      resetGraphBuilders();
+      resetTabulates();
       setBusyMessage(t("workspace.openingProject"));
       const unlisten = await listen<{
         datasetIndex: number;
@@ -685,8 +762,10 @@ export function Workspace() {
         const result = await openProject(selected as string);
         setActiveDataset(null);
         setActiveGraphBuilderId(null);
+        setActiveTabulateId(null);
         resetHistory();
         resetGraphBuilders();
+        resetTabulates();
         await refreshDatasets();
         tableCounter.current = 0;
         // Restore snapshots from project file (history is session-only)
@@ -701,6 +780,7 @@ export function Workspace() {
         if (result.graphBuilders && result.graphBuilders.length > 0) {
           loadGraphBuildersFromProject(result.graphBuilders as GraphBuilderItem[]);
         }
+        loadTabulatesFromProject((result.tabulates ?? []) as TabulateItem[]);
         // Restore folder tree + table/graph→folder assignments. We do this
         // after datasets/graphs are loaded so a subsequent prune pass keeps
         // assignments in sync with currently-existing items.
@@ -708,6 +788,7 @@ export function Workspace() {
           folders: result.folders ?? [],
           tableFolders: result.tableFolders ?? {},
           graphFolders: result.graphFolders ?? {},
+          tabulateFolders: result.tabulateFolders ?? {},
         });
         if (result.datasetNameMigrations.length > 0) {
           showToast(
@@ -996,6 +1077,7 @@ export function Workspace() {
   type DragPayload =
     | { kind: "table"; id: string }
     | { kind: "graph"; id: string }
+    | { kind: "tabulate"; id: string }
     | { kind: "folder"; path: string };
 
   const handleDragStart = (e: React.DragEvent, payload: DragPayload) => {
@@ -1028,6 +1110,7 @@ export function Workspace() {
     if (!canDropOn(payload, target)) return;
     if (payload.kind === "table") fsSetTableFolder(payload.id, target);
     else if (payload.kind === "graph") fsSetGraphFolder(payload.id, target);
+    else if (payload.kind === "tabulate") fsSetTabulateFolder(payload.id, target);
     else if (payload.kind === "folder") fsMoveFolder(payload.path, target);
     markDirty();
   };
@@ -1048,8 +1131,8 @@ export function Workspace() {
   };
 
   // ---- Tree structure: group folders + items by parent --------------------
-  // Memoize on the (folders, tableFolders, graphFolders, datasets,
-  // graphBuilders) tuple so we only rebuild when something actually changed.
+  // Memoize on the (folders, tableFolders, graphFolders, tabulateFolders,
+  // datasets, graphBuilders, tabulates) tuple so we only rebuild when something actually changed.
   const tree = useMemo(() => {
     // Children per parent path. Root parent is the magic key `__root__`.
     const ROOT = "__root__";
@@ -1080,8 +1163,15 @@ export function Workspace() {
       arr.push(gb);
       graphsByParent.set(p, arr);
     }
-    return { ROOT, childFolders, tablesByParent, graphsByParent };
-  }, [folders, tableFolders, graphFolders, datasets, graphBuilders]);
+    const tabulatesByParent = new Map<string, TabulateItem[]>();
+    for (const item of tabulates) {
+      const p = tabulateFolders[item.id] ?? ROOT;
+      const arr = tabulatesByParent.get(p) ?? [];
+      arr.push(item);
+      tabulatesByParent.set(p, arr);
+    }
+    return { ROOT, childFolders, tablesByParent, graphsByParent, tabulatesByParent };
+  }, [folders, tableFolders, graphFolders, tabulateFolders, datasets, graphBuilders, tabulates]);
 
   /** Recursively render one folder level. */
   const renderFolderLevel = (parent: string | null, depth: number): React.ReactNode[] => {
@@ -1091,6 +1181,7 @@ export function Workspace() {
     const folderChildren = tree.childFolders.get(key) ?? [];
     const tableChildren = tree.tablesByParent.get(key) ?? [];
     const graphChildren = tree.graphsByParent.get(key) ?? [];
+    const tabulateChildren = tree.tabulatesByParent.get(key) ?? [];
     // Folders first, then tables, then graphs, matching the prior visual order
     // (tables-then-graphs at the root level).
     for (const fp of folderChildren) {
@@ -1162,6 +1253,7 @@ export function Workspace() {
           onDragStart={(e) => handleDragStart(e, { kind: "table", id: ds.id })}
           onClick={() => {
             setActiveGraphBuilderId(null);
+            setActiveTabulateId(null);
             setActiveDataset(ds.id);
           }}
           onDoubleClick={() => {
@@ -1207,6 +1299,7 @@ export function Workspace() {
           onDragStart={(e) => handleDragStart(e, { kind: "graph", id: gb.id })}
           onClick={() => {
             setActiveDataset(null);
+            setActiveTabulateId(null);
             setActiveGraphBuilderId(gb.id);
           }}
           onDoubleClick={() => {
@@ -1240,6 +1333,55 @@ export function Workspace() {
           )}
           <span className="ds-info gb-source-tag">
             {sourceDs ? sourceDs.name : t("workspace.datasourceMissing")}
+          </span>
+        </div>,
+      );
+    }
+    for (const item of tabulateChildren) {
+      const sourceDs = datasets.find((d) => d.id === item.sourceDatasetId);
+      out.push(
+        <div
+          key={`tabulate:${item.id}`}
+          className={`dataset-item ${activeTabulateId === item.id ? "active" : ""}`}
+          style={{ paddingLeft: 8 + depth * 12 + 12 }}
+          draggable
+          onDragStart={(e) => handleDragStart(e, { kind: "tabulate", id: item.id })}
+          onClick={() => {
+            setActiveDataset(null);
+            setActiveGraphBuilderId(null);
+            setActiveTabulateId(item.id);
+          }}
+          onDoubleClick={() => {
+            setRenamingId(item.id);
+            setRenameValue(item.name);
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setCtxMenu({ kind: "tabulate", id: item.id, x: e.clientX, y: e.clientY });
+          }}
+          title={sourceDs ? t("workspace.datasourceLabel", { name: sourceDs.name }) : t("workspace.tabulateSourceMissing")}
+        >
+          <i className="ds-icon fa-solid fa-table-cells-large" aria-hidden="true" />
+          {renamingId === item.id ? (
+            <input
+              ref={renameInputRef}
+              className="ds-rename-input"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={() => handleRenameSubmit(item.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRenameSubmit(item.id);
+                if (e.key === "Escape") setRenamingId(null);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              autoFocus
+            />
+          ) : (
+            <span className="ds-name">{item.name}</span>
+          )}
+          <span className="ds-info gb-source-tag">
+            {sourceDs ? sourceDs.name : t("workspace.tabulateSourceMissing")}
           </span>
         </div>,
       );
@@ -1282,6 +1424,14 @@ export function Workspace() {
               <div className="menu-sep" />
               <div className="menu-item" onClick={handleExportGraphSpgh}>{t("menu.exportSpgh")}</div>
               <div className="menu-item" onClick={handleImportGraphSpgh}>{t("menu.importSpgh")}</div>
+            </MenuDropdown>
+            <MenuDropdown label={t("menu.analyze")}>
+              <div
+                className={`menu-item${activeDatasetId ? "" : " menu-item-disabled"}`}
+                onClick={activeDatasetId ? handleCreateTabulate : undefined}
+              >
+                {t("menu.tabulate")}
+              </div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.help")}>
               <div className="menu-item" onClick={() => setHelpDialog("about")}>{t("menu.about")}</div>
@@ -1386,7 +1536,7 @@ export function Workspace() {
                   }
                 }}
               >
-                {datasets.length === 0 && graphBuilders.length === 0 && folders.length === 0 ? (
+                {datasets.length === 0 && graphBuilders.length === 0 && tabulates.length === 0 && folders.length === 0 ? (
                   <div className="empty-hint">{t("common.noContent")}</div>
                 ) : (
                   renderFolderLevel(null, 0)
@@ -1404,7 +1554,16 @@ export function Workspace() {
 
         {/* Right: Main Content */}
         <div className="main-area">
-          {activeGraphBuilderId ? (
+          {activeTabulateId ? (
+            (() => {
+              const item = tabulates.find((entry) => entry.id === activeTabulateId);
+              if (!item) {
+                return <div className="main-content"><div className="workspace-empty"><p>{t("workspace.tabulateMissing", { defaultValue: "Tabulate no longer exists" })}</p></div></div>;
+              }
+              const ds = datasets.find((d) => d.id === item.sourceDatasetId);
+              return <TabulateView item={item} dataset={ds} />;
+            })()
+          ) : activeGraphBuilderId ? (
             (() => {
               const item = graphBuilders.find((g) => g.id === activeGraphBuilderId);
               if (!item) return <div className="main-content"><div className="workspace-empty"><p>{t("workspace.graphMissing")}</p></div></div>;
@@ -1547,6 +1706,7 @@ export function Workspace() {
                   setRenamingId(id);
                   setRenameValue(ds.name);
                   setActiveGraphBuilderId(null);
+                  setActiveTabulateId(null);
                   setActiveDataset(id);
                   setCtxMenu(null);
                 }}>{t("common.rename")}</div>
@@ -1569,11 +1729,31 @@ export function Workspace() {
                   setRenamingId(id);
                   setRenameValue(gb.name);
                   setActiveDataset(null);
+                  setActiveTabulateId(null);
                   setActiveGraphBuilderId(id);
                   setCtxMenu(null);
                 }}>{t("common.rename")}</div>
                 <div className="sp-ctx-sep" />
                 <div className="sp-ctx-item sp-ctx-danger" onClick={() => { handleDeleteGraphBuilder(id); setCtxMenu(null); }}>{t("common.delete")}</div>
+              </>
+            );
+          })()}
+          {ctxMenu.kind === "tabulate" && (() => {
+            const id = ctxMenu.id;
+            const item = tabulates.find((entry) => entry.id === id);
+            if (!item) return null;
+            return (
+              <>
+                <div className="sp-ctx-item" onClick={() => {
+                  setRenamingId(id);
+                  setRenameValue(item.name);
+                  setActiveDataset(null);
+                  setActiveGraphBuilderId(null);
+                  setActiveTabulateId(id);
+                  setCtxMenu(null);
+                }}>{t("common.rename")}</div>
+                <div className="sp-ctx-sep" />
+                <div className="sp-ctx-item sp-ctx-danger" onClick={() => { handleDeleteTabulate(id); setCtxMenu(null); }}>{t("common.delete")}</div>
               </>
             );
           })()}

@@ -51,7 +51,10 @@ pub fn capture_project_snapshot(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<ProjectDataSnapshot, AppError> {
-    let db = state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Database(e.to_string()))?;
     let display = state
         .column_display
         .lock()
@@ -62,11 +65,14 @@ pub fn capture_project_snapshot(
     let mut datasets = Vec::new();
 
     for (ds_idx, ds) in dataset_metas.iter().enumerate() {
-        let _ = app.emit("snapshot-progress", serde_json::json!({
-            "datasetIndex": ds_idx,
-            "datasetTotal": total_datasets,
-            "datasetName": &ds.name,
-        }));
+        let _ = app.emit(
+            "snapshot-progress",
+            serde_json::json!({
+                "datasetIndex": ds_idx,
+                "datasetTotal": total_datasets,
+                "datasetName": &ds.name,
+            }),
+        );
         let table_name = format!("dataset_{}", ds.id.replace('-', "_"));
 
         // Get columns from metadata
@@ -90,13 +96,13 @@ pub fn capture_project_snapshot(
                     name: name.clone(),
                     col_type: col_type.clone(),
                     width: dp.and_then(|p| p.width),
-                    format: dp.and_then(|p| p.format.as_ref()).map(|f| {
-                        SnapshotColumnFormat {
+                    format: dp
+                        .and_then(|p| p.format.as_ref())
+                        .map(|f| SnapshotColumnFormat {
                             kind: f.kind.clone(),
                             decimals: f.decimals,
                             currency: f.currency.clone(),
-                        }
-                    }),
+                        }),
                     extras: dp.and_then(|p| p.extras.clone()),
                 }
             })
@@ -148,11 +154,14 @@ pub fn capture_project_snapshot(
         });
     }
 
-    let _ = app.emit("snapshot-progress", serde_json::json!({
-        "datasetIndex": total_datasets,
-        "datasetTotal": total_datasets,
-        "datasetName": "完成",
-    }));
+    let _ = app.emit(
+        "snapshot-progress",
+        serde_json::json!({
+            "datasetIndex": total_datasets,
+            "datasetTotal": total_datasets,
+            "datasetName": "完成",
+        }),
+    );
 
     Ok(ProjectDataSnapshot { datasets })
 }
@@ -175,11 +184,14 @@ pub fn restore_project_snapshot(
     let total_datasets = snapshot.datasets.len();
 
     for (ds_idx, ds) in snapshot.datasets.iter().enumerate() {
-        let _ = app.emit("restore-progress", serde_json::json!({
-            "datasetIndex": ds_idx,
-            "datasetTotal": total_datasets,
-            "datasetName": &ds.name,
-        }));
+        let _ = app.emit(
+            "restore-progress",
+            serde_json::json!({
+                "datasetIndex": ds_idx,
+                "datasetTotal": total_datasets,
+                "datasetName": &ds.name,
+            }),
+        );
 
         let col_names: Vec<String> = ds.columns.iter().map(|c| c.name.clone()).collect();
         let col_types: Vec<String> = ds.columns.iter().map(|c| c.col_type.clone()).collect();
@@ -194,22 +206,34 @@ pub fn restore_project_snapshot(
             let table_ident = format!("dataset_{}", ds.id.replace('-', "_"));
 
             for chunk in ds.rows.chunks(1000) {
-                let values_lists: Vec<String> = chunk.iter().map(|row| {
-                    let vals: Vec<String> = row.iter().map(|v| match v {
-                        serde_json::Value::Null => "NULL".to_string(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        _ => format!("'{}'", v.to_string().replace('\'', "''")),
-                    }).collect();
-                    format!("({})", vals.join(", "))
-                }).collect();
+                let values_lists: Vec<String> = chunk
+                    .iter()
+                    .map(|row| {
+                        let vals: Vec<String> = row
+                            .iter()
+                            .map(|v| match v {
+                                serde_json::Value::Null => "NULL".to_string(),
+                                serde_json::Value::Number(n) => n.to_string(),
+                                serde_json::Value::String(s) => {
+                                    format!("'{}'", s.replace('\'', "''"))
+                                }
+                                serde_json::Value::Bool(b) => b.to_string(),
+                                _ => format!("'{}'", v.to_string().replace('\'', "''")),
+                            })
+                            .collect();
+                        format!("({})", vals.join(", "))
+                    })
+                    .collect();
 
                 let raw_sql = format!(
                     "INSERT INTO \"{}\" ({}) VALUES {}",
-                    table_ident, col_list, values_lists.join(", ")
+                    table_ident,
+                    col_list,
+                    values_lists.join(", ")
                 );
-                db.conn().execute_batch(&raw_sql).map_err(|e| AppError::Database(e.to_string()))?;
+                db.conn()
+                    .execute_batch(&raw_sql)
+                    .map_err(|e| AppError::Database(e.to_string()))?;
             }
         }
 
@@ -234,13 +258,14 @@ pub fn restore_project_snapshot(
                 display_props.push(crate::models::table::ColumnDisplayProps {
                     col_index: i,
                     width: col.width,
-                    format: col.format.as_ref().map(|f| {
-                        crate::models::table::ColumnFormatInfo {
+                    format: col
+                        .format
+                        .as_ref()
+                        .map(|f| crate::models::table::ColumnFormatInfo {
                             kind: f.kind.clone(),
                             decimals: f.decimals,
                             currency: f.currency.clone(),
-                        }
-                    }),
+                        }),
                     extras: col.extras.clone(),
                 });
             }
@@ -254,11 +279,14 @@ pub fn restore_project_snapshot(
         }
     }
 
-    let _ = app.emit("restore-progress", serde_json::json!({
-        "datasetIndex": total_datasets,
-        "datasetTotal": total_datasets,
-        "datasetName": "完成",
-    }));
+    let _ = app.emit(
+        "restore-progress",
+        serde_json::json!({
+            "datasetIndex": total_datasets,
+            "datasetTotal": total_datasets,
+            "datasetName": "完成",
+        }),
+    );
 
     Ok(())
 }

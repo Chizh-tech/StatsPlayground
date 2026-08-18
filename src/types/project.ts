@@ -17,6 +17,7 @@ export interface OpenProjectResult {
   history: unknown[];
   snapshots: unknown[];
   graphBuilders: unknown[];
+  tabulates: unknown[];
   /** 项目内所有文件夹路径（含空文件夹），使用 "/" 分隔，根目录不出现在列表中。 */
   folders: string[];
   /** datasetId → folder path（根目录的表不在此映射中）。 */
@@ -24,6 +25,8 @@ export interface OpenProjectResult {
   /** graphId → folder path（根目录的图不在此映射中）。 */
   graphFolders: Record<string, string>;
   datasetNameMigrations: DatasetNameMigration[];
+  /** tabulateId → folder path。 */
+  tabulateFolders: Record<string, string>;
 }
 
 /** 导入 .sptb 的返回值。

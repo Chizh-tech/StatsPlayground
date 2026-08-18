@@ -7,3 +7,4 @@ export {
   folderBaseName,
   validateFolderOrFileName,
 } from "./useFolderStore";
+export { useTabulateStore } from "./useTabulateStore";

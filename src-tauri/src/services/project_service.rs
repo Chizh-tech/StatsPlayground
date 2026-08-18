@@ -25,6 +25,8 @@ pub struct OpenProjectResult {
     pub snapshots: Vec<serde_json::Value>,
     #[serde(default)]
     pub graph_builders: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub tabulates: Vec<serde_json::Value>,
     /// All folder paths that exist in the project (including empty ones).
     #[serde(default)]
     pub folders: Vec<String>,
@@ -36,6 +38,9 @@ pub struct OpenProjectResult {
     pub graph_folders: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub dataset_name_migrations: Vec<DatasetNameMigration>,
+    /// `tabulateId -> folder path`.
+    #[serde(default)]
+    pub tabulate_folders: std::collections::HashMap<String, String>,
 }
 
 const SPPRJ_VERSION: &str = "3.0.0";
@@ -56,7 +61,10 @@ impl<'a> ProjectService<'a> {
             created_at: now,
         };
 
-        let mut proj = self.state.project.write()
+        let mut proj = self
+            .state
+            .project
+            .write()
             .map_err(|e| AppError::Database(e.to_string()))?;
         *proj = Some(project.clone());
 
@@ -81,13 +89,22 @@ impl<'a> ProjectService<'a> {
             name.to_string(),
             SPPRJ_VERSION.to_string(),
             now,
-            Vec::new(), Vec::new(), Vec::new(),
-            &empty_folders, &empty_folders,
-            Vec::new(), Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &empty_folders,
+            &empty_folders,
+            &empty_folders,
+            Vec::new(),
+            Vec::new(),
         );
         spprj_archive::write_project_archive(&bundle, file_path)?;
 
-        let mut proj = self.state.project.write()
+        let mut proj = self
+            .state
+            .project
+            .write()
             .map_err(|e| AppError::Database(e.to_string()))?;
         *proj = Some(project.clone());
 
@@ -128,6 +145,7 @@ impl<'a> ProjectService<'a> {
             Some(assignments) => assignments.clone(),
             None => derive_folders_from_entries(&bundle.manifest.graphs, "graphs"),
         };
+        let tabulate_folders = bundle.manifest.tabulate_folders.clone();
         let folders = bundle.manifest.folders.clone();
 
         // Re-pack graph docs into the opaque JSON shape the frontend
@@ -135,11 +153,17 @@ impl<'a> ProjectService<'a> {
         // keys (they live on GraphDoc itself to avoid duplicate JSON keys),
         // so re-inject `id` / `name`. Folder is intentionally NOT injected
         // into the body — it flows via the separate `graphFolders` map.
-        let graph_builders = bundle.graphs.into_iter()
+        let graph_builders = bundle
+            .graphs
+            .into_iter()
             .map(|mut g| {
-                g.body.insert("id".to_string(), serde_json::Value::String(g.id.clone()));
+                g.body
+                    .insert("id".to_string(), serde_json::Value::String(g.id.clone()));
                 if !g.name.is_empty() {
-                    g.body.insert("name".to_string(), serde_json::Value::String(g.name.clone()));
+                    g.body.insert(
+                        "name".to_string(),
+                        serde_json::Value::String(g.name.clone()),
+                    );
                 }
                 serde_json::Value::Object(g.body)
             })
@@ -165,10 +189,12 @@ impl<'a> ProjectService<'a> {
             history: bundle.history,
             snapshots: bundle.snapshots,
             graph_builders,
+            tabulates: bundle.tabulates,
             folders,
             table_folders,
             graph_folders,
             dataset_name_migrations,
+            tabulate_folders,
         })
     }
 
@@ -183,18 +209,27 @@ impl<'a> ProjectService<'a> {
         history_data: Option<Vec<serde_json::Value>>,
         snapshots_data: Option<Vec<serde_json::Value>>,
         graph_builders_data: Option<Vec<serde_json::Value>>,
+        tabulates_data: Option<Vec<serde_json::Value>>,
         folders: Option<Vec<String>>,
         table_folders: Option<std::collections::HashMap<String, String>>,
         graph_folders: Option<std::collections::HashMap<String, String>>,
+        tabulate_folders: Option<std::collections::HashMap<String, String>>,
     ) -> Result<(), AppError> {
-        let mut proj = self.state.project.write()
+        let mut proj = self
+            .state
+            .project
+            .write()
             .map_err(|e| AppError::Database(e.to_string()))?;
-        let project = proj.as_mut()
+        let project = proj
+            .as_mut()
             .ok_or_else(|| AppError::InvalidParam("No project is open".into()))?;
 
         if let Some(fp) = file_path {
             project.file_path = fp.to_string();
-            if let Some(stem) = std::path::Path::new(fp).file_stem().and_then(|s| s.to_str()) {
+            if let Some(stem) = std::path::Path::new(fp)
+                .file_stem()
+                .and_then(|s| s.to_str())
+            {
                 project.name = stem.to_string();
             }
         }
@@ -212,11 +247,16 @@ impl<'a> ProjectService<'a> {
         // `table_folders` map and consumed by `build_bundle` to derive
         // archive paths.
         let datasets = {
-            let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+            let db = self
+                .state
+                .db
+                .lock()
+                .map_err(|e| AppError::Database(e.to_string()))?;
             db.list_datasets()?
         };
         let table_folders_map = table_folders.unwrap_or_default();
         let graph_folders_map = graph_folders.unwrap_or_default();
+        let tabulate_folders_map = tabulate_folders.unwrap_or_default();
         let mut table_docs = Vec::with_capacity(datasets.len());
         for ds in &datasets {
             let doc = self.compose_table_doc(&ds.id)?;
@@ -233,9 +273,11 @@ impl<'a> ProjectService<'a> {
             save_created_at,
             table_docs,
             graph_docs,
+            tabulates_data.unwrap_or_default(),
             folders.unwrap_or_default(),
             &table_folders_map,
             &graph_folders_map,
+            &tabulate_folders_map,
             history_data.unwrap_or_default(),
             snapshots_data.unwrap_or_default(),
         );
@@ -246,7 +288,10 @@ impl<'a> ProjectService<'a> {
 
     /// Get current project info
     pub fn get_current_project(&self) -> Result<Option<ProjectInfo>, AppError> {
-        let proj = self.state.project.read()
+        let proj = self
+            .state
+            .project
+            .read()
             .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(proj.clone())
     }
@@ -261,15 +306,22 @@ impl<'a> ProjectService<'a> {
     /// Build a `TableDoc` snapshot of a single dataset from the live DB +
     /// in-memory display props.
     pub fn compose_table_doc(&self, dataset_id: &str) -> Result<TableDoc, AppError> {
-        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
-        let display = self.state.column_display.lock()
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let display = self
+            .state
+            .column_display
+            .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         let meta = db.get_dataset_meta(dataset_id)?;
         let table_name = format!("dataset_{}", dataset_id.replace('-', "_"));
 
         let mut col_stmt = db.conn().prepare(
-            "SELECT col_name, col_type FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index"
+            "SELECT col_name, col_type FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
         )?;
         let base_columns: Vec<(String, String)> = col_stmt
             .query_map(duckdb::params![dataset_id], |row| {
@@ -278,20 +330,26 @@ impl<'a> ProjectService<'a> {
             .collect::<Result<Vec<_>, _>>()?;
 
         let ds_display = display.get(dataset_id);
-        let columns: Vec<TableColumn> = base_columns.iter().enumerate().map(|(i, (name, col_type))| {
-            let dp = ds_display.and_then(|v| v.iter().find(|p| p.col_index == i));
-            TableColumn {
-                name: name.clone(),
-                col_type: col_type.clone(),
-                width: dp.and_then(|p| p.width),
-                format: dp.and_then(|p| p.format.as_ref()).map(|f| TableColumnFormat {
-                    kind: f.kind.clone(),
-                    decimals: f.decimals,
-                    currency: f.currency.clone(),
-                }),
-                extras: dp.and_then(|p| p.extras.clone()),
-            }
-        }).collect();
+        let columns: Vec<TableColumn> = base_columns
+            .iter()
+            .enumerate()
+            .map(|(i, (name, col_type))| {
+                let dp = ds_display.and_then(|v| v.iter().find(|p| p.col_index == i));
+                TableColumn {
+                    name: name.clone(),
+                    col_type: col_type.clone(),
+                    width: dp.and_then(|p| p.width),
+                    format: dp
+                        .and_then(|p| p.format.as_ref())
+                        .map(|f| TableColumnFormat {
+                            kind: f.kind.clone(),
+                            decimals: f.decimals,
+                            currency: f.currency.clone(),
+                        }),
+                    extras: dp.and_then(|p| p.extras.clone()),
+                }
+            })
+            .collect();
 
         let col_names: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
 
@@ -303,7 +361,10 @@ impl<'a> ProjectService<'a> {
             }))
             .collect::<Vec<_>>()
             .join(", ");
-        let query = format!("SELECT {} FROM \"{}\" ORDER BY \"_row_id\"", select_cols, table_name);
+        let query = format!(
+            "SELECT {} FROM \"{}\" ORDER BY \"_row_id\"",
+            select_cols, table_name
+        );
         let mut stmt = db.conn().prepare(&query)?;
         let total_cols = 1 + col_names.len();
 
@@ -417,7 +478,6 @@ impl<'a> ProjectService<'a> {
                 return Err(error);
             }
         }
-
         // Re-register column display props.
         let mut display_props: Vec<ColumnDisplayProps> = Vec::new();
         for (i, col) in doc.columns.iter().enumerate() {
@@ -435,7 +495,10 @@ impl<'a> ProjectService<'a> {
             }
         }
         if !display_props.is_empty() {
-            let mut display = self.state.column_display.lock()
+            let mut display = self
+                .state
+                .column_display
+                .lock()
                 .map_err(|e| AppError::Database(e.to_string()))?;
             display.insert(doc.id.clone(), display_props);
         }
@@ -486,9 +549,12 @@ impl<'a> ProjectService<'a> {
                 Ok(d) => d,
                 Err(_) => continue,
             };
-            let bytes = serde_json::to_vec_pretty(&doc)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
-            let raw = archive_paths.get(id).cloned().unwrap_or_else(|| doc.name.clone());
+            let bytes =
+                serde_json::to_vec_pretty(&doc).map_err(|e| AppError::FileIO(e.to_string()))?;
+            let raw = archive_paths
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| doc.name.clone());
             let safe = sanitize_zip_path(&raw);
             let entry = dedupe_zip_path(&safe, "sptb", &mut used);
             zip.start_file(&entry, options)
@@ -516,13 +582,14 @@ impl<'a> ProjectService<'a> {
 
     /// Export an arbitrary graph builder config (opaque to backend) as a
     /// standalone `.spgh` file on disk. Per issue #7 the body is folder-free.
-    pub fn export_graph(
-        &self,
-        graph: serde_json::Value,
-        file_path: &str,
-    ) -> Result<(), AppError> {
+    pub fn export_graph(&self, graph: serde_json::Value, file_path: &str) -> Result<(), AppError> {
         let (id, name, body) = lift_graph_meta(graph);
-        let doc = GraphDoc { id, name, version: "1".to_string(), body };
+        let doc = GraphDoc {
+            id,
+            name,
+            version: "1".to_string(),
+            body,
+        };
         spprj_archive::write_graph_file(&doc, file_path)
     }
 
@@ -630,11 +697,23 @@ fn duckdb_to_json(value: duckdb::types::Value) -> serde_json::Value {
 /// `graph_folders` map (issue #7) — any legacy in-body `folder` field is
 /// silently stripped by `lift_graph_meta`.
 fn compose_graph_docs(raw: Vec<serde_json::Value>) -> Vec<GraphDoc> {
-    raw.into_iter().enumerate().map(|(idx, value)| {
-        let (id, name, body) = lift_graph_meta(value);
-        let id = if id.is_empty() { format!("graph_{}", idx) } else { id };
-        GraphDoc { id, name, version: "1".to_string(), body }
-    }).collect()
+    raw.into_iter()
+        .enumerate()
+        .map(|(idx, value)| {
+            let (id, name, body) = lift_graph_meta(value);
+            let id = if id.is_empty() {
+                format!("graph_{}", idx)
+            } else {
+                id
+            };
+            GraphDoc {
+                id,
+                name,
+                version: "1".to_string(),
+                body,
+            }
+        })
+        .collect()
 }
 
 /// Pull `id` (or `builderId`) and `name` out of an opaque graph-builder
@@ -652,7 +731,10 @@ fn lift_graph_meta(
     let id = map
         .remove("id")
         .and_then(|v| v.as_str().map(String::from))
-        .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
+        .or_else(|| {
+            map.remove("builderId")
+                .and_then(|v| v.as_str().map(String::from))
+        })
         .unwrap_or_default();
     let name = map
         .remove("name")
@@ -745,11 +827,7 @@ fn sanitize_zip_path(raw: &str) -> String {
 }
 
 /// Suffix `base.ext` with ` (2)`, ` (3)`, … until unique within `used`.
-fn dedupe_zip_path(
-    base: &str,
-    ext: &str,
-    used: &mut std::collections::HashSet<String>,
-) -> String {
+fn dedupe_zip_path(base: &str, ext: &str, used: &mut std::collections::HashSet<String>) -> String {
     let mut candidate = format!("{}.{}", base, ext);
     let mut n = 2;
     while used.contains(&candidate) {
@@ -998,6 +1076,8 @@ mod tests {
             vec![valid, malformed],
             vec![],
             vec![],
+            vec![],
+            &folders,
             &folders,
             &folders,
             vec![],
