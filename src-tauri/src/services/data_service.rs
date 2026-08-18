@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::models::table::{DatasetMeta, TableQueryResult};
+use crate::models::table::{DatasetMeta, SqlQueryResult, TableQueryResult};
 use crate::state::AppState;
 
 /// Compute the new index of a column originally at `idx` after a single column
@@ -66,6 +66,16 @@ impl<'a> DataService<'a> {
         db.query_table(dataset_id, page, page_size, sort_by, sort_order)
     }
 
+    pub fn execute_sql_query(
+        &self,
+        sql: &str,
+        page: usize,
+        page_size: usize,
+    ) -> Result<SqlQueryResult, AppError> {
+        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        db.execute_sql_query(sql, page, page_size)
+    }
+
     pub fn create_table(
         &self,
         name: &str,
@@ -75,6 +85,12 @@ impl<'a> DataService<'a> {
         let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
         db.create_empty_table(&id, name, column_names, column_types)
+    }
+
+    pub fn create_table_from_sql_query(&self, sql: &str, name: &str) -> Result<DatasetMeta, AppError> {
+        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        let id = uuid::Uuid::new_v4().to_string();
+        db.create_table_from_sql_query(&id, name, sql)
     }
 
     pub fn add_row(&self, dataset_id: &str) -> Result<i64, AppError> {

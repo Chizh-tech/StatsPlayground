@@ -65,6 +65,14 @@ pub struct ProjectManifest {
     /// Implicit ancestors (e.g. `a` for `a/b`) are still listed explicitly.
     #[serde(default)]
     pub folders: Vec<String>,
+    /// `tableId -> folder path` manifest metadata. Missing means a legacy
+    /// archive whose folder layout must be derived from entry paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_folders: Option<HashMap<String, String>>,
+    /// `graphId -> folder path` manifest metadata. Missing means a legacy
+    /// archive whose folder layout must be derived from entry paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_folders: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -319,6 +327,8 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         tables: table_refs,
         graphs: graph_refs,
         folders: Vec::new(),
+        table_folders: None,
+        graph_folders: None,
     };
 
     Ok(ProjectBundle {
@@ -363,10 +373,9 @@ fn lift_id_name(raw: Value, fallback_idx: usize) -> (String, String, serde_json:
 ///
 /// Folder routing is supplied OUT-OF-BAND via `table_folders` and
 /// `graph_folders` (id → folder path); per issue #7 the file bodies
-/// themselves carry no folder information. The writer derives each entry's
-/// archive path from its display name and the supplied folder
-/// (`<folder>/<name>.<ext>`), sanitizing the name and auto-suffixing
-/// `" (2)"`, `" (3)"`, … on collisions within the same folder + extension.
+/// themselves carry no folder information. The writer now emits stable
+/// archive paths based only on ids: `tables/<dataset-id>.sptb` and
+/// `graphs/<graph-id>.spgh`.
 pub fn build_bundle(
     name: String,
     version: String,
@@ -379,34 +388,21 @@ pub fn build_bundle(
     history: Vec<Value>,
     snapshots: Vec<Value>,
 ) -> ProjectBundle {
-    // Track taken paths per-extension. `.sptb` and `.spgh` share the folder
-    // namespace, but their extensions are different so we let a table and a
-    // graph share the same display name without colliding.
-    let mut taken: HashSet<String> = HashSet::new();
-
     let mut table_refs: Vec<TableEntryRef> = Vec::with_capacity(tables.len());
     for t in tables.iter() {
-        let folder_norm = normalize_folder(table_folders.get(&t.id).map(|s| s.as_str()));
-        let base = sanitize_name(&t.name, &t.id);
-        let path = unique_archive_path(&folder_norm, &base, "sptb", &mut taken);
         table_refs.push(TableEntryRef {
             id: t.id.clone(),
             name: t.name.clone(),
-            file: path,
+            file: format!("tables/{}.sptb", t.id),
         });
     }
 
     let mut graph_refs: Vec<GraphEntryRef> = Vec::with_capacity(graphs.len());
     for g in graphs.iter() {
-        let folder_norm = normalize_folder(graph_folders.get(&g.id).map(|s| s.as_str()));
-        // Graph name may be empty (legacy / synthesized); fall back to id.
-        let display_name = if g.name.is_empty() { g.id.clone() } else { g.name.clone() };
-        let base = sanitize_name(&display_name, &g.id);
-        let path = unique_archive_path(&folder_norm, &base, "spgh", &mut taken);
         graph_refs.push(GraphEntryRef {
             id: g.id.clone(),
             name: g.name.clone(),
-            file: path,
+            file: format!("graphs/{}.spgh", g.id),
         });
     }
 
@@ -417,10 +413,14 @@ pub fn build_bundle(
 
     ProjectBundle {
         manifest: ProjectManifest {
-            name, version, created_at,
+            name,
+            version,
+            created_at,
             tables: table_refs,
             graphs: graph_refs,
             folders: normalized_folders,
+            table_folders: Some(table_folders.clone()),
+            graph_folders: Some(graph_folders.clone()),
         },
         tables,
         graphs,
@@ -645,29 +645,6 @@ fn normalize_folder_list(folders: Vec<String>) -> Vec<String> {
     sorted
 }
 
-/// Build a unique archive path of the form `<folder>/<base>.<ext>` (or just
-/// `<base>.<ext>` at the root), auto-suffixing `" (2)"`, `" (3)"`, … until
-/// no collision exists in `taken` for the given extension namespace.
-fn unique_archive_path(
-    folder: &Option<String>,
-    base: &str,
-    ext: &str,
-    taken: &mut HashSet<String>,
-) -> String {
-    let prefix = match folder {
-        Some(f) => format!("{}/", f),
-        None => String::new(),
-    };
-    let mut candidate = format!("{}{}.{}", prefix, base, ext);
-    let mut n: u32 = 2;
-    while taken.contains(&candidate) {
-        candidate = format!("{}{} ({}).{}", prefix, base, n, ext);
-        n += 1;
-    }
-    taken.insert(candidate.clone());
-    candidate
-}
-
 /// Parent folder of an archive entry path, or `None` if at root.
 pub fn parent_folder(file: &str) -> Option<String> {
     let idx = file.rfind('/')?;
@@ -684,4 +661,75 @@ fn folder_ancestors(folder: &str) -> Vec<String> {
         out.push(parts[..i].join("/"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn table_doc(id: &str, name: &str) -> TableDoc {
+        TableDoc {
+            id: id.into(),
+            name: name.into(),
+            source_type: "manual".into(),
+            version: "1".into(),
+            columns: vec![],
+            rows: vec![],
+        }
+    }
+
+    fn graph_doc(id: &str, name: &str) -> GraphDoc {
+        GraphDoc {
+            id: id.into(),
+            name: name.into(),
+            version: "1".into(),
+            body: serde_json::Map::new(),
+        }
+    }
+
+    #[test]
+    fn build_bundle_uses_stable_id_paths_and_explicit_folder_maps() {
+        let table = table_doc("table-id", "Sales");
+        let graph = graph_doc("graph-id", "Revenue");
+        let table_folders = HashMap::from([(String::from("table-id"), String::from("Raw/2026"))]);
+        let graph_folders = HashMap::from([(String::from("graph-id"), String::from("Reports"))]);
+
+        let bundle = build_bundle(
+            "Project".into(),
+            "3.0.0".into(),
+            "now".into(),
+            vec![table],
+            vec![graph],
+            vec!["Raw/2026".into(), "Reports".into()],
+            &table_folders,
+            &graph_folders,
+            vec![],
+            vec![],
+        );
+
+        assert_eq!(bundle.manifest.tables[0].file, "tables/table-id.sptb");
+        assert_eq!(bundle.manifest.graphs[0].file, "graphs/graph-id.spgh");
+        assert_eq!(bundle.manifest.table_folders.as_ref(), Some(&table_folders));
+        assert_eq!(bundle.manifest.graph_folders.as_ref(), Some(&graph_folders));
+    }
+
+    #[test]
+    fn manifest_round_trip_preserves_empty_folder_maps() {
+        let manifest = ProjectManifest {
+            name: "Project".into(),
+            version: "3.0.0".into(),
+            created_at: "now".into(),
+            tables: vec![],
+            graphs: vec![],
+            folders: vec![],
+            table_folders: Some(HashMap::new()),
+            graph_folders: Some(HashMap::new()),
+        };
+
+        let json = serde_json::to_vec(&manifest).expect("serialize manifest");
+        let round_trip: ProjectManifest = serde_json::from_slice(&json).expect("deserialize manifest");
+
+        assert_eq!(round_trip.table_folders, Some(HashMap::new()));
+        assert_eq!(round_trip.graph_folders, Some(HashMap::new()));
+    }
 }

@@ -3,7 +3,7 @@ export interface DatasetMeta {
   id: string;
   name: string;
   sourcePath: string | null;
-  sourceType: "csv" | "excel" | "parquet" | "json" | "manual";
+  sourceType: "csv" | "excel" | "parquet" | "json" | "manual" | "query";
   rowCount: number;
   colCount: number;
   createdAt: string;
@@ -44,6 +44,17 @@ export interface TableQueryResult {
   totalRows: number;
   page: number;
   pageSize: number;
+}
+
+/** SQL query result */
+export interface SqlQueryResult {
+  columns: string[];
+  columnTypes: string[];
+  rows: unknown[][];
+  totalRows: number;
+  page: number;
+  pageSize: number;
+  executionTimeMs: number;
 }
 
 /** 列显示格式 */

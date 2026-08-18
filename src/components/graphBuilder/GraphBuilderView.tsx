@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } fr
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -78,26 +78,6 @@ const LAYER_DIM: Record<ElementKind, LayerDim> = {
   scatter3d: "3d",
   surface: "3d",
 };
-
-/** 数据类型对应的小图标 */
-function fieldTypeIcon(t: FieldType): string {
-  switch (t) {
-    case "continuous": return "▰";
-    case "ordinal": return "≣";
-    case "datetime": return "◷";
-    case "id": return "#";
-    default: return "▤";
-  }
-}
-
-function fieldTypeColor(t: FieldType): string {
-  switch (t) {
-    case "continuous": return "#2ca678";
-    case "datetime": return "#9168d6";
-    case "id": return "#7f8c8d";
-    default: return "#ef8a3a";
-  }
-}
 
 const DRAG_MIME = "text/plain";
 
@@ -1758,6 +1738,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           resetAllGroupStyles={resetAllGroupStyles}
           onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
           onClearOverlay={() => clearSlot("overlay")}
+          onOverlayContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
           width={rightWidth}
           threeD={!!item.threeD}
         />
@@ -3204,13 +3185,14 @@ interface LegendStylePanelProps {
   resetAllGroupStyles: () => void;
   onDropOverlay: (e: React.DragEvent) => void;
   onClearOverlay: () => void;
+  onOverlayContextMenu: (x: number, y: number) => void;
   width: number;
   /** Whether the chart is in 3D mode — the Gradient mark only applies to
    *  (and is only shown for) 3D surfaces / scatter. */
   threeD: boolean;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width, threeD }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // `data` and `elements` are still part of the public prop contract for
@@ -3343,7 +3325,7 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           field={encoding.overlay}
           onDrop={onDropOverlay}
           onClear={onClearOverlay}
-          onContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
+          onContextMenu={onOverlayContextMenu}
           orientation="shelf"
         />
 
@@ -3592,49 +3574,67 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
 // shape is identical between them; only the dialog title, the absence
 // of the Y-only auto-spec block, and the X/Y value-field name differ.
 
-interface AxisSettingsDialogProps {
-  /** Which axis this dialog edits. Controls the title, the i18n key
-   *  prefix for category labels, and whether the auto-spec block is
-   *  present (Y only — spec extras live on the response variable). */
-  axis: "x" | "y";
-  /** Existing manual reference lines on this axis. Y dialog passes
-   *  `RefLineY[]`, X dialog passes `RefLineX[]`. The dialog itself
-   *  never reads the value field — it just forwards the array to
-   *  `RefLinesEditor`, which knows which field to address based on
-   *  the `axis` prop. */
-  refLines?: RefLineY[] | RefLineX[];
-  setRefLines?: (next: RefLineY[] | RefLineX[]) => void;
-  /** Whether the auto-spec-limits overlay is currently enabled. The
-   *  toggle is global (one flag covers both axes) — the renderer
-   *  contributes spec lines on whichever axis has a value-type column
-   *  with `extras.spec` metadata. Passed down to the RefLinesEditor so
-   *  its header checkbox renders the correct state without round-
-   *  tripping through the project store. */
-  autoSpecLines?: boolean;
-  setAutoSpecLines?: (next: boolean) => void;
-  /** Pre-resolved AutoSpec snapshot for the column currently bound to
-   *  THIS axis — already filtered to finite values by
-   *  GraphBuilderView. `undefined` means either the overlay is off,
-   *  this axis has no bound column, or the bound column has no spec
-   *  extras. */
-  resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
-  /** Name of the column currently bound to THIS axis, purely for the
-   *  editor's hint copy ("Reading limits from <col>"). */
-  autoSpecColName?: string | undefined;
-  /** When > 0, this axis is carrying a multi-column melt and the
-   *  auto-spec overlay (if enabled) will draw per-column ref lines
-   *  instead of a single overlay. Used purely to clarify the hint
-   *  copy so users understand WHY the toggle is producing lines even
-   *  though no single column is bound. `0` (or `undefined`) means
-   *  not in multi-mode. */
-  multiValueColCount?: number;
-  /** Current axis-override config (range / ticks / decimals / inverse /
-   *  axis line / tick position / minor ticks / grid). Both axes use
-   *  the same `YAxisConfig` shape. */
-  axisConfig: YAxisConfig | undefined;
-  setAxisConfig: (next: YAxisConfig | undefined) => void;
-  onClose: () => void;
-}
+type AxisSettingsDialogProps =
+  | {
+      /** Which axis this dialog edits. Controls the title, the i18n key
+       *  prefix for category labels, and whether the auto-spec block is
+       *  present (Y only — spec extras live on the response variable). */
+      axis: "y";
+      /** Existing manual reference lines on this axis. */
+      refLines?: RefLineY[];
+      setRefLines?: (next: RefLineY[]) => void;
+      /** Whether the auto-spec-limits overlay is currently enabled. */
+      autoSpecLines?: boolean;
+      setAutoSpecLines?: (next: boolean) => void;
+      /** Pre-resolved AutoSpec snapshot for the column currently bound to
+       *  THIS axis — already filtered to finite values by
+       *  GraphBuilderView. `undefined` means either the overlay is off,
+       *  this axis has no bound column, or the bound column has no spec
+       *  extras. */
+      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
+      /** Name of the column currently bound to THIS axis, purely for the
+       *  editor's hint copy ("Reading limits from <col>"). */
+      autoSpecColName?: string | undefined;
+      /** When > 0, this axis is carrying a multi-column melt and the
+       *  auto-spec overlay (if enabled) will draw per-column ref lines
+       *  instead of a single overlay. */
+      multiValueColCount?: number;
+      /** Current axis-override config (range / ticks / decimals / inverse /
+       *  axis line / tick position / minor ticks / grid). */
+      axisConfig: YAxisConfig | undefined;
+      setAxisConfig: (next: YAxisConfig | undefined) => void;
+      onClose: () => void;
+    }
+  | {
+      /** Which axis this dialog edits. Controls the title, the i18n key
+       *  prefix for category labels, and whether the auto-spec block is
+       *  present (Y only — spec extras live on the response variable). */
+      axis: "x";
+      /** Existing manual reference lines on this axis. */
+      refLines?: RefLineX[];
+      setRefLines?: (next: RefLineX[]) => void;
+      /** Whether the auto-spec-limits overlay is currently enabled. */
+      autoSpecLines?: boolean;
+      setAutoSpecLines?: (next: boolean) => void;
+      /** Pre-resolved AutoSpec snapshot for the column currently bound to
+       *  THIS axis — already filtered to finite values by
+       *  GraphBuilderView. `undefined` means either the overlay is off,
+       *  this axis has no bound column, or the bound column has no spec
+       *  extras. */
+      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
+      /** Name of the column currently bound to THIS axis, purely for the
+       *  editor's hint copy ("Reading limits from <col>"). */
+      autoSpecColName?: string | undefined;
+      /** When > 0, this axis is carrying a multi-column melt and the
+       *  auto-spec overlay (if enabled) will draw per-column ref lines
+       *  instead of a single overlay. */
+      multiValueColCount?: number;
+      /** Current axis-override config (range / ticks / decimals / inverse /
+       *  axis line / tick position / minor ticks / grid). */
+      axisConfig: YAxisConfig | undefined;
+      setAxisConfig: (next: YAxisConfig | undefined) => void;
+      onClose: () => void;
+    };
 
 type AxisCategoryKey = "axis" | "tickGrid" | "refLines";
 
@@ -3708,16 +3708,29 @@ function AxisSettingsDialog({
               <GridSettingsEditor config={axisConfig} setConfig={setAxisConfig} />
             )}
             {active === "refLines" && refLines && setRefLines && (
-              <RefLinesEditor
-                axis={axis}
-                refLines={refLines}
-                setRefLines={setRefLines}
-                autoSpecLines={!!autoSpecLines}
-                setAutoSpecLines={setAutoSpecLines}
-                resolvedAutoSpec={resolvedAutoSpec}
-                autoSpecColName={autoSpecColName}
-                multiValueColCount={multiValueColCount}
-              />
+              axis === "x" ? (
+                <RefLinesEditor
+                  axis="x"
+                  refLines={refLines as RefLineX[]}
+                  setRefLines={setRefLines as (next: RefLineX[]) => void}
+                  autoSpecLines={!!autoSpecLines}
+                  setAutoSpecLines={setAutoSpecLines}
+                  resolvedAutoSpec={resolvedAutoSpec}
+                  autoSpecColName={autoSpecColName}
+                  multiValueColCount={multiValueColCount}
+                />
+              ) : (
+                <RefLinesEditor
+                  axis="y"
+                  refLines={refLines as RefLineY[]}
+                  setRefLines={setRefLines as (next: RefLineY[]) => void}
+                  autoSpecLines={!!autoSpecLines}
+                  setAutoSpecLines={setAutoSpecLines}
+                  resolvedAutoSpec={resolvedAutoSpec}
+                  autoSpecColName={autoSpecColName}
+                  multiValueColCount={multiValueColCount}
+                />
+              )
             )}
           </div>
         </div>
@@ -4454,30 +4467,51 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
 // lines are preserved in the spec and reappear when the axis becomes
 // value-type again, e.g. after a Swap X & Y).
 
-interface RefLinesEditorProps {
-  /** Which axis this editor targets. Picks the value-field name
-   *  (`y` or `x`) used to read / write each card, the i18n copy
-   *  (horizontal vs. vertical marker), and whether the Y-only
-   *  auto-spec-limits block is rendered. */
-  axis: "x" | "y";
-  refLines: RefLineY[] | RefLineX[];
-  setRefLines: (next: RefLineY[] | RefLineX[]) => void;
-  /** When true, the chart auto-draws red (LSL/USL) and green (Target)
-   *  reference lines based on the bound column's `spec` extras. The
-   *  toggle is global — enabling it surfaces spec lines on whichever
-   *  axis (or both) has a value-type column carrying spec metadata. */
-  autoSpecLines?: boolean;
-  setAutoSpecLines?: (next: boolean) => void;
-  /** Pre-resolved spec snapshot for the column bound to THIS axis. */
-  resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
-  /** Name of the column bound to THIS axis — used in the helper hint. */
-  autoSpecColName?: string | undefined;
-  /** Number of source columns contributing per-column spec lines on
-   *  THIS axis when a multi-column melt is active. > 0 switches the
-   *  auto-spec hint into multi-column mode; 0 / undefined means the
-   *  axis carries at most one bound column. */
-  multiValueColCount?: number;
-}
+type RefLinesEditorProps =
+  | {
+      /** Which axis this editor targets. Picks the value-field name
+       *  (`y` or `x`) used to read / write each card, the i18n copy
+       *  (horizontal vs. vertical marker), and whether the Y-only
+       *  auto-spec-limits block is rendered. */
+      axis: "y";
+      refLines: RefLineY[];
+      setRefLines: (next: RefLineY[]) => void;
+      /** When true, the chart auto-draws red (LSL/USL) and green (Target)
+       *  reference lines based on the bound column's `spec` extras. The
+       *  toggle is global — enabling it surfaces spec lines on whichever
+       *  axis (or both) has a value-type column carrying spec metadata. */
+      autoSpecLines?: boolean;
+      setAutoSpecLines?: (next: boolean) => void;
+      /** Pre-resolved spec snapshot for the column bound to THIS axis. */
+      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
+      /** Name of the column bound to THIS axis — used in the helper hint. */
+      autoSpecColName?: string | undefined;
+      /** Number of source columns contributing per-column spec lines on
+       *  THIS axis when a multi-column melt is active. */
+      multiValueColCount?: number;
+    }
+  | {
+      /** Which axis this editor targets. Picks the value-field name
+       *  (`y` or `x`) used to read / write each card, the i18n copy
+       *  (horizontal vs. vertical marker), and whether the Y-only
+       *  auto-spec-limits block is rendered. */
+      axis: "x";
+      refLines: RefLineX[];
+      setRefLines: (next: RefLineX[]) => void;
+      /** When true, the chart auto-draws red (LSL/USL) and green (Target)
+       *  reference lines based on the bound column's `spec` extras. The
+       *  toggle is global — enabling it surfaces spec lines on whichever
+       *  axis (or both) has a value-type column carrying spec metadata. */
+      autoSpecLines?: boolean;
+      setAutoSpecLines?: (next: boolean) => void;
+      /** Pre-resolved spec snapshot for the column bound to THIS axis. */
+      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
+      /** Name of the column bound to THIS axis — used in the helper hint. */
+      autoSpecColName?: string | undefined;
+      /** Number of source columns contributing per-column spec lines on
+       *  THIS axis when a multi-column melt is active. */
+      multiValueColCount?: number;
+    };
 
 /** Saturated / primary-color palette for reference lines. The chart's
  *  GROUP_COLORS palette intentionally uses *muted* hues so data series
@@ -4512,66 +4546,72 @@ function nextRefLineId(): string {
   return `rl-${Date.now().toString(36)}-${_refLineSeq}`;
 }
 
-function RefLinesEditor({
-  axis,
-  refLines,
-  setRefLines,
-  autoSpecLines,
-  setAutoSpecLines,
-  resolvedAutoSpec,
-  autoSpecColName,
-  multiValueColCount,
-}: RefLinesEditorProps) {
+function RefLinesEditor(props: RefLinesEditorProps) {
   const { t } = useTranslation();
-  // Axis indirection: `valueField` picks which field on each card we
-  // read / write. Kept as a single source of truth so the rest of this
-  // component never branches on `axis` for data access — only for copy
-  // (horizontal vs. vertical marker) and for the Y-only auto-spec block.
-  const valueField: "x" | "y" = axis === "x" ? "x" : "y";
-  // Cast helpers: at runtime each line is either RefLineY (axis="y")
-  // or RefLineX (axis="x"); we treat them uniformly via the indirection.
-  // The cast keeps the read/write call sites concise without leaking
-  // `any` through the public API surface.
+  const axis = props.axis;
+  const autoSpecLines = props.autoSpecLines;
+  const setAutoSpecLines = props.setAutoSpecLines;
+  const resolvedAutoSpec = props.resolvedAutoSpec;
+  const autoSpecColName = props.autoSpecColName;
+  const multiValueColCount = props.multiValueColCount;
   const readValue = (r: RefLineY | RefLineX): number =>
-    (r as Record<string, number>)[valueField];
-  const writeValue = (n: number): Record<string, number> => ({ [valueField]: n });
+    "x" in r ? r.x : r.y;
+  const writeValue = (n: number): Partial<RefLineY> | Partial<RefLineX> =>
+    axis === "x" ? { x: n } : { y: n };
 
   const addLine = useCallback(() => {
-    // Build the new line using the axis-appropriate value field so
-    // RefLineY gets `{y:0}` and RefLineX gets `{x:0}`. Cast to the
-    // declared union after construction.
-    const next = {
+    if (props.axis === "x") {
+      const next: RefLineX = {
+        id: nextRefLineId(),
+        x: 0,
+        label: "",
+        style: "dashed",
+        color: REF_LINE_DEFAULT_COLOR,
+        width: 1,
+      };
+      props.setRefLines?.([...(props.refLines ?? []), next]);
+      return;
+    }
+    const next: RefLineY = {
       id: nextRefLineId(),
-      [valueField]: 0,
+      y: 0,
       label: "",
-      style: "dashed" as RefLineStyle,
+      style: "dashed",
       color: REF_LINE_DEFAULT_COLOR,
       width: 1,
-    } as RefLineY | RefLineX;
-    setRefLines([...(refLines ?? []), next] as RefLineY[] | RefLineX[]);
-  }, [refLines, setRefLines, valueField]);
+    };
+    props.setRefLines?.([...(props.refLines ?? []), next]);
+  }, [props.axis, props.refLines, props.setRefLines]);
 
   const updateLine = useCallback(
     (id: string, patch: Partial<RefLineY> | Partial<RefLineX>) => {
-      setRefLines(
-        ((refLines ?? []) as (RefLineY | RefLineX)[]).map((r) =>
-          r.id === id ? ({ ...r, ...patch } as RefLineY | RefLineX) : r,
-        ) as RefLineY[] | RefLineX[],
+      if (props.axis === "x") {
+        const next = (props.refLines ?? []).map((r) =>
+          r.id === id ? { ...r, ...(patch as Partial<RefLineX>) } : r,
+        );
+        props.setRefLines?.(next);
+        return;
+      }
+      const next = (props.refLines ?? []).map((r) =>
+        r.id === id ? { ...r, ...(patch as Partial<RefLineY>) } : r,
       );
+      props.setRefLines?.(next);
     },
-    [refLines, setRefLines],
+    [props.axis, props.refLines, props.setRefLines],
   );
 
   const removeLine = useCallback(
     (id: string) => {
-      setRefLines(
-        ((refLines ?? []) as (RefLineY | RefLineX)[]).filter((r) => r.id !== id) as RefLineY[] | RefLineX[],
-      );
+      if (props.axis === "x") {
+        props.setRefLines?.((props.refLines ?? []).filter((r) => r.id !== id));
+        return;
+      }
+      props.setRefLines?.((props.refLines ?? []).filter((r) => r.id !== id));
     },
-    [refLines, setRefLines],
+    [props.axis, props.refLines, props.setRefLines],
   );
 
-  const lines = (refLines ?? []) as (RefLineY | RefLineX)[];
+  const lines = (props.refLines ?? []) as (RefLineY | RefLineX)[];
 
   // Auto-spec preview state. We render up to three chips (LSL / Target
   // / USL) mirroring the colors the chart will use. When the toggle is

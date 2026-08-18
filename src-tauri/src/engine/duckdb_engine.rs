@@ -1,12 +1,22 @@
-use duckdb::{Connection, params, params_from_iter};
-use duckdb::types::Value;
+use std::collections::HashSet;
+use std::time::Instant;
+
+use duckdb::{Config, params, params_from_iter, Connection};
+use duckdb::types::{OrderedMap, TimeUnit, Value};
 
 use crate::error::AppError;
-use crate::models::table::{DatasetMeta, TableQueryResult};
+use crate::engine::sql_query::{normalize_identifier, validate_read_only_query};
+use crate::models::table::{DatasetMeta, SqlQueryResult, TableQueryResult};
 
 /// DuckDB engine wrapper
 pub struct DuckDbEngine {
     conn: Connection,
+}
+
+struct MaterializedQuery {
+    columns: Vec<String>,
+    column_types: Vec<String>,
+    rows: Vec<Vec<Value>>,
 }
 
 impl DuckDbEngine {
@@ -49,6 +59,8 @@ impl DuckDbEngine {
 
     /// Import a CSV file as a new dataset
     pub fn import_csv(&self, id: &str, name: &str, file_path: &str) -> Result<DatasetMeta, AppError> {
+        self.validate_dataset_name(name, None)?;
+
         let table_name = format!("dataset_{}", id.replace('-', "_"));
 
         // Create table from CSV using DuckDB's read_csv
@@ -67,7 +79,7 @@ impl DuckDbEngine {
 
         // Get column info
         let mut col_stmt = self.conn.prepare(
-            &format!("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = $1 ORDER BY ordinal_position")
+            "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = $1 ORDER BY ordinal_position",
         )?;
 
         let col_count: i32 = {
@@ -148,6 +160,133 @@ impl DuckDbEngine {
         self.conn.execute("DELETE FROM _meta_columns WHERE dataset_id = $1", params![id])?;
         self.conn.execute("DELETE FROM _meta_datasets WHERE id = $1", params![id])?;
         Ok(())
+    }
+
+    /// Execute a read-only SQL query against the visible dataset names.
+    pub fn execute_sql_query(
+        &self,
+        sql: &str,
+        page: usize,
+        page_size: usize,
+    ) -> Result<SqlQueryResult, AppError> {
+        if page == 0 {
+            return Err(AppError::InvalidParam("page must be at least 1".into()));
+        }
+        if !(1..=200).contains(&page_size) {
+            return Err(AppError::InvalidParam("page_size must be between 1 and 200".into()));
+        }
+
+        let started_at = Instant::now();
+        let sql = self.validate_query_against_visible_tables(sql)?;
+        let snapshot = self.build_isolated_snapshot_connection()?;
+        let result = self.collect_sql_query_page(&snapshot, &sql, page, page_size)?;
+
+        Ok(SqlQueryResult {
+            execution_time_ms: started_at.elapsed().as_millis(),
+            ..result
+        })
+    }
+
+    /// Create a managed dataset from a guarded read-only SQL query.
+    pub fn create_table_from_sql_query(
+        &self,
+        id: &str,
+        name: &str,
+        sql: &str,
+    ) -> Result<DatasetMeta, AppError> {
+        let sql = self.validate_query_against_visible_tables(sql)?;
+        let snapshot = self.build_isolated_snapshot_connection()?;
+        let materialized = self.collect_sql_query_rows(&snapshot, &sql)?;
+
+        self.conn.execute_batch("BEGIN TRANSACTION")?;
+
+        let outcome = (|| -> Result<DatasetMeta, AppError> {
+            self.validate_dataset_name(name, None)?;
+
+            let table_name = Self::internal_table_name(id);
+            let quoted_table = Self::quote_identifier(&table_name);
+            let column_defs = materialized
+                .columns
+                .iter()
+                .zip(materialized.column_types.iter())
+                .map(|(column_name, column_type)| {
+                    format!("{} {}", Self::quote_identifier(column_name), column_type)
+                })
+                .collect::<Vec<_>>();
+
+            let create_sql = if column_defs.is_empty() {
+                format!("CREATE TABLE {} (\"_row_id\" BIGINT)", quoted_table)
+            } else {
+                format!(
+                    "CREATE TABLE {} (\"_row_id\" BIGINT, {})",
+                    quoted_table,
+                    column_defs.join(", ")
+                )
+            };
+            self.conn.execute(&create_sql, [])?;
+
+            let insert_columns = std::iter::once(Self::quote_identifier("_row_id"))
+                .chain(materialized.columns.iter().map(|column_name| Self::quote_identifier(column_name)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let placeholders = std::iter::once("?".to_string())
+                .chain(materialized.column_types.iter().map(|column_type| {
+                    Self::typed_parameter_expression(column_type)
+                }))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let insert_sql = format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                quoted_table,
+                insert_columns,
+                placeholders
+            );
+
+            for (row_index, row_values) in materialized.rows.iter().enumerate() {
+                let mut values = Vec::with_capacity(row_values.len() + 1);
+                values.push(Value::BigInt((row_index + 1) as i64));
+                values.extend(row_values.iter().cloned());
+                self.conn.execute(&insert_sql, params_from_iter(values))?;
+            }
+
+            for (col_index, (col_name, col_type)) in materialized
+                .columns
+                .iter()
+                .zip(materialized.column_types.iter())
+                .enumerate()
+            {
+                self.conn.execute(
+                    "INSERT INTO _meta_columns (dataset_id, col_index, col_name, col_type) VALUES ($1, $2, $3, $4)",
+                    params![id, col_index as i32, col_name, col_type],
+                )?;
+            }
+
+            self.conn.execute(
+                "INSERT INTO _meta_datasets (id, name, source_path, source_type, row_count, col_count) VALUES ($1, $2, NULL, 'query', $3, $4)",
+                params![id, name, materialized.rows.len() as i64, materialized.columns.len() as i32],
+            )?;
+
+            self.get_dataset_meta(id)
+        })();
+
+        match outcome {
+            Ok(meta) => {
+                Self::finalize_transaction(
+                    || {
+                        self.conn.execute_batch("COMMIT")?;
+                        Ok(())
+                    },
+                    || {
+                        let _ = self.conn.execute_batch("ROLLBACK");
+                    },
+                )?;
+                Ok(meta)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
     }
 
     /// Query a dataset table with pagination
@@ -241,6 +380,397 @@ impl DuckDbEngine {
             page,
             page_size,
         })
+    }
+
+    fn build_isolated_snapshot_connection(&self) -> Result<Connection, AppError> {
+        let snapshot = Connection::open_in_memory_with_flags(
+            Config::default().enable_external_access(false)?,
+        )?;
+        self.copy_visible_datasets_into_snapshot(&snapshot)?;
+        Ok(snapshot)
+    }
+
+    fn copy_visible_datasets_into_snapshot(&self, snapshot: &Connection) -> Result<(), AppError> {
+        let datasets = self.list_datasets()?;
+        let mut seen_names: HashSet<String> = HashSet::new();
+
+        for dataset in datasets {
+            let normalized_name = normalize_identifier(&dataset.name);
+            if !seen_names.insert(normalized_name.clone()) {
+                return Err(AppError::InvalidParam(format!(
+                    "duplicate visible dataset name: {}",
+                    dataset.name
+                )));
+            }
+
+            let columns = self.get_user_columns(&dataset.id)?;
+            if columns.is_empty() {
+                continue;
+            }
+            let column_defs = columns
+                .iter()
+                .map(|(column_name, column_type)| {
+                    format!("{} {}", Self::quote_identifier(column_name), column_type)
+                })
+                .collect::<Vec<_>>();
+
+            let create_sql = format!(
+                "CREATE TABLE {} ({})",
+                Self::quote_identifier(&dataset.name),
+                column_defs.join(", ")
+            );
+            snapshot.execute(&create_sql, [])?;
+
+            let select_columns = columns
+                .iter()
+                .map(|(column_name, column_type)| {
+                    let identifier = Self::quote_identifier(column_name);
+                    Self::typed_export_expression(&identifier, column_type)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let internal_table = Self::quote_identifier(&Self::internal_table_name(&dataset.id));
+            let select_sql = format!(
+                "SELECT {} FROM {} ORDER BY \"_row_id\"",
+                select_columns,
+                internal_table
+            );
+            let mut stmt = self.conn.prepare(&select_sql)?;
+            let mut rows = stmt.query([])?;
+
+            let placeholders = columns
+                .iter()
+                .map(|(_, column_type)| Self::typed_parameter_expression(column_type))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let insert_sql = format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                Self::quote_identifier(&dataset.name),
+                columns
+                    .iter()
+                    .map(|(column_name, _)| Self::quote_identifier(column_name))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                placeholders
+            );
+
+            while let Some(row) = rows.next()? {
+                let mut values = Vec::with_capacity(columns.len());
+                for column_index in 0..columns.len() {
+                    let value: Option<String> = row.get(column_index)?;
+                    values.push(value.map(Value::Text).unwrap_or(Value::Null));
+                }
+                snapshot.execute(&insert_sql, params_from_iter(values))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn collect_sql_query_page(
+        &self,
+        conn: &Connection,
+        sql: &str,
+        page: usize,
+        page_size: usize,
+    ) -> Result<SqlQueryResult, AppError> {
+        let offset = page
+            .checked_sub(1)
+            .and_then(|value| value.checked_mul(page_size))
+            .ok_or_else(|| AppError::InvalidParam("page offset overflow".into()))?;
+
+        let (columns, column_types) = self.collect_sql_query_schema(conn, sql)?;
+        let count_sql = format!("SELECT COUNT(*) FROM ({}) AS \"_sp_query_count\"", sql);
+        let total_rows: i64 = conn.query_row(&count_sql, [], |row| row.get(0))?;
+
+        let page_sql = format!("SELECT * FROM ({}) AS \"_sp_query_page\" LIMIT $1 OFFSET $2", sql);
+        let mut stmt = conn.prepare(&page_sql)?;
+
+        let limit = i64::try_from(page_size)
+            .map_err(|_| AppError::InvalidParam("page_size is too large".into()))?;
+        let offset = i64::try_from(offset)
+            .map_err(|_| AppError::InvalidParam("page offset is too large".into()))?;
+
+        let mut rows = stmt.query(params![limit, offset])?;
+        let mut rows_data = Vec::new();
+        let column_count = columns.len();
+        while let Some(row) = rows.next()? {
+            let mut row_values = Vec::with_capacity(column_count);
+            for column_index in 0..column_count {
+                let value: Value = row.get(column_index)?;
+                row_values.push(Self::duckdb_value_to_json(value));
+            }
+            rows_data.push(row_values);
+        }
+
+        Ok(SqlQueryResult {
+            columns,
+            column_types,
+            rows: rows_data,
+            total_rows,
+            page,
+            page_size,
+            execution_time_ms: 0,
+        })
+    }
+
+    fn collect_sql_query_rows(
+        &self,
+        conn: &Connection,
+        sql: &str,
+    ) -> Result<MaterializedQuery, AppError> {
+        let (columns, column_types) = self.collect_sql_query_schema(conn, sql)?;
+        let select_columns = columns
+            .iter()
+            .zip(column_types.iter())
+            .map(|(column_name, column_type)| {
+                let identifier = Self::quote_identifier(column_name);
+                format!(
+                    "{} AS {}",
+                    Self::typed_export_expression(&identifier, column_type),
+                    identifier
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let transfer_sql = format!(
+            "SELECT {select_columns} FROM ({sql}) AS \"_sp_query_transfer\""
+        );
+        let mut stmt = conn.prepare(&transfer_sql)?;
+        let mut rows = stmt.query([])?;
+        let column_count = columns.len();
+        let mut rows_data = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let mut row_values = Vec::with_capacity(column_count);
+            for column_index in 0..column_count {
+                let value: Option<String> = row.get(column_index)?;
+                row_values.push(value.map(Value::Text).unwrap_or(Value::Null));
+            }
+            rows_data.push(row_values);
+        }
+
+        Ok(MaterializedQuery {
+            columns,
+            column_types,
+            rows: rows_data,
+        })
+    }
+
+    fn validate_query_against_visible_tables(&self, sql: &str) -> Result<String, AppError> {
+        let datasets = self.list_datasets()?;
+        let allowed_tables: HashSet<String> = datasets
+            .iter()
+            .filter(|dataset| dataset.col_count > 0)
+            .map(|dataset| normalize_identifier(&dataset.name))
+            .collect();
+
+        validate_read_only_query(sql, &allowed_tables)
+    }
+
+    fn quote_identifier(name: &str) -> String {
+        format!("\"{}\"", name.replace('"', "\"\""))
+    }
+
+    fn typed_export_expression(identifier: &str, column_type: &str) -> String {
+        if column_type.trim().eq_ignore_ascii_case("BLOB") {
+            format!("hex({identifier})")
+        } else {
+            format!("CAST({identifier} AS VARCHAR)")
+        }
+    }
+
+    fn typed_parameter_expression(column_type: &str) -> String {
+        if column_type.trim().eq_ignore_ascii_case("BLOB") {
+            "from_hex(?)".to_string()
+        } else {
+            format!("CAST(? AS {column_type})")
+        }
+    }
+
+    fn canonicalize_column_type(&self, column_type: &str) -> Result<String, AppError> {
+        let type_query = format!("SELECT CAST(NULL AS {column_type}) AS value");
+        let canonical_query = validate_read_only_query(&type_query, &HashSet::new())?;
+        let (_, column_types) = self.collect_sql_query_schema(&self.conn, &canonical_query)?;
+        column_types
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::InvalidParam("column type produced no schema".into()))
+    }
+
+    fn collect_sql_query_schema(
+        &self,
+        conn: &Connection,
+        sql: &str,
+    ) -> Result<(Vec<String>, Vec<String>), AppError> {
+        let schema_sql = format!("DESCRIBE SELECT * FROM ({}) AS \"_sp_query_schema\"", sql);
+        let mut stmt = conn.prepare(&schema_sql)?;
+        let mut rows = stmt.query([])?;
+        let mut columns = Vec::new();
+        let mut column_types = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            columns.push(row.get::<_, String>(0)?);
+            column_types.push(row.get::<_, String>(1)?);
+        }
+
+        Self::validate_result_column_names(&columns)?;
+        Ok((columns, column_types))
+    }
+
+    fn validate_result_column_names(columns: &[String]) -> Result<(), AppError> {
+        let mut seen: HashSet<String> = HashSet::new();
+        let reserved = normalize_identifier("_row_id");
+
+        for column_name in columns {
+            let trimmed = column_name.trim();
+            if trimmed.is_empty() {
+                return Err(AppError::InvalidParam(
+                    "query result column names cannot be empty".into(),
+                ));
+            }
+
+            let normalized = normalize_identifier(trimmed);
+            if normalized == reserved {
+                return Err(AppError::InvalidParam(
+                    "query result column names cannot use reserved name _row_id".into(),
+                ));
+            }
+
+            if !seen.insert(normalized.clone()) {
+                return Err(AppError::InvalidParam(format!(
+                    "query result column names must be unique case-insensitively: {}",
+                    column_name
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn finalize_transaction<T, Commit, Rollback>(commit: Commit, rollback: Rollback) -> Result<T, AppError>
+    where
+        Commit: FnOnce() -> Result<T, AppError>,
+        Rollback: FnOnce(),
+    {
+        match commit() {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                rollback();
+                Err(error)
+            }
+        }
+    }
+
+    fn internal_table_name(id: &str) -> String {
+        format!("dataset_{}", id.replace('-', "_"))
+    }
+
+    fn duckdb_value_to_json(value: Value) -> serde_json::Value {
+        match value {
+            Value::Null => serde_json::Value::Null,
+            Value::Boolean(value) => serde_json::Value::Bool(value),
+            Value::TinyInt(value) => serde_json::json!(value),
+            Value::SmallInt(value) => serde_json::json!(value),
+            Value::Int(value) => serde_json::json!(value),
+            Value::BigInt(value) => serde_json::json!(value),
+            Value::HugeInt(value) => serde_json::Value::String(value.to_string()),
+            Value::UHugeInt(value) => serde_json::Value::String(value.to_string()),
+            Value::UTinyInt(value) => serde_json::json!(value),
+            Value::USmallInt(value) => serde_json::json!(value),
+            Value::UInt(value) => serde_json::json!(value),
+            Value::UBigInt(value) => serde_json::Value::String(value.to_string()),
+            Value::Float(value) => Self::float_to_json(value as f64),
+            Value::Double(value) => Self::float_to_json(value),
+            Value::Decimal(value) => serde_json::Value::String(value.to_string()),
+            Value::Timestamp(unit, value) => serde_json::Value::String(format!(
+                "timestamp({}, {})",
+                Self::time_unit_label(unit),
+                value
+            )),
+            Value::Text(value) => serde_json::Value::String(value),
+            Value::Blob(bytes) => serde_json::Value::String(Self::bytes_to_hex(&bytes)),
+            Value::Geometry(bytes) => serde_json::Value::String(Self::bytes_to_hex(&bytes)),
+            Value::Date32(days) => serde_json::Value::String(format!("date32({days})")),
+            Value::Time64(unit, value) => serde_json::Value::String(format!(
+                "time64({}, {})",
+                Self::time_unit_label(unit),
+                value
+            )),
+            Value::Interval { months, days, nanos } => serde_json::Value::String(format!(
+                "interval(months={months}, days={days}, nanos={nanos})"
+            )),
+            Value::List(values) | Value::Array(values) => serde_json::Value::Array(
+                values.into_iter().map(Self::duckdb_value_to_json).collect(),
+            ),
+            Value::Enum(value) => serde_json::Value::String(value),
+            Value::Struct(entries) => {
+                let mut object = serde_json::Map::new();
+                for (key, value) in entries.iter() {
+                    object.insert(key.clone(), Self::duckdb_value_to_json(value.clone()));
+                }
+                serde_json::Value::Object(object)
+            }
+            Value::Map(entries) => Self::duckdb_map_to_json(entries),
+            Value::Union(value) => Self::duckdb_value_to_json(*value),
+            other => serde_json::Value::String(format!("unsupported duckdb value: {:?}", other)),
+        }
+    }
+
+    fn duckdb_map_to_json(entries: OrderedMap<Value, Value>) -> serde_json::Value {
+        let mapped = entries
+            .iter()
+            .map(|(key, value)| (Self::duckdb_value_to_json(key.clone()), Self::duckdb_value_to_json(value.clone())))
+            .collect::<Vec<_>>();
+
+        if mapped.iter().all(|(key, _)| matches!(key, serde_json::Value::String(_))) {
+            let mut object = serde_json::Map::new();
+            for (key, value) in mapped {
+                if let serde_json::Value::String(key) = key {
+                    object.insert(key, value);
+                }
+            }
+            serde_json::Value::Object(object)
+        } else {
+            serde_json::Value::Array(
+                mapped
+                    .into_iter()
+                    .map(|(key, value)| {
+                        serde_json::json!({
+                            "key": key,
+                            "value": value,
+                        })
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    fn float_to_json(value: f64) -> serde_json::Value {
+        match serde_json::Number::from_f64(value) {
+            Some(number) => serde_json::Value::Number(number),
+            None if value.is_nan() => serde_json::Value::String("NaN".to_string()),
+            None if value.is_sign_positive() => serde_json::Value::String("Infinity".to_string()),
+            None => serde_json::Value::String("-Infinity".to_string()),
+        }
+    }
+
+    fn bytes_to_hex(bytes: &[u8]) -> String {
+        let mut hex = String::with_capacity(bytes.len() * 2 + 2);
+        hex.push_str("0x");
+        for byte in bytes {
+            hex.push_str(&format!("{byte:02x}"));
+        }
+        hex
+    }
+
+    fn time_unit_label(unit: TimeUnit) -> &'static str {
+        match unit {
+            TimeUnit::Second => "Second",
+            TimeUnit::Millisecond => "Millisecond",
+            TimeUnit::Microsecond => "Microsecond",
+            TimeUnit::Nanosecond => "Nanosecond",
+        }
     }
 
     /// Export a dataset to CSV
@@ -392,6 +922,8 @@ impl DuckDbEngine {
         let mut results = Vec::new();
 
         for (table_index, src_table) in table_names.iter().enumerate() {
+            self.validate_dataset_name(src_table, None)?;
+
             let id = uuid::Uuid::new_v4().to_string();
             let table_name = format!("dataset_{}", id.replace('-', "_"));
 
@@ -562,6 +1094,47 @@ impl DuckDbEngine {
         } else {
             "VARCHAR"
         }
+    }
+
+    pub fn validate_dataset_name(
+        &self,
+        name: &str,
+        exclude_id: Option<&str>,
+    ) -> Result<(), AppError> {
+        if name.trim().is_empty() {
+            return Err(AppError::InvalidParam("Dataset name cannot be empty".into()));
+        }
+
+        if name.starts_with(|ch: char| ch.is_whitespace() || ch == '.')
+            || name.ends_with(|ch: char| ch.is_whitespace() || ch == '.')
+        {
+            return Err(AppError::InvalidParam(
+                "Dataset name cannot start or end with a dot or whitespace".into(),
+            ));
+        }
+
+        if name
+            .chars()
+            .any(|ch| matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        {
+            return Err(AppError::InvalidParam(
+                "Dataset name contains invalid characters: / \\ : * ? \" < > |".into(),
+            ));
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT name FROM _meta_datasets WHERE lower(name) = lower($1) AND ($2 IS NULL OR id != $2) LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![name, exclude_id])?;
+        if let Some(row) = rows.next()? {
+            let conflict_name: String = row.get(0)?;
+            return Err(AppError::InvalidParam(format!(
+                "Dataset name conflicts with existing dataset \"{}\"",
+                conflict_name
+            )));
+        }
+
+        Ok(())
     }
 
     /// Export datasets to a SQLite database file.
@@ -738,21 +1311,28 @@ impl DuckDbEngine {
             return Err(AppError::InvalidParam("Column names and types length mismatch".into()));
         }
 
-        let table_name = format!("dataset_{}", id.replace('-', "_"));
+        self.validate_dataset_name(name, None)?;
+        Self::validate_result_column_names(column_names)?;
+        let canonical_types = column_types
+            .iter()
+            .map(|column_type| self.canonicalize_column_type(column_type))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let table_name = Self::quote_identifier(&Self::internal_table_name(id));
 
         // Build column definitions
         let col_defs: Vec<String> = column_names
             .iter()
-            .zip(column_types.iter())
-            .map(|(name, typ)| format!("\"{}\" {}", name, typ))
+            .zip(canonical_types.iter())
+            .map(|(name, typ)| format!("{} {}", Self::quote_identifier(name), typ))
             .collect();
 
         // Add a hidden row_id column for row identification
         let create_sql = if col_defs.is_empty() {
-            format!("CREATE TABLE \"{}\" (\"_row_id\" INTEGER DEFAULT 0)", table_name)
+            format!("CREATE TABLE {} (\"_row_id\" INTEGER DEFAULT 0)", table_name)
         } else {
             format!(
-                "CREATE TABLE \"{}\" (\"_row_id\" INTEGER DEFAULT 0, {})",
+                "CREATE TABLE {} (\"_row_id\" INTEGER DEFAULT 0, {})",
                 table_name,
                 col_defs.join(", ")
             )
@@ -760,7 +1340,7 @@ impl DuckDbEngine {
         self.conn.execute(&create_sql, [])?;
 
         // Register column metadata
-        for (i, (col_name, col_type)) in column_names.iter().zip(column_types.iter()).enumerate() {
+        for (i, (col_name, col_type)) in column_names.iter().zip(canonical_types.iter()).enumerate() {
             self.conn.execute(
                 "INSERT INTO _meta_columns (dataset_id, col_index, col_name, col_type) VALUES ($1, $2, $3, $4)",
                 params![id, i as i32, col_name, col_type],
@@ -859,6 +1439,8 @@ impl DuckDbEngine {
 
     /// Rename a dataset
     pub fn rename_dataset(&self, dataset_id: &str, new_name: &str) -> Result<(), AppError> {
+        self.validate_dataset_name(new_name, Some(dataset_id))?;
+
         self.conn.execute(
             "UPDATE _meta_datasets SET name = $1 WHERE id = $2",
             params![new_name, dataset_id],
@@ -1504,6 +2086,8 @@ impl DuckDbEngine {
         source_type: &str,
         select_sql: &str,
     ) -> Result<DatasetMeta, AppError> {
+        self.validate_dataset_name(new_name, None)?;
+
         let table_name = format!("dataset_{}", new_id.replace('-', "_"));
 
         // Create table via CTAS wrapped with _row_id
@@ -1610,6 +2194,8 @@ impl DuckDbEngine {
         new_name: &str,
         source_id: &str,
     ) -> Result<DatasetMeta, AppError> {
+        self.validate_dataset_name(new_name, None)?;
+
         let src_table = format!("dataset_{}", source_id.replace('-', "_"));
         let user_cols = self.get_user_columns(source_id)?;
         if user_cols.is_empty() {
@@ -2050,4 +2636,540 @@ fn dedupe_sqlite_table_name(
     }
     used.insert(candidate.clone());
     candidate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use duckdb::types::Decimal;
+
+    fn seed_sales_dataset(db: &DuckDbEngine) {
+        db.create_empty_table(
+            "sales-id",
+            "Sales",
+            &["region".to_string(), "revenue".to_string()],
+            &["VARCHAR".to_string(), "DOUBLE".to_string()],
+        )
+        .unwrap();
+
+        let rows = [
+            (1_i64, "North", 120.0_f64),
+            (2_i64, "South", 200.0_f64),
+            (3_i64, "East", 40.0_f64),
+            (4_i64, "West", 80.0_f64),
+            (5_i64, "Central", 160.0_f64),
+        ];
+
+        for (row_id, region, revenue) in rows {
+            db.conn()
+                .execute(
+                    "INSERT INTO \"dataset_sales_id\" (\"_row_id\", \"region\", \"revenue\") VALUES ($1, $2, $3)",
+                    params![row_id, region, revenue],
+                )
+                .unwrap();
+        }
+    }
+
+    fn seed_regional_sales_dataset(db: &DuckDbEngine) {
+        db.create_empty_table(
+            "sales-id",
+            "Sales",
+            &["region".to_string(), "revenue".to_string()],
+            &["VARCHAR".to_string(), "DOUBLE".to_string()],
+        )
+        .unwrap();
+
+        let rows = [
+            (1_i64, "North", 120.0_f64),
+            (2_i64, "South", 200.0_f64),
+        ];
+
+        for (row_id, region, revenue) in rows {
+            db.conn()
+                .execute(
+                    "INSERT INTO \"dataset_sales_id\" (\"_row_id\", \"region\", \"revenue\") VALUES ($1, $2, $3)",
+                    params![row_id, region, revenue],
+                )
+                .unwrap();
+        }
+
+        db.conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
+                params![2_i64, "sales-id"],
+            )
+            .unwrap();
+    }
+
+    fn connection_external_access_enabled(conn: &Connection) -> bool {
+        let value: String = conn
+            .query_row(
+                "SELECT CAST(current_setting('enable_external_access') AS VARCHAR)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        value.trim().eq_ignore_ascii_case("true")
+    }
+
+    fn external_access_enabled(db: &DuckDbEngine) -> bool {
+        let value: String = db
+            .conn()
+            .query_row(
+                "SELECT CAST(current_setting('enable_external_access') AS VARCHAR)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        value.trim().eq_ignore_ascii_case("true")
+    }
+
+    fn dataset_table_exists(db: &DuckDbEngine, table_name: &str) -> bool {
+        let sql = format!(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'main' AND table_name = '{}'",
+            table_name
+        );
+        let count: i64 = db.conn().query_row(&sql, [], |row| row.get(0)).unwrap();
+        count > 0
+    }
+
+    fn metadata_row_count(db: &DuckDbEngine, dataset_id: &str) -> i64 {
+        db.conn()
+            .query_row(
+                "SELECT COUNT(*) FROM _meta_datasets WHERE id = $1",
+                params![dataset_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn finalize_transaction_rolls_back_when_commit_fails() {
+        let rollback_called = std::cell::Cell::new(false);
+
+        let error = DuckDbEngine::finalize_transaction(
+            || Err::<(), AppError>(AppError::Database("commit failed".into())),
+            || rollback_called.set(true),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, AppError::Database(message) if message == "commit failed"));
+        assert!(rollback_called.get());
+    }
+
+    #[test]
+    fn validate_result_column_names_rejects_empty_duplicate_and_reserved_values() {
+        let empty_error = DuckDbEngine::validate_result_column_names(&["".to_string()])
+            .unwrap_err();
+        assert!(matches!(empty_error, AppError::InvalidParam(_)));
+
+        let duplicate_error = DuckDbEngine::validate_result_column_names(&[
+            "Region".to_string(),
+            "region".to_string(),
+        ])
+        .unwrap_err();
+        assert!(matches!(duplicate_error, AppError::InvalidParam(_)));
+
+        let reserved_error = DuckDbEngine::validate_result_column_names(&[
+            "_row_id".to_string(),
+        ])
+        .unwrap_err();
+        assert!(matches!(reserved_error, AppError::InvalidParam(_)));
+    }
+
+    #[test]
+    fn duckdb_value_to_json_handles_known_complex_variants_without_debug_fallback() {
+        let decimal = Decimal::new(12, 2, 1234).unwrap();
+        let struct_value = Value::Struct(OrderedMap::from(vec![
+            ("name".to_string(), Value::Text("Ada".to_string())),
+            ("score".to_string(), Value::Int(7)),
+        ]));
+        let string_key_map = Value::Map(OrderedMap::from(vec![
+            (Value::Text("left".to_string()), Value::Int(1)),
+            (Value::Text("right".to_string()), Value::Int(2)),
+        ]));
+        let mixed_key_map = Value::Map(OrderedMap::from(vec![
+            (Value::Int(1), Value::Text("one".to_string())),
+            (Value::Text("two".to_string()), Value::Int(2)),
+        ]));
+
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::HugeInt(123456789012345678901234567890i128)), serde_json::json!("123456789012345678901234567890"));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::UHugeInt(u128::MAX)), serde_json::json!(u128::MAX.to_string()));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::UBigInt(u64::MAX)), serde_json::json!(u64::MAX.to_string()));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Decimal(decimal)), serde_json::json!("12.34"));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Timestamp(TimeUnit::Microsecond, 7)), serde_json::json!("timestamp(Microsecond, 7)"));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Time64(TimeUnit::Second, 9)), serde_json::json!("time64(Second, 9)"));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Date32(4)), serde_json::json!("date32(4)"));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Blob(vec![0xde, 0xad])), serde_json::json!("0xdead"));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Geometry(vec![0xbe, 0xef])), serde_json::json!("0xbeef"));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::List(vec![Value::Int(1), Value::Int(2)])), serde_json::json!([1, 2]));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Array(vec![Value::Text("x".to_string()), Value::Boolean(true)])), serde_json::json!(["x", true]));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(struct_value), serde_json::json!({"name": "Ada", "score": 7}));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(string_key_map), serde_json::json!({"left": 1, "right": 2}));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(mixed_key_map), serde_json::json!([
+            {"key": 1, "value": "one"},
+            {"key": "two", "value": 2},
+        ]));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Enum("green".to_string())), serde_json::json!("green"));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Union(Box::new(Value::Boolean(true)))), serde_json::json!(true));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Float(f32::NAN)), serde_json::json!("NaN"));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Double(f64::INFINITY)), serde_json::json!("Infinity"));
+        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Double(f64::NEG_INFINITY)), serde_json::json!("-Infinity"));
+    }
+
+    #[test]
+    fn dataset_names_are_unique_case_insensitively() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table("one", "Sales", &[], &[]).unwrap();
+
+        let create_error = db.create_empty_table("two", "sales", &[], &[]).unwrap_err();
+        assert!(matches!(create_error, AppError::InvalidParam(_)));
+
+        db.create_empty_table("two", "Costs", &[], &[]).unwrap();
+        let rename_error = db.rename_dataset("two", "SALES").unwrap_err();
+        assert!(matches!(rename_error, AppError::InvalidParam(_)));
+    }
+
+    #[test]
+    fn transpose_table_rejects_case_insensitive_name_conflict_before_mutating_state() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "source",
+            "Sales",
+            &["Value".to_string()],
+            &["VARCHAR".to_string()],
+        )
+        .unwrap();
+
+        let err = db.transpose_table("target", "sales", "source").unwrap_err();
+        assert!(matches!(err, AppError::InvalidParam(_)));
+        assert_eq!(metadata_row_count(&db, "target"), 0);
+        assert!(!dataset_table_exists(&db, "dataset_target"));
+    }
+
+    #[test]
+    fn transpose_table_rejects_invalid_name_before_mutating_state() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "source",
+            "Source",
+            &["Value".to_string()],
+            &["VARCHAR".to_string()],
+        )
+        .unwrap();
+
+        let err = db.transpose_table("target", "Bad/Name", "source").unwrap_err();
+        assert!(matches!(err, AppError::InvalidParam(_)));
+        assert_eq!(metadata_row_count(&db, "target"), 0);
+        assert!(!dataset_table_exists(&db, "dataset_target"));
+    }
+
+    #[test]
+    fn dataset_name_rejects_empty_or_whitespace_only_values() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+
+        let empty_error = db.create_empty_table("one", "", &[], &[]).unwrap_err();
+        assert!(matches!(empty_error, AppError::InvalidParam(_)));
+
+        let whitespace_error = db.create_empty_table("two", "   ", &[], &[]).unwrap_err();
+        assert!(matches!(whitespace_error, AppError::InvalidParam(_)));
+    }
+
+    #[test]
+    fn dataset_name_rejects_invalid_edge_characters_and_reserved_symbols() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+
+        let leading_dot_error = db.create_empty_table("one", ".Sales", &[], &[]).unwrap_err();
+        assert!(matches!(leading_dot_error, AppError::InvalidParam(_)));
+
+        let trailing_space_error = db.create_empty_table("two", "Sales ", &[], &[]).unwrap_err();
+        assert!(matches!(trailing_space_error, AppError::InvalidParam(_)));
+
+        let reserved_char_error = db.create_empty_table("three", "Sales/2026", &[], &[]).unwrap_err();
+        assert!(matches!(reserved_char_error, AppError::InvalidParam(_)));
+    }
+
+    #[test]
+    fn create_empty_table_rejects_hostile_schema_without_mutating_state() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        let error = db
+            .create_empty_table(
+                "hostile-id",
+                "Hostile",
+                &["value\" INTEGER); DROP TABLE _meta_datasets; --".to_string()],
+                &["INTEGER); DROP TABLE _meta_columns; --".to_string()],
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, AppError::InvalidParam(_)));
+        assert_eq!(metadata_row_count(&db, "hostile-id"), 0);
+        assert!(!dataset_table_exists(&db, "dataset_hostile_id"));
+        assert!(db.list_datasets().is_ok());
+    }
+
+    #[test]
+    fn rename_dataset_allows_self_preserving_case_changes() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table("one", "Sales", &[], &[]).unwrap();
+
+        db.rename_dataset("one", "SALES").unwrap();
+
+        let meta = db.get_dataset_meta("one").unwrap();
+        assert_eq!(meta.name, "SALES");
+    }
+
+    #[test]
+    fn executes_visible_name_query_with_count_types_and_pagination() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        seed_sales_dataset(&db);
+
+        let before = external_access_enabled(&db);
+        let result = db
+            .execute_sql_query("SELECT region, revenue FROM Sales ORDER BY revenue", 1, 2)
+            .unwrap();
+
+        assert_eq!(result.columns, vec!["region".to_string(), "revenue".to_string()]);
+        assert_eq!(result.column_types, vec!["VARCHAR".to_string(), "DOUBLE".to_string()]);
+        assert_eq!(result.total_rows, 5);
+        assert_eq!(result.page, 1);
+        assert_eq!(result.page_size, 2);
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0], vec![serde_json::json!("East"), serde_json::json!(40.0)]);
+        assert_eq!(result.rows[1], vec![serde_json::json!("West"), serde_json::json!(80.0)]);
+        assert_eq!(external_access_enabled(&db), before);
+    }
+
+    #[test]
+    fn blank_dataset_does_not_block_queries_that_do_not_reference_it() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table("blank-id", "Blank", &[], &[]).unwrap();
+
+        let result = db.execute_sql_query("SELECT 1 AS value", 1, 10).unwrap();
+
+        assert_eq!(result.rows, vec![vec![serde_json::json!(1)]]);
+    }
+
+    #[test]
+    fn query_with_terminal_semicolon_can_be_previewed_and_materialized() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+
+        let preview = db
+            .execute_sql_query("SELECT 1 AS value; -- finished", 1, 10)
+            .unwrap();
+        let created = db
+            .create_table_from_sql_query("semicolon-id", "Semicolon", "SELECT 1 AS value;")
+            .unwrap();
+
+        assert_eq!(preview.rows, vec![vec![serde_json::json!(1)]]);
+        assert_eq!(created.row_count, 1);
+    }
+
+    #[test]
+    fn execute_sql_query_rejects_out_of_range_page_size() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+
+        let zero_error = db.execute_sql_query("SELECT 1", 1, 0).unwrap_err();
+        assert!(matches!(zero_error, AppError::InvalidParam(_)));
+
+        let oversize_error = db.execute_sql_query("SELECT 1", 1, 201).unwrap_err();
+        assert!(matches!(oversize_error, AppError::InvalidParam(_)));
+    }
+
+    #[test]
+    fn execute_sql_query_rejects_offset_overflow() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+
+        let overflow_error = db.execute_sql_query("SELECT 1", usize::MAX, 2).unwrap_err();
+        assert!(matches!(overflow_error, AppError::InvalidParam(_)));
+    }
+
+    #[test]
+    fn execute_sql_query_exposes_visible_metadata() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        seed_sales_dataset(&db);
+
+        let datasets = db.list_datasets().unwrap();
+        assert_eq!(datasets.len(), 1);
+        assert_eq!(datasets[0].name, "Sales");
+
+        let meta = db.get_dataset_meta("sales-id").unwrap();
+        assert_eq!(meta.source_type, "manual");
+        assert_eq!(meta.col_count, 2);
+    }
+
+    #[test]
+    fn execute_sql_query_restores_external_access_and_cleans_up_aliases_on_failure() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        seed_sales_dataset(&db);
+
+        let before = external_access_enabled(&db);
+        let error = db.execute_sql_query("SELECT CAST(region AS INTEGER) FROM Sales", 1, 2).unwrap_err();
+        assert!(matches!(error, AppError::Database(_)));
+        assert_eq!(external_access_enabled(&db), before);
+    }
+
+    #[test]
+    fn isolated_snapshot_keeps_external_access_disabled_without_mutating_live_connection() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        seed_sales_dataset(&db);
+
+        let live_before = external_access_enabled(&db);
+        let snapshot = db.build_isolated_snapshot_connection().unwrap();
+
+        assert!(!connection_external_access_enabled(&snapshot));
+        assert_eq!(external_access_enabled(&db), live_before);
+
+        let success = db.execute_sql_query("SELECT region FROM Sales ORDER BY region", 1, 1).unwrap();
+        assert_eq!(success.columns, vec!["region".to_string()]);
+        assert_eq!(external_access_enabled(&db), live_before);
+
+        let failure = db.execute_sql_query("SELECT CAST(region AS INTEGER) FROM Sales", 1, 1).unwrap_err();
+        assert!(matches!(failure, AppError::Database(_)));
+        assert_eq!(external_access_enabled(&db), live_before);
+    }
+
+    #[test]
+    fn execute_sql_query_preserves_exact_complex_types_and_json_values() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        let sql = "SELECT 12.34::DECIMAL(12,2) AS amount, TIMESTAMP '1970-01-01 00:00:01' AS created_at, [1, 2]::INTEGER[] AS numbers, struct_pack(label := 'alpha', score := 7) AS info";
+
+        let result = db.execute_sql_query(sql, 1, 10).unwrap();
+
+        assert_eq!(result.columns, vec!["amount".to_string(), "created_at".to_string(), "numbers".to_string(), "info".to_string()]);
+        assert_eq!(result.column_types, vec!["DECIMAL(12,2)".to_string(), "TIMESTAMP".to_string(), "INTEGER[]".to_string(), "STRUCT(\"label\" VARCHAR, score INTEGER)".to_string()]);
+        assert_eq!(result.total_rows, 1);
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], serde_json::json!("12.34"));
+        assert!(matches!(&result.rows[0][1], serde_json::Value::String(text) if text.starts_with("timestamp(")));
+        assert_eq!(result.rows[0][2], serde_json::json!([1, 2]));
+        assert_eq!(result.rows[0][3], serde_json::json!({"label": "alpha", "score": 7}));
+    }
+
+    #[test]
+    fn create_table_from_sql_query_preserves_exact_scalar_types_and_row_insertion() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        seed_regional_sales_dataset(&db);
+        let sql = "SELECT region, CAST(SUM(revenue) AS DECIMAL(12,2)) AS total FROM Sales GROUP BY region ORDER BY region";
+
+        let meta = db
+            .create_table_from_sql_query("typed-query-id", "Typed Query", sql)
+            .unwrap();
+
+        assert_eq!(meta.source_type, "query");
+        assert_eq!(meta.row_count, 2);
+        assert_eq!(meta.col_count, 2);
+
+        let table = db.query_table("typed-query-id", 0, 10, None, None).unwrap();
+        assert_eq!(table.columns.first().map(String::as_str), Some("_row_id"));
+        assert_eq!(table.column_types, vec!["INTEGER".to_string(), "VARCHAR".to_string(), "DECIMAL(12,2)".to_string()]);
+        assert_eq!(table.rows.len(), 2);
+
+        let first_region: String = db
+            .conn()
+            .query_row(
+                "SELECT CAST(\"region\" AS VARCHAR) FROM \"dataset_typed_query_id\" ORDER BY \"_row_id\" LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let first_total: String = db
+            .conn()
+            .query_row(
+                "SELECT CAST(\"total\" AS VARCHAR) FROM \"dataset_typed_query_id\" ORDER BY \"_row_id\" LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let second_total: String = db
+            .conn()
+            .query_row(
+                "SELECT CAST(\"total\" AS VARCHAR) FROM \"dataset_typed_query_id\" ORDER BY \"_row_id\" LIMIT 1 OFFSET 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(first_region, "North");
+        assert_eq!(first_total, "120.00");
+        assert_eq!(second_total, "200.00");
+    }
+
+    #[test]
+    fn create_table_from_sql_query_rejects_reserved_row_id_name_before_mutating_state() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+
+        let error = db
+            .create_table_from_sql_query(
+                "reserved-result-id",
+                "Reserved Result",
+                "SELECT 1 AS \"_row_id\"",
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, AppError::InvalidParam(_)));
+        assert!(db.get_dataset_meta("reserved-result-id").is_err());
+        assert!(!dataset_table_exists(&db, "dataset_reserved_result_id"));
+    }
+
+    #[test]
+    fn create_table_from_sql_query_persists_query_metadata_and_row_id_order() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        seed_regional_sales_dataset(&db);
+
+        let meta = db
+            .create_table_from_sql_query(
+                "regional-totals-id",
+                "Regional Totals",
+                "SELECT region, SUM(revenue) AS total FROM Sales GROUP BY region ORDER BY region",
+            )
+            .unwrap();
+
+        assert_eq!(meta.name, "Regional Totals");
+        assert_eq!(meta.source_type, "query");
+        assert_eq!(meta.row_count, 2);
+        assert_eq!(meta.col_count, 2);
+
+        let table = db.query_table("regional-totals-id", 0, 10, None, None).unwrap();
+        assert_eq!(table.columns.first().map(String::as_str), Some("_row_id"));
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.columns.len(), 3);
+
+        let stored = db.get_dataset_meta("regional-totals-id").unwrap();
+        assert_eq!(stored.source_type, "query");
+        assert_eq!(stored.name, "Regional Totals");
+    }
+
+    #[test]
+    fn create_table_from_sql_query_rolls_back_when_metadata_insert_fails() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        seed_regional_sales_dataset(&db);
+
+        let dataset_id = "rollback-query-id";
+        db.conn()
+            .execute(
+                "INSERT INTO _meta_columns (dataset_id, col_index, col_name, col_type) VALUES ($1, $2, $3, $4)",
+                params![dataset_id, 0_i32, "stale", "VARCHAR"],
+            )
+            .unwrap();
+
+        let error = db
+            .create_table_from_sql_query(
+                dataset_id,
+                "Rollback Query",
+                "SELECT region, SUM(revenue) AS total FROM Sales GROUP BY region",
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, AppError::Database(_)));
+
+        db.conn()
+            .execute("DELETE FROM _meta_columns WHERE dataset_id = $1", params![dataset_id])
+            .unwrap();
+
+        assert!(db.get_dataset_meta(dataset_id).is_err());
+        assert!(!dataset_table_exists(
+            &db,
+            &format!("dataset_{}", dataset_id.replace('-', "_"))
+        ));
+    }
 }
