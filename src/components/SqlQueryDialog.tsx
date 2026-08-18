@@ -265,7 +265,7 @@ export function SqlQueryDialog({ datasets, tableFolders, onClose, onCreated }: S
                   <i className="fa-solid fa-eraser" aria-hidden="true" />
                   <span>{t("sqlQuery.clear")}</span>
                 </button>
-                <button type="button" className="sql-query-toolbar-btn" onClick={openCreatePrompt} disabled={!isPreviewCurrent || busy} title={t("sqlQuery.createTooltip")} aria-label={t("sqlQuery.createTable")}> 
+                <button type="button" className="sql-query-toolbar-btn" onClick={openCreatePrompt} disabled={!isPreviewCurrent || busy} title={t("sqlQuery.createTooltip")} aria-label={t("sqlQuery.createTable")}>
                   <i className="fa-solid fa-table" aria-hidden="true" />
                   <span>{t("sqlQuery.createTable")}</span>
                 </button>

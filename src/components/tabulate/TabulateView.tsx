@@ -549,4 +549,3 @@ function reorder<T>(items: readonly T[], fromIndex: number, toIndex: number): T[
   next.splice(toIndex, 0, moved);
   return next;
 }
-
