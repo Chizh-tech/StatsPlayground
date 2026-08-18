@@ -1,5 +1,7 @@
 use crate::error::AppError;
-use crate::models::project::ProjectInfo;
+use duckdb::params_from_iter;
+use duckdb::types::Value as DuckValue;
+use crate::models::project::{DatasetNameMigration, ProjectInfo};
 use crate::models::table::{ColumnDisplayProps, ColumnFormatInfo};
 use crate::services::spprj_archive::{
     self, GraphDoc, ProjectBundle, TableColumn, TableColumnFormat, TableDoc,
@@ -32,9 +34,11 @@ pub struct OpenProjectResult {
     /// `graphId -> folder path`.
     #[serde(default)]
     pub graph_folders: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub dataset_name_migrations: Vec<DatasetNameMigration>,
 }
 
-const SPPRJ_VERSION: &str = "2.0.0";
+const SPPRJ_VERSION: &str = "3.0.0";
 
 impl<'a> ProjectService<'a> {
     pub fn new(state: &'a AppState) -> Self {
@@ -97,16 +101,18 @@ impl<'a> ProjectService<'a> {
         file_path: &str,
         progress_cb: Option<&dyn Fn(usize, usize, &str)>,
     ) -> Result<OpenProjectResult, AppError> {
-        let bundle = spprj_archive::read_project_file(file_path)?;
+        let mut bundle = spprj_archive::read_project_file(file_path)?;
+        let dataset_name_migrations = normalize_duplicate_dataset_names(&mut bundle.tables);
 
-        self.state.reset_db()?;
-
+        let staged_state = AppState::new()?;
         let total = bundle.tables.len();
-        for (idx, doc) in bundle.tables.iter().enumerate() {
-            if let Some(cb) = &progress_cb { cb(idx, total, &doc.name); }
-            self.restore_table_doc(doc)?;
+        {
+            let staged_service = ProjectService::new(&staged_state);
+            for (idx, doc) in bundle.tables.iter().enumerate() {
+                if let Some(cb) = &progress_cb { cb(idx, total, &doc.name); }
+                staged_service.restore_table_doc(doc)?;
+            }
         }
-        if let Some(cb) = &progress_cb { cb(total, total, "完成"); }
 
         let project = ProjectInfo {
             name: bundle.manifest.name.clone(),
@@ -114,27 +120,14 @@ impl<'a> ProjectService<'a> {
             created_at: bundle.manifest.created_at.clone(),
         };
 
-        let mut proj = self.state.project.write()
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        *proj = Some(project.clone());
-
-        // Folder for every file is derived from its archive path
-        // (`dirname(entry.file)`). The manifest no longer carries a separate
-        // `folder` field — the path IS the source of truth (issue #7).
-        let mut table_folders: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for entry in &bundle.manifest.tables {
-            if let Some(f) = spprj_archive::parent_folder(&entry.file) {
-                if !f.is_empty() { table_folders.insert(entry.id.clone(), f); }
-            }
-        }
-        let mut graph_folders: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for entry in &bundle.manifest.graphs {
-            if let Some(f) = spprj_archive::parent_folder(&entry.file) {
-                if !f.is_empty() { graph_folders.insert(entry.id.clone(), f); }
-            }
-        }
+        let table_folders = match &bundle.manifest.table_folders {
+            Some(assignments) => assignments.clone(),
+            None => derive_folders_from_entries(&bundle.manifest.tables, "tables"),
+        };
+        let graph_folders = match &bundle.manifest.graph_folders {
+            Some(assignments) => assignments.clone(),
+            None => derive_folders_from_entries(&bundle.manifest.graphs, "graphs"),
+        };
         let folders = bundle.manifest.folders.clone();
 
         // Re-pack graph docs into the opaque JSON shape the frontend
@@ -152,6 +145,21 @@ impl<'a> ProjectService<'a> {
             })
             .collect();
 
+        let staged_db = staged_state.db.into_inner()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let staged_display = staged_state.column_display.into_inner()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let mut live_db = self.state.db.lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let mut live_display = self.state.column_display.lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let mut live_project = self.state.project.write()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        *live_db = staged_db;
+        *live_display = staged_display;
+        *live_project = Some(project.clone());
+        if let Some(cb) = &progress_cb { cb(total, total, "完成"); }
+
         Ok(OpenProjectResult {
             project,
             history: bundle.history,
@@ -160,6 +168,7 @@ impl<'a> ProjectService<'a> {
             folders,
             table_folders,
             graph_folders,
+            dataset_name_migrations,
         })
     }
 
@@ -289,7 +298,9 @@ impl<'a> ProjectService<'a> {
         // SELECT _row_id + every visible column. _row_id stays at index 0 in
         // the saved row arrays so restore can write it back verbatim.
         let select_cols = std::iter::once("\"_row_id\"".to_string())
-            .chain(col_names.iter().map(|n| format!("\"{}\"", n)))
+            .chain(columns.iter().map(|column| {
+                archive_export_expression(&column.name, &column.col_type)
+            }))
             .collect::<Vec<_>>()
             .join(", ");
         let query = format!("SELECT {} FROM \"{}\" ORDER BY \"_row_id\"", select_cols, table_name);
@@ -300,9 +311,19 @@ impl<'a> ProjectService<'a> {
         let mut result_rows = stmt.query([])?;
         while let Some(row) = result_rows.next()? {
             let mut row_values = Vec::with_capacity(total_cols);
-            for i in 0..total_cols {
-                let value: duckdb::types::Value = row.get(i)?;
-                row_values.push(duckdb_to_json(value));
+            let row_id: DuckValue = row.get(0)?;
+            row_values.push(duckdb_to_json(row_id));
+            for (column_index, column) in columns.iter().enumerate() {
+                if is_archive_scalar_type(&column.col_type) {
+                    let value: DuckValue = row.get(column_index + 1)?;
+                    row_values.push(duckdb_to_json(value));
+                } else {
+                    let value: Option<String> = row.get(column_index + 1)?;
+                    row_values.push(match value {
+                        Some(value) => serde_json::json!({ "$duckdbValue": value }),
+                        None => serde_json::Value::Null,
+                    });
+                }
             }
             rows.push(row_values);
         }
@@ -311,7 +332,7 @@ impl<'a> ProjectService<'a> {
             id: dataset_id.to_string(),
             name: meta.name,
             source_type: meta.source_type,
-            version: "1".to_string(),
+            version: "2".to_string(),
             columns,
             rows,
         })
@@ -321,49 +342,81 @@ impl<'a> ProjectService<'a> {
     /// register its column display props. Returns the dataset id actually used
     /// (caller may want a fresh id when importing — see `import_table`).
     pub fn restore_table_doc(&self, doc: &TableDoc) -> Result<String, AppError> {
+        if doc.version != "1" && doc.version != "2" {
+            return Err(AppError::InvalidParam(format!(
+                "unsupported table document version: {}",
+                doc.version
+            )));
+        }
+
+        let expected_row_width = doc.columns.len() + 1;
+        if doc.rows.iter().any(|row| row.len() != expected_row_width) {
+            return Err(AppError::InvalidParam(format!(
+                "table rows must contain exactly {expected_row_width} values"
+            )));
+        }
+
         let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
 
         let col_names: Vec<String> = doc.columns.iter().map(|c| c.name.clone()).collect();
         let col_types: Vec<String> = doc.columns.iter().map(|c| c.col_type.clone()).collect();
-        db.create_empty_table(&doc.id, &doc.name, &col_names, &col_types)?;
+        db.conn().execute_batch("BEGIN TRANSACTION")?;
+        let restore_result = (|| -> Result<(), AppError> {
+            db.create_empty_table(&doc.id, &doc.name, &col_names, &col_types)?;
+            let canonical_columns = db.get_user_columns(&doc.id)?;
 
-        if !doc.rows.is_empty() {
-            let all_col_defs: Vec<String> = std::iter::once("\"_row_id\"".to_string())
-                .chain(col_names.iter().map(|n| format!("\"{}\"", n)))
-                .collect();
-            let col_list = all_col_defs.join(", ");
-            let table_ident = format!("dataset_{}", doc.id.replace('-', "_"));
-
-            for chunk in doc.rows.chunks(1000) {
-                let values_lists: Vec<String> = chunk.iter().map(|row| {
-                    let vals: Vec<String> = row.iter().map(|v| match v {
-                        serde_json::Value::Null => "NULL".to_string(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        _ => format!("'{}'", v.to_string().replace('\'', "''")),
-                    }).collect();
-                    format!("({})", vals.join(", "))
-                }).collect();
-
-                let raw_sql = format!(
-                    "INSERT INTO \"{}\" ({}) VALUES {}",
-                    table_ident, col_list, values_lists.join(", ")
+            if !doc.rows.is_empty() {
+                let all_col_defs: Vec<String> = std::iter::once("\"_row_id\"".to_string())
+                    .chain(col_names.iter().map(|name| quote_identifier(name)))
+                    .collect();
+                let col_list = all_col_defs.join(", ");
+                let table_ident = quote_identifier(&format!("dataset_{}", doc.id.replace('-', "_")));
+                let placeholders = std::iter::once("CAST(? AS BIGINT)".to_string())
+                    .chain(canonical_columns.iter().map(|(_, column_type)| {
+                        archive_parameter_expression(column_type)
+                    }))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let insert_sql = format!(
+                    "INSERT INTO {} ({}) VALUES ({})",
+                    table_ident, col_list, placeholders
                 );
-                db.conn().execute_batch(&raw_sql)
-                    .map_err(|e| AppError::Database(e.to_string()))?;
+
+                for row in &doc.rows {
+                    let values = row
+                        .iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            let decode_v2_tag = index > 0
+                                && doc.version == "2"
+                                && !is_archive_scalar_type(&canonical_columns[index - 1].1);
+                            json_to_duckdb_param(value, decode_v2_tag)
+                        })
+                        .collect::<Vec<_>>();
+                    db.conn().execute(&insert_sql, params_from_iter(values))?;
+                }
+            }
+
+            let table_ident = quote_identifier(&format!("dataset_{}", doc.id.replace('-', "_")));
+            let row_count: i64 = db.conn().query_row(
+                &format!("SELECT COUNT(*) FROM {table_ident}"),
+                [],
+                |row| row.get(0),
+            )?;
+            db.conn().execute(
+                "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
+                duckdb::params![row_count, doc.id],
+            )?;
+            Ok(())
+        })();
+
+        match restore_result {
+            Ok(()) => db.conn().execute_batch("COMMIT")?,
+            Err(error) => {
+                let _ = db.conn().execute_batch("ROLLBACK");
+                return Err(error);
             }
         }
-
-        // Update row count metadata.
-        let row_count: i64 = db.conn().query_row(
-            &format!("SELECT COUNT(*) FROM \"dataset_{}\"", doc.id.replace('-', "_")),
-            [], |row| row.get(0),
-        )?;
-        db.conn().execute(
-            "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
-            duckdb::params![row_count, doc.id],
-        )?;
 
         // Re-register column display props.
         let mut display_props: Vec<ColumnDisplayProps> = Vec::new();
@@ -492,6 +545,69 @@ impl<'a> ProjectService<'a> {
 // Helpers
 // ----------------------------------------------------------------------------
 
+fn quote_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+fn is_archive_scalar_type(column_type: &str) -> bool {
+    matches!(
+        column_type.trim().to_ascii_uppercase().as_str(),
+        "BOOLEAN"
+            | "TINYINT"
+            | "SMALLINT"
+            | "INTEGER"
+            | "BIGINT"
+            | "FLOAT"
+            | "REAL"
+            | "DOUBLE"
+            | "VARCHAR"
+    )
+}
+
+fn archive_export_expression(column_name: &str, column_type: &str) -> String {
+    let identifier = quote_identifier(column_name);
+    if is_archive_scalar_type(column_type) {
+        identifier
+    } else if column_type.trim().eq_ignore_ascii_case("BLOB") {
+        format!("hex({identifier})")
+    } else {
+        format!("CAST({identifier} AS VARCHAR)")
+    }
+}
+
+fn archive_parameter_expression(column_type: &str) -> String {
+    if column_type.trim().eq_ignore_ascii_case("BLOB") {
+        "from_hex(?)".to_string()
+    } else {
+        format!("CAST(? AS {column_type})")
+    }
+}
+
+fn json_to_duckdb_param(value: &serde_json::Value, decode_v2_tag: bool) -> DuckValue {
+    match value {
+        serde_json::Value::Null => DuckValue::Null,
+        serde_json::Value::Bool(value) => DuckValue::Boolean(*value),
+        serde_json::Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                DuckValue::BigInt(value)
+            } else if let Some(value) = value.as_u64() {
+                DuckValue::UBigInt(value)
+            } else {
+                DuckValue::Double(value.as_f64().unwrap_or_default())
+            }
+        }
+        serde_json::Value::String(value) => DuckValue::Text(value.clone()),
+        serde_json::Value::Object(object) if decode_v2_tag && object.len() == 1 => object
+            .get("$duckdbValue")
+            .and_then(serde_json::Value::as_str)
+            .map(|value| DuckValue::Text(value.to_string()))
+            .unwrap_or_else(|| DuckValue::Text(value.to_string())),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            DuckValue::Text(value.to_string())
+        }
+    }
+}
+
 fn duckdb_to_json(value: duckdb::types::Value) -> serde_json::Value {
     match value {
         duckdb::types::Value::Null => serde_json::Value::Null,
@@ -547,6 +663,51 @@ fn lift_graph_meta(
     (id, name, map)
 }
 
+fn derive_folders_from_entries<T>(
+    entries: &[T],
+    container_prefix: &str,
+) -> std::collections::HashMap<String, String>
+where
+    T: EntryFolderRef,
+{
+    let mut folders = std::collections::HashMap::new();
+    for entry in entries {
+        if let Some(folder) = folder_from_entry_path(entry.file(), container_prefix) {
+            folders.insert(entry.id().to_string(), folder);
+        }
+    }
+    folders
+}
+
+fn folder_from_entry_path(file: &str, container_prefix: &str) -> Option<String> {
+    let parent = spprj_archive::parent_folder(file)?;
+    if parent == container_prefix {
+        None
+    } else if parent.starts_with(&format!("{}/", container_prefix)) {
+        let stripped = &parent[container_prefix.len() + 1..];
+        if stripped.is_empty() { None } else { Some(stripped.to_string()) }
+    } else if parent.is_empty() {
+        None
+    } else {
+        Some(parent)
+    }
+}
+
+trait EntryFolderRef {
+    fn id(&self) -> &str;
+    fn file(&self) -> &str;
+}
+
+impl EntryFolderRef for spprj_archive::TableEntryRef {
+    fn id(&self) -> &str { &self.id }
+    fn file(&self) -> &str { &self.file }
+}
+
+impl EntryFolderRef for spprj_archive::GraphEntryRef {
+    fn id(&self) -> &str { &self.id }
+    fn file(&self) -> &str { &self.file }
+}
+
 fn chrono_now() -> String {
     // Simple UTC timestamp without chrono dependency
     std::time::SystemTime::now()
@@ -597,4 +758,266 @@ fn dedupe_zip_path(
     }
     used.insert(candidate.clone());
     candidate
+}
+
+fn normalize_duplicate_dataset_names(docs: &mut [TableDoc]) -> Vec<DatasetNameMigration> {
+    let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut migrations = Vec::new();
+
+    for doc in docs.iter_mut() {
+        let original_name = doc.name.clone();
+        if used_names.insert(original_name.to_lowercase()) {
+            continue;
+        }
+
+        let mut suffix = 2;
+        loop {
+            let candidate = format!("{} ({})", original_name, suffix);
+            if used_names.insert(candidate.to_lowercase()) {
+                doc.name = candidate.clone();
+                migrations.push(DatasetNameMigration {
+                    dataset_id: doc.id.clone(),
+                    old_name: original_name.clone(),
+                    new_name: candidate,
+                });
+                break;
+            }
+            suffix += 1;
+        }
+    }
+
+    migrations
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{folder_from_entry_path, normalize_duplicate_dataset_names, ProjectService};
+    use crate::models::project::ProjectInfo;
+    use crate::services::spprj_archive::{self, TableColumn, TableDoc};
+    use crate::state::AppState;
+    use std::collections::HashMap;
+
+    fn table_doc(id: &str, name: &str) -> TableDoc {
+        TableDoc {
+            id: id.into(),
+            name: name.into(),
+            source_type: "manual".into(),
+            version: "1".into(),
+            columns: vec![],
+            rows: vec![],
+        }
+    }
+
+    #[test]
+    fn legacy_container_roots_do_not_become_ui_folders() {
+        assert_eq!(folder_from_entry_path("tables/123.sptb", "tables"), None);
+        assert_eq!(folder_from_entry_path("graphs/456.spgh", "graphs"), None);
+    }
+
+    #[test]
+    fn direct_v2_folder_names_do_not_match_legacy_container_prefixes() {
+        assert_eq!(folder_from_entry_path("tablesBackup/123.sptb", "tables"), Some("tablesBackup".to_string()));
+        assert_eq!(folder_from_entry_path("graphsArchive/456.spgh", "graphs"), Some("graphsArchive".to_string()));
+    }
+
+    #[test]
+    fn nested_legacy_paths_still_derive_user_folders() {
+        assert_eq!(folder_from_entry_path("tables/Raw/123.sptb", "tables"), Some("Raw".to_string()));
+        assert_eq!(folder_from_entry_path("graphs/Reports/456.spgh", "graphs"), Some("Reports".to_string()));
+    }
+
+    #[test]
+    fn v2_paths_keep_direct_parent_folders() {
+        assert_eq!(folder_from_entry_path("Raw/123.sptb", "tables"), Some("Raw".to_string()));
+        assert_eq!(folder_from_entry_path("Reports/456.spgh", "graphs"), Some("Reports".to_string()));
+    }
+
+    #[test]
+    fn normalizes_legacy_duplicate_dataset_names_in_manifest_order() {
+        let mut docs = vec![
+            table_doc("one", "Sales"),
+            table_doc("two", "sales"),
+            table_doc("three", "Sales"),
+        ];
+
+        let migrations = normalize_duplicate_dataset_names(&mut docs);
+
+        assert_eq!(docs[0].name, "Sales");
+        assert_eq!(docs[1].name, "sales (2)");
+        assert_eq!(docs[2].name, "Sales (3)");
+        assert_eq!(migrations.len(), 2);
+        assert_eq!(migrations[0].dataset_id, "two");
+        assert_eq!(migrations[0].old_name, "sales");
+        assert_eq!(migrations[0].new_name, "sales (2)");
+        assert_eq!(migrations[1].dataset_id, "three");
+        assert_eq!(migrations[1].old_name, "Sales");
+        assert_eq!(migrations[1].new_name, "Sales (3)");
+    }
+
+    #[test]
+    fn complex_query_table_document_restores_without_losing_values() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.create_table_from_sql_query(
+                "complex-id",
+                "Complex",
+                "SELECT 12.34::DECIMAL(12,2) AS amount, TIMESTAMP '2026-08-13 10:11:12' AS created_at, [1, 2]::INTEGER[] AS numbers, struct_pack(label := 'alpha', score := 7) AS info, from_hex('dead') AS payload",
+            )
+            .unwrap();
+        }
+
+        let service = ProjectService::new(&state);
+        let doc = service.compose_table_doc("complex-id").unwrap();
+        state.reset_db().unwrap();
+        service.restore_table_doc(&doc).unwrap();
+
+        let db = state.db.lock().unwrap();
+        let restored: (String, String, String, String, String) = db
+            .conn()
+            .query_row(
+                "SELECT CAST(amount AS VARCHAR), CAST(created_at AS VARCHAR), CAST(numbers AS VARCHAR), CAST(info AS VARCHAR), hex(payload) FROM dataset_complex_id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
+
+        assert_eq!(restored.0, "12.34");
+        assert_eq!(restored.1, "2026-08-13 10:11:12");
+        assert_eq!(restored.2, "[1, 2]");
+        assert_eq!(restored.3, "{'label': alpha, 'score': 7}");
+        assert_eq!(restored.4, "DEAD");
+
+        let preview = db
+            .execute_sql_query(
+                "SELECT amount, created_at, numbers, info, payload FROM Complex",
+                1,
+                10,
+            )
+            .unwrap();
+        assert_eq!(preview.total_rows, 1);
+        assert_eq!(preview.rows[0][0], serde_json::json!("12.34"));
+        assert_eq!(preview.rows[0][2], serde_json::json!([1, 2]));
+        assert_eq!(preview.rows[0][3], serde_json::json!({"label": "alpha", "score": 7}));
+        assert_eq!(preview.rows[0][4], serde_json::json!("0xdead"));
+    }
+
+    #[test]
+    fn v1_struct_cell_that_looks_like_v2_tag_restores_as_struct() {
+        let state = AppState::new().unwrap();
+        let service = ProjectService::new(&state);
+        let doc = TableDoc {
+            id: "legacy-struct".into(),
+            name: "Legacy Struct".into(),
+            source_type: "manual".into(),
+            version: "1".into(),
+            columns: vec![TableColumn {
+                name: "payload".into(),
+                col_type: "STRUCT(\"$duckdbValue\" VARCHAR)".into(),
+                width: None,
+                format: None,
+                extras: None,
+            }],
+            rows: vec![vec![serde_json::json!(1), serde_json::json!({"$duckdbValue": "original"})]],
+        };
+
+        service.restore_table_doc(&doc).unwrap();
+
+        let db = state.db.lock().unwrap();
+        let value: String = db
+            .conn()
+            .query_row(
+                "SELECT payload.\"$duckdbValue\" FROM dataset_legacy_struct",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "original");
+    }
+
+    #[test]
+    fn malformed_table_document_does_not_leave_partial_dataset() {
+        let state = AppState::new().unwrap();
+        let service = ProjectService::new(&state);
+        let mut doc = table_doc("malformed-id", "Malformed");
+        doc.columns.push(TableColumn {
+            name: "value".into(),
+            col_type: "INTEGER".into(),
+            width: None,
+            format: None,
+            extras: None,
+        });
+        doc.rows.push(vec![serde_json::json!(1)]);
+
+        assert!(service.restore_table_doc(&doc).is_err());
+
+        let db = state.db.lock().unwrap();
+        assert!(db.get_dataset_meta("malformed-id").is_err());
+    }
+
+    #[test]
+    fn unsupported_table_document_version_is_rejected_without_mutation() {
+        let state = AppState::new().unwrap();
+        let service = ProjectService::new(&state);
+        let mut doc = table_doc("future-id", "Future");
+        doc.version = "3".into();
+
+        assert!(matches!(service.restore_table_doc(&doc), Err(crate::error::AppError::InvalidParam(_))));
+        let db = state.db.lock().unwrap();
+        assert!(db.get_dataset_meta("future-id").is_err());
+    }
+
+    #[test]
+    fn failed_project_open_preserves_existing_project_and_database() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.create_empty_table("original-id", "Original", &[], &[]).unwrap();
+        }
+        *state.project.write().unwrap() = Some(ProjectInfo {
+            name: "Original Project".into(),
+            file_path: "original.spprj".into(),
+            created_at: "before".into(),
+        });
+
+        let valid = table_doc("valid-id", "Valid");
+        let mut malformed = table_doc("bad-id", "Bad");
+        malformed.columns.push(TableColumn {
+            name: "value".into(),
+            col_type: "INTEGER".into(),
+            width: None,
+            format: None,
+            extras: None,
+        });
+        malformed.rows.push(vec![serde_json::json!(1)]);
+        let folders = HashMap::new();
+        let bundle = spprj_archive::build_bundle(
+            "Incoming".into(),
+            "3.0.0".into(),
+            "after".into(),
+            vec![valid, malformed],
+            vec![],
+            vec![],
+            &folders,
+            &folders,
+            vec![],
+            vec![],
+        );
+        let file_path = std::env::temp_dir().join(format!(
+            "sp_failed_open_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        spprj_archive::write_project_archive(&bundle, file_path.to_str().unwrap()).unwrap();
+
+        let service = ProjectService::new(&state);
+        let result = service.open_project(file_path.to_str().unwrap(), None);
+        let _ = std::fs::remove_file(file_path);
+
+        assert!(result.is_err());
+        let db = state.db.lock().unwrap();
+        assert!(db.get_dataset_meta("original-id").is_ok());
+        assert!(db.get_dataset_meta("valid-id").is_err());
+        drop(db);
+        assert_eq!(state.project.read().unwrap().as_ref().unwrap().name, "Original Project");
+    }
 }

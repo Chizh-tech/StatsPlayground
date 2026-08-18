@@ -1,7 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ColumnDisplayProps, DatasetMeta, TableQueryParams, TableQueryResult } from "@/types/data";
+import type { ColumnDisplayProps, DatasetMeta, SqlQueryResult, TableQueryParams, TableQueryResult } from "@/types/data";
 
 export const dataService = {
+  /** 执行 SQL 查询（分页） */
+  executeSqlQuery: (sql: string, page: number, pageSize = 200) =>
+    invoke<SqlQueryResult>("execute_sql_query", { sql, page, pageSize }),
+
+  /** 根据 SQL 查询创建数据表 */
+  createTableFromSqlQuery: (sql: string, name: string) =>
+    invoke<DatasetMeta>("create_table_from_sql_query", { sql, name }),
+
   /** 查询数据表（分页） */
   queryTable: (params: TableQueryParams) =>
     invoke<TableQueryResult>("query_table", { ...params }),

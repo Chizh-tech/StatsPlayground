@@ -5,6 +5,12 @@ export interface ProjectInfo {
   createdAt: string;
 }
 
+export interface DatasetNameMigration {
+  datasetId: string;
+  oldName: string;
+  newName: string;
+}
+
 /** open_project 返回结果，包含历史/快照数据 + 文件夹布局 */
 export interface OpenProjectResult {
   project: ProjectInfo;
@@ -17,6 +23,7 @@ export interface OpenProjectResult {
   tableFolders: Record<string, string>;
   /** graphId → folder path（根目录的图不在此映射中）。 */
   graphFolders: Record<string, string>;
+  datasetNameMigrations: DatasetNameMigration[];
 }
 
 /** 导入 .sptb 的返回值。

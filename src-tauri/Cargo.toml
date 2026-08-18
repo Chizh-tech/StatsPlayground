@@ -24,6 +24,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
+sqlparser = "0.62.0"
 
 [profile.dev]
 incremental = true

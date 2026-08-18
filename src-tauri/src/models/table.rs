@@ -39,6 +39,19 @@ pub struct TableQueryResult {
     pub page_size: usize,
 }
 
+/// Paginated result of an arbitrary read-only SQL query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlQueryResult {
+    pub columns: Vec<String>,
+    pub column_types: Vec<String>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub total_rows: i64,
+    pub page: usize,
+    pub page_size: usize,
+    pub execution_time_ms: u128,
+}
+
 /// Per-column display format
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

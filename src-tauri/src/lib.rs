@@ -20,6 +20,8 @@ pub fn run() {
             commands::data_commands::list_datasets,
             commands::data_commands::delete_dataset,
             commands::data_commands::query_table,
+            commands::data_commands::execute_sql_query,
+            commands::data_commands::create_table_from_sql_query,
             commands::data_commands::create_table,
             commands::data_commands::add_row,
             commands::data_commands::update_cell,

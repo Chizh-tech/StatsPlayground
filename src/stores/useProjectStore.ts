@@ -48,9 +48,16 @@ export const useProjectStore = create<ProjectStore>((set) => ({
 
   openProject: async (filePath) => {
     set({ loading: true });
-    const result = await projectService.openProject(filePath);
-    set({ project: result.project, loading: false, dirty: false });
-    return result;
+    try {
+      const result = await projectService.openProject(filePath);
+      set({
+        project: result.project,
+        dirty: result.datasetNameMigrations.length > 0,
+      });
+      return result;
+    } finally {
+      set({ loading: false });
+    }
   },
 
   saveProject: async (filePath, history, snapshots, graphBuilders, folders) => {

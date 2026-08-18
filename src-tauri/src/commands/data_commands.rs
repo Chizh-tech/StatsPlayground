@@ -43,6 +43,27 @@ pub fn query_table(
 }
 
 #[tauri::command]
+pub fn execute_sql_query(
+    state: State<'_, AppState>,
+    sql: String,
+    page: usize,
+    page_size: usize,
+) -> Result<crate::models::table::SqlQueryResult, AppError> {
+    let service = DataService::new(&state);
+    service.execute_sql_query(&sql, page, page_size)
+}
+
+#[tauri::command]
+pub fn create_table_from_sql_query(
+    state: State<'_, AppState>,
+    sql: String,
+    name: String,
+) -> Result<DatasetMeta, AppError> {
+    let service = DataService::new(&state);
+    service.create_table_from_sql_query(&sql, &name)
+}
+
+#[tauri::command]
 pub fn create_table(
     state: State<'_, AppState>,
     name: String,

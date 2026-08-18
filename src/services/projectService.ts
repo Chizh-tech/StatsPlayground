@@ -1,10 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
 
-/** Optional folder payload accepted by the v2 save_project command.
- *  Per issue #7 the file bodies (.sptb / .spgh) carry no folder info; the
- *  folder a file lives in is encoded purely by its path inside the archive,
- *  which the backend derives from these maps. */
+/** Optional folder payload accepted by the save_project command.
+ *  Folder maps are manifest metadata now; they are not used to route archive
+ *  filenames. The backend persists them so UI folder layout stays separate
+ *  from the stable `tables/<id>.sptb` and `graphs/<id>.spgh` paths. */
 export interface SaveProjectFolders {
   /** All folder paths that exist in the project, including empty ones. */
   folders: string[];

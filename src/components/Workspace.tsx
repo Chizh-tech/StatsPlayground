@@ -16,6 +16,7 @@ import { projectService } from "@/services/projectService";
 import { DataTableView } from "./DataTableView";
 import { HistoryPanel, type SnapshotMenuData } from "./HistoryPanel";
 import { PreferencesDialog } from "./PreferencesDialog";
+import { SqlQueryDialog } from "./SqlQueryDialog";
 import { HelpDialog } from "./HelpDialog";
 import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
 import { GraphBuilderView } from "./graphBuilder";
@@ -136,7 +137,7 @@ function MenuDropdown({ label, children, openMenu, setOpenMenu }: {
 
 export function Workspace() {
   const { t } = useTranslation();
-  const { project, saveProject, closeProject, initProject, dirty, markDirty } = useProjectStore();
+  const { project, saveProject, initProject, dirty, markDirty } = useProjectStore();
   const { datasets, activeDatasetId, setActiveDataset, refreshDatasets, statusInfo } = useDataStore();
   const { openProject } = useProjectStore();
   const { record: recordHistory, createSnapshot, restoreSnapshot, deleteSnapshot, reset: resetHistory } = useHistoryStore();
@@ -155,9 +156,11 @@ export function Workspace() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [showPrefs, setShowPrefs] = useState(false);
+  const [showSqlQuery, setShowSqlQuery] = useState(false);
   const [helpDialog, setHelpDialog] = useState<"about" | "license" | null>(null);
   const [tableOp, setTableOp] = useState<TableOpType | null>(null);
-  const [saveToast, setSaveToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
   // Folder tree state ------------------------------------------------------
   const folders = useFolderStore((s) => s.folders);
@@ -226,6 +229,12 @@ export function Workspace() {
 
   useEffect(() => {
     refreshDatasets();
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
   }, []);
 
   // Dismiss the unified context menu on outside click.
@@ -540,6 +549,7 @@ export function Workspace() {
   };
 
   const handleImportTableSptb = async () => {
+    if (busyMessage) return;
     const selected = await open({
       title: t("menu.importSptb"),
       filters: [{ name: "StatsPlayground Table", extensions: ["sptb"] }],
@@ -547,6 +557,7 @@ export function Workspace() {
     });
     if (!selected) return;
     try {
+      setBusyMessage(t("menu.importSptb"));
       const result = await projectService.importTable(selected as string);
       await refreshDatasets();
       // Per issue #7 the .sptb file carries no folder info; the imported
@@ -555,6 +566,8 @@ export function Workspace() {
       setActiveDataset(result.id);
     } catch (e) {
       alert(t("alert.importTableFailed") + String(e));
+    } finally {
+      setBusyMessage(null);
     }
   };
 
@@ -624,10 +637,20 @@ export function Workspace() {
     } else {
       await saveProject(undefined, [], snapshots, gbItems, folderPayload);
     }
-    setSaveToast(true);
-    setTimeout(() => setSaveToast(false), 1500);
+    showToast(t("common.saved"), 1500);
   };
   handleSaveRef.current = handleSave;
+
+  const showToast = (message: string, durationMs: number) => {
+    setToastMessage(message);
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, durationMs);
+  };
 
   const handleCloseProject = async () => {
     setActiveDataset(null);
@@ -647,10 +670,6 @@ export function Workspace() {
       multiple: false,
     });
     if (selected) {
-      setActiveDataset(null);
-      setActiveGraphBuilderId(null);
-      resetHistory();
-      resetGraphBuilders();
       setBusyMessage(t("workspace.openingProject"));
       const unlisten = await listen<{
         datasetIndex: number;
@@ -664,6 +683,10 @@ export function Workspace() {
       });
       try {
         const result = await openProject(selected as string);
+        setActiveDataset(null);
+        setActiveGraphBuilderId(null);
+        resetHistory();
+        resetGraphBuilders();
         await refreshDatasets();
         tableCounter.current = 0;
         // Restore snapshots from project file (history is session-only)
@@ -686,6 +709,12 @@ export function Workspace() {
           tableFolders: result.tableFolders ?? {},
           graphFolders: result.graphFolders ?? {},
         });
+        if (result.datasetNameMigrations.length > 0) {
+          showToast(
+            t("workspace.datasetNameMigrations", { count: result.datasetNameMigrations.length }),
+            4000,
+          );
+        }
       } catch (e) {
         // Surface backend errors so the user isn't left staring at a screen
         // flash with no explanation when an .spprj fails to load.
@@ -1245,6 +1274,9 @@ export function Workspace() {
               <div className="menu-item" onClick={handleExportTableSptb}>{t("menu.exportSptb")}</div>
               <div className="menu-item" onClick={handleImportTableSptb}>{t("menu.importSptb")}</div>
             </MenuDropdown>
+            <MenuDropdown label={t("menu.data")}>
+              <div className="menu-item" onClick={() => setShowSqlQuery(true)}>{t("menu.sqlQuery")}</div>
+            </MenuDropdown>
             <MenuDropdown label={t("menu.graph")}>
               <div className="menu-item" onClick={handleCreateGraphBuilder}>{t("menu.newGraph")}</div>
               <div className="menu-sep" />
@@ -1440,6 +1472,22 @@ export function Workspace() {
         />
       )}
 
+      {showSqlQuery && (
+        <SqlQueryDialog
+          datasets={datasets}
+          tableFolders={tableFolders}
+          onClose={() => setShowSqlQuery(false)}
+          onCreated={async (dataset) => {
+            await refreshDatasets();
+            setActiveGraphBuilderId(null);
+            setActiveDataset(dataset.id);
+            markDirty();
+            recordAction(t("history.sqlQueryTableCreated", { name: dataset.name }));
+            setShowSqlQuery(false);
+          }}
+        />
+      )}
+
       {importProgress && (
         <div className="sp-dialog-overlay">
           <div className="sp-dialog" style={{ minWidth: 360, padding: "20px 24px" }}>
@@ -1612,8 +1660,8 @@ export function Workspace() {
         </div>
       )}
 
-      {saveToast && (
-        <div className="save-toast">{t("common.saved")}</div>
+      {toastMessage && (
+        <div className="save-toast">{toastMessage}</div>
       )}
 
     </div>

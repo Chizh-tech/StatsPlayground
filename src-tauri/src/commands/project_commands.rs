@@ -109,7 +109,7 @@ pub struct ImportTableResult {
 }
 
 /// Returns the new dataset id assigned to the imported table.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_table(
     state: State<'_, AppState>,
     file_path: String,
@@ -137,4 +137,21 @@ pub fn import_graph(
 ) -> Result<serde_json::Value, AppError> {
     let service = ProjectService::new(&state);
     service.import_graph(&file_path)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sptb_import_uses_async_command_scheduling() {
+        let source = include_str!("project_commands.rs");
+        let import_start = source
+            .find("pub fn import_table(")
+            .expect("import_table command must exist");
+        let command_attribute = &source[..import_start];
+
+        assert!(
+            command_attribute.trim_end().ends_with("#[tauri::command(async)]"),
+            "import_table must not run blocking archive and database work on Tauri's main command thread"
+        );
+    }
 }
