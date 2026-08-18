@@ -13,15 +13,27 @@ impl<'a> IoService<'a> {
     }
 
     pub fn export_csv(&self, dataset_id: &str, output_path: &str) -> Result<(), AppError> {
-        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         db.export_csv(dataset_id, output_path)
     }
 
-    pub fn import_sqlite<F>(&self, file_path: &str, on_progress: F) -> Result<Vec<DatasetMeta>, AppError>
+    pub fn import_sqlite<F>(
+        &self,
+        file_path: &str,
+        on_progress: F,
+    ) -> Result<Vec<DatasetMeta>, AppError>
     where
         F: Fn(&str, usize, usize, usize, usize),
     {
-        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         let results = db.import_sqlite(file_path, &on_progress)?;
         Ok(results.into_iter().map(|(_, meta)| meta).collect())
     }
@@ -40,7 +52,11 @@ impl<'a> IoService<'a> {
         subset: Option<&[String]>,
         name_overrides: &HashMap<String, String>,
     ) -> Result<(), AppError> {
-        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         db.export_sqlite_subset(output_path, subset, name_overrides)
     }
 
@@ -58,8 +74,11 @@ impl<'a> IoService<'a> {
         subset: Option<&[String]>,
         archive_paths: &HashMap<String, String>,
     ) -> Result<(), AppError> {
-        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         db.export_csv_zip_subset(output_path, subset, archive_paths)
     }
 }
-

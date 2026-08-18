@@ -65,6 +65,10 @@ pub struct ProjectManifest {
     /// Implicit ancestors (e.g. `a` for `a/b`) are still listed explicitly.
     #[serde(default)]
     pub folders: Vec<String>,
+    #[serde(default)]
+    pub tabulates: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub tabulate_folders: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -151,7 +155,9 @@ pub struct GraphDoc {
     pub body: serde_json::Map<String, Value>,
 }
 
-fn default_doc_version() -> String { "1".to_string() }
+fn default_doc_version() -> String {
+    "1".to_string()
+}
 
 // ----------------------------------------------------------------------------
 // Bundle = the in-memory shape of an entire project, ready to write or just
@@ -164,6 +170,7 @@ pub struct ProjectBundle {
     pub manifest: ProjectManifest,
     pub tables: Vec<TableDoc>,
     pub graphs: Vec<GraphDoc>,
+    pub tabulates: Vec<Value>,
     pub history: Vec<Value>,
     pub snapshots: Vec<Value>,
 }
@@ -257,14 +264,19 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         .or_else(|| read_entry_bytes(&mut zip, "snapshots.json"))
         .map(|b| serde_json::from_slice::<Vec<Value>>(&b).unwrap_or_default())
         .unwrap_or_default();
+    let tabulates = manifest.tabulates.clone();
 
-    Ok(ProjectBundle { manifest, tables, graphs, history, snapshots })
+    Ok(ProjectBundle {
+        manifest,
+        tables,
+        graphs,
+        tabulates,
+        history,
+        snapshots,
+    })
 }
 
-fn read_entry_bytes<R: Read + Seek>(
-    zip: &mut zip::ZipArchive<R>,
-    name: &str,
-) -> Option<Vec<u8>> {
+fn read_entry_bytes<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, name: &str) -> Option<Vec<u8>> {
     let mut entry = zip.by_name(name).ok()?;
     let mut out = Vec::with_capacity(entry.size() as usize);
     entry.read_to_end(&mut out).ok()?;
@@ -308,23 +320,35 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
                 name: name.clone(),
                 file: format!("{}.spgh", id),
             });
-            graphs.push(GraphDoc { id, name, version: default_doc_version(), body });
+            graphs.push(GraphDoc {
+                id,
+                name,
+                version: default_doc_version(),
+                body,
+            });
         }
     }
 
     let manifest = ProjectManifest {
         name: legacy.name,
-        version: if legacy.version.is_empty() { "0.1.0".into() } else { legacy.version },
+        version: if legacy.version.is_empty() {
+            "0.1.0".into()
+        } else {
+            legacy.version
+        },
         created_at: legacy.created_at,
         tables: table_refs,
         graphs: graph_refs,
         folders: Vec::new(),
+        tabulates: Vec::new(),
+        tabulate_folders: HashMap::new(),
     };
 
     Ok(ProjectBundle {
         manifest,
         tables,
         graphs,
+        tabulates: Vec::new(),
         history: legacy.history.unwrap_or_default(),
         snapshots: legacy.snapshots.unwrap_or_default(),
     })
@@ -336,7 +360,10 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
 /// GraphDoc that flattens it won't emit duplicate keys on serialization, and
 /// so legacy in-body folder hints can never silently override the
 /// path-derived folder.
-fn lift_id_name(raw: Value, fallback_idx: usize) -> (String, String, serde_json::Map<String, Value>) {
+fn lift_id_name(
+    raw: Value,
+    fallback_idx: usize,
+) -> (String, String, serde_json::Map<String, Value>) {
     let mut map = match raw {
         Value::Object(m) => m,
         _ => serde_json::Map::new(),
@@ -344,7 +371,10 @@ fn lift_id_name(raw: Value, fallback_idx: usize) -> (String, String, serde_json:
     let id = map
         .remove("id")
         .and_then(|v| v.as_str().map(String::from))
-        .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
+        .or_else(|| {
+            map.remove("builderId")
+                .and_then(|v| v.as_str().map(String::from))
+        })
         .unwrap_or_else(|| format!("graph_{}", fallback_idx));
     let name = map
         .remove("name")
@@ -373,9 +403,11 @@ pub fn build_bundle(
     created_at: String,
     tables: Vec<TableDoc>,
     graphs: Vec<GraphDoc>,
+    tabulates: Vec<Value>,
     folders: Vec<String>,
     table_folders: &HashMap<String, String>,
     graph_folders: &HashMap<String, String>,
+    tabulate_folders: &HashMap<String, String>,
     history: Vec<Value>,
     snapshots: Vec<Value>,
 ) -> ProjectBundle {
@@ -400,7 +432,11 @@ pub fn build_bundle(
     for g in graphs.iter() {
         let folder_norm = normalize_folder(graph_folders.get(&g.id).map(|s| s.as_str()));
         // Graph name may be empty (legacy / synthesized); fall back to id.
-        let display_name = if g.name.is_empty() { g.id.clone() } else { g.name.clone() };
+        let display_name = if g.name.is_empty() {
+            g.id.clone()
+        } else {
+            g.name.clone()
+        };
         let base = sanitize_name(&display_name, &g.id);
         let path = unique_archive_path(&folder_norm, &base, "spgh", &mut taken);
         graph_refs.push(GraphEntryRef {
@@ -417,13 +453,18 @@ pub fn build_bundle(
 
     ProjectBundle {
         manifest: ProjectManifest {
-            name, version, created_at,
+            name,
+            version,
+            created_at,
             tables: table_refs,
             graphs: graph_refs,
             folders: normalized_folders,
+            tabulates: tabulates.clone(),
+            tabulate_folders: tabulate_folders.clone(),
         },
         tables,
         graphs,
+        tabulates,
         history,
         snapshots,
     }
@@ -452,16 +493,22 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
         // Also include implicit ancestors of any table/graph file path.
         let mut all_dirs: HashSet<String> = HashSet::new();
         for f in &bundle.manifest.folders {
-            for anc in folder_ancestors(f) { all_dirs.insert(anc); }
+            for anc in folder_ancestors(f) {
+                all_dirs.insert(anc);
+            }
         }
         for t in &bundle.manifest.tables {
             if let Some(parent) = parent_folder(&t.file) {
-                for anc in folder_ancestors(&parent) { all_dirs.insert(anc); }
+                for anc in folder_ancestors(&parent) {
+                    all_dirs.insert(anc);
+                }
             }
         }
         for g in &bundle.manifest.graphs {
             if let Some(parent) = parent_folder(&g.file) {
-                for anc in folder_ancestors(&parent) { all_dirs.insert(anc); }
+                for anc in folder_ancestors(&parent) {
+                    all_dirs.insert(anc);
+                }
             }
         }
         // Sort so the archive's central directory has a stable order.
@@ -481,21 +528,19 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
 
         for entry in &bundle.manifest.tables {
             if let Some(doc) = table_by_id.get(entry.id.as_str()) {
-                let bytes = serde_json::to_vec(doc)
-                    .map_err(|e| AppError::FileIO(e.to_string()))?;
+                let bytes = serde_json::to_vec(doc).map_err(|e| AppError::FileIO(e.to_string()))?;
                 write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
             }
         }
         for entry in &bundle.manifest.graphs {
             if let Some(doc) = graph_by_id.get(entry.id.as_str()) {
-                let bytes = serde_json::to_vec(doc)
-                    .map_err(|e| AppError::FileIO(e.to_string()))?;
+                let bytes = serde_json::to_vec(doc).map_err(|e| AppError::FileIO(e.to_string()))?;
                 write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
             }
         }
         if !bundle.history.is_empty() {
-            let bytes = serde_json::to_vec(&bundle.history)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
+            let bytes =
+                serde_json::to_vec(&bundle.history).map_err(|e| AppError::FileIO(e.to_string()))?;
             write_zip_entry(&mut zip, ".history.json", &bytes, opts)?;
         }
         if !bundle.snapshots.is_empty() {
@@ -518,8 +563,10 @@ fn write_zip_entry<W: Write + Seek>(
     data: &[u8],
     opts: zip::write::SimpleFileOptions,
 ) -> Result<(), AppError> {
-    zip.start_file(name, opts).map_err(|e| AppError::FileIO(e.to_string()))?;
-    zip.write_all(data).map_err(|e| AppError::FileIO(e.to_string()))?;
+    zip.start_file(name, opts)
+        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    zip.write_all(data)
+        .map_err(|e| AppError::FileIO(e.to_string()))?;
     Ok(())
 }
 
@@ -529,8 +576,7 @@ fn write_zip_entry<W: Write + Seek>(
 
 /// Write a single `TableDoc` to a `.sptb` file (just JSON on disk for now).
 pub fn write_table_file(doc: &TableDoc, path: &str) -> Result<(), AppError> {
-    let bytes = serde_json::to_vec_pretty(doc)
-        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    let bytes = serde_json::to_vec_pretty(doc).map_err(|e| AppError::FileIO(e.to_string()))?;
     std::fs::write(path, bytes)?;
     Ok(())
 }
@@ -545,8 +591,7 @@ pub fn read_table_file(path: &str) -> Result<TableDoc, AppError> {
 
 /// Write a single `GraphDoc` to a `.spgh` file.
 pub fn write_graph_file(doc: &GraphDoc, path: &str) -> Result<(), AppError> {
-    let bytes = serde_json::to_vec_pretty(doc)
-        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    let bytes = serde_json::to_vec_pretty(doc).map_err(|e| AppError::FileIO(e.to_string()))?;
     std::fs::write(path, bytes)?;
     Ok(())
 }
@@ -554,8 +599,7 @@ pub fn write_graph_file(doc: &GraphDoc, path: &str) -> Result<(), AppError> {
 /// Read a `.spgh` file from disk into a `GraphDoc`.
 pub fn read_graph_file(path: &str) -> Result<GraphDoc, AppError> {
     let bytes = std::fs::read(path)?;
-    parse_graph_doc(&bytes, "")
-        .map_err(|e| AppError::FileIO(format!("Invalid .spgh file: {}", e)))
+    parse_graph_doc(&bytes, "").map_err(|e| AppError::FileIO(format!("Invalid .spgh file: {}", e)))
 }
 
 /// Tolerant `.spgh` parser. Reads the bytes into a generic `serde_json::Value`
@@ -576,7 +620,10 @@ fn parse_graph_doc(bytes: &[u8], fallback_id: &str) -> Result<GraphDoc, String> 
     let id = map
         .remove("id")
         .and_then(|v| v.as_str().map(String::from))
-        .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
+        .or_else(|| {
+            map.remove("builderId")
+                .and_then(|v| v.as_str().map(String::from))
+        })
         .unwrap_or_else(|| fallback_id.to_string());
     let name = map
         .remove("name")
@@ -589,7 +636,12 @@ fn parse_graph_doc(bytes: &[u8], fallback_id: &str) -> Result<GraphDoc, String> 
     // Pre-#7 files may have stuffed a `folder` field inside the body —
     // strip it so it can never override the path-derived folder.
     map.remove("folder");
-    Ok(GraphDoc { id, name, version, body: map })
+    Ok(GraphDoc {
+        id,
+        name,
+        version,
+        body: map,
+    })
 }
 
 // ----------------------------------------------------------------------------
@@ -608,7 +660,13 @@ const FORBIDDEN_NAME_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>',
 pub fn sanitize_name(name: &str, fallback: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if FORBIDDEN_NAME_CHARS.contains(&c) { '_' } else { c })
+        .map(|c| {
+            if FORBIDDEN_NAME_CHARS.contains(&c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let trimmed = cleaned.trim_matches(|c: char| c.is_whitespace() || c == '.');
     if trimmed.is_empty() {
@@ -622,13 +680,19 @@ pub fn sanitize_name(name: &str, fallback: &str) -> String {
 /// Splits on `/` and `\`, sanitizes each segment, and rejoins with `/`.
 pub fn normalize_folder(folder: Option<&str>) -> Option<String> {
     let raw = folder?.trim();
-    if raw.is_empty() { return None; }
+    if raw.is_empty() {
+        return None;
+    }
     let segs: Vec<String> = raw
         .split(|c| c == '/' || c == '\\')
         .filter(|s| !s.is_empty())
         .map(|s| sanitize_name(s, "_"))
         .collect();
-    if segs.is_empty() { None } else { Some(segs.join("/")) }
+    if segs.is_empty() {
+        None
+    } else {
+        Some(segs.join("/"))
+    }
 }
 
 /// Normalize a list of folder paths and add implicit ancestors so the writer
@@ -637,7 +701,9 @@ fn normalize_folder_list(folders: Vec<String>) -> Vec<String> {
     let mut out: HashSet<String> = HashSet::new();
     for f in folders {
         if let Some(norm) = normalize_folder(Some(&f)) {
-            for anc in folder_ancestors(&norm) { out.insert(anc); }
+            for anc in folder_ancestors(&norm) {
+                out.insert(anc);
+            }
         }
     }
     let mut sorted: Vec<String> = out.into_iter().collect();
@@ -684,4 +750,85 @@ fn folder_ancestors(folder: &str) -> Vec<String> {
         out.push(parts[..i].join("/"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn temp_project_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "statsplayground-spprj-{}-{}.spprj",
+            name,
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    #[test]
+    fn tabulate_round_trip_preserves_opaque_json_and_folder_map() {
+        let path = temp_project_path("tabulate-round-trip");
+        let tabulate = json!({
+            "id": "tab-1",
+            "name": "Tabulate 1",
+            "sourceDatasetId": "table-1",
+            "rowFields": ["Region"],
+            "columnFields": [],
+            "statistics": [],
+        });
+        let folders = HashMap::from([("tab-1".to_string(), "Reports".to_string())]);
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "2.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![tabulate.clone()],
+            Vec::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &folders,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(loaded.manifest.tabulates, vec![tabulate.clone()]);
+        assert_eq!(loaded.manifest.tabulate_folders, folders);
+        assert_eq!(loaded.tabulates, vec![tabulate]);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn tabulate_missing_manifest_fields_default_cleanly() {
+        let path = temp_project_path("tabulate-defaults");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let manifest = json!({
+            "name": "Compat Project",
+            "version": "2.0.0",
+            "createdAt": "2026-08-14T00:00:00Z",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+        });
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(&manifest_bytes).unwrap();
+        zip.finish().unwrap();
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert!(loaded.manifest.tabulates.is_empty());
+        assert!(loaded.manifest.tabulate_folders.is_empty());
+        assert!(loaded.tabulates.is_empty());
+
+        let _ = std::fs::remove_file(path);
+    }
 }

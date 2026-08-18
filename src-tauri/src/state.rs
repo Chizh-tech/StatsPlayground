@@ -25,10 +25,16 @@ impl AppState {
 
     /// Reset DuckDB engine (for opening a new/different project)
     pub fn reset_db(&self) -> Result<(), AppError> {
-        let mut db = self.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        let mut db = self
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         *db = DuckDbEngine::new_in_memory()?;
         // Clear column display props
-        let mut display = self.column_display.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        let mut display = self
+            .column_display
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         display.clear();
         Ok(())
     }

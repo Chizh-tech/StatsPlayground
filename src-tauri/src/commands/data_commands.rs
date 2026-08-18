@@ -195,7 +195,9 @@ pub fn get_column_display_props(
     state: State<'_, AppState>,
     dataset_id: String,
 ) -> Result<Vec<ColumnDisplayProps>, AppError> {
-    let display = state.column_display.lock()
+    let display = state
+        .column_display
+        .lock()
         .map_err(|e| AppError::Database(e.to_string()))?;
     Ok(display.get(&dataset_id).cloned().unwrap_or_default())
 }
@@ -206,7 +208,9 @@ pub fn set_column_display_props(
     dataset_id: String,
     props: Vec<ColumnDisplayProps>,
 ) -> Result<(), AppError> {
-    let mut display = state.column_display.lock()
+    let mut display = state
+        .column_display
+        .lock()
         .map_err(|e| AppError::Database(e.to_string()))?;
     display.insert(dataset_id, props);
     Ok(())

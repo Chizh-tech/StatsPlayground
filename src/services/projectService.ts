@@ -12,6 +12,8 @@ export interface SaveProjectFolders {
   tableFolders: Record<string, string>;
   /** graphId → folder path. Root graphs are simply absent. */
   graphFolders: Record<string, string>;
+  /** tabulateId → folder path. Root tabulates are simply absent. */
+  tabulateFolders: Record<string, string>;
 }
 
 export const projectService = {
@@ -30,15 +32,18 @@ export const projectService = {
     snapshots?: unknown[],
     graphBuilders?: unknown[],
     folders?: SaveProjectFolders,
+    tabulates?: unknown[],
   ) =>
     invoke<ProjectInfo>("save_project", {
       filePath: filePath ?? null,
       history: history ?? null,
       snapshots: snapshots ?? null,
       graphBuilders: graphBuilders ?? null,
+      tabulates: tabulates ?? null,
       folders: folders?.folders ?? null,
       tableFolders: folders?.tableFolders ?? null,
       graphFolders: folders?.graphFolders ?? null,
+      tabulateFolders: folders?.tabulateFolders ?? null,
     }),
 
   getCurrentProject: () => invoke<ProjectInfo | null>("get_current_project"),

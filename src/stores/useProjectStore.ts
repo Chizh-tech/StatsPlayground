@@ -22,6 +22,7 @@ interface ProjectStore {
     snapshots?: unknown[],
     graphBuilders?: unknown[],
     folders?: SaveProjectFolders,
+    tabulates?: unknown[],
   ) => Promise<void>;
   /** 关闭项目 */
   closeProject: () => void;
@@ -53,13 +54,14 @@ export const useProjectStore = create<ProjectStore>((set) => ({
     return result;
   },
 
-  saveProject: async (filePath, history, snapshots, graphBuilders, folders) => {
+  saveProject: async (filePath, history, snapshots, graphBuilders, folders, tabulates) => {
     const project = await projectService.saveProject(
       filePath,
       history,
       snapshots,
       graphBuilders,
       folders,
+      tabulates,
     );
     set({ project, dirty: false });
   },

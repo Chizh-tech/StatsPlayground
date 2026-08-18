@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
 use crate::models::project::ProjectInfo;
-use crate::services::project_service::{ProjectService, OpenProjectResult};
+use crate::services::project_service::{OpenProjectResult, ProjectService};
 use crate::state::AppState;
 
 #[tauri::command]
@@ -28,13 +28,19 @@ pub fn open_project(
     file_path: String,
 ) -> Result<OpenProjectResult, AppError> {
     let service = ProjectService::new(&state);
-    service.open_project(&file_path, Some(&|ds_idx, ds_total, ds_name| {
-        let _ = app.emit("open-project-progress", serde_json::json!({
-            "datasetIndex": ds_idx,
-            "datasetTotal": ds_total,
-            "datasetName": ds_name,
-        }));
-    }))
+    service.open_project(
+        &file_path,
+        Some(&|ds_idx, ds_total, ds_name| {
+            let _ = app.emit(
+                "open-project-progress",
+                serde_json::json!({
+                    "datasetIndex": ds_idx,
+                    "datasetTotal": ds_total,
+                    "datasetName": ds_name,
+                }),
+            );
+        }),
+    )
 }
 
 #[tauri::command]
@@ -44,9 +50,11 @@ pub fn save_project(
     history: Option<Vec<serde_json::Value>>,
     snapshots: Option<Vec<serde_json::Value>>,
     graph_builders: Option<Vec<serde_json::Value>>,
+    tabulates: Option<Vec<serde_json::Value>>,
     folders: Option<Vec<String>>,
     table_folders: Option<std::collections::HashMap<String, String>>,
     graph_folders: Option<std::collections::HashMap<String, String>>,
+    tabulate_folders: Option<std::collections::HashMap<String, String>>,
 ) -> Result<ProjectInfo, AppError> {
     let service = ProjectService::new(&state);
     service.save_project(
@@ -54,12 +62,16 @@ pub fn save_project(
         history,
         snapshots,
         graph_builders,
+        tabulates,
         folders,
         table_folders,
         graph_folders,
+        tabulate_folders,
     )?;
     // Return updated project info
-    service.get_current_project()?.ok_or_else(|| AppError::InvalidParam("No project".into()))
+    service
+        .get_current_project()?
+        .ok_or_else(|| AppError::InvalidParam("No project".into()))
 }
 
 #[tauri::command]

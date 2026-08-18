@@ -302,6 +302,15 @@
   background: var(--bg-menu-hover);
 }
 
+.menu-item-disabled {
+  color: var(--fg-disabled);
+  cursor: default;
+}
+
+.menu-item-disabled:hover {
+  background: transparent;
+}
+
 .menu-sep {
   height: 1px;
   background: var(--border-sep);

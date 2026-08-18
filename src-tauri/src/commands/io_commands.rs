@@ -1,6 +1,6 @@
-use tauri::{AppHandle, Emitter, State};
 use serde::Serialize;
 use std::collections::HashMap;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
 use crate::models::table::DatasetMeta;
@@ -33,31 +33,31 @@ pub fn import_sqlite(
     file_path: String,
 ) -> Result<Vec<DatasetMeta>, AppError> {
     let service = IoService::new(&state);
-    service.import_sqlite(&file_path, |table_name, table_index, table_total, rows_done, rows_total| {
-        let _ = app.emit("import-progress", ImportProgress {
-            table_name: table_name.to_string(),
-            table_index,
-            table_total,
-            rows_done,
-            rows_total,
-        });
-    })
+    service.import_sqlite(
+        &file_path,
+        |table_name, table_index, table_total, rows_done, rows_total| {
+            let _ = app.emit(
+                "import-progress",
+                ImportProgress {
+                    table_name: table_name.to_string(),
+                    table_index,
+                    table_total,
+                    rows_done,
+                    rows_total,
+                },
+            );
+        },
+    )
 }
 
 #[tauri::command(async)]
-pub fn export_sqlite(
-    state: State<'_, AppState>,
-    output_path: String,
-) -> Result<(), AppError> {
+pub fn export_sqlite(state: State<'_, AppState>, output_path: String) -> Result<(), AppError> {
     let service = IoService::new(&state);
     service.export_sqlite(&output_path)
 }
 
 #[tauri::command(async)]
-pub fn export_csv_zip(
-    state: State<'_, AppState>,
-    output_path: String,
-) -> Result<(), AppError> {
+pub fn export_csv_zip(state: State<'_, AppState>, output_path: String) -> Result<(), AppError> {
     let service = IoService::new(&state);
     service.export_csv_zip(&output_path)
 }

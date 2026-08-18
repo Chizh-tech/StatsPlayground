@@ -97,7 +97,9 @@ pub fn join_tables(
     new_name: String,
 ) -> Result<DatasetMeta, AppError> {
     let service = DataService::new(&state);
-    service.join_tables(&left_id, &right_id, &join_type, &left_key, &right_key, &new_name)
+    service.join_tables(
+        &left_id, &right_id, &join_type, &left_key, &right_key, &new_name,
+    )
 }
 
 #[tauri::command]
