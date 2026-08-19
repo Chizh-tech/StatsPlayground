@@ -16,6 +16,20 @@ pub struct DatasetMeta {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddedRowsResult {
+    pub row_ids: Vec<i64>,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnDefinition {
+    pub name: String,
+    pub column_type: String,
+}
+
 /// Column metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +51,84 @@ pub struct TableQueryResult {
     pub total_rows: i64,
     pub page: usize,
     pub page_size: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableWindowSort {
+    pub column: String,
+    pub descending: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TableWindowFilterRule {
+    Continuous {
+        field: String,
+        min: Option<f64>,
+        max: Option<f64>,
+    },
+    Categorical {
+        field: String,
+        selected: Vec<String>,
+        #[serde(default)]
+        exclude: bool,
+    },
+    Date {
+        field: String,
+        start: Option<String>,
+        end: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableWindowFilter {
+    pub op: String,
+    pub rule: TableWindowFilterRule,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableWindowRequest {
+    pub dataset_id: String,
+    pub start: usize,
+    pub count: usize,
+    pub sort: Option<TableWindowSort>,
+    pub filters: Vec<TableWindowFilter>,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableWindowResult {
+    pub columns: Vec<String>,
+    pub column_types: Vec<String>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub total_rows: i64,
+    pub start: usize,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellPosition {
+    pub row_id: i64,
+    pub column_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellUpdate {
+    pub row_id: i64,
+    pub column_name: String,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasteChangeSetResult {
+    pub change_set_id: String,
 }
 
 /// Paginated result of an arbitrary read-only SQL query.

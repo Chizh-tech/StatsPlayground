@@ -36,6 +36,8 @@ export interface FilterCategoricalRule {
   kind: "categorical";
   field: FieldRef;
   selected: string[];
+  /** When true, selected values are exclusions and an empty list passes all rows. */
+  exclude?: boolean;
 }
 
 /**

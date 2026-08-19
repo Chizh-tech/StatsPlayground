@@ -9,6 +9,13 @@ edition = "2021"
 name = "stats_playground_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+perf-harness = []
+
+[[example]]
+name = "performance_baseline"
+required-features = ["perf-harness"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

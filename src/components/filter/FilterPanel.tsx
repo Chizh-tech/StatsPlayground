@@ -18,7 +18,7 @@
  * names are preserved (see filter.css) to keep the diff bounded.
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FieldRef, GraphData, FieldType } from "@/graphCore";
 import type {
@@ -39,6 +39,8 @@ interface FilterPanelProps {
   onChange: (next: FilterRuleItem[]) => void;
   onClose: () => void;
   width: number;
+  categoricalMode?: "include" | "exclude";
+  getCategoricalValues?: (field: string, search: string) => Promise<string[]>;
 }
 
 /** Map a column FieldType to the filter rule kind we render for it. */
@@ -49,7 +51,11 @@ function ruleKindFor(t: FieldType): FilterRule["kind"] {
 }
 
 /** Seed a rule with sensible defaults for the column's data. */
-function makeRule(field: FieldRef, data: GraphData | null): FilterRule {
+function makeRule(
+  field: FieldRef,
+  data: GraphData | null,
+  categoricalMode: "include" | "exclude",
+): FilterRule {
   const kind = ruleKindFor(field.type);
   if (kind === "continuous") {
     return { kind: "continuous", field, min: null, max: null };
@@ -59,8 +65,11 @@ function makeRule(field: FieldRef, data: GraphData | null): FilterRule {
   }
   // Categorical: pre-select every distinct value so the rule starts as
   // pass-through (toggling off boxes narrows the result).
+  if (categoricalMode === "exclude") {
+    return { kind: "categorical", field, selected: [], exclude: true };
+  }
   const all = distinctColumnValues(data, field.name);
-  return { kind: "categorical", field, selected: all };
+  return { kind: "categorical", field, selected: all, exclude: false };
 }
 
 let _ruleIdSeq = 0;
@@ -76,6 +85,8 @@ export function FilterPanel({
   onChange,
   onClose,
   width,
+  categoricalMode = "include",
+  getCategoricalValues,
 }: FilterPanelProps) {
   const { t } = useTranslation();
 
@@ -101,7 +112,7 @@ export function FilterPanel({
     const item: FilterRuleItem = {
       id: nextRuleId(),
       op: filters.length === 0 ? "AND" : "AND",
-      rule: makeRule(field, data),
+      rule: makeRule(field, data, categoricalMode),
     };
     onChange([...filters, item]);
     setPicked("");
@@ -184,6 +195,7 @@ export function FilterPanel({
                 index={i}
                 item={item}
                 data={data}
+                getCategoricalValues={getCategoricalValues}
                 onChange={(patch) => updateRule(item.id, patch)}
                 onRemove={() => removeRule(item.id)}
               />
@@ -201,11 +213,19 @@ interface FilterCardProps {
   index: number;
   item: FilterRuleItem;
   data: GraphData | null;
+  getCategoricalValues?: (field: string, search: string) => Promise<string[]>;
   onChange: (patch: Partial<FilterRuleItem>) => void;
   onRemove: () => void;
 }
 
-function FilterCard({ index, item, data, onChange, onRemove }: FilterCardProps) {
+function FilterCard({
+  index,
+  item,
+  data,
+  getCategoricalValues,
+  onChange,
+  onRemove,
+}: FilterCardProps) {
   const { t } = useTranslation();
   const { rule } = item;
 
@@ -315,6 +335,7 @@ function FilterCard({ index, item, data, onChange, onRemove }: FilterCardProps) 
             <CategoricalEditor
               rule={rule}
               data={data}
+              getCategoricalValues={getCategoricalValues}
               onChange={(next) => onChange({ rule: next })}
             />
           )}
@@ -435,10 +456,12 @@ function DateEditor({
 function CategoricalEditor({
   rule,
   data,
+  getCategoricalValues,
   onChange,
 }: {
   rule: FilterCategoricalRule;
   data: GraphData | null;
+  getCategoricalValues?: (field: string, search: string) => Promise<string[]>;
   onChange: (next: FilterCategoricalRule) => void;
 }) {
   const { t } = useTranslation();
@@ -451,12 +474,37 @@ function CategoricalEditor({
 
   // Distinct values from the UN-filtered data (filterEngine helper) —
   // this list stays stable while the user toggles boxes within the rule.
-  const all = useMemo(
+  const localValues = useMemo(
     () => distinctColumnValues(data, rule.field.name),
     [data, rule.field.name],
   );
+  const [remoteValues, setRemoteValues] = useState<string[]>([]);
+  useEffect(() => {
+    if (!getCategoricalValues) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void getCategoricalValues(rule.field.name, query)
+        .then((values) => {
+          if (!cancelled) setRemoteValues(values);
+        })
+        .catch(() => {
+          if (!cancelled) setRemoteValues([]);
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [getCategoricalValues, query, rule.field.name]);
+  const all = getCategoricalValues ? remoteValues : localValues;
 
-  const selectedSet = useMemo(() => new Set(rule.selected), [rule.selected]);
+  const storedSet = useMemo(() => new Set(rule.selected), [rule.selected]);
+  const selectedSet = useMemo(
+    () => rule.exclude
+      ? new Set(all.filter((value) => !storedSet.has(value)))
+      : storedSet,
+    [all, rule.exclude, storedSet],
+  );
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -467,7 +515,14 @@ function CategoricalEditor({
   // Commit a new Set as the rule's selection, preserving `all`'s order so
   // re-renders are deterministic.
   const commit = (next: Set<string>) => {
-    onChange({ ...rule, selected: all.filter((x) => next.has(x)) });
+    if (rule.exclude) {
+      const visibleValues = new Set(all);
+      const excluded = rule.selected.filter((value) => !visibleValues.has(value));
+      excluded.push(...all.filter((value) => !next.has(value)));
+      onChange({ ...rule, selected: excluded });
+    } else {
+      onChange({ ...rule, selected: all.filter((x) => next.has(x)) });
+    }
   };
 
   const toggle = (v: string) => {
@@ -530,11 +585,11 @@ function CategoricalEditor({
   };
 
   const selectAll = () => {
-    onChange({ ...rule, selected: all.slice() });
+    onChange({ ...rule, selected: rule.exclude ? [] : all.slice() });
     setAnchorIdx(null);
   };
   const clearAll = () => {
-    onChange({ ...rule, selected: [] });
+    onChange({ ...rule, selected: [], exclude: false });
     setAnchorIdx(null);
   };
 

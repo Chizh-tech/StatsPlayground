@@ -13,8 +13,11 @@ import { useTableZoomStore } from "@/stores/useTableZoomStore";
 import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { modKey, shiftKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
+import { copyThenClear } from "@/utils/tableClipboard";
+import { TableWindowCache } from "@/utils/tableWindowCache";
+import { calculatePlaceholderRange, canMaterializeSelection, calculateTableWindow, MAX_MATERIALIZED_SELECTION_ITEMS, RequestEpoch, serializeTableWindowFilters, windowRowAt } from "@/utils/tableViewport";
 import { inferFieldType, type FieldRef, type GraphData } from "@/graphCore";
-import { FilterPanel, applyFiltersWithIndex } from "@/components/filter";
+import { FilterPanel } from "@/components/filter";
 import type { FilterRuleItem } from "@/types/filter";
 
 interface DataTableViewProps {
@@ -56,6 +59,8 @@ const BASE_ADD_COL_WIDTH = 40;
 const BASE_HEADER_HEIGHT = 48; // approximate sticky header height
 const OVERSCAN = 10; // extra rows above/below viewport
 const COLUMN_OVERSCAN = 4; // extra columns left/right of viewport
+const TABLE_WINDOW_SIZE = 500;
+const TABLE_CACHE_ROW_LIMIT = 5_000;
 
 // Shared empty Set so resetting "selected rows/cols" to empty doesn't
 // allocate a new reference every time and trigger downstream re-renders.
@@ -697,6 +702,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const { t } = useTranslation();
   const labelOf = useMemo(() => typeLabelOf(t), [t]);
   const [data, setData] = useState<TableQueryResult | null>(null);
+  const [windowStart, setWindowStart] = useState(0);
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
   const [editCell, setEditCell] = useState<{ row: number; col: number } | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -795,6 +801,8 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   // rules are cheap to re-add. Rule shape matches the Graph Builder so
   // future cross-view sharing is just a state lift.
   const [tableFilters, setTableFilters] = useState<FilterRuleItem[]>([]);
+  const tableFiltersRef = useRef<FilterRuleItem[]>([]);
+  tableFiltersRef.current = tableFilters;
   const [showTableFilters, setShowTableFilters] = useState(false);
   // Width of the FilterPanel column. Clamped at render time by the
   // splitter (see handler below). Same defaults as the Graph Builder.
@@ -811,7 +819,19 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
   const { refreshDatasets, setStatusInfo } = useDataStore();
   const { markDirty } = useProjectStore();
-  const { record: recordHistory, undo: historyUndo, redo: historyRedo, pendingRestore, clearPendingRestore } = useHistoryStore();
+  const {
+    record: recordHistory,
+    recordTable,
+    undo: historyUndo,
+    redo: historyRedo,
+    pendingRestore,
+    historyRevision,
+    historyError,
+    pendingAction,
+    tryBeginTableMutation,
+    endTableMutation,
+    clearPendingRestore,
+  } = useHistoryStore();
   const zoom = useTableZoomStore((s) => s.zoom);
   const zoomIn = useTableZoomStore((s) => s.zoomIn);
   const zoomOut = useTableZoomStore((s) => s.zoomOut);
@@ -827,8 +847,26 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
   // Refs for tracking latest state (used by recordAction and pendingRestore)
   const dataRef = useRef<TableQueryResult | null>(null);
+  const generationRef = useRef(0);
+  const windowStartRef = useRef(0);
+  const windowCacheRef = useRef<TableWindowCache | null>(null);
+  const requestEpochRef = useRef<RequestEpoch | null>(null);
+  const pendingWindowsRef = useRef<Set<string>>(new Set());
+  const loadedFilterKeyRef = useRef("[]");
+  const skipFilterReloadRef = useRef(false);
+  if (!windowCacheRef.current) windowCacheRef.current = new TableWindowCache(TABLE_CACHE_ROW_LIMIT);
+  if (!requestEpochRef.current) requestEpochRef.current = new RequestEpoch();
+  const getTableCategoricalValues = useCallback(
+    (field: string, search: string) => dataService.queryTableFilterValues(
+      datasetId,
+      field,
+      search,
+      500,
+      generationRef.current,
+    ),
+    [datasetId],
+  );
   const colWidthsRef = useRef<number[]>([]);
-  const initialRecordedRef = useRef<Set<string>>(new Set());
   if (data) dataRef.current = data;
   colWidthsRef.current = colWidths;
 
@@ -837,32 +875,52 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     markDirty();
   }, [refreshDatasets, markDirty]);
 
-  // Capture current state for history (called after each operation)
+  // Window rows are not a complete dataset snapshot. Table history is
+  // migrated to compact inverse operations in the next phase.
   const captureState = useCallback(() => {
-    if (!dataRef.current) return undefined;
-    return {
-      datasetId,
-      data: structuredClone(dataRef.current),
-      colWidths: [...colWidthsRef.current],
-      colFormats: colFormatsRef.current.map((f: ColumnFormat) => ({ ...f })),
-      colExtras: colExtrasRef.current.map((e) => (e ? { ...e } : null)),
-    };
-  }, [datasetId]);
+    return undefined;
+  }, []);
 
   // History recording — captures afterState for undo/redo
   const recordAction = useCallback((description: string) => {
     recordHistory(description, captureState());
   }, [recordHistory, captureState]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (
+    filters = tableFiltersRef.current,
+    start = windowStartRef.current,
+  ) => {
+    const epoch = requestEpochRef.current!.advance();
+    windowCacheRef.current!.clear();
+    pendingWindowsRef.current.clear();
+    const serializedFilters = serializeTableWindowFilters(filters);
+    loadedFilterKeyRef.current = JSON.stringify(serializedFilters);
     try {
-      const result = await dataService.queryTable({
+      const generation = await dataService.getDatasetGeneration(datasetId);
+      const request = {
         datasetId,
+        start,
+        count: TABLE_WINDOW_SIZE,
+        sort: null,
+        filters: serializedFilters,
+        generation,
+      };
+      const result = await dataService.queryTableWindow(request);
+      if (!requestEpochRef.current!.isCurrent(epoch)) return;
+      windowCacheRef.current!.put(request, result);
+      const nextData: TableQueryResult = {
+        columns: result.columns,
+        columnTypes: result.columnTypes,
+        rows: result.rows,
+        totalRows: result.totalRows,
         page: 0,
-        pageSize: 1_000_000,
-      });
-      setData(result);
-      dataRef.current = result;
+        pageSize: result.rows.length,
+      };
+      generationRef.current = result.generation;
+      windowStartRef.current = result.start;
+      setWindowStart(result.start);
+      setData(nextData);
+      dataRef.current = nextData;
       // Load saved display props
       try {
         const props = await dataService.getColumnDisplayProps(datasetId);
@@ -891,8 +949,13 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         colExtrasRef.current = extras;
       } catch { /* ignore display prop load errors */ }
     } catch (e) {
+      if (!requestEpochRef.current!.isCurrent(epoch)) return;
       console.error("Failed to load table:", e);
-      setData({ columns: [], columnTypes: [], rows: [], totalRows: 0, page: 0, pageSize: 1_000_000 });
+      setErrorMsg(String(e));
+      setWindowStart(0);
+      windowStartRef.current = 0;
+      setData(null);
+      dataRef.current = null;
     }
   }, [datasetId]);
 
@@ -927,13 +990,9 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   }, [datasetId]);
 
   useEffect(() => {
-    load().then(() => {
-      // Record initial state so the very first operation can be undone
-      if (!initialRecordedRef.current.has(datasetId) && dataRef.current) {
-        initialRecordedRef.current.add(datasetId);
-        recordHistory("__init__", captureState());
-      }
-    });
+    skipFilterReloadRef.current = true;
+    tableFiltersRef.current = [];
+    void load([], 0);
     setActiveCell(null);
     setEditCell(null);
     setSelectedRows(EMPTY_NUM_SET);
@@ -951,43 +1010,33 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setShowTableFilters(false);
   }, [datasetId, load]);
 
+  useEffect(() => {
+    if (skipFilterReloadRef.current) {
+      skipFilterReloadRef.current = false;
+      return;
+    }
+    const filterKey = JSON.stringify(serializeTableWindowFilters(tableFilters));
+    if (filterKey === loadedFilterKeyRef.current) return;
+    if (tableRef.current) tableRef.current.scrollTop = 0;
+    setScrollTop(0);
+    void load(tableFilters, 0);
+  }, [tableFilters, load]);
+
   // Apply pending restore from history store (undo/redo/jumpTo)
   useEffect(() => {
     if (!pendingRestore) return;
-    const snapshot = pendingRestore as {
-      datasetId: string;
-      data: TableQueryResult;
-      colWidths: number[];
-      colFormats: ColumnFormat[];
-      colExtras?: Array<Record<string, unknown> | null>;
-    };
-    // Only apply if the snapshot is for this dataset
-    if (snapshot.datasetId !== datasetId) {
-      clearPendingRestore();
-      return;
-    }
-    // Optimistic UI update — show restored state immediately
-    setData(snapshot.data);
-    dataRef.current = snapshot.data;
-    setColWidths(snapshot.colWidths);
-    colWidthsRef.current = snapshot.colWidths;
-    setColFormats(snapshot.colFormats);
-    colFormatsRef.current = snapshot.colFormats;
-    const restoredExtras = snapshot.colExtras
-      ?? Array.from({ length: snapshot.colFormats.length }, () => null);
-    setColExtras(restoredExtras);
-    colExtrasRef.current = restoredExtras;
     clearPendingRestore();
-    // Sync to backend in background (non-blocking)
-    const rowIdIdx2 = snapshot.data.columns.indexOf("_row_id");
-    const colNames = snapshot.data.columns.filter((_: string, i: number) => i !== rowIdIdx2);
-    const colTypesSnap = snapshot.data.columnTypes.filter((_: string, i: number) => i !== rowIdIdx2);
-    const rows = snapshot.data.rows;
-    dataService.restoreSnapshot(datasetId, colNames, colTypesSnap, rows)
-      .then(() => syncDisplayProps(snapshot.colWidths, snapshot.colFormats))
-      .then(() => refreshAndMarkDirty())
-      .catch((e) => setErrorMsg(String(e)));
-  }, [pendingRestore, datasetId, clearPendingRestore, syncDisplayProps, refreshAndMarkDirty]);
+  }, [pendingRestore, clearPendingRestore]);
+
+  useEffect(() => {
+    if (historyError) setErrorMsg(historyError);
+  }, [historyError]);
+
+  useEffect(() => {
+    if (historyRevision === 0) return;
+    void load();
+    void refreshAndMarkDirty();
+  }, [historyRevision, load, refreshAndMarkDirty]);
 
   // Auto-scroll to keep activeCell visible (virtual scrolling) — both axes.
   useEffect(() => {
@@ -1155,23 +1204,15 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     [cols, allRows],
   );
 
-  // Filtered display rows + index mapping back to `allRows` indices.
-  // Uses the shared filter engine — `applyFiltersWithIndex` returns both
-  // the kept rows AND their original positions, so `toDataIdx` can keep
-  // translating visible-row → `_row_id` for in-place edits.
-  const { displayRows, displayIdxMap } = useMemo(() => {
-    if (tableFilters.length === 0) {
-      return { displayRows: allRows, displayIdxMap: null as number[] | null };
-    }
-    const result = applyFiltersWithIndex(tableFilterData, tableFilters);
-    if (!result) return { displayRows: allRows, displayIdxMap: null as number[] | null };
-    return { displayRows: result.data.rows, displayIdxMap: result.indices };
-  }, [allRows, tableFilterData, tableFilters]);
+  const displayRows = allRows;
+  const displayRowAt = useCallback(
+    (logicalIndex: number) => windowRowAt({ start: windowStart, rows: displayRows }, logicalIndex),
+    [displayRows, windowStart],
+  );
 
-  // Convert visible row index to data.rows index (for _row_id lookup)
-  const toDataIdx = useCallback((vi: number): number =>
-    displayIdxMap ? displayIdxMap[vi] : vi,
-    [displayIdxMap]);
+  const toDataIdx = useCallback((logicalIndex: number): number =>
+    logicalIndex - windowStartRef.current,
+    []);
 
   // ----- Cross-view cell pick (Graph → Table) -----------------------
   // The GraphBuilder writes a `{rowId, colName}` slot into
@@ -1200,23 +1241,37 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         break;
       }
     }
-    if (dataIdx < 0) return;
-    let displayIdx: number;
-    if (displayIdxMap) {
-      displayIdx = displayIdxMap.indexOf(dataIdx);
-      if (displayIdx < 0) return;
-    } else {
-      displayIdx = dataIdx;
-    }
     const colIdx = cols.indexOf(pickedCell.colName);
     if (colIdx < 0) return;
+    if (dataIdx < 0) {
+      const epoch = requestEpochRef.current!.current;
+      void dataService.locateTableRow(
+        datasetId,
+        pickedCell.rowId,
+        serializeTableWindowFilters(tableFiltersRef.current),
+        generationRef.current,
+      ).then((logicalIndex) => {
+        if (!requestEpochRef.current!.isCurrent(epoch) || logicalIndex == null) return;
+        setActiveCell({ row: logicalIndex, col: colIdx });
+        setSelection({
+          startRow: logicalIndex,
+          startCol: colIdx,
+          endRow: logicalIndex,
+          endCol: colIdx,
+        });
+      }).catch((error) => {
+        if (requestEpochRef.current!.isCurrent(epoch)) setErrorMsg(String(error));
+      });
+      return;
+    }
+    const displayIdx = windowStart + dataIdx;
     setActiveCell({ row: displayIdx, col: colIdx });
     setSelection({ startRow: displayIdx, startCol: colIdx, endRow: displayIdx, endCol: colIdx });
     setSelectedRows(EMPTY_NUM_SET);
     setSelectedCols(EMPTY_NUM_SET);
     setSelectedCells(EMPTY_CELL_SET);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickedCell, pickedTick, data, rowIdIdx, displayIdxMap, cols]);
+  }, [pickedCell, pickedTick, data, rowIdIdx, cols, windowStart]);
 
   // ----- Cross-view multi-cell highlight (Graph brush → Table) --------
   // GraphBuilder writes an array of (rowId, colName) picks when the user
@@ -1255,13 +1310,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         if (Number(rows[i]?.[rowIdIdx]) === pk.rowId) { dataIdx = i; break; }
       }
       if (dataIdx < 0) continue;
-      let displayIdx: number;
-      if (displayIdxMap) {
-        displayIdx = displayIdxMap.indexOf(dataIdx);
-        if (displayIdx < 0) continue;
-      } else {
-        displayIdx = dataIdx;
-      }
+      const displayIdx = windowStart + dataIdx;
       cellSet.add(cellKey(displayIdx, colIdx));
       if (displayIdx < firstRow) firstRow = displayIdx;
     }
@@ -1284,7 +1333,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickedCells, pickedCellsTick, data, rowIdIdx, displayIdxMap, cols]);
+  }, [pickedCells, pickedCellsTick, data, rowIdIdx, cols, windowStart]);
 
   // Sync status info to global status bar
   useEffect(() => {
@@ -1314,19 +1363,21 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       if (selection) {
         const { r1, c1, r2, c2 } = normalizeRange(selection);
         if (r1 !== r2 || c1 !== c2) {
-          for (let r = r1; r <= r2; r++)
+          const firstLoadedRow = Math.max(r1, windowStart);
+          const lastLoadedRow = Math.min(r2, windowStart + displayRows.length - 1);
+          for (let r = firstLoadedRow; r <= lastLoadedRow; r++)
             for (let c = c1; c <= c2; c++)
-              vals.push(displayRows[r]?.[c]);
+              vals.push(displayRowAt(r)?.[c]);
         }
       } else if (selectedRows.size > 0) {
         const colCount = cols.length;
         for (const ri of selectedRows)
           for (let c = 0; c < colCount; c++)
-            vals.push(displayRows[ri]?.[c]);
+            vals.push(displayRowAt(ri)?.[c]);
       } else if (selectedCols.size > 0) {
-        for (let r = 0; r < displayRows.length; r++)
+        for (const row of displayRows)
           for (const ci of selectedCols)
-            vals.push(displayRows[r]?.[ci]);
+            vals.push(row[ci]);
       }
       return vals;
     };
@@ -1367,11 +1418,11 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       cellLabel: activeCell ? `${colLetter(activeCell.col)}${activeCell.row + 1}` : "",
       selectionLabel: selLabel,
       dimensions: tableFilters.length > 0
-        ? t("dataTable.dimensionsFiltered", { shown: displayRows.length, total: data.totalRows, cols: visibleColCount })
+        ? t("dataTable.dimensionsFiltered", { shown: data.totalRows, total: data.totalRows, cols: visibleColCount })
         : t("dataTable.dimensions", { rows: data.totalRows, cols: visibleColCount }),
       selectionStats,
     });
-  }, [activeCell, selection, selectedRows, selectedCols, data, displayRows, cols, visibleColCount, setStatusInfo, tableFilters, t]);
+  }, [activeCell, selection, selectedRows, selectedCols, data, displayRows, displayRowAt, cols, visibleColCount, setStatusInfo, tableFilters, t, windowStart]);
 
   // Precompute active row/col ranges for className computation.
   // Row/col headers light up for:
@@ -1387,7 +1438,9 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     if (activeCell) set.add(activeCell.row);
     if (selection) {
       const { r1, r2 } = normalizeRange(selection);
-      for (let i = r1; i <= r2; i++) set.add(i);
+      const firstLoadedRow = Math.max(r1, windowStart);
+      const lastLoadedRow = Math.min(r2, windowStart + displayRows.length - 1);
+      for (let i = firstLoadedRow; i <= lastLoadedRow; i++) set.add(i);
     }
     for (const key of selectedCells) {
       const ci = key.indexOf(",");
@@ -1397,10 +1450,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     }
     if (pendingCtrlRect) {
       const { r1, r2 } = normalizeRange(pendingCtrlRect);
-      for (let i = r1; i <= r2; i++) set.add(i);
+      const firstLoadedRow = Math.max(r1, windowStart);
+      const lastLoadedRow = Math.min(r2, windowStart + displayRows.length - 1);
+      for (let i = firstLoadedRow; i <= lastLoadedRow; i++) set.add(i);
     }
     return set;
-  }, [activeCell, selection, selectedCells, pendingCtrlRect]);
+  }, [activeCell, selection, selectedCells, pendingCtrlRect, displayRows.length, windowStart]);
 
   const activeColRange = useMemo(() => {
     const set = new Set<number>();
@@ -1451,13 +1506,85 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const wrapperWidth = wrapperSize.width;
   const headerHeight = Math.max(1, Math.round(BASE_HEADER_HEIGHT * zoom));
   const visibleAreaHeight = wrapperHeight - headerHeight;
-  const totalRowCount = displayRows.length;
+  const totalRowCount = data?.totalRows ?? 0;
   const virtualRange = useMemo(() => {
     const startIdx = Math.max(0, Math.floor((scrollTop - headerHeight) / ROW_HEIGHT) - OVERSCAN);
     const visibleCount = Math.ceil(visibleAreaHeight / ROW_HEIGHT) + 2 * OVERSCAN;
     const endIdx = Math.min(totalRowCount, startIdx + visibleCount);
     return { startIdx, endIdx };
   }, [scrollTop, totalRowCount, visibleAreaHeight, headerHeight, ROW_HEIGHT]);
+  const retainedRenderRange = useMemo(() => {
+    const startIdx = Math.max(virtualRange.startIdx, windowStart);
+    const endIdx = Math.min(virtualRange.endIdx, windowStart + displayRows.length);
+    return endIdx > startIdx
+      ? { startIdx, endIdx }
+      : { startIdx: virtualRange.startIdx, endIdx: virtualRange.startIdx };
+  }, [displayRows.length, virtualRange, windowStart]);
+  const placeholderRange = useMemo(
+    () => calculatePlaceholderRange(
+      virtualRange.startIdx,
+      virtualRange.endIdx,
+      windowStart,
+      displayRows.length,
+    ),
+    [displayRows.length, virtualRange, windowStart],
+  );
+  const renderedRange = placeholderRange ?? retainedRenderRange;
+
+  useEffect(() => {
+    if (!data || data.totalRows === 0) return;
+    const range = calculateTableWindow({
+      totalRows: data.totalRows,
+      rowHeight: ROW_HEIGHT,
+      scrollTop: Math.max(0, scrollTop - headerHeight),
+      viewportHeight: visibleAreaHeight,
+      overscanRows: OVERSCAN,
+      pageSize: TABLE_WINDOW_SIZE,
+    });
+    if (range.count === 0) return;
+    const request = {
+      datasetId,
+      ...range,
+      sort: null,
+      filters: serializeTableWindowFilters(tableFiltersRef.current),
+      generation: generationRef.current,
+    };
+    const applyResult = (result: import("@/types/data").TableWindowResult) => {
+      const nextData: TableQueryResult = {
+        columns: result.columns,
+        columnTypes: result.columnTypes,
+        rows: result.rows,
+        totalRows: result.totalRows,
+        page: 0,
+        pageSize: result.rows.length,
+      };
+      windowStartRef.current = result.start;
+      setWindowStart(result.start);
+      dataRef.current = nextData;
+      setData(nextData);
+    };
+    const key = `${request.generation}:${request.start}:${request.count}:${loadedFilterKeyRef.current}`;
+    const trackedRequest = requestEpochRef.current!.track(key);
+    const cached = windowCacheRef.current!.get(request);
+    if (cached) {
+      if (cached.start !== windowStartRef.current) applyResult(cached);
+      return;
+    }
+    if (pendingWindowsRef.current.has(key)) return;
+    pendingWindowsRef.current.add(key);
+    void dataService.queryTableWindow(request)
+      .then((result) => {
+        if (!requestEpochRef.current!.isCurrent(trackedRequest.epoch)) return;
+        if (!windowCacheRef.current!.put(request, result)) return;
+        if (!requestEpochRef.current!.isLatest(trackedRequest)) return;
+        const assembled = windowCacheRef.current!.get(request);
+        if (assembled) applyResult(assembled);
+      })
+      .catch((error) => {
+        if (requestEpochRef.current!.isLatest(trackedRequest)) setErrorMsg(String(error));
+      })
+      .finally(() => pendingWindowsRef.current.delete(key));
+  }, [data?.totalRows, datasetId, headerHeight, ROW_HEIGHT, scrollTop, visibleAreaHeight]);
 
   // Column virtualization: cumulative widths and visible column range.
   // Stored colWidths are in base (zoom-independent) units; scale on output.
@@ -1587,7 +1714,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     containerRef.current?.focus();
   }, []);
 
-  if (!data) return <div className="sp-loading">{t("dataTable.loading")}</div>;
+  if (!data) return <div className="sp-loading">{errorMsg ?? t("dataTable.loading")}</div>;
 
   const getRowId = (row: unknown[]): number =>
     rowIdIdx >= 0 ? (row[rowIdIdx] as number) : 0;
@@ -1613,153 +1740,309 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   // ---- Row operations ----
+  const addRowsWithHistory = async (count: number, description: string) => {
+    if (!tryBeginTableMutation()) return false;
+    try {
+      const result = await dataService.addRows(datasetId, count);
+      recordTable(description, {
+        kind: "addedRows",
+        datasetId,
+        generation: result.generation,
+        rowIds: result.rowIds,
+      });
+      await load();
+      await refreshAndMarkDirty();
+      return true;
+    } catch (error) {
+      setErrorMsg(String(error));
+      return false;
+    } finally {
+      endTableMutation();
+    }
+  };
+
   const handleAddRow = async () => {
-    await dataService.addRow(datasetId);
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.addRow"));
+    await addRowsWithHistory(1, t("history.addRow"));
   };
 
   const handleInsertMultiRows = async () => {
+    if (pendingAction) return;
     const count = parseInt(insertRowCount, 10);
     if (isNaN(count) || count < 1) return;
-    for (let i = 0; i < count; i++) {
-      await dataService.addRow(datasetId);
-    }
+    const added = await addRowsWithHistory(count, t("history.addRowsBatch"));
+    if (!added) return;
     setShowInsertMultiRows(false);
     setInsertRowCount("5");
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.addRowsBatch"));
   };
 
   const handleDeleteRows = async () => {
+    if (pendingAction) return;
     if (selectedRows.size === 0) return;
-    for (const rowIdx of selectedRows) {
-      const row = data.rows[toDataIdx(rowIdx)] as unknown[];
-      if (row) await dataService.deleteRow(datasetId, getRowId(row));
+    if ([...selectedRows].some((rowIdx) => !displayRowAt(rowIdx))) {
+      setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+        defaultValue: "This operation requires rows outside the loaded window.",
+      }));
+      return;
     }
-    setSelectedRows(EMPTY_NUM_SET);
-    setRowMenu(null);
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.deleteRow"));
+    const rowIds = Array.from(selectedRows, (rowIdx) =>
+      getRowId(data.rows[toDataIdx(rowIdx)] as unknown[]),
+    );
+    if (!tryBeginTableMutation()) return;
+    try {
+      const generation = await dataService.getDatasetGeneration(datasetId);
+      const changeSetId = await dataService.deleteRowsWithChangeSet(
+        datasetId,
+        rowIds,
+        generation,
+      );
+      recordTable(t("history.deleteRow"), { kind: "changeSet", datasetId, changeSetId });
+      setSelectedRows(EMPTY_NUM_SET);
+      setRowMenu(null);
+      await load();
+      await refreshAndMarkDirty();
+    } catch (error) {
+      setErrorMsg(String(error));
+      return;
+    } finally {
+      endTableMutation();
+    }
   };
 
   const handleDeleteSingleRow = async (rowIdx: number) => {
+    if (pendingAction) return;
     const row = data.rows[toDataIdx(rowIdx)] as unknown[];
-    await dataService.deleteRow(datasetId, getRowId(row));
-    setRowMenu(null);
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.deleteRow"));
+    if (!row) {
+      setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+        defaultValue: "This operation requires rows outside the loaded window.",
+      }));
+      return;
+    }
+    if (!tryBeginTableMutation()) return;
+    try {
+      const generation = await dataService.getDatasetGeneration(datasetId);
+      const changeSetId = await dataService.deleteRowsWithChangeSet(
+        datasetId,
+        [getRowId(row)],
+        generation,
+      );
+      recordTable(t("history.deleteRow"), { kind: "changeSet", datasetId, changeSetId });
+      setRowMenu(null);
+      await load();
+      await refreshAndMarkDirty();
+    } catch (error) {
+      setErrorMsg(String(error));
+      return;
+    } finally {
+      endTableMutation();
+    }
   };
 
   const handleInsertRowAbove = async () => {
-    await dataService.addRow(datasetId);
+    if (pendingAction) return;
+    const added = await addRowsWithHistory(1, t("history.insertRow"));
+    if (!added) return;
     setRowMenu(null);
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.insertRow"));
   };
 
   // ---- Column operations ----
+  const addColumnWithHistory = async (
+    name: string,
+    columnType: string,
+    atIndex: number | null,
+    description: string,
+  ) => {
+    if (!tryBeginTableMutation()) return false;
+    try {
+      const generation = await dataService.getDatasetGeneration(datasetId);
+      const changeSetId = await dataService.addColumnWithChangeSet(
+        datasetId,
+        name,
+        columnType,
+        atIndex,
+        generation,
+      );
+      recordTable(description, { kind: "changeSet", datasetId, changeSetId });
+      await load();
+      await refreshAndMarkDirty();
+      return true;
+    } catch (error) {
+      setErrorMsg(String(error));
+      return false;
+    } finally {
+      endTableMutation();
+    }
+  };
+
   const handleAddColumnQuick = async () => {
+    if (pendingAction) return;
     const name = generateColName(cols);
-    await dataService.addColumn(datasetId, name, "VARCHAR");
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.addColumn"));
+    await addColumnWithHistory(name, "VARCHAR", null, t("history.addColumn"));
   };
 
   // Insert a single blank column immediately after the given visible index
   // (used by the column header context menu so "insert column" lands next to
   // the right-clicked column instead of at the far end).
   const handleInsertColumnAfter = async (index: number) => {
+    if (pendingAction) return;
     const name = generateColName(cols);
-    await dataService.insertColumnAt(datasetId, name, "VARCHAR", index + 1);
+    const added = await addColumnWithHistory(
+      name,
+      "VARCHAR",
+      index + 1,
+      t("history.addColumn"),
+    );
+    if (!added) return;
     setColMenu(null);
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.addColumn"));
   };
 
   const handleAddColumn = async () => {
+    if (pendingAction) return;
     const name = newColName.trim();
     if (!name) return;
-    await dataService.addColumn(datasetId, name, newColType);
+    const added = await addColumnWithHistory(
+      name,
+      newColType,
+      null,
+      t("history.addColumnNamed", { name }),
+    );
+    if (!added) return;
     setShowAddCol(false);
     setNewColName("");
     setNewColType("VARCHAR");
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.addColumnNamed", { name }));
   };
 
   const handleInsertMultiCols = async () => {
+    if (pendingAction) return;
     const count = parseInt(insertColCount, 10);
     if (isNaN(count) || count < 1) return;
     const anchor = insertColAnchor;
     const currentNames = [...cols];
+    const columns: Array<{ name: string; columnType: string }> = [];
     for (let i = 0; i < count; i++) {
       const name = generateColName(currentNames);
-      if (anchor == null) {
-        // No anchor (opened from a non-column context): append at the end.
-        currentNames.push(name);
-        await dataService.addColumn(datasetId, name, insertColType);
-      } else {
-        // Insert right after the right-clicked column, keeping the batch in
-        // order: anchor+1, anchor+2, …
-        const at = anchor + 1 + i;
-        currentNames.splice(at, 0, name);
-        await dataService.insertColumnAt(datasetId, name, insertColType, at);
-      }
+      const at = anchor == null ? currentNames.length : anchor + 1 + i;
+      currentNames.splice(at, 0, name);
+      columns.push({ name, columnType: insertColType });
+    }
+    if (!tryBeginTableMutation()) return;
+    try {
+      const generation = await dataService.getDatasetGeneration(datasetId);
+      const changeSetId = await dataService.addColumnsWithChangeSet(
+        datasetId,
+        columns,
+        anchor == null ? null : anchor + 1,
+        generation,
+      );
+      recordTable(t("history.addColumnsBatch"), {
+        kind: "changeSet",
+        datasetId,
+        changeSetId,
+      });
+      await load();
+      await refreshAndMarkDirty();
+    } catch (error) {
+      setErrorMsg(String(error));
+      return;
+    } finally {
+      endTableMutation();
     }
     setShowInsertMultiCols(false);
     setInsertColCount("3");
     setInsertColType("VARCHAR");
     setInsertColAnchor(null);
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.addColumnsBatch"));
   };
 
   // Reorder a column by dragging its handle in the COLUMNS side panel.
   // `from`/`to` are visible column indices; the backend renumbers col_index
   // and remaps any stored display props so widths/formats/extras follow.
   const handleColsPanelReorder = async (from: number, to: number) => {
+    if (pendingAction) return;
     if (from === to) return;
-    await dataService.reorderColumn(datasetId, from, to);
-    setSelectedCols(EMPTY_NUM_SET);
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.reorderColumn", { defaultValue: "Reorder columns" }));
+    if (!tryBeginTableMutation()) return;
+    try {
+      const expectedGeneration = await dataService.getDatasetGeneration(datasetId);
+      const generation = await dataService.reorderColumnIfGeneration(
+        datasetId,
+        from,
+        to,
+        expectedGeneration,
+      );
+      recordTable(t("history.reorderColumn", { defaultValue: "Reorder columns" }), {
+        kind: "reorderColumns",
+        datasetId,
+        generation,
+        from,
+        to,
+      });
+      setSelectedCols(EMPTY_NUM_SET);
+      await load();
+      await refreshAndMarkDirty();
+    } catch (error) {
+      setErrorMsg(String(error));
+    } finally {
+      endTableMutation();
+    }
   };
 
   const handleDeleteColumn = async (colName: string) => {
+    if (pendingAction) return;
     if (cols.length <= 1) return;
-    await dataService.deleteColumn(datasetId, colName);
-    setColMenu(null);
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.deleteColumnNamed", { name: colName }));
+    if (!tryBeginTableMutation()) return;
+    try {
+      const generation = await dataService.getDatasetGeneration(datasetId);
+      const changeSetId = await dataService.deleteColumnsWithChangeSet(
+        datasetId,
+        [colName],
+        generation,
+      );
+      recordTable(t("history.deleteColumnNamed", { name: colName }), {
+        kind: "changeSet",
+        datasetId,
+        changeSetId,
+      });
+      setColMenu(null);
+      await load();
+      await refreshAndMarkDirty();
+    } catch (error) {
+      setErrorMsg(String(error));
+    } finally {
+      endTableMutation();
+    }
   };
 
   const handleDeleteSelectedCols = async () => {
+    if (pendingAction) return;
     if (selectedCols.size === 0) return;
     if (cols.length - selectedCols.size < 1) {
       setErrorMsg(t("dataTable.cantDeleteAllCols"));
       setColMenu(null);
       return;
     }
-    for (const ci of selectedCols) {
-      await dataService.deleteColumn(datasetId, cols[ci]);
+    const columnNames = Array.from(selectedCols)
+      .sort((left, right) => left - right)
+      .map((columnIndex) => cols[columnIndex]);
+    if (!tryBeginTableMutation()) return;
+    try {
+      const generation = await dataService.getDatasetGeneration(datasetId);
+      const changeSetId = await dataService.deleteColumnsWithChangeSet(
+        datasetId,
+        columnNames,
+        generation,
+      );
+      recordTable(t("history.deleteColumn"), {
+        kind: "changeSet",
+        datasetId,
+        changeSetId,
+      });
+      setSelectedCols(EMPTY_NUM_SET);
+      setColMenu(null);
+      await load();
+      await refreshAndMarkDirty();
+    } catch (error) {
+      setErrorMsg(String(error));
+    } finally {
+      endTableMutation();
     }
-    setSelectedCols(EMPTY_NUM_SET);
-    setColMenu(null);
-    await load();
-    await refreshAndMarkDirty();
-    recordAction(t("history.deleteColumn"));
   };
 
   const handleStartRenameCol = (colIdx: number) => {
@@ -1786,6 +2069,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleApplyBatchColProps = async () => {
+    if (pendingAction) return;
     if (!batchColProps) return;
     // Apply column widths — user-entered value is visual; store as base.
     const visualW = Math.max(DEFAULT_COL_WIDTH, Math.round(Number(batchColWidth) || DEFAULT_COL_WIDTH));
@@ -1806,18 +2090,35 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     // Sync display props to backend
     syncDisplayProps(newWidths, newFormats);
     markDirty();
+    const changedColumnNames = Array.from(batchColProps.checkedCols)
+      .filter((columnIndex) => colTypes[columnIndex] !== batchColType)
+      .map((columnIndex) => cols[columnIndex]);
+    const hasSchemaChanges = changedColumnNames.length > 0;
+    if (hasSchemaChanges && !tryBeginTableMutation()) return;
     try {
-      for (const ci of batchColProps.checkedCols) {
-        if (colTypes[ci] !== batchColType) {
-          await dataService.changeColumnType(datasetId, cols[ci], batchColType);
-        }
+      if (hasSchemaChanges) {
+        const generation = await dataService.getDatasetGeneration(datasetId);
+        const changeSetId = await dataService.alterColumnsTypeWithChangeSet(
+          datasetId,
+          changedColumnNames,
+          batchColType,
+          generation,
+        );
+        recordTable(t("history.modifyColumnProps"), {
+          kind: "changeSet",
+          datasetId,
+          changeSetId,
+        });
+      } else {
+        recordAction(t("history.modifyColumnProps"));
       }
       await load();
       await refreshAndMarkDirty();
       setBatchColProps(null);
-      recordAction(t("history.modifyColumnProps"));
     } catch (e) {
       setErrorMsg(String(e));
+    } finally {
+      if (hasSchemaChanges) endTableMutation();
     }
   };
 
@@ -1832,6 +2133,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleRenameColumn = async () => {
+    if (pendingAction) return;
     if (!renameCol || !renameValue.trim()) return;
     const nameChanged = renameValue.trim() !== renameCol.oldName;
     const typeChanged = renameType !== renameCol.oldType;
@@ -1857,21 +2159,31 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     syncDisplayProps(newWidths, newFormats);
     markDirty();
     try {
-      if (nameChanged) {
-        await dataService.renameColumn(datasetId, renameCol.oldName, renameValue.trim());
-      }
-      if (typeChanged) {
-        const colName = nameChanged ? renameValue.trim() : renameCol.oldName;
-        await dataService.changeColumnType(datasetId, colName, renameType);
-      }
       if (nameChanged || typeChanged) {
+        if (!tryBeginTableMutation()) return;
+        const generation = await dataService.getDatasetGeneration(datasetId);
+        const changeSetId = await dataService.alterColumnWithChangeSet(
+          datasetId,
+          renameCol.oldName,
+          renameValue.trim(),
+          renameType,
+          generation,
+        );
+        recordTable(t("history.modifyColumnProps"), {
+          kind: "changeSet",
+          datasetId,
+          changeSetId,
+        });
         await load();
         await refreshAndMarkDirty();
+      } else {
+        recordAction(t("history.modifyColumnProps"));
       }
       setRenameCol(null);
-      recordAction(t("history.modifyColumnProps"));
     } catch (e) {
       setErrorMsg(String(e));
+    } finally {
+      if (nameChanged || typeChanged) endTableMutation();
     }
   };
 
@@ -1958,6 +2270,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       return;
     }
     if (!editCell) return;
+    if (pendingAction) return;
     const { row: editRow, col: editCol } = editCell;
     const colType = colTypes[editCol];
     const err = validateCellValue(editValue, colType);
@@ -1968,30 +2281,51 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setEditCell(null);
     const dataIdx = toDataIdx(editRow);
     const row = data.rows[dataIdx] as unknown[];
+    if (!row) {
+      setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+        defaultValue: "This operation requires rows outside the loaded window.",
+      }));
+      return;
+    }
     const rowId = getRowId(row);
     const colName = cols[editCol];
+    const rawColIdx = editCol >= rowIdIdx ? editCol + 1 : editCol;
+    const beforeValue = row[rawColIdx];
 
     // Optimistic UI update — immediately reflect new value, no flash
     const newData = { ...data, rows: [...data.rows] };
     const newRow = [...(newData.rows[dataIdx] as unknown[])];
     // Column index in raw row = editCol offset by _row_id position
-    const rawColIdx = editCol >= rowIdIdx ? editCol + 1 : editCol;
     newRow[rawColIdx] = editValue === "" ? null : editValue;
     newData.rows[dataIdx] = newRow;
-    setData(newData);
-    dataRef.current = newData;
 
+    if (!tryBeginTableMutation()) return;
     try {
+      setData(newData);
+      dataRef.current = newData;
       await dataService.updateCell(datasetId, rowId, colName, editValue);
+      markDirty();
+      await load();
+      recordTable(t("history.editCell"), {
+        kind: "cells",
+        datasetId,
+        generation: generationRef.current,
+        cells: [{
+          rowId,
+          columnName: colName,
+          before: beforeValue,
+          after: editValue === "" ? null : editValue,
+        }],
+      });
     } catch (e) {
       setErrorMsg(String(e));
       await load(); // Revert on error
       return;
+    } finally {
+      endTableMutation();
     }
-    markDirty();
-    recordAction(t("history.editCell"));
 
-    const maxRow = displayRows.length - 1;
+    const maxRow = data.totalRows - 1;
     const maxCol = cols.length - 1;
     if (direction === "down") {
       // Enter: move down; if Tab anchor exists, return to that column
@@ -2044,64 +2378,107 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     }
     const dataIdx = toDataIdx(editRow);
     const rawRow = data.rows[dataIdx] as unknown[];
+    if (!rawRow) {
+      setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+        defaultValue: "This operation requires rows outside the loaded window.",
+      }));
+      return false;
+    }
     const rowId = getRowId(rawRow);
     const colName = cols[editCol];
+    const rawColIdx = editCol >= rowIdIdx ? editCol + 1 : editCol;
+    const beforeValue = rawRow[rawColIdx];
     // Optimistic update
     const newData = { ...data, rows: [...data.rows] };
     const newRow = [...rawRow];
-    const rawColIdx = editCol >= rowIdIdx ? editCol + 1 : editCol;
     newRow[rawColIdx] = value === "" ? null : value;
     newData.rows[dataIdx] = newRow;
-    setData(newData);
-    dataRef.current = newData;
+    if (!tryBeginTableMutation()) return false;
     try {
+      setData(newData);
+      dataRef.current = newData;
       await dataService.updateCell(datasetId, rowId, colName, value);
+      markDirty();
+      await load();
+      recordTable(t("history.editCell"), {
+        kind: "cells",
+        datasetId,
+        generation: generationRef.current,
+        cells: [{
+          rowId,
+          columnName: colName,
+          before: beforeValue,
+          after: value === "" ? null : value,
+        }],
+      });
+      return true;
     } catch (e) {
       setErrorMsg(String(e));
       await load();
       return false;
+    } finally {
+      endTableMutation();
     }
-    markDirty();
-    recordAction(t("history.editCell"));
-    return true;
   };
 
   // ---- Clear cells (Delete key) ----
   const clearCells = async (cells: { row: number; col: number }[]) => {
+    if (cells.some(({ row, col }) => !displayRowAt(row) || col < 0 || col >= cols.length)) {
+      setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+        defaultValue: "This operation requires rows outside the loaded window.",
+      }));
+      return;
+    }
     // Optimistic UI update
     const newData = { ...data, rows: [...data.rows] };
-    const updateInfos: { rowId: number; colName: string }[] = [];
+    const updateInfos: { rowId: number; colName: string; before: unknown }[] = [];
     for (const { row, col } of cells) {
       const dataIdx = toDataIdx(row);
       const rawRow = [...(newData.rows[dataIdx] as unknown[])];
       const rowId = getRowId(rawRow as unknown[]);
       const rawColIdx = col >= rowIdIdx ? col + 1 : col;
+      const before = rawRow[rawColIdx];
       rawRow[rawColIdx] = null;
       newData.rows[dataIdx] = rawRow;
-      updateInfos.push({ rowId, colName: cols[col] });
+      updateInfos.push({ rowId, colName: cols[col], before });
     }
-    setData(newData);
-    dataRef.current = newData;
 
+    if (!tryBeginTableMutation()) return;
     try {
-      for (const { rowId, colName } of updateInfos) {
-        await dataService.updateCell(datasetId, rowId, colName, "");
-      }
+      setData(newData);
+      dataRef.current = newData;
+      await dataService.clearCells(
+        datasetId,
+        updateInfos.map(({ rowId, colName }) => ({ rowId, columnName: colName })),
+      );
+      markDirty();
+      await load();
+      recordTable(t("history.clearCells"), {
+        kind: "cells",
+        datasetId,
+        generation: generationRef.current,
+        cells: updateInfos.map(({ rowId, colName, before }) => ({
+          rowId,
+          columnName: colName,
+          before,
+          after: null,
+        })),
+      });
     } catch (e) {
       setErrorMsg(String(e));
       await load(); // Revert on error
       return;
+    } finally {
+      endTableMutation();
     }
-    markDirty();
-    recordAction(t("history.clearCells"));
   };
 
   // ---- Helper: find boundary of continuous data (Excel Ctrl+Arrow behavior) ----
   const findEdge = (row: number, col: number, dRow: number, dCol: number): { row: number; col: number } => {
-    const maxRow = displayRows.length - 1;
+    const maxRow = windowStart + displayRows.length - 1;
     const maxCol = cols.length - 1;
     const getCellVal = (r: number, c: number): unknown => {
-      return displayRows[r]?.[c];
+      return displayRowAt(r)?.[c];
     };
     const currentVal = getCellVal(row, col);
     const currentEmpty = currentVal == null || currentVal === "";
@@ -2176,8 +2553,8 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   // ---- Copy selected cells to clipboard as TSV ----
-  const handleCopy = (withHeader: boolean = false) => {
-    if (!data) return;
+  const handleCopy = async (withHeader: boolean = false): Promise<boolean> => {
+    if (!data) return false;
     let rows: string[][] = [];
     let headerCols: number[] | null = null;
 
@@ -2186,24 +2563,42 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       const sortedRows = Array.from(selectedRows).sort((a, b) => a - b);
       headerCols = cols.map((_, i) => i);
       for (const ri of sortedRows) {
-        const dr = displayRows[ri];
+        const dr = displayRowAt(ri);
+        if (!dr) {
+          setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+            defaultValue: "This operation requires rows outside the loaded window.",
+          }));
+          return false;
+        }
         rows.push(dr.map((v) => (v == null ? "" : String(v))));
       }
     } else if (selectedCols.size > 0) {
+      if (data.totalRows > displayRows.length) {
+        setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+          defaultValue: "This operation requires rows outside the loaded window.",
+        }));
+        return false;
+      }
       // Copy selected columns (all rows)
       const sortedCols = Array.from(selectedCols).sort((a, b) => a - b);
       headerCols = sortedCols;
-      for (let ri = 0; ri < displayRows.length; ri++) {
-        const dr = displayRows[ri];
+      for (const dr of displayRows) {
         rows.push(sortedCols.map((ci) => (dr[ci] == null ? "" : String(dr[ci]))));
       }
     } else if (selection) {
       // Copy selection range
       const { r1, c1, r2, c2 } = normalizeRange(selection);
+      if (r1 < windowStart || r2 >= windowStart + displayRows.length) {
+        setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+          defaultValue: "This operation requires rows outside the loaded window.",
+        }));
+        return false;
+      }
       headerCols = [];
       for (let c = c1; c <= c2; c++) headerCols.push(c);
       for (let r = r1; r <= r2; r++) {
-        const dr = displayRows[r];
+        const dr = displayRowAt(r);
+        if (!dr) return false;
         const row: string[] = [];
         for (let c = c1; c <= c2; c++) {
           row.push(dr[c] == null ? "" : String(dr[c]));
@@ -2212,24 +2607,35 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       }
     } else if (activeCell) {
       // Copy single cell
-      const dr = displayRows[activeCell.row];
+      const dr = displayRowAt(activeCell.row);
+      if (!dr) return false;
       headerCols = [activeCell.col];
       rows.push([dr[activeCell.col] == null ? "" : String(dr[activeCell.col])]);
     }
 
-    if (rows.length === 0) return;
+    if (rows.length === 0) return false;
     if (withHeader && headerCols) {
       const headerRow = headerCols.map((ci) => cols[ci] ?? "");
       rows.unshift(headerRow);
     }
     const tsv = rows.map((r) => r.join("\t")).join("\n");
-    navigator.clipboard.writeText(tsv).catch(() => {
+    try {
+      await navigator.clipboard.writeText(tsv);
+      return true;
+    } catch {
       setErrorMsg(t("dataTable.clipboardWriteFail"));
-    });
+      return false;
+    }
   };
 
   // ---- Paste from clipboard (Excel TSV) ----
   const doPaste = async (text: string, withHeader: boolean) => {
+    if (tableFilters.length > 0) {
+      setErrorMsg(t("dataTable.pasteFilteredUnsupported", {
+        defaultValue: "Paste is unavailable while table filters are active.",
+      }));
+      return;
+    }
     // Parse TSV (Excel copies as tab-separated)
     const lines = text.replace(/\r\n$/, "").split(/\r?\n/);
     const parsed = lines.map((line) => line.split("\t"));
@@ -2265,6 +2671,19 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       const colsFit = srcCols > 0 && selCols % srcCols === 0;
       // Header rows are not tiled — they must be written exactly once.
       if (isMultiCell && rowsFit && colsFit && !headerNames) {
+        if (!canMaterializeSelection(
+          selR0,
+          selR1,
+          selC0,
+          selC1,
+          windowStart,
+          displayRows.length,
+        )) {
+          setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+            defaultValue: "This operation requires rows outside the loaded window.",
+          }));
+          return;
+        }
         const repR = selRows / srcRows;
         const repC = selCols / srcCols;
         if (repR > 1 || repC > 1) {
@@ -2322,8 +2741,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     let hasConflicts = false;
     for (let r = 0; r < numPasteRows && !hasConflicts; r++) {
       const targetRow = startRow + r;
-      if (targetRow < displayRows.length) {
-        const dr = displayRows[targetRow];
+      if (targetRow < data.totalRows) {
+        const dr = displayRowAt(targetRow);
+        if (!dr) {
+          hasConflicts = true;
+          break;
+        }
         for (let c = 0; c < numPasteCols; c++) {
           const targetCol = startCol + c;
           if (targetCol < dr.length) {
@@ -2342,15 +2765,27 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       if (!confirmed) return;
     }
 
+    if (!tryBeginTableMutation()) return;
     try {
-      await dataService.pasteAtPosition(
-        datasetId, toDataIdx(startRow), startCol, dataRows, headerNames, detectedTypes
+      const { changeSetId } = await dataService.pasteAtPositionWithChangeSet(
+        datasetId, startRow, startCol, dataRows, headerNames, detectedTypes, generationRef.current
       );
-      await load();
-      await refreshAndMarkDirty();
-      recordAction(t("history.pasteData"));
+      recordTable(t("history.pasteData"), {
+        kind: "changeSet",
+        datasetId,
+        changeSetId,
+      });
+      markDirty();
+      try {
+        await load();
+        await refreshAndMarkDirty();
+      } catch (refreshError) {
+        setErrorMsg(String(refreshError));
+      }
     } catch (err) {
       setErrorMsg(String(err));
+    } finally {
+      endTableMutation();
     }
   };
 
@@ -2474,13 +2909,13 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
     // Cmd/Ctrl+A: select all
     if (isMeta && !e.shiftKey && e.key.toLowerCase() === "a") {
-      if (!editCell && data && displayRows.length > 0 && cols.length > 0) {
+      if (!editCell && data && data.totalRows > 0 && cols.length > 0) {
         e.preventDefault();
         setActiveCell({ row: 0, col: 0 });
         setSelection({
           startRow: 0,
           startCol: 0,
-          endRow: displayRows.length - 1,
+          endRow: data.totalRows - 1,
           endCol: cols.length - 1,
         });
         setSelectedRows(EMPTY_NUM_SET);
@@ -2507,15 +2942,45 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         // Collect cells to clear
         const cellsToCut: { row: number; col: number }[] = [];
         if (selectedRows.size > 0) {
+          if ([...selectedRows].some((row) => !displayRowAt(row))) {
+            setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+              defaultValue: "This operation requires rows outside the loaded window.",
+            }));
+            return;
+          }
+          if (selectedRows.size > Math.floor(MAX_MATERIALIZED_SELECTION_ITEMS / Math.max(1, cols.length))) {
+            setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+              defaultValue: "This operation requires rows outside the loaded window.",
+            }));
+            return;
+          }
           for (const ri of selectedRows) {
             for (let ci = 0; ci < cols.length; ci++) cellsToCut.push({ row: ri, col: ci });
           }
         } else if (selectedCols.size > 0) {
+          if (data.totalRows > displayRows.length) {
+            setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+              defaultValue: "This operation requires rows outside the loaded window.",
+            }));
+            return;
+          }
+          if (displayRows.length > Math.floor(MAX_MATERIALIZED_SELECTION_ITEMS / Math.max(1, selectedCols.size))) {
+            setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+              defaultValue: "This operation requires rows outside the loaded window.",
+            }));
+            return;
+          }
           for (const ci of selectedCols) {
-            for (let ri = 0; ri < displayRows.length; ri++) cellsToCut.push({ row: ri, col: ci });
+            for (let ri = windowStart; ri < windowStart + displayRows.length; ri++) cellsToCut.push({ row: ri, col: ci });
           }
         } else if (selection) {
           const { r1, c1, r2, c2 } = normalizeRange(selection);
+          if (!canMaterializeSelection(r1, r2, c1, c2, windowStart, displayRows.length)) {
+            setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+              defaultValue: "This operation requires rows outside the loaded window.",
+            }));
+            return;
+          }
           for (let r = r1; r <= r2; r++) {
             for (let c = c1; c <= c2; c++) cellsToCut.push({ row: r, col: c });
           }
@@ -2523,8 +2988,10 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
           cellsToCut.push(activeCell);
         }
         if (cellsToCut.length > 0) {
-          handleCopy();
-          clearCells(cellsToCut);
+          void copyThenClear(
+            () => handleCopy(),
+            () => clearCells(cellsToCut),
+          );
         }
         return;
       }
@@ -2545,7 +3012,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     if (!activeCell) return;
 
     const { row, col } = activeCell;
-    const maxRow = displayRows.length - 1;
+    const maxRow = data?.totalRows ? data.totalRows - 1 : -1;
     const maxCol = cols.length - 1;
     const isMod = e.ctrlKey || e.metaKey; // Ctrl (Windows/Linux) or Cmd (macOS)
 
@@ -2633,7 +3100,8 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       }
       case "F2": {
         e.preventDefault();
-        const displayRow = displayRows[row];
+        const displayRow = displayRowAt(row);
+        if (!displayRow) break;
         handleCellDoubleClick(row, col, displayRow[col]);
         break;
       }
@@ -2643,7 +3111,15 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         const cellsToClear: { row: number; col: number }[] = [];
         if (selection) {
           const { r1, c1, r2, c2 } = normalizeRange(selection);
-          for (let r = r1; r <= r2; r++)
+          if (!canMaterializeSelection(r1, r2, c1, c2, windowStart, displayRows.length)) {
+            setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+              defaultValue: "This operation requires rows outside the loaded window.",
+            }));
+            return;
+          }
+          const firstLoadedRow = Math.max(r1, windowStart);
+          const lastLoadedRow = Math.min(r2, windowStart + displayRows.length - 1);
+          for (let r = firstLoadedRow; r <= lastLoadedRow; r++)
             for (let c = c1; c <= c2; c++)
               cellsToClear.push({ row: r, col: c });
         } else {
@@ -2740,6 +3216,21 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       //       seed; existing set persists naturally.
       if (selection) {
         const { r1, c1, r2, c2 } = normalizeRange(selection);
+        if (!canMaterializeSelection(
+          r1,
+          r2,
+          c1,
+          c2,
+          windowStart,
+          displayRows.length,
+          undefined,
+          selectedCells.size,
+        )) {
+          setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+            defaultValue: "This operation requires rows outside the loaded window.",
+          }));
+          return;
+        }
         const seed = new Set(selectedCells);
         for (let r = r1; r <= r2; r++) {
           for (let c = c1; c <= c2; c++) seed.add(cellKey(r, c));
@@ -2805,9 +3296,30 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         const r2 = Math.max(row, lastR);
         const c1 = Math.min(col, lastC);
         const c2 = Math.max(col, lastC);
+        if (!canMaterializeSelection(
+          r1,
+          r2,
+          c1,
+          c2,
+          windowStart,
+          displayRows.length,
+          undefined,
+          selectedCells.size,
+        )) {
+          setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+            defaultValue: "This operation requires rows outside the loaded window.",
+          }));
+          return;
+        }
         if (r1 === r2 && c1 === c2) {
           // Pure click on a single cell — toggle it.
           setSelectedCells((prev) => {
+            if (!canMaterializeSelection(row, row, col, col, windowStart, displayRows.length, undefined, prev.size)) {
+              setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+                defaultValue: "This operation requires rows outside the loaded window.",
+              }));
+              return prev;
+            }
             const next = new Set(prev);
             const k = cellKey(row, col);
             if (next.has(k)) next.delete(k);
@@ -2819,6 +3331,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
           // do not toggle here: Excel's additive Ctrl+drag never removes
           // cells, even if some inside the new rect were already selected.
           setSelectedCells((prev) => {
+            if (!canMaterializeSelection(r1, r2, c1, c2, windowStart, displayRows.length, undefined, prev.size)) {
+              setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+                defaultValue: "This operation requires rows outside the loaded window.",
+              }));
+              return prev;
+            }
             const next = new Set(prev);
             for (let r = r1; r <= r2; r++) {
               for (let c = c1; c <= c2; c++) next.add(cellKey(r, c));
@@ -2929,6 +3447,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     } else if (e.shiftKey && rowAnchorRef.current != null) {
       const start = Math.min(rowAnchorRef.current, rowIdx);
       const end = Math.max(rowAnchorRef.current, rowIdx);
+      if (start < windowStart || end >= windowStart + displayRows.length) {
+        setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+          defaultValue: "This operation requires rows outside the loaded window.",
+        }));
+        return;
+      }
       newSet.clear();
       for (let i = start; i <= end; i++) newSet.add(i);
     } else {
@@ -2986,6 +3510,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       const commitRange = () => {
         const start = Math.min(anchorRow, lastRow);
         const end = Math.max(anchorRow, lastRow);
+        if (!canMaterializeSelection(start, end, 0, 0, windowStart, displayRows.length)) {
+          setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+            defaultValue: "This operation requires rows outside the loaded window.",
+          }));
+          return;
+        }
         const newSet = new Set(snapshot);
         for (let i = start; i <= end; i++) newSet.add(i);
         setSelectedRows(newSet);
@@ -3079,6 +3609,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       if (Number.isFinite(ri)) {
         const start = Math.min(anchorRow, ri);
         const end = Math.max(anchorRow, ri);
+        if (!canMaterializeSelection(start, end, 0, 0, windowStart, displayRows.length)) {
+          setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
+            defaultValue: "This operation requires rows outside the loaded window.",
+          }));
+          return;
+        }
         const newSet = new Set<number>();
         for (let i = start; i <= end; i++) newSet.add(i);
         setSelectedRows(newSet);
@@ -3455,18 +3991,18 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
   moveDownAfterCommitRef.current = () => {
     if (!activeCell) return;
-    const maxRow = displayRows.length - 1;
+    const maxRow = data.totalRows - 1;
     if (activeCell.row < maxRow) {
       setActiveCell({ row: activeCell.row + 1, col: activeCell.col });
     }
   };
   const activeCellValueStr = (() => {
     if (!activeCell) return "";
-    const dr = displayRows[activeCell.row];
+    const dr = displayRowAt(activeCell.row);
     const v = dr ? dr[activeCell.col] : undefined;
     return v == null ? "" : String(v);
   })();
-  const formulaMaxRow = displayRows.length - 1;
+  const formulaMaxRow = data.totalRows - 1;
   const formulaMaxCol = cols.length - 1;
 
   return (
@@ -3664,6 +4200,8 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
               onChange={setTableFilters}
               onClose={() => setShowTableFilters(false)}
               width={tableFilterWidth}
+              categoricalMode="exclude"
+              getCategoricalValues={getTableCategoricalValues}
             />
             <div
               className="sp-cols-panel-splitter"
@@ -3855,7 +4393,11 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
               if (td) {
                 const ri = Number(td.dataset.row);
                 const ci = Number(td.dataset.col);
-                handleCellDoubleClick(ri, ci, displayRows[ri]?.[ci]);
+                handleCellDoubleClick(
+                  ri,
+                  ci,
+                  windowRowAt({ start: windowStart, rows: displayRows }, ri)?.[ci],
+                );
               }
             }}
             onContextMenu={(e) => {
@@ -3871,14 +4413,19 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
             }}
           >
             {/* Top spacer for virtual scroll */}
-            {virtualRange.startIdx > 0 && (
+            {renderedRange.startIdx > 0 && (
               <tr aria-hidden="true">
-                <td colSpan={9999} style={{ padding: 0, border: "none", height: virtualRange.startIdx * ROW_HEIGHT }} />
+                <td colSpan={9999} style={{ padding: 0, border: "none", height: renderedRange.startIdx * ROW_HEIGHT }} />
               </tr>
             )}
-            {displayRows.length > 0 && (
-              displayRows.slice(virtualRange.startIdx, virtualRange.endIdx).map((displayRow, idx) => {
-                const ri = virtualRange.startIdx + idx;
+            {!placeholderRange && retainedRenderRange.endIdx > retainedRenderRange.startIdx && (
+              displayRows
+                .slice(
+                  retainedRenderRange.startIdx - windowStart,
+                  retainedRenderRange.endIdx - windowStart,
+                )
+                .map((displayRow, idx) => {
+                const ri = retainedRenderRange.startIdx + idx;
                 const isRowSelected = selectedRows.has(ri);
                 const isRowActive = activeRowRange.has(ri);
                 const activeCol = activeCell?.row === ri ? activeCell.col : -1;
@@ -3916,10 +4463,31 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
                 );
               })
             )}
+            {placeholderRange && Array.from(
+              { length: placeholderRange.endIdx - placeholderRange.startIdx },
+              (_, index) => {
+                const rowIndex = placeholderRange.startIdx + index;
+                return (
+                  <tr key={`placeholder-${rowIndex}`} className="sp-placeholder-row" aria-hidden="true">
+                    <td className="sp-row-hdr">{rowIndex + 1}</td>
+                    {colVirtRange.leftSpacerW > 0 && (
+                      <td className="sp-col-spacer" style={{ width: colVirtRange.leftSpacerW, padding: 0, border: "none" }} />
+                    )}
+                    {visibleColIdxs.map((columnIndex) => (
+                      <td key={columnIndex} className="sp-cell sp-placeholder-cell" />
+                    ))}
+                    {colVirtRange.rightSpacerW > 0 && (
+                      <td className="sp-col-spacer" style={{ width: colVirtRange.rightSpacerW, padding: 0, border: "none" }} />
+                    )}
+                    <td className="sp-add-col-cell" />
+                  </tr>
+                );
+              },
+            )}
             {/* Bottom spacer for virtual scroll */}
-            {virtualRange.endIdx < totalRowCount && (
+            {renderedRange.endIdx < totalRowCount && (
               <tr aria-hidden="true">
-                <td colSpan={9999} style={{ padding: 0, border: "none", height: (totalRowCount - virtualRange.endIdx) * ROW_HEIGHT }} />
+                <td colSpan={9999} style={{ padding: 0, border: "none", height: (totalRowCount - renderedRange.endIdx) * ROW_HEIGHT }} />
               </tr>
             )}
             {/* "Add row" bottom row */}

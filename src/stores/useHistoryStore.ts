@@ -1,11 +1,21 @@
 import { create } from "zustand";
+import { dataService } from "@/services/dataService";
 import { historyService } from "@/services/historyService";
 import type {
   HistoryEntry,
   NamedSnapshot,
+  PendingHistoryAction,
+  TableHistoryAction,
 } from "@/types/history";
+import {
+  discardedChangeSetIds,
+  recordIncrementalEntry,
+  redoIncrementalEntry,
+  undoIncrementalEntry,
+} from "@/utils/historyTimeline";
 
 const MAX_HISTORY = 100;
+let historyEpoch = 0;
 
 let _idCounter = 0;
 function nextId(): string {
@@ -14,6 +24,21 @@ function nextId(): string {
 
 function nowISO(): string {
   return new Date().toISOString();
+}
+
+function dropDiscardedChangeSets(previous: HistoryEntry[], next: HistoryEntry[]): void {
+  for (const changeSetId of discardedChangeSetIds(previous, next)) {
+    void dataService.dropTableChangeSet(changeSetId).catch(() => undefined);
+  }
+}
+
+function updateReplayGeneration(
+  entry: HistoryEntry,
+  entryId: string,
+  generation: number,
+): HistoryEntry {
+  if (entry.id !== entryId || !entry.action || entry.action.kind === "changeSet") return entry;
+  return { ...entry, action: { ...entry.action, generation } };
 }
 
 interface HistoryStore {
@@ -25,13 +50,20 @@ interface HistoryStore {
   currentIdx: number;
   /** Pending restore data — set by undo/redo/jumpTo, consumed by DataTableView */
   pendingRestore: unknown | null;
+  pendingAction: PendingHistoryAction | null;
+  historyRevision: number;
+  historyError: string | null;
+  tableMutationDepth: number;
 
   /** Record a new action with optional afterState for undo/redo */
   record: (description: string, afterState?: unknown) => void;
+  recordTable: (description: string, action: TableHistoryAction) => void;
+  tryBeginTableMutation: () => boolean;
+  endTableMutation: () => void;
   /** Undo one step (go to previous entry's afterState) */
-  undo: () => void;
+  undo: () => Promise<void>;
   /** Redo one step (go to next entry's afterState) */
-  redo: () => void;
+  redo: () => Promise<void>;
   /** Jump to a specific history entry by id */
   jumpTo: (id: string) => void;
   /** Clear the pending restore signal */
@@ -58,6 +90,10 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   snapshots: [],
   currentIdx: -1,
   pendingRestore: null,
+  pendingAction: null,
+  historyRevision: 0,
+  historyError: null,
+  tableMutationDepth: 0,
 
   record: (description: string, afterState?: unknown) => {
     const entry: HistoryEntry = {
@@ -67,6 +103,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       afterState,
     };
     set((state) => {
+      if (state.pendingAction) return state;
       // If user made changes after undo, truncate "future" entries
       let history = state.currentIdx > 0
         ? state.history.slice(state.currentIdx)
@@ -75,12 +112,99 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       if (history.length > MAX_HISTORY) {
         history.length = MAX_HISTORY;
       }
+      dropDiscardedChangeSets(state.history, history);
       return { history, currentIdx: 0 };
     });
   },
 
-  undo: () => {
-    const { history, currentIdx } = get();
+  recordTable: (description: string, action: TableHistoryAction) => {
+    const entry: HistoryEntry = {
+      id: nextId(),
+      timestamp: nowISO(),
+      description,
+      action,
+    };
+    set((state) => {
+      if (state.pendingAction) return state;
+      const next = recordIncrementalEntry(state, entry, MAX_HISTORY);
+      dropDiscardedChangeSets(state.history, next.history);
+      return next;
+    });
+  },
+
+  tryBeginTableMutation: () => {
+    if (get().pendingAction) return false;
+    set((state) => state.pendingAction
+      ? state
+      : { tableMutationDepth: state.tableMutationDepth + 1 });
+    return get().pendingAction === null;
+  },
+
+  endTableMutation: () => {
+    set((state) => ({ tableMutationDepth: Math.max(0, state.tableMutationDepth - 1) }));
+  },
+
+  undo: async () => {
+    const { history, currentIdx, pendingAction, tableMutationDepth } = get();
+    if (pendingAction || tableMutationDepth > 0) return;
+    const transition = undoIncrementalEntry({ history, currentIdx });
+    if (transition) {
+      const request = transition.request;
+      const requestEpoch = historyEpoch;
+      set({ ...transition.state, pendingAction: request, historyError: null });
+      try {
+        let nextGeneration: number | null = null;
+        if (request.action.kind === "cells") {
+          nextGeneration = await dataService.updateCells(
+            request.action.datasetId,
+            request.action.cells.map((patch) => ({
+              rowId: patch.rowId,
+              columnName: patch.columnName,
+              value: patch.before == null ? null : String(patch.before),
+            })),
+            request.action.generation,
+          );
+        } else if (request.action.kind === "addedRows") {
+          nextGeneration = await dataService.applyAddedRows(
+            request.action.datasetId,
+            request.action.rowIds,
+            true,
+            request.action.generation,
+          );
+        } else if (request.action.kind === "reorderColumns") {
+          nextGeneration = await dataService.reorderColumnIfGeneration(
+            request.action.datasetId,
+            request.action.to,
+            request.action.from,
+            request.action.generation,
+          );
+        } else {
+          await dataService.applyTableChangeSet(request.action.changeSetId, true);
+        }
+        set((state) => historyEpoch === requestEpoch && state.pendingAction?.entryId === request.entryId
+          ? {
+              pendingAction: null,
+              historyRevision: state.historyRevision + 1,
+              history: nextGeneration == null
+                ? state.history
+                : state.history.map((entry) => updateReplayGeneration(
+                    entry,
+                    request.entryId,
+                    nextGeneration,
+                  )),
+            }
+          : state);
+      } catch (error) {
+        set((state) => historyEpoch === requestEpoch && state.pendingAction?.entryId === request.entryId
+          ? {
+              currentIdx: Math.max(0, state.currentIdx - 1),
+              pendingAction: null,
+              historyError: String(error),
+            }
+          : state);
+      }
+      return;
+    }
     if (currentIdx >= history.length - 1) return; // Nothing to undo
     const nextIdx = currentIdx + 1;
     const targetEntry = history[nextIdx];
@@ -88,8 +212,67 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     set({ currentIdx: nextIdx, pendingRestore: targetEntry.afterState });
   },
 
-  redo: () => {
-    const { history, currentIdx } = get();
+  redo: async () => {
+    const { history, currentIdx, pendingAction, tableMutationDepth } = get();
+    if (pendingAction || tableMutationDepth > 0) return;
+    const transition = redoIncrementalEntry({ history, currentIdx });
+    if (transition) {
+      const request = transition.request;
+      const requestEpoch = historyEpoch;
+      set({ ...transition.state, pendingAction: request, historyError: null });
+      try {
+        let nextGeneration: number | null = null;
+        if (request.action.kind === "cells") {
+          nextGeneration = await dataService.updateCells(
+            request.action.datasetId,
+            request.action.cells.map((patch) => ({
+              rowId: patch.rowId,
+              columnName: patch.columnName,
+              value: patch.after == null ? null : String(patch.after),
+            })),
+            request.action.generation,
+          );
+        } else if (request.action.kind === "addedRows") {
+          nextGeneration = await dataService.applyAddedRows(
+            request.action.datasetId,
+            request.action.rowIds,
+            false,
+            request.action.generation,
+          );
+        } else if (request.action.kind === "reorderColumns") {
+          nextGeneration = await dataService.reorderColumnIfGeneration(
+            request.action.datasetId,
+            request.action.from,
+            request.action.to,
+            request.action.generation,
+          );
+        } else {
+          await dataService.applyTableChangeSet(request.action.changeSetId, false);
+        }
+        set((state) => historyEpoch === requestEpoch && state.pendingAction?.entryId === request.entryId
+          ? {
+              pendingAction: null,
+              historyRevision: state.historyRevision + 1,
+              history: nextGeneration == null
+                ? state.history
+                : state.history.map((entry) => updateReplayGeneration(
+                    entry,
+                    request.entryId,
+                    nextGeneration,
+                  )),
+            }
+          : state);
+      } catch (error) {
+        set((state) => historyEpoch === requestEpoch && state.pendingAction?.entryId === request.entryId
+          ? {
+              currentIdx: Math.min(state.history.length, state.currentIdx + 1),
+              pendingAction: null,
+              historyError: String(error),
+            }
+          : state);
+      }
+      return;
+    }
     if (currentIdx <= 0) return; // Already at latest
     const prevIdx = currentIdx - 1;
     const targetEntry = history[prevIdx];
@@ -153,13 +336,19 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   reset: () => {
-    set({ history: [], snapshots: [], currentIdx: -1, pendingRestore: null });
+    historyEpoch += 1;
+    dropDiscardedChangeSets(get().history, []);
+    set({ history: [], snapshots: [], currentIdx: -1, pendingRestore: null, pendingAction: null, historyError: null, tableMutationDepth: 0 });
   },
 
   loadFromProject: (
     history: HistoryEntry[],
     snapshots: NamedSnapshot[]
   ) => {
-    set({ history, snapshots, currentIdx: history.length > 0 ? 0 : -1 });
+    const storedHistory = history.map((entry) => entry.action
+      ? { ...entry, action: undefined }
+      : entry);
+    dropDiscardedChangeSets(get().history, []);
+    set({ history: storedHistory, snapshots, currentIdx: storedHistory.length > 0 ? 0 : -1 });
   },
 }));

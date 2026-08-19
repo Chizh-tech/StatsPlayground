@@ -1,7 +1,10 @@
 use tauri::State;
 
 use crate::error::AppError;
-use crate::models::table::{ColumnDisplayProps, DatasetMeta, TableQueryResult};
+use crate::models::table::{
+    CellPosition, CellUpdate, ColumnDisplayProps, DatasetMeta, TableQueryResult, TableWindowRequest,
+    TableWindowResult,
+};
 use crate::services::data_service::DataService;
 use crate::state::AppState;
 
@@ -40,6 +43,49 @@ pub fn query_table(
         sort_by.as_deref(),
         sort_order.as_deref(),
     )
+}
+
+#[tauri::command(async)]
+pub fn query_table_window(
+    state: State<'_, AppState>,
+    request: TableWindowRequest,
+) -> Result<TableWindowResult, AppError> {
+    let service = DataService::new(&state);
+    service.query_table_window(&request)
+}
+
+#[tauri::command]
+pub fn get_dataset_generation(
+    state: State<'_, AppState>,
+    dataset_id: String,
+) -> Result<u64, AppError> {
+    let service = DataService::new(&state);
+    service.get_dataset_generation(&dataset_id)
+}
+
+#[tauri::command(async)]
+pub fn locate_table_row(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    row_id: i64,
+    filters: Vec<crate::models::table::TableWindowFilter>,
+    generation: u64,
+) -> Result<Option<usize>, AppError> {
+    let service = DataService::new(&state);
+    service.locate_table_row(&dataset_id, row_id, &filters, generation)
+}
+
+#[tauri::command(async)]
+pub fn query_table_filter_values(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    field: String,
+    search: String,
+    limit: usize,
+    generation: u64,
+) -> Result<Vec<String>, AppError> {
+    let service = DataService::new(&state);
+    service.query_table_filter_values(&dataset_id, &field, &search, limit, generation)
 }
 
 #[tauri::command]
@@ -81,6 +127,28 @@ pub fn add_row(state: State<'_, AppState>, dataset_id: String) -> Result<i64, Ap
 }
 
 #[tauri::command]
+pub fn add_rows(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    count: usize,
+) -> Result<crate::models::table::AddedRowsResult, AppError> {
+    let service = DataService::new(&state);
+    service.add_rows(&dataset_id, count)
+}
+
+#[tauri::command]
+pub fn apply_added_rows(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    row_ids: Vec<i64>,
+    undo: bool,
+    expected_generation: u64,
+) -> Result<u64, AppError> {
+    let service = DataService::new(&state);
+    service.apply_added_rows(&dataset_id, &row_ids, undo, expected_generation)
+}
+
+#[tauri::command]
 pub fn update_cell(
     state: State<'_, AppState>,
     dataset_id: String,
@@ -93,6 +161,27 @@ pub fn update_cell(
 }
 
 #[tauri::command]
+pub fn clear_cells(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    cells: Vec<CellPosition>,
+) -> Result<(), AppError> {
+    let service = DataService::new(&state);
+    service.clear_cells(&dataset_id, &cells)
+}
+
+#[tauri::command]
+pub fn update_cells(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    updates: Vec<CellUpdate>,
+    expected_generation: Option<u64>,
+) -> Result<u64, AppError> {
+    let service = DataService::new(&state);
+    service.update_cells(&dataset_id, &updates, expected_generation)
+}
+
+#[tauri::command]
 pub fn delete_row(
     state: State<'_, AppState>,
     dataset_id: String,
@@ -100,6 +189,74 @@ pub fn delete_row(
 ) -> Result<(), AppError> {
     let service = DataService::new(&state);
     service.delete_row(&dataset_id, row_id)
+}
+
+#[tauri::command]
+pub fn delete_rows(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    row_ids: Vec<i64>,
+) -> Result<(), AppError> {
+    let service = DataService::new(&state);
+    service.delete_rows(&dataset_id, &row_ids)
+}
+
+#[tauri::command]
+pub fn delete_rows_with_change_set(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    row_ids: Vec<i64>,
+    expected_generation: Option<u64>,
+) -> Result<String, AppError> {
+    let service = DataService::new(&state);
+    service.delete_rows_with_change_set(&dataset_id, &row_ids, expected_generation)
+}
+
+#[tauri::command]
+pub fn delete_columns_with_change_set(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    column_names: Vec<String>,
+    expected_generation: Option<u64>,
+) -> Result<String, AppError> {
+    let service = DataService::new(&state);
+    service.delete_columns_with_change_set(&dataset_id, &column_names, expected_generation)
+}
+
+#[tauri::command]
+pub fn alter_column_with_change_set(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    old_name: String,
+    new_name: String,
+    new_type: String,
+    expected_generation: Option<u64>,
+) -> Result<String, AppError> {
+    let service = DataService::new(&state);
+    service.alter_column_with_change_set(
+        &dataset_id,
+        &old_name,
+        &new_name,
+        &new_type,
+        expected_generation,
+    )
+}
+
+#[tauri::command]
+pub fn alter_columns_type_with_change_set(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    column_names: Vec<String>,
+    new_type: String,
+    expected_generation: Option<u64>,
+) -> Result<String, AppError> {
+    let service = DataService::new(&state);
+    service.alter_columns_type_with_change_set(
+        &dataset_id,
+        &column_names,
+        &new_type,
+        expected_generation,
+    )
 }
 
 #[tauri::command]
@@ -124,6 +281,42 @@ pub fn add_column(
 }
 
 #[tauri::command]
+pub fn add_column_with_change_set(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    col_name: String,
+    col_type: String,
+    at_index: Option<i32>,
+    expected_generation: Option<u64>,
+) -> Result<String, AppError> {
+    let service = DataService::new(&state);
+    service.add_column_with_change_set(
+        &dataset_id,
+        &col_name,
+        &col_type,
+        at_index,
+        expected_generation,
+    )
+}
+
+#[tauri::command]
+pub fn add_columns_with_change_set(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    columns: Vec<crate::models::table::ColumnDefinition>,
+    at_index: Option<i32>,
+    expected_generation: Option<u64>,
+) -> Result<String, AppError> {
+    let service = DataService::new(&state);
+    service.add_columns_with_change_set(
+        &dataset_id,
+        &columns,
+        at_index,
+        expected_generation,
+    )
+}
+
+#[tauri::command]
 pub fn insert_column_at(
     state: State<'_, AppState>,
     dataset_id: String,
@@ -144,6 +337,18 @@ pub fn reorder_column(
 ) -> Result<(), AppError> {
     let service = DataService::new(&state);
     service.reorder_column(&dataset_id, from, to)
+}
+
+#[tauri::command]
+pub fn reorder_column_if_generation(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    from: usize,
+    to: usize,
+    expected_generation: u64,
+) -> Result<u64, AppError> {
+    let service = DataService::new(&state);
+    service.reorder_column_if_generation(&dataset_id, from, to, expected_generation)
 }
 
 #[tauri::command]
@@ -187,6 +392,7 @@ pub fn paste_at_position(
     rows: Vec<Vec<String>>,
     header_names: Option<Vec<String>>,
     col_types: Vec<String>,
+    expected_generation: Option<u64>,
 ) -> Result<(), AppError> {
     let service = DataService::new(&state);
     service.paste_at_position(
@@ -196,7 +402,49 @@ pub fn paste_at_position(
         &rows,
         header_names.as_deref(),
         &col_types,
+        expected_generation,
     )
+}
+
+#[tauri::command]
+pub fn paste_at_position_with_change_set(
+    state: State<'_, AppState>,
+    dataset_id: String,
+    start_row: usize,
+    start_col: usize,
+    rows: Vec<Vec<String>>,
+    header_names: Option<Vec<String>>,
+    col_types: Vec<String>,
+    expected_generation: Option<u64>,
+) -> Result<crate::models::table::PasteChangeSetResult, AppError> {
+    let service = DataService::new(&state);
+    let change_set_id = service.paste_at_position_with_change_set(
+        &dataset_id,
+        start_row,
+        start_col,
+        &rows,
+        header_names.as_deref(),
+        &col_types,
+        expected_generation,
+    )?;
+    Ok(crate::models::table::PasteChangeSetResult { change_set_id })
+}
+
+#[tauri::command]
+pub fn apply_table_change_set(
+    state: State<'_, AppState>,
+    change_set_id: String,
+    undo: bool,
+) -> Result<(), AppError> {
+    DataService::new(&state).apply_change_set(&change_set_id, undo)
+}
+
+#[tauri::command]
+pub fn drop_table_change_set(
+    state: State<'_, AppState>,
+    change_set_id: String,
+) -> Result<(), AppError> {
+    DataService::new(&state).drop_change_set(&change_set_id)
 }
 
 #[tauri::command]

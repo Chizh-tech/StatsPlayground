@@ -122,13 +122,11 @@ function continuousPred(rule: FilterContinuousRule, idx: number) {
 }
 
 function categoricalPred(rule: FilterCategoricalRule, idx: number) {
-  // Note: an empty `selected` means "nothing passes". This mirrors the JMP
-  // behaviour where unchecking every box hides every row.
-  const allow = new Set(rule.selected);
+  const selected = new Set(rule.selected);
   return (row: unknown[]) => {
     const v = row[idx];
     const s = v == null ? "" : String(v);
-    return allow.has(s);
+    return rule.exclude ? !selected.has(s) : selected.has(s);
   };
 }
 

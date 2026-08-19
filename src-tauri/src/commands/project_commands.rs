@@ -21,7 +21,7 @@ pub fn create_project(
     service.create_project(&name, &file_path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_project(
     state: State<'_, AppState>,
     app: AppHandle,
@@ -30,13 +30,15 @@ pub fn open_project(
     let service = ProjectService::new(&state);
     service.open_project(
         &file_path,
-        Some(&|ds_idx, ds_total, ds_name| {
+        Some(&|ds_idx, ds_total, ds_name, rows_done, rows_total| {
             let _ = app.emit(
                 "open-project-progress",
                 serde_json::json!({
                     "datasetIndex": ds_idx,
                     "datasetTotal": ds_total,
                     "datasetName": ds_name,
+                    "rowsDone": rows_done,
+                    "rowsTotal": rows_total,
                 }),
             );
         }),
@@ -153,6 +155,20 @@ pub fn import_graph(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn project_open_uses_async_command_scheduling() {
+        let source = include_str!("project_commands.rs");
+        let open_start = source
+            .find("pub fn open_project(")
+            .expect("open_project command must exist");
+        let command_attribute = &source[..open_start];
+
+        assert!(
+            command_attribute.trim_end().ends_with("#[tauri::command(async)]"),
+            "open_project must not run archive and database work on Tauri's main command thread"
+        );
+    }
+
     #[test]
     fn sptb_import_uses_async_command_scheduling() {
         let source = include_str!("project_commands.rs");

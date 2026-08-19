@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use duckdb::params_from_iter;
+use duckdb::appender_params_from_iter;
 use duckdb::types::Value as DuckValue;
 use crate::models::project::{DatasetNameMigration, ProjectInfo};
 use crate::models::table::{ColumnDisplayProps, ColumnFormatInfo};
@@ -116,7 +116,7 @@ impl<'a> ProjectService<'a> {
     pub fn open_project(
         &self,
         file_path: &str,
-        progress_cb: Option<&dyn Fn(usize, usize, &str)>,
+        progress_cb: Option<&dyn Fn(usize, usize, &str, usize, usize)>,
     ) -> Result<OpenProjectResult, AppError> {
         let mut bundle = spprj_archive::read_project_file(file_path)?;
         let dataset_name_migrations = normalize_duplicate_dataset_names(&mut bundle.tables);
@@ -126,8 +126,15 @@ impl<'a> ProjectService<'a> {
         {
             let staged_service = ProjectService::new(&staged_state);
             for (idx, doc) in bundle.tables.iter().enumerate() {
-                if let Some(cb) = &progress_cb { cb(idx, total, &doc.name); }
-                staged_service.restore_table_doc(doc)?;
+                if let Some(cb) = &progress_cb {
+                    cb(idx, total, &doc.name, 0, doc.rows.len());
+                }
+                let row_progress = |rows_done, rows_total| {
+                    if let Some(cb) = &progress_cb {
+                        cb(idx, total, &doc.name, rows_done, rows_total);
+                    }
+                };
+                staged_service.restore_table_doc_with_progress(doc, Some(&row_progress))?;
             }
         }
 
@@ -182,7 +189,7 @@ impl<'a> ProjectService<'a> {
         *live_db = staged_db;
         *live_display = staged_display;
         *live_project = Some(project.clone());
-        if let Some(cb) = &progress_cb { cb(total, total, "完成"); }
+        if let Some(cb) = &progress_cb { cb(total, total, "完成", 0, 0); }
 
         Ok(OpenProjectResult {
             project,
@@ -403,6 +410,14 @@ impl<'a> ProjectService<'a> {
     /// register its column display props. Returns the dataset id actually used
     /// (caller may want a fresh id when importing — see `import_table`).
     pub fn restore_table_doc(&self, doc: &TableDoc) -> Result<String, AppError> {
+        self.restore_table_doc_with_progress(doc, None)
+    }
+
+    pub fn restore_table_doc_with_progress(
+        &self,
+        doc: &TableDoc,
+        progress_cb: Option<&dyn Fn(usize, usize)>,
+    ) -> Result<String, AppError> {
         if doc.version != "1" && doc.version != "2" {
             return Err(AppError::InvalidParam(format!(
                 "unsupported table document version: {}",
@@ -427,35 +442,33 @@ impl<'a> ProjectService<'a> {
             let canonical_columns = db.get_user_columns(&doc.id)?;
 
             if !doc.rows.is_empty() {
-                let all_col_defs: Vec<String> = std::iter::once("\"_row_id\"".to_string())
-                    .chain(col_names.iter().map(|name| quote_identifier(name)))
-                    .collect();
-                let col_list = all_col_defs.join(", ");
-                let table_ident = quote_identifier(&format!("dataset_{}", doc.id.replace('-', "_")));
-                let placeholders = std::iter::once("CAST(? AS BIGINT)".to_string())
-                    .chain(canonical_columns.iter().map(|(_, column_type)| {
-                        archive_parameter_expression(column_type)
-                    }))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let insert_sql = format!(
-                    "INSERT INTO {} ({}) VALUES ({})",
-                    table_ident, col_list, placeholders
-                );
+                let table_name = format!("dataset_{}", doc.id.replace('-', "_"));
+                let mut appender = db.conn().appender(&table_name)?;
+                let rows_total = doc.rows.len();
 
-                for row in &doc.rows {
+                for (row_index, row) in doc.rows.iter().enumerate() {
                     let values = row
                         .iter()
                         .enumerate()
                         .map(|(index, value)| {
+                            let column_type = index
+                                .checked_sub(1)
+                                .map(|column_index| canonical_columns[column_index].1.as_str());
                             let decode_v2_tag = index > 0
                                 && doc.version == "2"
                                 && !is_archive_scalar_type(&canonical_columns[index - 1].1);
-                            json_to_duckdb_param(value, decode_v2_tag)
+                            json_to_duckdb_param(value, decode_v2_tag, column_type)
                         })
-                        .collect::<Vec<_>>();
-                    db.conn().execute(&insert_sql, params_from_iter(values))?;
+                        .collect::<Result<Vec<_>, _>>()?;
+                    appender.append_row(appender_params_from_iter(values))?;
+                    let rows_done = row_index + 1;
+                    if rows_done % 5_000 == 0 || rows_done == rows_total {
+                        if let Some(cb) = progress_cb {
+                            cb(rows_done, rows_total);
+                        }
+                    }
                 }
+                appender.flush()?;
             }
 
             let table_ident = quote_identifier(&format!("dataset_{}", doc.id.replace('-', "_")));
@@ -642,36 +655,55 @@ fn archive_export_expression(column_name: &str, column_type: &str) -> String {
     }
 }
 
-fn archive_parameter_expression(column_type: &str) -> String {
-    if column_type.trim().eq_ignore_ascii_case("BLOB") {
-        "from_hex(?)".to_string()
-    } else {
-        format!("CAST(? AS {column_type})")
+fn json_to_duckdb_param(
+    value: &serde_json::Value,
+    decode_v2_tag: bool,
+    column_type: Option<&str>,
+) -> Result<DuckValue, AppError> {
+    match value {
+        serde_json::Value::Null => Ok(DuckValue::Null),
+        serde_json::Value::Bool(value) => Ok(DuckValue::Boolean(*value)),
+        serde_json::Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ok(DuckValue::BigInt(value))
+            } else if let Some(value) = value.as_u64() {
+                Ok(DuckValue::UBigInt(value))
+            } else {
+                Ok(DuckValue::Double(value.as_f64().unwrap_or_default()))
+            }
+        }
+        serde_json::Value::String(value) => archive_string_param(value, column_type),
+        serde_json::Value::Object(object) if decode_v2_tag && object.len() == 1 => {
+            if let Some(value) = object
+                .get("$duckdbValue")
+                .and_then(serde_json::Value::as_str)
+            {
+                archive_string_param(value, column_type)
+            } else {
+                Ok(DuckValue::Text(value.to_string()))
+            }
+        }
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            Ok(DuckValue::Text(value.to_string()))
+        }
     }
 }
 
-fn json_to_duckdb_param(value: &serde_json::Value, decode_v2_tag: bool) -> DuckValue {
-    match value {
-        serde_json::Value::Null => DuckValue::Null,
-        serde_json::Value::Bool(value) => DuckValue::Boolean(*value),
-        serde_json::Value::Number(value) => {
-            if let Some(value) = value.as_i64() {
-                DuckValue::BigInt(value)
-            } else if let Some(value) = value.as_u64() {
-                DuckValue::UBigInt(value)
-            } else {
-                DuckValue::Double(value.as_f64().unwrap_or_default())
-            }
+fn archive_string_param(value: &str, column_type: Option<&str>) -> Result<DuckValue, AppError> {
+    if column_type.is_some_and(|column_type| column_type.trim().eq_ignore_ascii_case("BLOB")) {
+        if !value.len().is_multiple_of(2) {
+            return Err(AppError::InvalidParam("archived BLOB hex has odd length".into()));
         }
-        serde_json::Value::String(value) => DuckValue::Text(value.clone()),
-        serde_json::Value::Object(object) if decode_v2_tag && object.len() == 1 => object
-            .get("$duckdbValue")
-            .and_then(serde_json::Value::as_str)
-            .map(|value| DuckValue::Text(value.to_string()))
-            .unwrap_or_else(|| DuckValue::Text(value.to_string())),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-            DuckValue::Text(value.to_string())
-        }
+        let bytes = (0..value.len())
+            .step_by(2)
+            .map(|index| {
+                u8::from_str_radix(&value[index..index + 2], 16)
+                    .map_err(|_| AppError::InvalidParam("archived BLOB contains invalid hex".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(DuckValue::Blob(bytes))
+    } else {
+        Ok(DuckValue::Text(value.to_string()))
     }
 }
 
@@ -873,6 +905,7 @@ mod tests {
     use crate::models::project::ProjectInfo;
     use crate::services::spprj_archive::{self, TableColumn, TableDoc};
     use crate::state::AppState;
+    use std::cell::RefCell;
     use std::collections::HashMap;
 
     fn table_doc(id: &str, name: &str) -> TableDoc {
@@ -978,6 +1011,139 @@ mod tests {
         assert_eq!(preview.rows[0][2], serde_json::json!([1, 2]));
         assert_eq!(preview.rows[0][3], serde_json::json!({"label": "alpha", "score": 7}));
         assert_eq!(preview.rows[0][4], serde_json::json!("0xdead"));
+    }
+
+    #[test]
+    fn imported_csv_saves_into_project_archive() {
+        let state = AppState::new().unwrap();
+        let file_path = std::env::temp_dir().join(format!(
+            "stats_playground_project_import_{}.csv",
+            uuid::Uuid::new_v4()
+        ));
+        let project_path = std::env::temp_dir().join(format!(
+            "stats_playground_csv_project_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&file_path, "name,amount\nalpha,10\nbeta,20\n").unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.import_csv(
+                "csv-project-id",
+                "CSV Project",
+                file_path.to_str().unwrap(),
+            )
+            .unwrap();
+        }
+        *state.project.write().unwrap() = Some(ProjectInfo {
+            name: "CSV Project".into(),
+            file_path: String::new(),
+            created_at: "2026-08-19T00:00:00Z".into(),
+        });
+
+        let service = ProjectService::new(&state);
+        let doc = service.compose_table_doc("csv-project-id");
+        let _ = std::fs::remove_file(file_path);
+        let doc = doc.unwrap();
+
+        assert_eq!(doc.columns.len(), 2);
+        assert_eq!(doc.columns[0].name, "name");
+        assert_eq!(doc.columns[1].name, "amount");
+        assert_eq!(
+            doc.rows,
+            vec![
+                vec![
+                    serde_json::json!(1),
+                    serde_json::json!("alpha"),
+                    serde_json::json!(10)
+                ],
+                vec![
+                    serde_json::json!(2),
+                    serde_json::json!("beta"),
+                    serde_json::json!(20)
+                ],
+            ]
+        );
+
+        service
+            .save_project(
+                project_path.to_str(),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(HashMap::new()),
+                Some(HashMap::new()),
+                Some(HashMap::new()),
+            )
+            .unwrap();
+        let bundle = spprj_archive::read_project_file(project_path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(project_path);
+
+        assert_eq!(bundle.tables.len(), 1);
+        assert_eq!(bundle.tables[0].id, "csv-project-id");
+        assert_eq!(bundle.tables[0].rows, doc.rows);
+    }
+
+    #[test]
+    fn large_table_restore_reports_batched_progress_and_preserves_values() {
+        let state = AppState::new().unwrap();
+        let row_count = 12_001usize;
+        let doc = TableDoc {
+            id: "large-restore".into(),
+            name: "Large Restore".into(),
+            source_type: "manual".into(),
+            version: "2".into(),
+            columns: vec![TableColumn {
+                name: "value".into(),
+                col_type: "BIGINT".into(),
+                width: None,
+                format: None,
+                extras: None,
+            }],
+            rows: (1..=row_count)
+                .map(|value| {
+                    vec![
+                        serde_json::json!(value),
+                        serde_json::json!(value * 10),
+                    ]
+                })
+                .collect(),
+        };
+        let progress = RefCell::new(Vec::new());
+
+        ProjectService::new(&state)
+            .restore_table_doc_with_progress(
+                &doc,
+                Some(&|rows_done, rows_total| {
+                    progress.borrow_mut().push((rows_done, rows_total));
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(
+            progress.into_inner(),
+            vec![(5_000, row_count), (10_000, row_count), (row_count, row_count)]
+        );
+        let db = state.db.lock().unwrap();
+        let first: (i64, i64) = db
+            .conn()
+            .query_row(
+                "SELECT _row_id, value FROM dataset_large_restore ORDER BY _row_id LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let last: (i64, i64) = db
+            .conn()
+            .query_row(
+                "SELECT _row_id, value FROM dataset_large_restore ORDER BY _row_id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(first, (1, 10));
+        assert_eq!(last, (row_count as i64, (row_count * 10) as i64));
     }
 
     #[test]

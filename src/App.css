@@ -1542,6 +1542,18 @@
   box-sizing: border-box;
 }
 
+.sp-placeholder-row {
+  pointer-events: none;
+}
+
+.sp-placeholder-row .sp-row-hdr {
+  color: var(--fg-dim);
+}
+
+.sp-placeholder-cell {
+  background-color: var(--bg-main);
+}
+
 .sp-null {
   color: var(--fg-null);
 }

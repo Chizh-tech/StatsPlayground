@@ -219,6 +219,7 @@ export function Workspace() {
     rowsTotal: number;
   } | null>(null);
   const [busyMessage, setBusyMessage] = useState<string | null>(null);
+  const [busyProgress, setBusyProgress] = useState<{ rowsDone: number; rowsTotal: number } | null>(null);
   const [tableKey, setTableKey] = useState(0);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const tableCounter = useRef(0);
@@ -752,10 +753,13 @@ export function Workspace() {
         datasetIndex: number;
         datasetTotal: number;
         datasetName: string;
+        rowsDone: number;
+        rowsTotal: number;
       }>("open-project-progress", (event) => {
-        const { datasetIndex, datasetTotal, datasetName } = event.payload;
+        const { datasetIndex, datasetTotal, datasetName, rowsDone, rowsTotal } = event.payload;
         if (datasetTotal > 0 && datasetIndex < datasetTotal) {
           setBusyMessage(`${t("workspace.openingProject")} ${t("workspace.importProgressTable", { i: datasetIndex + 1, total: datasetTotal, name: datasetName })}`);
+          setBusyProgress({ rowsDone, rowsTotal });
         }
       });
       try {
@@ -802,6 +806,7 @@ export function Workspace() {
         alert(t("alert.openProjectFailed", { defaultValue: "Failed to open project: {{msg}}", msg: String(e) }));
       } finally {
         unlisten();
+        setBusyProgress(null);
         setBusyMessage(null);
       }
     }
@@ -1683,8 +1688,18 @@ export function Workspace() {
           <div className="sp-dialog" style={{ minWidth: 320, padding: "20px 24px" }}>
             <div style={{ fontWeight: 600, marginBottom: 12 }}>{busyMessage}</div>
             <div className="sp-progress-bar">
-              <div className="sp-progress-fill sp-progress-indeterminate" />
+              <div
+                className={`sp-progress-fill${busyProgress?.rowsTotal ? "" : " sp-progress-indeterminate"}`}
+                style={busyProgress?.rowsTotal
+                  ? { width: `${Math.round((busyProgress.rowsDone / busyProgress.rowsTotal) * 100)}%` }
+                  : undefined}
+              />
             </div>
+            {busyProgress && busyProgress.rowsTotal > 0 && (
+              <div style={{ fontSize: 12, marginTop: 4, color: "var(--fg-secondary, #888)" }}>
+                {busyProgress.rowsDone.toLocaleString()} / {busyProgress.rowsTotal.toLocaleString()} {t("workspace.importProgressRows")}
+              </div>
+            )}
           </div>
         </div>
       )}

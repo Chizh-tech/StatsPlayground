@@ -46,6 +46,48 @@ export interface TableQueryResult {
   pageSize: number;
 }
 
+export interface TableWindowSort {
+  column: string;
+  descending: boolean;
+}
+
+export type TableWindowFilterRule =
+  | { kind: "continuous"; field: string; min: number | null; max: number | null }
+  | { kind: "categorical"; field: string; selected: string[]; exclude?: boolean }
+  | { kind: "date"; field: string; start: string | null; end: string | null };
+
+export interface TableWindowFilter {
+  op: "AND" | "OR";
+  rule: TableWindowFilterRule;
+}
+
+export interface TableWindowRequest {
+  datasetId: string;
+  start: number;
+  count: number;
+  sort: TableWindowSort | null;
+  filters: TableWindowFilter[];
+  generation: number;
+}
+
+export interface TableWindowResult {
+  columns: string[];
+  columnTypes: string[];
+  rows: unknown[][];
+  totalRows: number;
+  start: number;
+  generation: number;
+}
+
+export interface CellPosition {
+  rowId: number;
+  columnName: string;
+}
+
+export interface CellUpdate extends CellPosition {
+  value: string | null;
+}
+
 /** SQL query result */
 export interface SqlQueryResult {
   columns: string[];

@@ -1,5 +1,7 @@
 use crate::error::AppError;
-use crate::models::table::{DatasetMeta, SqlQueryResult, TableQueryResult};
+use crate::models::table::{
+    DatasetMeta, SqlQueryResult, TableQueryResult, TableWindowRequest, TableWindowResult,
+};
 use crate::state::AppState;
 
 /// Compute the new index of a column originally at `idx` after a single column
@@ -82,6 +84,58 @@ impl<'a> DataService<'a> {
         db.query_table(dataset_id, page, page_size, sort_by, sort_order)
     }
 
+    pub fn query_table_window(
+        &self,
+        request: &TableWindowRequest,
+    ) -> Result<TableWindowResult, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        db.query_table_window(request)
+    }
+
+    pub fn get_dataset_generation(&self, dataset_id: &str) -> Result<u64, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        db.get_dataset_generation(dataset_id)
+    }
+
+    pub fn locate_table_row(
+        &self,
+        dataset_id: &str,
+        row_id: i64,
+        filters: &[crate::models::table::TableWindowFilter],
+        generation: u64,
+    ) -> Result<Option<usize>, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        db.locate_table_row(dataset_id, row_id, filters, generation)
+    }
+
+    pub fn query_table_filter_values(
+        &self,
+        dataset_id: &str,
+        field: &str,
+        search: &str,
+        limit: usize,
+        generation: u64,
+    ) -> Result<Vec<String>, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        db.query_table_filter_values(dataset_id, field, search, limit, generation)
+    }
+
     pub fn execute_sql_query(
         &self,
         sql: &str,
@@ -122,6 +176,36 @@ impl<'a> DataService<'a> {
         db.add_row(dataset_id)
     }
 
+    pub fn add_rows(
+        &self,
+        dataset_id: &str,
+        count: usize,
+    ) -> Result<crate::models::table::AddedRowsResult, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let row_ids = db.add_rows(dataset_id, count)?;
+        let generation = db.get_dataset_generation(dataset_id)?;
+        Ok(crate::models::table::AddedRowsResult { row_ids, generation })
+    }
+
+    pub fn apply_added_rows(
+        &self,
+        dataset_id: &str,
+        row_ids: &[i64],
+        undo: bool,
+        expected_generation: u64,
+    ) -> Result<u64, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.apply_added_rows(dataset_id, row_ids, undo, expected_generation)
+    }
+
     pub fn update_cell(
         &self,
         dataset_id: &str,
@@ -137,6 +221,33 @@ impl<'a> DataService<'a> {
         db.update_cell(dataset_id, row_id, column_name, value)
     }
 
+    pub fn clear_cells(
+        &self,
+        dataset_id: &str,
+        cells: &[crate::models::table::CellPosition],
+    ) -> Result<(), AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.clear_cells(dataset_id, cells)
+    }
+
+    pub fn update_cells(
+        &self,
+        dataset_id: &str,
+        updates: &[crate::models::table::CellUpdate],
+        expected_generation: Option<u64>,
+    ) -> Result<u64, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.update_cells_if_generation(dataset_id, updates, expected_generation)
+    }
+
     pub fn delete_row(&self, dataset_id: &str, row_id: i64) -> Result<(), AppError> {
         let db = self
             .state
@@ -144,6 +255,85 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         db.delete_row(dataset_id, row_id)
+    }
+
+    pub fn delete_rows(&self, dataset_id: &str, row_ids: &[i64]) -> Result<(), AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.delete_rows(dataset_id, row_ids)
+    }
+
+    pub fn delete_rows_with_change_set(
+        &self,
+        dataset_id: &str,
+        row_ids: &[i64],
+        expected_generation: Option<u64>,
+    ) -> Result<String, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.delete_rows_with_change_set(dataset_id, row_ids, expected_generation)
+    }
+
+    pub fn delete_columns_with_change_set(
+        &self,
+        dataset_id: &str,
+        column_names: &[String],
+        expected_generation: Option<u64>,
+    ) -> Result<String, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.delete_columns_with_change_set(dataset_id, column_names, expected_generation)
+    }
+
+    pub fn alter_column_with_change_set(
+        &self,
+        dataset_id: &str,
+        old_name: &str,
+        new_name: &str,
+        new_type: &str,
+        expected_generation: Option<u64>,
+    ) -> Result<String, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.alter_column_with_change_set(
+            dataset_id,
+            old_name,
+            new_name,
+            new_type,
+            expected_generation,
+        )
+    }
+
+    pub fn alter_columns_type_with_change_set(
+        &self,
+        dataset_id: &str,
+        column_names: &[String],
+        new_type: &str,
+        expected_generation: Option<u64>,
+    ) -> Result<String, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.alter_columns_type_with_change_set(
+            dataset_id,
+            column_names,
+            new_type,
+            expected_generation,
+        )
     }
 
     pub fn rename_dataset(&self, dataset_id: &str, new_name: &str) -> Result<(), AppError> {
@@ -167,6 +357,52 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         db.add_column(dataset_id, col_name, col_type)
+    }
+
+    pub fn add_column_with_change_set(
+        &self,
+        dataset_id: &str,
+        col_name: &str,
+        col_type: &str,
+        at_index: Option<i32>,
+        expected_generation: Option<u64>,
+    ) -> Result<String, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.add_column_with_change_set(
+            dataset_id,
+            col_name,
+            col_type,
+            at_index,
+            expected_generation,
+        )
+    }
+
+    pub fn add_columns_with_change_set(
+        &self,
+        dataset_id: &str,
+        columns: &[crate::models::table::ColumnDefinition],
+        at_index: Option<i32>,
+        expected_generation: Option<u64>,
+    ) -> Result<String, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let engine_columns = columns
+            .iter()
+            .map(|column| (column.name.clone(), column.column_type.clone()))
+            .collect::<Vec<_>>();
+        db.add_columns_with_change_set(
+            dataset_id,
+            &engine_columns,
+            at_index,
+            expected_generation,
+        )
     }
 
     /// Insert a column at a specific visible index and shift any stored display
@@ -229,6 +465,43 @@ impl<'a> DataService<'a> {
         Ok(())
     }
 
+    pub fn reorder_column_if_generation(
+        &self,
+        dataset_id: &str,
+        from: usize,
+        to: usize,
+        expected_generation: u64,
+    ) -> Result<u64, AppError> {
+        let generation = {
+            let db = self
+                .state
+                .db
+                .lock()
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            let from_index = i32::try_from(from)
+                .map_err(|_| AppError::InvalidParam("source column index is too large".into()))?;
+            let to_index = i32::try_from(to)
+                .map_err(|_| AppError::InvalidParam("target column index is too large".into()))?;
+            db.reorder_column_if_generation(
+                dataset_id,
+                from_index,
+                to_index,
+                expected_generation,
+            )?
+        };
+        let mut display = self
+            .state
+            .column_display
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        if let Some(props) = display.get_mut(dataset_id) {
+            for property in props.iter_mut() {
+                property.col_index = remap_moved_index(property.col_index, from, to);
+            }
+        }
+        Ok(generation)
+    }
+
     pub fn delete_column(&self, dataset_id: &str, col_name: &str) -> Result<(), AppError> {
         let db = self
             .state
@@ -274,20 +547,66 @@ impl<'a> DataService<'a> {
         rows: &[Vec<String>],
         header_names: Option<&[String]>,
         col_types: &[String],
+        expected_generation: Option<u64>,
     ) -> Result<(), AppError> {
         let db = self
             .state
             .db
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
-        db.paste_at_position(
+        db.paste_at_position_if_generation(
             dataset_id,
             start_row,
             start_col,
             rows,
             header_names,
             col_types,
+            expected_generation,
         )
+    }
+
+    pub fn paste_at_position_with_change_set(
+        &self,
+        dataset_id: &str,
+        start_row: usize,
+        start_col: usize,
+        rows: &[Vec<String>],
+        header_names: Option<&[String]>,
+        col_types: &[String],
+        expected_generation: Option<u64>,
+    ) -> Result<String, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.paste_at_position_with_change_set(
+            dataset_id,
+            start_row,
+            start_col,
+            rows,
+            header_names,
+            col_types,
+            expected_generation,
+        )
+    }
+
+    pub fn apply_change_set(&self, change_set_id: &str, undo: bool) -> Result<(), AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.apply_change_set(change_set_id, undo)
+    }
+
+    pub fn drop_change_set(&self, change_set_id: &str) -> Result<(), AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.drop_change_set(change_set_id)
     }
 
     pub fn restore_snapshot(
