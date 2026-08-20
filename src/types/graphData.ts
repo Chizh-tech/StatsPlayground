@@ -75,10 +75,25 @@ export interface GraphChunkMessage {
 }
 
 export type GraphAggregatePacket =
-  | { kind: "histogram"; payload: unknown }
-  | { kind: "heatmap"; payload: unknown }
-  | { kind: "boxPlot"; payload: unknown }
-  | { kind: "summary"; payload: unknown };
+  | { kind: "histogram" }
+  | { kind: "heatmap" }
+  | { kind: "boxPlot" }
+  | { kind: "summary" };
+
+export function isGraphAggregatePacket(value: unknown): value is GraphAggregatePacket {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const packet = value as Record<string, unknown>;
+  return (
+    Object.keys(packet).length === 1
+    && (packet.kind === "histogram"
+      || packet.kind === "heatmap"
+      || packet.kind === "boxPlot"
+      || packet.kind === "summary")
+  );
+}
 
 export interface DecodedRawPointChunk {
   chunkIndex: number;
@@ -171,10 +186,31 @@ function assertType(
   }
 }
 
+function descriptorElementCount(descriptor: GraphTypedSliceDescriptor): number {
+  return descriptor.byteLength / TYPE_WIDTH[descriptor.type];
+}
+
+function assertRowVectorCardinality(
+  descriptor: GraphTypedSliceDescriptor,
+  rowCount: number,
+  label: string,
+): void {
+  const elementCount = descriptorElementCount(descriptor);
+  if (elementCount !== rowCount) {
+    throw new GraphPayloadError(
+      `${label} element count ${elementCount} must equal rowCount ${rowCount}`,
+    );
+  }
+}
+
 export function decodeGraphPayload(
   header: GraphChunkHeader,
   payload: ArrayBuffer,
 ): DecodedGraphChunk {
+  if (!Number.isInteger(header.rowCount) || header.rowCount < 0) {
+    throw new GraphPayloadError("rowCount must be a non-negative integer");
+  }
+
   assertType(header.xValues, ["f64", "u32"], "xValues");
   assertType(header.yValues, "f64", "yValues");
   assertType(header.rowIds, "i64", "rowIds");
@@ -216,6 +252,27 @@ export function decodeGraphPayload(
     if (previous.end > current.start) {
       throw new GraphPayloadError(
         `slice overlap between ${previous.label} and ${current.label}`,
+      );
+    }
+  }
+
+  assertRowVectorCardinality(header.xValues, header.rowCount, "xValues");
+  assertRowVectorCardinality(header.yValues, header.rowCount, "yValues");
+  assertRowVectorCardinality(header.rowIds, header.rowCount, "rowIds");
+  if (header.groupCodes) {
+    assertRowVectorCardinality(header.groupCodes, header.rowCount, "groupCodes");
+  }
+  if (header.sizeValues) {
+    assertRowVectorCardinality(header.sizeValues, header.rowCount, "sizeValues");
+  }
+
+  // Validity bitmaps may include trailing bytes for alignment or future metadata,
+  // so we enforce a minimum length rather than exact equality.
+  const minValidityBytes = Math.ceil(header.rowCount / 8);
+  for (const [key, descriptor] of Object.entries(header.validityRanges)) {
+    if (descriptor.byteLength < minValidityBytes) {
+      throw new GraphPayloadError(
+        `validityRanges.${key} byteLength ${descriptor.byteLength} is smaller than required minimum ${minValidityBytes} for rowCount ${header.rowCount}`,
       );
     }
   }
