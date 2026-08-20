@@ -102,6 +102,82 @@ assert.deepEqual(decoded.dictionaries.x, ["Central", "East"]);
 assert.deepEqual(Array.from(decoded.validity.x), [1, 0]);
 assert.deepEqual(Array.from(decoded.validity.y), [1, 1]);
 
+const dynamicPayload = new ArrayBuffer(184);
+new Uint32Array(dynamicPayload, 0, 2).set([0, 1]);
+new Float64Array(dynamicPayload, 8, 2).set([10, 20]);
+new BigInt64Array(dynamicPayload, 24, 2).set([901n, 902n]);
+new Float64Array(dynamicPayload, 40, 2).set([100, 200]);
+new Uint32Array(dynamicPayload, 56, 2).set([1, 0]);
+new Uint32Array(dynamicPayload, 64, 2).set([0, 1]);
+new Uint32Array(dynamicPayload, 72, 2).set([1, 0]);
+new Uint32Array(dynamicPayload, 80, 2).set([0, 1]);
+new Uint32Array(dynamicPayload, 88, 2).set([1, 1]);
+new Uint32Array(dynamicPayload, 96, 2).set([1, 0]);
+new Uint8Array(dynamicPayload, 104, 2).set([1, 1]);
+new Uint8Array(dynamicPayload, 112, 2).set([1, 1]);
+new Uint8Array(dynamicPayload, 120, 2).set([1, 1]);
+new Uint8Array(dynamicPayload, 128, 2).set([1, 1]);
+new Uint8Array(dynamicPayload, 136, 2).set([1, 1]);
+new Uint8Array(dynamicPayload, 144, 2).set([1, 1]);
+new Uint8Array(dynamicPayload, 152, 2).set([1, 1]);
+new Uint8Array(dynamicPayload, 160, 2).set([1, 1]);
+new Uint8Array(dynamicPayload, 168, 2).set([1, 1]);
+
+const dynamicDecoded = decodeGraphPayload(
+  {
+    requestId: "req-dynamic",
+    generation: 8,
+    chunkIndex: 0,
+    rowOffset: 0,
+    rowCount: 2,
+    sourceRows: 2,
+    processedRows: 2,
+    dictionaries: {
+      x: ["A", "B"],
+      source: ["m1", "m2"],
+      group: ["G0", "G1"],
+      facetX: ["L", "R"],
+      facetY: ["Top", "Bottom"],
+      facetZ: ["Front", "Back"],
+      wrap: ["W1", "W2"],
+    },
+    validityRanges: {
+      x: { type: "u8", offset: 104, byteLength: 2 },
+      y: { type: "u8", offset: 112, byteLength: 2 },
+      z: { type: "u8", offset: 120, byteLength: 2 },
+      source: { type: "u8", offset: 128, byteLength: 2 },
+      group: { type: "u8", offset: 136, byteLength: 2 },
+      facetX: { type: "u8", offset: 144, byteLength: 2 },
+      facetY: { type: "u8", offset: 152, byteLength: 2 },
+      facetZ: { type: "u8", offset: 160, byteLength: 2 },
+      wrap: { type: "u8", offset: 168, byteLength: 2 },
+    },
+    xValues: { type: "u32", offset: 0, byteLength: 8 },
+    yValues: { type: "f64", offset: 8, byteLength: 16 },
+    rowIds: { type: "i64", offset: 24, byteLength: 16 },
+    zValues: { type: "f64", offset: 40, byteLength: 16 },
+    roleVectors: {
+      source: { type: "u32", offset: 56, byteLength: 8 },
+      group: { type: "u32", offset: 64, byteLength: 8 },
+      groupX: { type: "u32", offset: 72, byteLength: 8 },
+      groupY: { type: "u32", offset: 80, byteLength: 8 },
+      groupZ: { type: "u32", offset: 96, byteLength: 8 },
+      wrap: { type: "u32", offset: 88, byteLength: 8 },
+    },
+    xEncoding: "categorical",
+    finalChunk: true,
+  } as GraphChunkHeader,
+  dynamicPayload,
+);
+
+assert.deepEqual(Array.from(dynamicDecoded.sourceCodes ?? []), [1, 0]);
+assert.deepEqual(Array.from(dynamicDecoded.groupCodes ?? []), [0, 1]);
+assert.deepEqual(Array.from(dynamicDecoded.facetXCodes ?? []), [1, 0]);
+assert.deepEqual(Array.from(dynamicDecoded.facetYCodes ?? []), [0, 1]);
+assert.deepEqual(Array.from(dynamicDecoded.facetZCodes ?? []), [1, 0]);
+assert.deepEqual(Array.from(dynamicDecoded.wrapCodes ?? []), [1, 1]);
+assert.deepEqual(Array.from(dynamicDecoded.rowIds), [901n, 902n]);
+
 assert.equal(isGraphAggregatePacket({ kind: "histogram" }), false);
 assert.equal(isGraphAggregatePacket({ kind: "histogram", payload: {} }), false);
 assert.equal(isGraphAggregatePacket({
@@ -113,6 +189,49 @@ assert.equal(isGraphAggregatePacket({
   totalCount: 2,
   bins: [],
 }), true);
+
+assert.equal(isGraphAggregatePacket({
+  kind: "histogram",
+  yColumn: "cost",
+  binCount: 20,
+  missingCount: 0,
+  binWidth: 1,
+  totalCount: 1,
+  bins: [
+    {
+      group: "G1",
+      category: "A",
+      sourceColumn: "m1",
+      facetX: "L",
+      facetY: "Top",
+      facetZ: undefined,
+      wrap: "W1",
+      binStart: 0,
+      binEnd: 1,
+      count: 1,
+    },
+  ],
+}), true);
+
+assert.equal(isGraphAggregatePacket({
+  kind: "histogram",
+  yColumn: "cost",
+  binCount: 20,
+  missingCount: 0,
+  binWidth: 1,
+  totalCount: 1,
+  bins: [
+    {
+      group: "G1",
+      category: "A",
+      sourceColumn: "m1",
+      facetX: "L",
+      binStart: 0,
+      binEnd: 1,
+      count: 1,
+    },
+  ],
+}), false);
 
 assert.throws(
   () =>
@@ -633,6 +752,7 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
     }),
   );
   assert.deepEqual(roleColumns(groupZFallback, "group"), ["gz"]);
+  assert.deepEqual(roleColumns(groupZFallback, "groupZ"), ["gz"]);
 }
 
 {

@@ -59,7 +59,9 @@ export interface GraphChunkHeader {
   sourceCodes?: GraphTypedSliceDescriptor;
   facetXCodes?: GraphTypedSliceDescriptor;
   facetYCodes?: GraphTypedSliceDescriptor;
+  facetZCodes?: GraphTypedSliceDescriptor;
   wrapCodes?: GraphTypedSliceDescriptor;
+  roleVectors?: Record<string, GraphTypedSliceDescriptor>;
   xEncoding: GraphAxisEncoding;
   finalChunk: boolean;
 }
@@ -85,6 +87,7 @@ export interface HistogramBin {
   sourceColumn?: string;
   facetX?: string;
   facetY?: string;
+  facetZ?: string;
   wrap?: string;
   binStart: number;
   binEnd: number;
@@ -112,6 +115,7 @@ export interface HeatmapCell {
   sourceColumn?: string;
   facetX?: string;
   facetY?: string;
+  facetZ?: string;
   wrap?: string;
   xBinIndex: number;
   yBinIndex: number;
@@ -153,6 +157,7 @@ export interface BoxPlotEntry {
   sourceColumn?: string;
   facetX?: string;
   facetY?: string;
+  facetZ?: string;
   wrap?: string;
   count: number;
   min: number;
@@ -180,6 +185,7 @@ export interface SummaryEntry {
   sourceColumn?: string;
   facetX?: string;
   facetY?: string;
+  facetZ?: string;
   wrap?: string;
   count: number;
   mean: number;
@@ -226,13 +232,21 @@ function isNonNegativeInteger(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= 0;
 }
 
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
 function isHistogramBin(value: unknown): value is HistogramBin {
   if (!isRecord(value)) return false;
+  if (!hasOwn(value, "facetX") || !hasOwn(value, "facetY") || !hasOwn(value, "facetZ") || !hasOwn(value, "wrap")) {
+    return false;
+  }
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
     && isOptionalString(value.facetX)
     && isOptionalString(value.facetY)
+    && isOptionalString(value.facetZ)
     && isOptionalString(value.wrap)
     && isFiniteNumber(value.binStart)
     && isFiniteNumber(value.binEnd)
@@ -241,11 +255,15 @@ function isHistogramBin(value: unknown): value is HistogramBin {
 
 function isHeatmapCell(value: unknown): value is HeatmapCell {
   if (!isRecord(value)) return false;
+  if (!hasOwn(value, "facetX") || !hasOwn(value, "facetY") || !hasOwn(value, "facetZ") || !hasOwn(value, "wrap")) {
+    return false;
+  }
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
     && isOptionalString(value.facetX)
     && isOptionalString(value.facetY)
+    && isOptionalString(value.facetZ)
     && isOptionalString(value.wrap)
     && Number.isInteger(value.xBinIndex)
     && Number.isInteger(value.yBinIndex)
@@ -265,11 +283,15 @@ function isBoxPlotOutlier(value: unknown): value is BoxPlotOutlier {
 
 function isBoxPlotEntry(value: unknown): value is BoxPlotEntry {
   if (!isRecord(value)) return false;
+  if (!hasOwn(value, "facetX") || !hasOwn(value, "facetY") || !hasOwn(value, "facetZ") || !hasOwn(value, "wrap")) {
+    return false;
+  }
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
     && isOptionalString(value.facetX)
     && isOptionalString(value.facetY)
+    && isOptionalString(value.facetZ)
     && isOptionalString(value.wrap)
     && isNonNegativeInteger(value.count)
     && isFiniteNumber(value.min)
@@ -285,11 +307,15 @@ function isBoxPlotEntry(value: unknown): value is BoxPlotEntry {
 
 function isSummaryEntry(value: unknown): value is SummaryEntry {
   if (!isRecord(value)) return false;
+  if (!hasOwn(value, "facetX") || !hasOwn(value, "facetY") || !hasOwn(value, "facetZ") || !hasOwn(value, "wrap")) {
+    return false;
+  }
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
     && isOptionalString(value.facetX)
     && isOptionalString(value.facetY)
+    && isOptionalString(value.facetZ)
     && isOptionalString(value.wrap)
     && isNonNegativeInteger(value.count)
     && isFiniteNumber(value.mean)
@@ -369,7 +395,9 @@ export interface DecodedRawPointChunk {
   sourceCodes?: Uint32Array;
   facetXCodes?: Uint32Array;
   facetYCodes?: Uint32Array;
+  facetZCodes?: Uint32Array;
   wrapCodes?: Uint32Array;
+  roleVectors?: Record<string, Float64Array | Uint32Array | BigInt64Array | Uint8Array>;
   validity: Record<string, Uint8Array>;
 }
 
@@ -499,8 +527,58 @@ export function decodeGraphPayload(
   if (header.facetYCodes) {
     assertType(header.facetYCodes, "u32", "facetYCodes");
   }
+  if (header.facetZCodes) {
+    assertType(header.facetZCodes, "u32", "facetZCodes");
+  }
   if (header.wrapCodes) {
     assertType(header.wrapCodes, "u32", "wrapCodes");
+  }
+  if (header.roleVectors) {
+    for (const [roleKey, descriptor] of Object.entries(header.roleVectors)) {
+      assertType(descriptor, ["f64", "u32", "i64", "u8"], `roleVectors.${roleKey}`);
+    }
+  }
+
+  const resolveRoleDescriptor = (
+    roleKey: string,
+    legacy: GraphTypedSliceDescriptor | undefined,
+  ): GraphTypedSliceDescriptor | undefined => {
+    const descriptor = header.roleVectors?.[roleKey] ?? legacy;
+    return descriptor;
+  };
+
+  const zDescriptor = resolveRoleDescriptor("z", header.zValues);
+  const groupDescriptor = resolveRoleDescriptor("group", header.groupCodes);
+  const sizeDescriptor = resolveRoleDescriptor("size", header.sizeValues);
+  const sourceDescriptor = resolveRoleDescriptor("source", header.sourceCodes);
+  const facetXDescriptor = resolveRoleDescriptor("groupX", header.facetXCodes);
+  const facetYDescriptor = resolveRoleDescriptor("groupY", header.facetYCodes);
+  const facetZDescriptor = resolveRoleDescriptor("groupZ", header.facetZCodes);
+  const wrapDescriptor = resolveRoleDescriptor("wrap", header.wrapCodes);
+
+  if (zDescriptor) {
+    assertType(zDescriptor, "f64", "zValues");
+  }
+  if (groupDescriptor) {
+    assertType(groupDescriptor, "u32", "groupCodes");
+  }
+  if (sizeDescriptor) {
+    assertType(sizeDescriptor, "f64", "sizeValues");
+  }
+  if (sourceDescriptor) {
+    assertType(sourceDescriptor, "u32", "sourceCodes");
+  }
+  if (facetXDescriptor) {
+    assertType(facetXDescriptor, "u32", "facetXCodes");
+  }
+  if (facetYDescriptor) {
+    assertType(facetYDescriptor, "u32", "facetYCodes");
+  }
+  if (facetZDescriptor) {
+    assertType(facetZDescriptor, "u32", "facetZCodes");
+  }
+  if (wrapDescriptor) {
+    assertType(wrapDescriptor, "u32", "wrapCodes");
   }
 
   const ranges: Array<{ start: number; end: number; label: string }> = [];
@@ -514,26 +592,29 @@ export function decodeGraphPayload(
   register(header.xValues, "xValues");
   register(header.yValues, "yValues");
   register(header.rowIds, "rowIds");
-  if (header.zValues) {
-    register(header.zValues, "zValues");
+  if (zDescriptor) {
+    register(zDescriptor, "zValues");
   }
-  if (header.groupCodes) {
-    register(header.groupCodes, "groupCodes");
+  if (groupDescriptor) {
+    register(groupDescriptor, "groupCodes");
   }
-  if (header.sizeValues) {
-    register(header.sizeValues, "sizeValues");
+  if (sizeDescriptor) {
+    register(sizeDescriptor, "sizeValues");
   }
-  if (header.sourceCodes) {
-    register(header.sourceCodes, "sourceCodes");
+  if (sourceDescriptor) {
+    register(sourceDescriptor, "sourceCodes");
   }
-  if (header.facetXCodes) {
-    register(header.facetXCodes, "facetXCodes");
+  if (facetXDescriptor) {
+    register(facetXDescriptor, "facetXCodes");
   }
-  if (header.facetYCodes) {
-    register(header.facetYCodes, "facetYCodes");
+  if (facetYDescriptor) {
+    register(facetYDescriptor, "facetYCodes");
   }
-  if (header.wrapCodes) {
-    register(header.wrapCodes, "wrapCodes");
+  if (facetZDescriptor) {
+    register(facetZDescriptor, "facetZCodes");
+  }
+  if (wrapDescriptor) {
+    register(wrapDescriptor, "wrapCodes");
   }
 
   for (const [key, descriptor] of Object.entries(header.validityRanges)) {
@@ -555,26 +636,29 @@ export function decodeGraphPayload(
   assertRowVectorCardinality(header.xValues, header.rowCount, "xValues");
   assertRowVectorCardinality(header.yValues, header.rowCount, "yValues");
   assertRowVectorCardinality(header.rowIds, header.rowCount, "rowIds");
-  if (header.groupCodes) {
-    assertRowVectorCardinality(header.groupCodes, header.rowCount, "groupCodes");
+  if (groupDescriptor) {
+    assertRowVectorCardinality(groupDescriptor, header.rowCount, "groupCodes");
   }
-  if (header.zValues) {
-    assertRowVectorCardinality(header.zValues, header.rowCount, "zValues");
+  if (zDescriptor) {
+    assertRowVectorCardinality(zDescriptor, header.rowCount, "zValues");
   }
-  if (header.sizeValues) {
-    assertRowVectorCardinality(header.sizeValues, header.rowCount, "sizeValues");
+  if (sizeDescriptor) {
+    assertRowVectorCardinality(sizeDescriptor, header.rowCount, "sizeValues");
   }
-  if (header.sourceCodes) {
-    assertRowVectorCardinality(header.sourceCodes, header.rowCount, "sourceCodes");
+  if (sourceDescriptor) {
+    assertRowVectorCardinality(sourceDescriptor, header.rowCount, "sourceCodes");
   }
-  if (header.facetXCodes) {
-    assertRowVectorCardinality(header.facetXCodes, header.rowCount, "facetXCodes");
+  if (facetXDescriptor) {
+    assertRowVectorCardinality(facetXDescriptor, header.rowCount, "facetXCodes");
   }
-  if (header.facetYCodes) {
-    assertRowVectorCardinality(header.facetYCodes, header.rowCount, "facetYCodes");
+  if (facetYDescriptor) {
+    assertRowVectorCardinality(facetYDescriptor, header.rowCount, "facetYCodes");
   }
-  if (header.wrapCodes) {
-    assertRowVectorCardinality(header.wrapCodes, header.rowCount, "wrapCodes");
+  if (facetZDescriptor) {
+    assertRowVectorCardinality(facetZDescriptor, header.rowCount, "facetZCodes");
+  }
+  if (wrapDescriptor) {
+    assertRowVectorCardinality(wrapDescriptor, header.rowCount, "wrapCodes");
   }
 
   // Validity bitmaps may include trailing bytes for alignment or future metadata,
@@ -594,27 +678,45 @@ export function decodeGraphPayload(
       : new Uint32Array(payload, header.xValues.offset, header.xValues.byteLength / 4);
   const yValues = new Float64Array(payload, header.yValues.offset, header.yValues.byteLength / 8);
   const rowIds = new BigInt64Array(payload, header.rowIds.offset, header.rowIds.byteLength / 8);
-  const zValues = header.zValues
-    ? new Float64Array(payload, header.zValues.offset, header.zValues.byteLength / 8)
+  const zValues = zDescriptor
+    ? new Float64Array(payload, zDescriptor.offset, zDescriptor.byteLength / 8)
     : undefined;
-  const groupCodes = header.groupCodes
-    ? new Uint32Array(payload, header.groupCodes.offset, header.groupCodes.byteLength / 4)
+  const groupCodes = groupDescriptor
+    ? new Uint32Array(payload, groupDescriptor.offset, groupDescriptor.byteLength / 4)
     : undefined;
-  const sizeValues = header.sizeValues
-    ? new Float64Array(payload, header.sizeValues.offset, header.sizeValues.byteLength / 8)
+  const sizeValues = sizeDescriptor
+    ? new Float64Array(payload, sizeDescriptor.offset, sizeDescriptor.byteLength / 8)
     : undefined;
-  const sourceCodes = header.sourceCodes
-    ? new Uint32Array(payload, header.sourceCodes.offset, header.sourceCodes.byteLength / 4)
+  const sourceCodes = sourceDescriptor
+    ? new Uint32Array(payload, sourceDescriptor.offset, sourceDescriptor.byteLength / 4)
     : undefined;
-  const facetXCodes = header.facetXCodes
-    ? new Uint32Array(payload, header.facetXCodes.offset, header.facetXCodes.byteLength / 4)
+  const facetXCodes = facetXDescriptor
+    ? new Uint32Array(payload, facetXDescriptor.offset, facetXDescriptor.byteLength / 4)
     : undefined;
-  const facetYCodes = header.facetYCodes
-    ? new Uint32Array(payload, header.facetYCodes.offset, header.facetYCodes.byteLength / 4)
+  const facetYCodes = facetYDescriptor
+    ? new Uint32Array(payload, facetYDescriptor.offset, facetYDescriptor.byteLength / 4)
     : undefined;
-  const wrapCodes = header.wrapCodes
-    ? new Uint32Array(payload, header.wrapCodes.offset, header.wrapCodes.byteLength / 4)
+  const facetZCodes = facetZDescriptor
+    ? new Uint32Array(payload, facetZDescriptor.offset, facetZDescriptor.byteLength / 4)
     : undefined;
+  const wrapCodes = wrapDescriptor
+    ? new Uint32Array(payload, wrapDescriptor.offset, wrapDescriptor.byteLength / 4)
+    : undefined;
+
+  const roleVectors: Record<string, Float64Array | Uint32Array | BigInt64Array | Uint8Array> = {};
+  if (header.roleVectors) {
+    for (const [roleKey, descriptor] of Object.entries(header.roleVectors)) {
+      if (descriptor.type === "f64") {
+        roleVectors[roleKey] = new Float64Array(payload, descriptor.offset, descriptor.byteLength / 8);
+      } else if (descriptor.type === "u32") {
+        roleVectors[roleKey] = new Uint32Array(payload, descriptor.offset, descriptor.byteLength / 4);
+      } else if (descriptor.type === "i64") {
+        roleVectors[roleKey] = new BigInt64Array(payload, descriptor.offset, descriptor.byteLength / 8);
+      } else {
+        roleVectors[roleKey] = new Uint8Array(payload, descriptor.offset, descriptor.byteLength);
+      }
+    }
+  }
 
   const validity: Record<string, Uint8Array> = {};
   for (const [key, descriptor] of Object.entries(header.validityRanges)) {
@@ -641,7 +743,9 @@ export function decodeGraphPayload(
     sourceCodes,
     facetXCodes,
     facetYCodes,
+    facetZCodes,
     wrapCodes,
+    roleVectors: Object.keys(roleVectors).length > 0 ? roleVectors : undefined,
     validity,
   };
 }

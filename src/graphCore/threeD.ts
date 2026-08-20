@@ -10,10 +10,10 @@
  * 交给 setOption 时按 echarts 的 core option 处理。
  */
 
-import type { GraphSpec, GraphData } from "./types";
-import type { GraphTheme } from "./theme";
-import { isMissing } from "./transform";
-import { DEFAULT_GROUP_KEY } from "./types";
+import type { GraphSpec, GraphData } from "./types.ts";
+import type { GraphTheme } from "./theme.ts";
+import { DEFAULT_GROUP_KEY } from "./types.ts";
+import { collectFrame3DPoints, type Typed3DPoint } from "./threeDFrame.ts";
 import type { GraphDataFrame } from "@/types/graphData";
 
 /** 3D 散点上限。 */
@@ -36,6 +36,10 @@ function shade(hex: string, ratio: number): string {
 }
 
 interface XYZ { xi: number; yi: number; zi: number }
+
+function isMissingValue(v: unknown): boolean {
+  return v == null || (typeof v === "string" && v.trim() === "");
+}
 
 function colIndices(data: GraphData, x?: string, y?: string, z?: string): XYZ {
   return {
@@ -75,49 +79,6 @@ function errMagnitude(zs: number[], kind: string): number {
   if (k === "stdDev") return sd;
   if (k === "ci95") return 1.96 * se;
   return se;
-}
-
-interface Typed3DPoint {
-  x: number;
-  y: number;
-  z?: number;
-  group?: string;
-}
-
-function bitIsSet(bitmap: Uint8Array | undefined, rowIndex: number): boolean {
-  if (!bitmap) return true;
-  const byteIndex = rowIndex >> 3;
-  if (byteIndex >= bitmap.length) return false;
-  const mask = 1 << (rowIndex & 7);
-  return (bitmap[byteIndex] & mask) !== 0;
-}
-
-function collectFrame3DPoints(frame: GraphDataFrame): Typed3DPoint[] {
-  const points: Typed3DPoint[] = [];
-  const groupDict = frame.dictionaries.group ?? [];
-  for (const chunk of frame.rawChunks) {
-    const n = Math.min(chunk.xValues.length, chunk.yValues.length, chunk.rowIds.length);
-    for (let row = 0; row < n; row += 1) {
-      if (!bitIsSet(chunk.validity.x, row)) continue;
-      if (!bitIsSet(chunk.validity.y, row)) continue;
-      const x = Number(chunk.xValues[row]);
-      const y = Number(chunk.yValues[row]);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      let z: number | undefined;
-      if (chunk.zValues) {
-        if (!bitIsSet(chunk.validity.z, row)) continue;
-        const zv = Number(chunk.zValues[row]);
-        if (!Number.isFinite(zv)) continue;
-        z = zv;
-      }
-      let group: string | undefined;
-      if (chunk.groupCodes && bitIsSet(chunk.validity.group, row)) {
-        group = groupDict[chunk.groupCodes[row] >>> 0];
-      }
-      points.push({ x, y, z, group });
-    }
-  }
-  return points;
 }
 
 /** 按原始 X/Y 网格聚合，并可对有限 Z 做保留空洞的邻域平滑。 */
@@ -598,7 +559,7 @@ export function build3DOption(
       const groups: string[] = [];
       for (const row of data.rows) {
         const gv = row[gi];
-        if (isMissing(gv)) continue;
+        if (isMissingValue(gv)) continue;
         const k = String(gv);
         if (!seen.has(k)) { seen.add(k); groups.push(k); }
       }

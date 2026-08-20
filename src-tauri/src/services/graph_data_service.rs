@@ -11,6 +11,7 @@ use crate::error::AppError;
 use crate::models::graph_data::{
     GraphAggregatePacket, GraphAxisEncoding, GraphChunkHeader, GraphDataCompletion,
     GraphDataRequest, GraphPayloadType, GraphSampling, GraphTypedSliceDescriptor,
+    GRAPH_VIRTUAL_SOURCE_COLUMN,
 };
 use crate::state::AppState;
 
@@ -529,6 +530,12 @@ struct ProjectionMetadata {
     include_row_id: bool,
     x_index: usize,
     y_index: usize,
+    z_index: Option<usize>,
+    source_index: Option<usize>,
+    group_x_index: Option<usize>,
+    group_y_index: Option<usize>,
+    group_z_index: Option<usize>,
+    wrap_index: Option<usize>,
     group_index: Option<usize>,
     size_index: Option<usize>,
     x_payload_type: GraphPayloadType,
@@ -602,6 +609,19 @@ impl ProjectionMetadata {
             .position(|column| column == resolved_y_column)
             .ok_or_else(|| AppError::InvalidParam("unknown graph column for role y".to_string()))?;
 
+        let resolve_role_index = |role: &str, alias: &str| {
+            if has_backend_projection_aliases {
+                stats
+                    .projected_columns
+                    .iter()
+                    .position(|name| name == alias)
+            } else {
+                role_columns
+                    .get(role)
+                    .and_then(|column| stats.projected_columns.iter().position(|name| name == column))
+            }
+        };
+
         let group_index = if has_backend_projection_aliases {
             stats
                 .projected_columns
@@ -622,6 +642,15 @@ impl ProjectionMetadata {
                 .get("size")
                 .and_then(|column| stats.projected_columns.iter().position(|name| name == column))
         };
+        let z_index = resolve_role_index("z", "__sp_z");
+        let group_x_index = resolve_role_index("groupx", "__sp_groupx");
+        let group_y_index = resolve_role_index("groupy", "__sp_groupy");
+        let group_z_index = resolve_role_index("groupz", "__sp_groupz");
+        let wrap_index = resolve_role_index("wrap", "__sp_wrap");
+        let source_index = stats
+            .projected_columns
+            .iter()
+            .position(|name| name == GRAPH_VIRTUAL_SOURCE_COLUMN);
 
         let x_type = stats
             .projected_column_types
@@ -644,6 +673,12 @@ impl ProjectionMetadata {
             include_row_id,
             x_index,
             y_index,
+            z_index,
+            source_index,
+            group_x_index,
+            group_y_index,
+            group_z_index,
+            wrap_index,
             group_index,
             size_index,
             x_payload_type,
@@ -662,11 +697,47 @@ impl ProjectionMetadata {
         if self.size_index.is_some() {
             row_width += GraphPayloadType::F64.byte_width();
         }
+        if self.z_index.is_some() {
+            row_width += GraphPayloadType::F64.byte_width();
+        }
+        if self.source_index.is_some() {
+            row_width += GraphPayloadType::U32.byte_width();
+        }
+        if self.group_x_index.is_some() {
+            row_width += GraphPayloadType::U32.byte_width();
+        }
+        if self.group_y_index.is_some() {
+            row_width += GraphPayloadType::U32.byte_width();
+        }
+        if self.group_z_index.is_some() {
+            row_width += GraphPayloadType::U32.byte_width();
+        }
+        if self.wrap_index.is_some() {
+            row_width += GraphPayloadType::U32.byte_width();
+        }
         row_width += 2;
         if self.group_index.is_some() {
             row_width += 1;
         }
         if self.size_index.is_some() {
+            row_width += 1;
+        }
+        if self.z_index.is_some() {
+            row_width += 1;
+        }
+        if self.source_index.is_some() {
+            row_width += 1;
+        }
+        if self.group_x_index.is_some() {
+            row_width += 1;
+        }
+        if self.group_y_index.is_some() {
+            row_width += 1;
+        }
+        if self.group_z_index.is_some() {
+            row_width += 1;
+        }
+        if self.wrap_index.is_some() {
             row_width += 1;
         }
         // Reserve fixed headroom for per-slice alignment padding so payload stays under budget.
@@ -681,16 +752,38 @@ struct ChunkAccumulator {
     x_categorical_values: Vec<u32>,
     y_values: Vec<f64>,
     row_ids: Vec<i64>,
+    z_values: Vec<f64>,
     group_codes: Vec<u32>,
     size_values: Vec<f64>,
+    source_codes: Vec<u32>,
+    facet_x_codes: Vec<u32>,
+    facet_y_codes: Vec<u32>,
+    facet_z_codes: Vec<u32>,
+    wrap_codes: Vec<u32>,
     x_validity: Vec<u8>,
     y_validity: Vec<u8>,
+    z_validity: Vec<u8>,
     group_validity: Vec<u8>,
     size_validity: Vec<u8>,
+    source_validity: Vec<u8>,
+    facet_x_validity: Vec<u8>,
+    facet_y_validity: Vec<u8>,
+    facet_z_validity: Vec<u8>,
+    wrap_validity: Vec<u8>,
     x_dictionary: Vec<String>,
     x_dictionary_index: HashMap<String, u32>,
     group_dictionary: Vec<String>,
     group_dictionary_index: HashMap<String, u32>,
+    source_dictionary: Vec<String>,
+    source_dictionary_index: HashMap<String, u32>,
+    facet_x_dictionary: Vec<String>,
+    facet_x_dictionary_index: HashMap<String, u32>,
+    facet_y_dictionary: Vec<String>,
+    facet_y_dictionary_index: HashMap<String, u32>,
+    facet_z_dictionary: Vec<String>,
+    facet_z_dictionary_index: HashMap<String, u32>,
+    wrap_dictionary: Vec<String>,
+    wrap_dictionary_index: HashMap<String, u32>,
 }
 
 impl ChunkAccumulator {
@@ -702,16 +795,38 @@ impl ChunkAccumulator {
             x_categorical_values: Vec::with_capacity(rows_per_chunk),
             y_values: Vec::with_capacity(rows_per_chunk),
             row_ids: Vec::with_capacity(rows_per_chunk),
+            z_values: Vec::with_capacity(rows_per_chunk),
             group_codes: Vec::with_capacity(rows_per_chunk),
             size_values: Vec::with_capacity(rows_per_chunk),
+            source_codes: Vec::with_capacity(rows_per_chunk),
+            facet_x_codes: Vec::with_capacity(rows_per_chunk),
+            facet_y_codes: Vec::with_capacity(rows_per_chunk),
+            facet_z_codes: Vec::with_capacity(rows_per_chunk),
+            wrap_codes: Vec::with_capacity(rows_per_chunk),
             x_validity: Vec::with_capacity(rows_per_chunk),
             y_validity: Vec::with_capacity(rows_per_chunk),
+            z_validity: Vec::with_capacity(rows_per_chunk),
             group_validity: Vec::with_capacity(rows_per_chunk),
             size_validity: Vec::with_capacity(rows_per_chunk),
+            source_validity: Vec::with_capacity(rows_per_chunk),
+            facet_x_validity: Vec::with_capacity(rows_per_chunk),
+            facet_y_validity: Vec::with_capacity(rows_per_chunk),
+            facet_z_validity: Vec::with_capacity(rows_per_chunk),
+            wrap_validity: Vec::with_capacity(rows_per_chunk),
             x_dictionary: Vec::new(),
             x_dictionary_index: HashMap::new(),
             group_dictionary: Vec::new(),
             group_dictionary_index: HashMap::new(),
+            source_dictionary: Vec::new(),
+            source_dictionary_index: HashMap::new(),
+            facet_x_dictionary: Vec::new(),
+            facet_x_dictionary_index: HashMap::new(),
+            facet_y_dictionary: Vec::new(),
+            facet_y_dictionary_index: HashMap::new(),
+            facet_z_dictionary: Vec::new(),
+            facet_z_dictionary_index: HashMap::new(),
+            wrap_dictionary: Vec::new(),
+            wrap_dictionary_index: HashMap::new(),
         }
     }
 
@@ -807,6 +922,109 @@ impl ChunkAccumulator {
             }
         }
 
+        if let Some(z_index) = metadata.z_index {
+            let z = values.get(z_index).ok_or_else(|| {
+                AppError::Database("z value missing from graph projection".to_string())
+            })?;
+            if let Some(value) = value_to_f64(z) {
+                self.z_values.push(value);
+                self.z_validity.push(1);
+            } else {
+                self.z_values.push(0.0);
+                self.z_validity.push(0);
+            }
+        }
+
+        if let Some(source_index) = metadata.source_index {
+            let source = values.get(source_index).ok_or_else(|| {
+                AppError::Database("source value missing from graph projection".to_string())
+            })?;
+            if let Some(label) = value_to_category(source) {
+                let code = upsert_code(
+                    &mut self.source_dictionary,
+                    &mut self.source_dictionary_index,
+                    &label,
+                )?;
+                self.source_codes.push(code);
+                self.source_validity.push(1);
+            } else {
+                self.source_codes.push(0);
+                self.source_validity.push(0);
+            }
+        }
+
+        if let Some(group_x_index) = metadata.group_x_index {
+            let group_x = values.get(group_x_index).ok_or_else(|| {
+                AppError::Database("groupX value missing from graph projection".to_string())
+            })?;
+            if let Some(label) = value_to_category(group_x) {
+                let code = upsert_code(
+                    &mut self.facet_x_dictionary,
+                    &mut self.facet_x_dictionary_index,
+                    &label,
+                )?;
+                self.facet_x_codes.push(code);
+                self.facet_x_validity.push(1);
+            } else {
+                self.facet_x_codes.push(0);
+                self.facet_x_validity.push(0);
+            }
+        }
+
+        if let Some(group_y_index) = metadata.group_y_index {
+            let group_y = values.get(group_y_index).ok_or_else(|| {
+                AppError::Database("groupY value missing from graph projection".to_string())
+            })?;
+            if let Some(label) = value_to_category(group_y) {
+                let code = upsert_code(
+                    &mut self.facet_y_dictionary,
+                    &mut self.facet_y_dictionary_index,
+                    &label,
+                )?;
+                self.facet_y_codes.push(code);
+                self.facet_y_validity.push(1);
+            } else {
+                self.facet_y_codes.push(0);
+                self.facet_y_validity.push(0);
+            }
+        }
+
+        if let Some(group_z_index) = metadata.group_z_index {
+            let group_z = values.get(group_z_index).ok_or_else(|| {
+                AppError::Database("groupZ value missing from graph projection".to_string())
+            })?;
+            if let Some(label) = value_to_category(group_z) {
+                let code = upsert_code(
+                    &mut self.facet_z_dictionary,
+                    &mut self.facet_z_dictionary_index,
+                    &label,
+                )?;
+                self.facet_z_codes.push(code);
+                self.facet_z_validity.push(1);
+            } else {
+                self.facet_z_codes.push(0);
+                self.facet_z_validity.push(0);
+            }
+        }
+
+        if let Some(wrap_index) = metadata.wrap_index {
+            let wrap = values.get(wrap_index).ok_or_else(|| {
+                AppError::Database("wrap value missing from graph projection".to_string())
+            })?;
+            if let Some(label) = value_to_category(wrap) {
+                let code = upsert_code(
+                    &mut self.wrap_dictionary,
+                    &mut self.wrap_dictionary_index,
+                    &label,
+                )?;
+                self.wrap_codes.push(code);
+                self.wrap_validity.push(1);
+            } else {
+                self.wrap_codes.push(0);
+                self.wrap_validity.push(0);
+            }
+        }
+
         Ok(())
     }
 
@@ -856,11 +1074,71 @@ impl ChunkAccumulator {
             None
         };
 
+        let z_values = if metadata.z_index.is_some() {
+            Some(descriptor_from_f64(
+                &mut payload,
+                &self.z_values,
+                GraphPayloadType::F64,
+            ))
+        } else {
+            None
+        };
+
         let size_values = if metadata.size_index.is_some() {
             Some(descriptor_from_f64(
                 &mut payload,
                 &self.size_values,
                 GraphPayloadType::F64,
+            ))
+        } else {
+            None
+        };
+
+        let source_codes = if metadata.source_index.is_some() {
+            Some(descriptor_from_u32(
+                &mut payload,
+                &self.source_codes,
+                GraphPayloadType::U32,
+            ))
+        } else {
+            None
+        };
+
+        let facet_x_codes = if metadata.group_x_index.is_some() {
+            Some(descriptor_from_u32(
+                &mut payload,
+                &self.facet_x_codes,
+                GraphPayloadType::U32,
+            ))
+        } else {
+            None
+        };
+
+        let facet_y_codes = if metadata.group_y_index.is_some() {
+            Some(descriptor_from_u32(
+                &mut payload,
+                &self.facet_y_codes,
+                GraphPayloadType::U32,
+            ))
+        } else {
+            None
+        };
+
+        let facet_z_codes = if metadata.group_z_index.is_some() {
+            Some(descriptor_from_u32(
+                &mut payload,
+                &self.facet_z_codes,
+                GraphPayloadType::U32,
+            ))
+        } else {
+            None
+        };
+
+        let wrap_codes = if metadata.wrap_index.is_some() {
+            Some(descriptor_from_u32(
+                &mut payload,
+                &self.wrap_codes,
+                GraphPayloadType::U32,
             ))
         } else {
             None
@@ -887,6 +1165,42 @@ impl ChunkAccumulator {
                 descriptor_from_u8(&mut payload, &self.size_validity, GraphPayloadType::U8),
             );
         }
+        if metadata.z_index.is_some() {
+            validity_ranges.insert(
+                "z".to_string(),
+                descriptor_from_u8(&mut payload, &self.z_validity, GraphPayloadType::U8),
+            );
+        }
+        if metadata.source_index.is_some() {
+            validity_ranges.insert(
+                "source".to_string(),
+                descriptor_from_u8(&mut payload, &self.source_validity, GraphPayloadType::U8),
+            );
+        }
+        if metadata.group_x_index.is_some() {
+            validity_ranges.insert(
+                "facetX".to_string(),
+                descriptor_from_u8(&mut payload, &self.facet_x_validity, GraphPayloadType::U8),
+            );
+        }
+        if metadata.group_y_index.is_some() {
+            validity_ranges.insert(
+                "facetY".to_string(),
+                descriptor_from_u8(&mut payload, &self.facet_y_validity, GraphPayloadType::U8),
+            );
+        }
+        if metadata.group_z_index.is_some() {
+            validity_ranges.insert(
+                "facetZ".to_string(),
+                descriptor_from_u8(&mut payload, &self.facet_z_validity, GraphPayloadType::U8),
+            );
+        }
+        if metadata.wrap_index.is_some() {
+            validity_ranges.insert(
+                "wrap".to_string(),
+                descriptor_from_u8(&mut payload, &self.wrap_validity, GraphPayloadType::U8),
+            );
+        }
 
         let mut dictionaries = BTreeMap::new();
         if metadata.x_payload_type == GraphPayloadType::U32 {
@@ -894,6 +1208,47 @@ impl ChunkAccumulator {
         }
         if metadata.group_index.is_some() {
             dictionaries.insert("group".to_string(), self.group_dictionary.clone());
+        }
+        if metadata.source_index.is_some() {
+            dictionaries.insert("source".to_string(), self.source_dictionary.clone());
+        }
+        if metadata.group_x_index.is_some() {
+            dictionaries.insert("facetX".to_string(), self.facet_x_dictionary.clone());
+        }
+        if metadata.group_y_index.is_some() {
+            dictionaries.insert("facetY".to_string(), self.facet_y_dictionary.clone());
+        }
+        if metadata.group_z_index.is_some() {
+            dictionaries.insert("facetZ".to_string(), self.facet_z_dictionary.clone());
+        }
+        if metadata.wrap_index.is_some() {
+            dictionaries.insert("wrap".to_string(), self.wrap_dictionary.clone());
+        }
+
+        let mut role_vectors = BTreeMap::new();
+        if let Some(descriptor) = &z_values {
+            role_vectors.insert("z".to_string(), descriptor.clone());
+        }
+        if let Some(descriptor) = &group_codes {
+            role_vectors.insert("group".to_string(), descriptor.clone());
+        }
+        if let Some(descriptor) = &size_values {
+            role_vectors.insert("size".to_string(), descriptor.clone());
+        }
+        if let Some(descriptor) = &source_codes {
+            role_vectors.insert("source".to_string(), descriptor.clone());
+        }
+        if let Some(descriptor) = &facet_x_codes {
+            role_vectors.insert("groupX".to_string(), descriptor.clone());
+        }
+        if let Some(descriptor) = &facet_y_codes {
+            role_vectors.insert("groupY".to_string(), descriptor.clone());
+        }
+        if let Some(descriptor) = &facet_z_codes {
+            role_vectors.insert("groupZ".to_string(), descriptor.clone());
+        }
+        if let Some(descriptor) = &wrap_codes {
+            role_vectors.insert("wrap".to_string(), descriptor.clone());
         }
 
         let header = GraphChunkHeader {
@@ -910,8 +1265,15 @@ impl ChunkAccumulator {
             x_values,
             y_values,
             row_ids,
+            z_values,
             group_codes,
             size_values,
+            source_codes,
+            facet_x_codes,
+            facet_y_codes,
+            facet_z_codes,
+            wrap_codes,
+            role_vectors,
             x_encoding: metadata.x_encoding.clone(),
             final_chunk,
         };
@@ -928,16 +1290,38 @@ impl ChunkAccumulator {
         self.x_categorical_values.clear();
         self.y_values.clear();
         self.row_ids.clear();
+        self.z_values.clear();
         self.group_codes.clear();
         self.size_values.clear();
+        self.source_codes.clear();
+        self.facet_x_codes.clear();
+        self.facet_y_codes.clear();
+        self.facet_z_codes.clear();
+        self.wrap_codes.clear();
         self.x_validity.clear();
         self.y_validity.clear();
+        self.z_validity.clear();
         self.group_validity.clear();
         self.size_validity.clear();
+        self.source_validity.clear();
+        self.facet_x_validity.clear();
+        self.facet_y_validity.clear();
+        self.facet_z_validity.clear();
+        self.wrap_validity.clear();
         self.x_dictionary.clear();
         self.x_dictionary_index.clear();
         self.group_dictionary.clear();
         self.group_dictionary_index.clear();
+        self.source_dictionary.clear();
+        self.source_dictionary_index.clear();
+        self.facet_x_dictionary.clear();
+        self.facet_x_dictionary_index.clear();
+        self.facet_y_dictionary.clear();
+        self.facet_y_dictionary_index.clear();
+        self.facet_z_dictionary.clear();
+        self.facet_z_dictionary_index.clear();
+        self.wrap_dictionary.clear();
+        self.wrap_dictionary_index.clear();
     }
 }
 
@@ -1078,6 +1462,143 @@ mod tests {
     mod aggregate {
         use super::*;
         use crate::models::graph_data::GraphAggregatePacket;
+
+        fn faceted_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
+            GraphDataRequest {
+                request_id: format!("request-{dataset_id}-facet"),
+                dataset_id: dataset_id.to_string(),
+                generation,
+                fields: vec![
+                    GraphFieldBinding {
+                        role: "x".to_string(),
+                        column: "region".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "y".to_string(),
+                        column: "m1".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "z".to_string(),
+                        column: "zv".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "group".to_string(),
+                        column: "segment".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "groupX".to_string(),
+                        column: "facet_x".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "groupY".to_string(),
+                        column: "facet_y".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "groupZ".to_string(),
+                        column: "facet_z".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "wrap".to_string(),
+                        column: "facet_wrap".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "multiY0".to_string(),
+                        column: "m1".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "multiY1".to_string(),
+                        column: "m2".to_string(),
+                    },
+                ],
+                filters: vec![TableWindowFilter {
+                    op: "AND".to_string(),
+                    rule: TableWindowFilterRule::Categorical {
+                        field: "batch".to_string(),
+                        selected: vec!["B0".to_string(), "B1".to_string()],
+                        exclude: false,
+                    },
+                }],
+                elements: vec![
+                    GraphElementRequest {
+                        kind: "points".to_string(),
+                        summary_stat: "none".to_string(),
+                    },
+                    GraphElementRequest {
+                        kind: "histogram".to_string(),
+                        summary_stat: "none".to_string(),
+                    },
+                    GraphElementRequest {
+                        kind: "heatmap".to_string(),
+                        summary_stat: "none".to_string(),
+                    },
+                    GraphElementRequest {
+                        kind: "boxplot".to_string(),
+                        summary_stat: "none".to_string(),
+                    },
+                    GraphElementRequest {
+                        kind: "summary".to_string(),
+                        summary_stat: "mean".to_string(),
+                    },
+                ],
+                sampling: GraphSampling::Full,
+                viewport: GraphViewport {
+                    width: 1400,
+                    height: 900,
+                },
+            }
+        }
+
+        fn seed_faceted_dataset(state: &AppState, dataset_id: &str) {
+            let db = state.db.lock().expect("db lock");
+            db.create_empty_table(
+                dataset_id,
+                "Faceted Graph Dataset",
+                &[
+                    "region".into(),
+                    "segment".into(),
+                    "facet_x".into(),
+                    "facet_y".into(),
+                    "facet_z".into(),
+                    "facet_wrap".into(),
+                    "batch".into(),
+                    "zv".into(),
+                    "m1".into(),
+                    "m2".into(),
+                ],
+                &[
+                    "VARCHAR".into(),
+                    "VARCHAR".into(),
+                    "VARCHAR".into(),
+                    "VARCHAR".into(),
+                    "VARCHAR".into(),
+                    "VARCHAR".into(),
+                    "VARCHAR".into(),
+                    "DOUBLE".into(),
+                    "DOUBLE".into(),
+                    "DOUBLE".into(),
+                ],
+            )
+            .expect("create table");
+            let table = format!("dataset_{}", dataset_id.replace('-', "_"));
+            db.conn()
+                .execute(
+                    &format!(
+                        "INSERT INTO \"{table}\" (_row_id, region, segment, facet_x, facet_y, facet_z, facet_wrap, batch, zv, m1, m2) VALUES
+                         (1, 'North', 'S1', 'L', 'Top', 'Front', 'W1', 'B0', 10.0, 1.0, 100.0),
+                         (2, 'North', 'S1', 'R', 'Top', 'Front', 'W2', 'B1', 20.0, 2.0, 200.0),
+                         (3, 'South', 'S2', 'L', 'Bottom', 'Back', 'W1', 'B0', 30.0, 3.0, 300.0),
+                         (4, 'South', 'S2', 'R', 'Bottom', 'Back', 'W2', 'B1', 40.0, 4.0, 400.0)"
+                    ),
+                    [],
+                )
+                .expect("insert rows");
+            db.conn()
+                .execute(
+                    "UPDATE _meta_datasets SET row_count = 4 WHERE id = $1",
+                    params![dataset_id],
+                )
+                .expect("update row count");
+        }
 
         fn aggregate_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
             let mut request = build_request(dataset_id, generation);
@@ -1656,6 +2177,200 @@ mod tests {
         }
 
         #[test]
+        fn raw_chunks_emit_requested_role_vectors_and_melt_source_alignment() {
+            let state = AppState::new().expect("state");
+            let dataset_id = "agg-role-vectors";
+            seed_faceted_dataset(&state, dataset_id);
+
+            let service = GraphDataService::new(&state);
+            let request = faceted_request(dataset_id, 0);
+            let chunks = service.collect_for_test(&request).expect("chunks");
+
+            let first = chunks.first().expect("at least one chunk");
+            assert!(
+                first.header.role_vectors.contains_key("z"),
+                "expected z role vector descriptor"
+            );
+            assert!(
+                first.header.role_vectors.contains_key("source"),
+                "expected source role vector descriptor"
+            );
+            assert!(
+                first.header.role_vectors.contains_key("groupX"),
+                "expected groupX role vector descriptor"
+            );
+            assert!(
+                first.header.role_vectors.contains_key("groupY"),
+                "expected groupY role vector descriptor"
+            );
+            assert!(
+                first.header.role_vectors.contains_key("groupZ"),
+                "expected groupZ role vector descriptor"
+            );
+            assert!(
+                first.header.role_vectors.contains_key("wrap"),
+                "expected wrap role vector descriptor"
+            );
+
+            let source_desc = first
+                .header
+                .role_vectors
+                .get("source")
+                .expect("source role descriptor");
+            let source_codes = extract_u32_slice(first, source_desc);
+            assert_eq!(source_codes.len(), first.header.row_count);
+            let row_ids = extract_i64_slice(first, &first.header.row_ids);
+            assert_eq!(row_ids.len(), source_codes.len());
+
+            let z_desc = first
+                .header
+                .role_vectors
+                .get("z")
+                .expect("z role descriptor");
+            let z_values = extract_f64_slice(first, z_desc);
+            assert_eq!(z_values.len(), first.header.row_count);
+            assert!(
+                z_values.iter().all(|value| value.is_finite()),
+                "z role vector must contain finite values"
+            );
+
+            let facet_z_desc = first
+                .header
+                .role_vectors
+                .get("groupZ")
+                .expect("groupZ role descriptor");
+            let facet_z_codes = extract_u32_slice(first, facet_z_desc);
+            assert_eq!(facet_z_codes.len(), first.header.row_count);
+
+            let source_dictionary = first
+                .header
+                .dictionaries
+                .get("source")
+                .cloned()
+                .unwrap_or_default();
+            assert!(source_dictionary.iter().any(|value| value == "m1"));
+            assert!(source_dictionary.iter().any(|value| value == "m2"));
+
+            let facet_z_dictionary = first
+                .header
+                .dictionaries
+                .get("facetZ")
+                .cloned()
+                .unwrap_or_default();
+            assert!(facet_z_dictionary.iter().any(|value| value == "Front"));
+            assert!(facet_z_dictionary.iter().any(|value| value == "Back"));
+        }
+
+        #[test]
+        fn aggregate_packets_include_explicit_facet_and_group_dimensions() {
+            let state = AppState::new().expect("state");
+            let dataset_id = "agg-facet-dims";
+            seed_faceted_dataset(&state, dataset_id);
+
+            let service = GraphDataService::new(&state);
+            let request = faceted_request(dataset_id, 0);
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("aggregate packets");
+
+            let histogram = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::Histogram(value) => Some(value),
+                    _ => None,
+                })
+                .expect("histogram packet");
+            assert!(
+                histogram.bins.iter().all(|entry| entry.facet_x.is_some()),
+                "histogram bins must carry facet_x"
+            );
+            assert!(
+                histogram.bins.iter().all(|entry| entry.facet_y.is_some()),
+                "histogram bins must carry facet_y"
+            );
+            assert!(
+                histogram.bins.iter().all(|entry| entry.facet_z.is_some()),
+                "histogram bins must carry facet_z"
+            );
+            assert!(
+                histogram.bins.iter().all(|entry| entry.wrap.is_some()),
+                "histogram bins must carry wrap"
+            );
+
+            let heatmap = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::Heatmap(value) => Some(value),
+                    _ => None,
+                })
+                .expect("heatmap packet");
+            assert!(
+                heatmap.cells.iter().all(|entry| entry.facet_x.is_some()),
+                "heatmap cells must carry facet_x"
+            );
+            assert!(
+                heatmap.cells.iter().all(|entry| entry.facet_y.is_some()),
+                "heatmap cells must carry facet_y"
+            );
+            assert!(
+                heatmap.cells.iter().all(|entry| entry.facet_z.is_some()),
+                "heatmap cells must carry facet_z"
+            );
+            assert!(
+                heatmap.cells.iter().all(|entry| entry.wrap.is_some()),
+                "heatmap cells must carry wrap"
+            );
+
+            let boxplot = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::BoxPlot(value) => Some(value),
+                    _ => None,
+                })
+                .expect("boxplot packet");
+            assert!(
+                boxplot.entries.iter().all(|entry| entry.facet_x.is_some()),
+                "boxplot entries must carry facet_x"
+            );
+            assert!(
+                boxplot.entries.iter().all(|entry| entry.facet_y.is_some()),
+                "boxplot entries must carry facet_y"
+            );
+            assert!(
+                boxplot.entries.iter().all(|entry| entry.facet_z.is_some()),
+                "boxplot entries must carry facet_z"
+            );
+            assert!(
+                boxplot.entries.iter().all(|entry| entry.wrap.is_some()),
+                "boxplot entries must carry wrap"
+            );
+
+            let summary = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::Summary(value) => Some(value),
+                    _ => None,
+                })
+                .expect("summary packet");
+            assert!(
+                summary.summaries.iter().all(|entry| entry.facet_x.is_some()),
+                "summary entries must carry facet_x"
+            );
+            assert!(
+                summary.summaries.iter().all(|entry| entry.facet_y.is_some()),
+                "summary entries must carry facet_y"
+            );
+            assert!(
+                summary.summaries.iter().all(|entry| entry.facet_z.is_some()),
+                "summary entries must carry facet_z"
+            );
+            assert!(
+                summary.summaries.iter().all(|entry| entry.wrap.is_some()),
+                "summary entries must carry wrap"
+            );
+        }
+
+        #[test]
         fn boxplot_packet_emits_outliers_with_identity() {
             let state = AppState::new().expect("state");
             seed_dataset(&state, "agg-box", 200);
@@ -2187,6 +2902,32 @@ mod tests {
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&chunk.payload[offset..offset + 8]);
             result.push(i64::from_ne_bytes(bytes));
+            offset += 8;
+        }
+        result
+    }
+
+    fn extract_u32_slice(chunk: &GraphDataChunk, descriptor: &crate::models::graph_data::GraphTypedSliceDescriptor) -> Vec<u32> {
+        let mut result = Vec::new();
+        let mut offset = descriptor.offset;
+        let end = descriptor.offset + descriptor.byte_length;
+        while offset < end {
+            let mut bytes = [0u8; 4];
+            bytes.copy_from_slice(&chunk.payload[offset..offset + 4]);
+            result.push(u32::from_ne_bytes(bytes));
+            offset += 4;
+        }
+        result
+    }
+
+    fn extract_f64_slice(chunk: &GraphDataChunk, descriptor: &crate::models::graph_data::GraphTypedSliceDescriptor) -> Vec<f64> {
+        let mut result = Vec::new();
+        let mut offset = descriptor.offset;
+        let end = descriptor.offset + descriptor.byte_length;
+        while offset < end {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&chunk.payload[offset..offset + 8]);
+            result.push(f64::from_ne_bytes(bytes));
             offset += 8;
         }
         result

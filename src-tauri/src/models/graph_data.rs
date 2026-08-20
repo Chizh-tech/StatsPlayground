@@ -107,8 +107,15 @@ pub struct GraphChunkHeader {
     pub x_values: GraphTypedSliceDescriptor,
     pub y_values: GraphTypedSliceDescriptor,
     pub row_ids: GraphTypedSliceDescriptor,
+    pub z_values: Option<GraphTypedSliceDescriptor>,
     pub group_codes: Option<GraphTypedSliceDescriptor>,
     pub size_values: Option<GraphTypedSliceDescriptor>,
+    pub source_codes: Option<GraphTypedSliceDescriptor>,
+    pub facet_x_codes: Option<GraphTypedSliceDescriptor>,
+    pub facet_y_codes: Option<GraphTypedSliceDescriptor>,
+    pub facet_z_codes: Option<GraphTypedSliceDescriptor>,
+    pub wrap_codes: Option<GraphTypedSliceDescriptor>,
+    pub role_vectors: BTreeMap<String, GraphTypedSliceDescriptor>,
     pub x_encoding: GraphAxisEncoding,
     pub final_chunk: bool,
 }
@@ -124,8 +131,30 @@ impl GraphChunkHeader {
         if let Some(group_codes) = &self.group_codes {
             slices.push(group_codes);
         }
+        if let Some(z_values) = &self.z_values {
+            slices.push(z_values);
+        }
         if let Some(size_values) = &self.size_values {
             slices.push(size_values);
+        }
+        if let Some(source_codes) = &self.source_codes {
+            slices.push(source_codes);
+        }
+        if let Some(facet_x_codes) = &self.facet_x_codes {
+            slices.push(facet_x_codes);
+        }
+        if let Some(facet_y_codes) = &self.facet_y_codes {
+            slices.push(facet_y_codes);
+        }
+        if let Some(facet_z_codes) = &self.facet_z_codes {
+            slices.push(facet_z_codes);
+        }
+        if let Some(wrap_codes) = &self.wrap_codes {
+            slices.push(wrap_codes);
+        }
+
+        for descriptor in self.role_vectors.values() {
+            slices.push(descriptor);
         }
 
         for descriptor in self.validity_ranges.values() {
@@ -176,6 +205,9 @@ impl GraphChunkHeader {
         for pair in ranges.windows(2) {
             let prev = pair[0];
             let next = pair[1];
+            if prev == next {
+                continue;
+            }
             if prev.1 > next.0 {
                 return Err(format!(
                     "slice overlap detected between [{}..{}) and [{}..{})",
@@ -246,8 +278,15 @@ mod tests {
             x_values: GraphTypedSliceDescriptor::new(GraphPayloadType::F64, 0, 16),
             y_values: GraphTypedSliceDescriptor::new(GraphPayloadType::F64, 16, 16),
             row_ids: GraphTypedSliceDescriptor::new(GraphPayloadType::I64, 32, 16),
+            z_values: None,
             group_codes: Some(GraphTypedSliceDescriptor::new(GraphPayloadType::U32, 48, 8)),
             size_values: Some(GraphTypedSliceDescriptor::new(GraphPayloadType::F64, 56, 16)),
+            source_codes: None,
+            facet_x_codes: None,
+            facet_y_codes: None,
+            facet_z_codes: None,
+            wrap_codes: None,
+            role_vectors: std::collections::BTreeMap::new(),
             x_encoding: GraphAxisEncoding::Categorical,
             final_chunk: true,
         };
@@ -308,6 +347,10 @@ pub struct HistogramBin {
     pub group: Option<String>,
     pub category: Option<String>,
     pub source_column: Option<String>,
+    pub facet_x: Option<String>,
+    pub facet_y: Option<String>,
+    pub facet_z: Option<String>,
+    pub wrap: Option<String>,
     pub bin_start: f64,
     pub bin_end: f64,
     pub count: u64,
@@ -339,6 +382,10 @@ pub struct HeatmapCell {
     pub group: Option<String>,
     pub category: Option<String>,
     pub source_column: Option<String>,
+    pub facet_x: Option<String>,
+    pub facet_y: Option<String>,
+    pub facet_z: Option<String>,
+    pub wrap: Option<String>,
     pub x_bin_index: i64,
     pub y_bin_index: i64,
     pub x_bin_start: f64,
@@ -364,6 +411,10 @@ pub struct BoxPlotEntry {
     pub group: Option<String>,
     pub category: Option<String>,
     pub source_column: Option<String>,
+    pub facet_x: Option<String>,
+    pub facet_y: Option<String>,
+    pub facet_z: Option<String>,
+    pub wrap: Option<String>,
     pub count: u64,
     pub min: f64,
     pub q1: f64,
@@ -399,6 +450,10 @@ pub struct SummaryEntry {
     pub group: Option<String>,
     pub category: Option<String>,
     pub source_column: Option<String>,
+    pub facet_x: Option<String>,
+    pub facet_y: Option<String>,
+    pub facet_z: Option<String>,
+    pub wrap: Option<String>,
     pub count: u64,
     pub mean: f64,
     pub median: f64,

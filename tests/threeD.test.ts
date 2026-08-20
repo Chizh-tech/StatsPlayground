@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 
-import type { GraphTheme } from "../src/graphCore/theme";
-import type { GraphData, GraphSpec } from "../src/graphCore/types";
-import type { GraphDataFrame } from "../src/types/graphData";
+import type { GraphTheme } from "../src/graphCore/theme.ts";
+import type { GraphData, GraphSpec } from "../src/graphCore/types.ts";
+import type { GraphDataFrame } from "../src/types/graphData.ts";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: {
@@ -12,7 +12,7 @@ Object.defineProperty(globalThis, "localStorage", {
   },
 });
 
-const { build3DOption } = await import("../src/graphCore/threeD");
+const { build3DOption } = await import("../src/graphCore/threeD.ts");
 
 const theme: GraphTheme = {
   fgPrimary: "#111111",

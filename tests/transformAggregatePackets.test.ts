@@ -84,6 +84,72 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
 }
 
 {
+  const throwingRows = new Proxy([] as unknown[][], {
+    get(_target, prop) {
+      if (prop === "length") return 2;
+      throw new Error("frame-backed panel descriptor must not read legacy rows");
+    },
+  });
+
+  const data = baseData(["x", "y", "wrapCol"], throwingRows);
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "x", type: "continuous" },
+      y: { name: "y", type: "continuous" },
+      wrap: { name: "wrapCol", type: "nominal" },
+    },
+    elements: [{ kind: "points", enabled: true, options: { summaryStat: "none" } }],
+  };
+
+  const frame: GraphDataFrame = {
+    requestId: "req-wrap-roles",
+    datasetId: "ds-wrap-roles",
+    generation: 1,
+    sourceRows: 2,
+    processedRows: 2,
+    sampling: { mode: "full" },
+    dictionaries: {
+      source: ["m2", "m1"],
+      wrap: ["W1", "W2"],
+    },
+    extents: {},
+    aggregates: [],
+    rawChunks: [
+      {
+        chunkIndex: 0,
+        rowOffset: 0,
+        rowCount: 2,
+        xValues: new Float64Array([1, 2]),
+        yValues: new Float64Array([10, 20]),
+        rowIds: new BigInt64Array([101n, 102n]),
+        roleVectors: {
+          source: new Uint32Array([1, 0]),
+          wrap: new Uint32Array([0, 1]),
+        },
+        validity: {
+          x: new Uint8Array([0b00000011]),
+          y: new Uint8Array([0b00000011]),
+          source: new Uint8Array([0b00000011]),
+          wrap: new Uint8Array([0b00000011]),
+        },
+      },
+    ],
+  };
+
+  const built = buildGraph(spec, data, theme, undefined, frame);
+  const wrapPanel = built.panels.find((panel) => panel.title.includes("W2"));
+  assert.ok(wrapPanel, "expected wrapped panel for W2 facet value");
+
+  const sourceByRowId = wrapPanel?.rawPoints?.sourceByRowId;
+  assert.equal(sourceByRowId?.get(101n), "m1");
+  assert.equal(sourceByRowId?.get(102n), "m2");
+
+  const facetMask = wrapPanel?.rawPoints?.chunks[0]?.facetMask;
+  assert.ok(facetMask, "facet mask must be emitted for wrapped panel");
+  assert.equal(facetMask?.[0], 0b00000010);
+}
+
+{
   const data = baseData(["cat", "v"], []);
   const frame = baseFrame([
     {

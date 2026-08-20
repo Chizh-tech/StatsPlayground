@@ -158,7 +158,9 @@ function toRawChunk(chunk: DecodedGraphChunk): DecodedRawPointChunk {
     sourceCodes: chunk.sourceCodes,
     facetXCodes: chunk.facetXCodes,
     facetYCodes: chunk.facetYCodes,
+    facetZCodes: chunk.facetZCodes,
     wrapCodes: chunk.wrapCodes,
+    roleVectors: chunk.roleVectors,
     validity: chunk.validity,
   };
 }
@@ -490,6 +492,7 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
   }
 
   addField("groupX", item.encoding.groupX?.name);
+    addField("groupZ", item.encoding.groupZ?.name);
   addField("groupY", item.encoding.groupY?.name);
   addField("wrap", item.encoding.wrap?.name);
 

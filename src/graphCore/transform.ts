@@ -6325,10 +6325,12 @@ function buildFrameBackedRawDescriptor(
   if (sourceDict && sourceDict.length > 0) {
     sourceByRowId = new Map<bigint, string>();
     for (const chunk of frame.rawChunks) {
-      if (!chunk.sourceCodes) continue;
-      const n = Math.min(chunk.rowIds.length, chunk.sourceCodes.length);
+      const sourceCodes = chunk.sourceCodes
+        ?? (chunk.roleVectors?.source instanceof Uint32Array ? chunk.roleVectors.source : undefined);
+      if (!sourceCodes) continue;
+      const n = Math.min(chunk.rowIds.length, sourceCodes.length);
       for (let row = 0; row < n; row += 1) {
-        const sourceCode = chunk.sourceCodes[row] >>> 0;
+        const sourceCode = sourceCodes[row] >>> 0;
         const source = sourceDict[sourceCode] ?? "";
         if (!source) continue;
         sourceByRowId.set(chunk.rowIds[row], source);
@@ -6342,20 +6344,26 @@ function buildFrameBackedRawDescriptor(
   ): boolean => {
     if (!panelFacet) return true;
     if (panelFacet.groupXValue !== null) {
-      if (!chunk.facetXCodes || !bitIsSet(chunk.validity.facetX, row)) return false;
-      const code = chunk.facetXCodes[row] >>> 0;
+      const facetXCodes = chunk.facetXCodes
+        ?? (chunk.roleVectors?.groupX instanceof Uint32Array ? chunk.roleVectors.groupX : undefined);
+      if (!facetXCodes || !bitIsSet(chunk.validity.facetX, row)) return false;
+      const code = facetXCodes[row] >>> 0;
       const label = frame.dictionaries.facetX?.[code];
       if (label !== panelFacet.groupXValue) return false;
     }
     if (panelFacet.groupYValue !== null) {
-      if (!chunk.facetYCodes || !bitIsSet(chunk.validity.facetY, row)) return false;
-      const code = chunk.facetYCodes[row] >>> 0;
+      const facetYCodes = chunk.facetYCodes
+        ?? (chunk.roleVectors?.groupY instanceof Uint32Array ? chunk.roleVectors.groupY : undefined);
+      if (!facetYCodes || !bitIsSet(chunk.validity.facetY, row)) return false;
+      const code = facetYCodes[row] >>> 0;
       const label = frame.dictionaries.facetY?.[code];
       if (label !== panelFacet.groupYValue) return false;
     }
     if (panelFacet.wrapValue != null) {
-      if (!chunk.wrapCodes || !bitIsSet(chunk.validity.wrap, row)) return false;
-      const code = chunk.wrapCodes[row] >>> 0;
+      const wrapCodes = chunk.wrapCodes
+        ?? (chunk.roleVectors?.wrap instanceof Uint32Array ? chunk.roleVectors.wrap : undefined);
+      if (!wrapCodes || !bitIsSet(chunk.validity.wrap, row)) return false;
+      const code = wrapCodes[row] >>> 0;
       const label = frame.dictionaries.wrap?.[code];
       if (label !== panelFacet.wrapValue) return false;
     }

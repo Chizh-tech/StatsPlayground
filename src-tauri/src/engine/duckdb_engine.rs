@@ -1131,6 +1131,11 @@ impl DuckDbEngine {
         let x_column = role_to_column.get("x").cloned();
         let group_column = role_to_column.get("group").cloned();
         let size_column = role_to_column.get("size").cloned();
+        let z_column = role_to_column.get("z").cloned();
+        let group_x_column = role_to_column.get("groupx").cloned();
+        let group_y_column = role_to_column.get("groupy").cloned();
+        let group_z_column = role_to_column.get("groupz").cloned();
+        let wrap_column = role_to_column.get("wrap").cloned();
 
         let mut multi_y_columns = request
             .fields
@@ -1163,6 +1168,21 @@ impl DuckDbEngine {
             validate_column(column)?;
         }
         if let Some(column) = &size_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &z_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &group_x_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &group_y_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &group_z_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &wrap_column {
             validate_column(column)?;
         }
         for column in &multi_y_columns {
@@ -1233,6 +1253,26 @@ impl DuckDbEngine {
             .as_ref()
             .map(|column| Self::quote_identifier(column))
             .unwrap_or_else(|| "NULL".to_string());
+        let z_expr = z_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let group_x_expr = group_x_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let group_y_expr = group_y_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let group_z_expr = group_z_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let wrap_expr = wrap_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
         let strata_select_sql = if sampling_strata_select_sql.is_empty() {
             String::new()
         } else {
@@ -1244,7 +1284,7 @@ impl DuckDbEngine {
             let mut values = Vec::with_capacity(filter_values.len() * multi_y_columns.len() + multi_y_columns.len());
             for column in &multi_y_columns {
                 let branch = format!(
-                    "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size{strata_select}, ? AS {source_col} FROM {table_name} {where_clause}",
+                    "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, CAST({z_expr} AS DOUBLE) AS __sp_z, {group_x_expr} AS __sp_groupx, {group_y_expr} AS __sp_groupy, {group_z_expr} AS __sp_groupz, {wrap_expr} AS __sp_wrap{strata_select}, ? AS {source_col} FROM {table_name} {where_clause}",
                     y_col = Self::quote_identifier(column),
                     source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
                     strata_select = strata_select_sql,
@@ -1265,7 +1305,7 @@ impl DuckDbEngine {
                 y_column.clone()
             };
             let sql = format!(
-                "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size{strata_select}, ? AS {source_col} FROM {table_name} {where_clause}",
+                "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, CAST({z_expr} AS DOUBLE) AS __sp_z, {group_x_expr} AS __sp_groupx, {group_y_expr} AS __sp_groupy, {group_z_expr} AS __sp_groupz, {wrap_expr} AS __sp_wrap{strata_select}, ? AS {source_col} FROM {table_name} {where_clause}",
                 y_col = Self::quote_identifier(&source_col),
                 source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
                 strata_select = strata_select_sql,
@@ -1299,7 +1339,7 @@ impl DuckDbEngine {
                                ) AS __sp_rank
                         FROM __sp_source
                       )
-                      SELECT \"_row_id\", __sp_x, __sp_y, __sp_group, __sp_size, {source_col}
+                      SELECT \"_row_id\", __sp_x, __sp_y, __sp_group, __sp_size, __sp_z, __sp_groupx, __sp_groupy, __sp_groupz, __sp_wrap, {source_col}
                       FROM __sp_ranked
                       WHERE __sp_rank <= CASE
                         WHEN __sp_total_rows <= {sample_size} THEN __sp_stratum_rows
@@ -1321,10 +1361,19 @@ impl DuckDbEngine {
         let mut projected_columns = Vec::new();
         let mut projected_column_types = Vec::new();
 
+        let mut push_projected = |expr: String, name: String, column_type: String| {
+            if projected_columns.iter().any(|existing| existing == &name) {
+                return;
+            }
+            projection_select_items.push(expr);
+            projected_columns.push(name);
+            projected_column_types.push(column_type);
+        };
+
         let x_public = x_column.clone().unwrap_or_else(|| "__sp_x".to_string());
-        projection_select_items.push(format!("__sp_x AS {}", Self::quote_identifier(&x_public)));
-        projected_columns.push(x_public.clone());
-        projected_column_types.push(
+        push_projected(
+            format!("__sp_x AS {}", Self::quote_identifier(&x_public)),
+            x_public,
             x_column
                 .as_ref()
                 .and_then(|column| allowed_columns.get(column.as_str()).copied())
@@ -1337,14 +1386,16 @@ impl DuckDbEngine {
         } else {
             y_column.clone()
         };
-        projection_select_items.push(format!("__sp_y AS {}", Self::quote_identifier(&y_public)));
-        projected_columns.push(y_public);
-        projected_column_types.push("DOUBLE".to_string());
+        push_projected(
+            format!("__sp_y AS {}", Self::quote_identifier(&y_public)),
+            y_public,
+            "DOUBLE".to_string(),
+        );
 
         if let Some(column) = group_column.clone() {
-            projection_select_items.push(format!("__sp_group AS {}", Self::quote_identifier(&column)));
-            projected_columns.push(column.clone());
-            projected_column_types.push(
+            push_projected(
+                format!("__sp_group AS {}", Self::quote_identifier(&column)),
+                column.clone(),
                 allowed_columns
                     .get(column.as_str())
                     .copied()
@@ -1354,9 +1405,9 @@ impl DuckDbEngine {
         }
 
         if let Some(column) = size_column.clone() {
-            projection_select_items.push(format!("__sp_size AS {}", Self::quote_identifier(&column)));
-            projected_columns.push(column.clone());
-            projected_column_types.push(
+            push_projected(
+                format!("__sp_size AS {}", Self::quote_identifier(&column)),
+                column.clone(),
                 allowed_columns
                     .get(column.as_str())
                     .copied()
@@ -1365,14 +1416,76 @@ impl DuckDbEngine {
             );
         }
 
+        if let Some(column) = z_column.clone() {
+            push_projected(
+                format!("__sp_z AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("DOUBLE")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = group_x_column.clone() {
+            push_projected(
+                format!("__sp_groupx AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("VARCHAR")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = group_y_column.clone() {
+            push_projected(
+                format!("__sp_groupy AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("VARCHAR")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = group_z_column.clone() {
+            push_projected(
+                format!("__sp_groupz AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("VARCHAR")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = wrap_column.clone() {
+            push_projected(
+                format!("__sp_wrap AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("VARCHAR")
+                    .to_string(),
+            );
+        }
+
         if melt_active {
-            projection_select_items.push(format!(
-                "{} AS {}",
-                Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
-                Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN)
-            ));
-            projected_columns.push(GRAPH_VIRTUAL_SOURCE_COLUMN.to_string());
-            projected_column_types.push(source_column_type.clone());
+            push_projected(
+                format!(
+                    "{} AS {}",
+                    Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                    Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN)
+                ),
+                GRAPH_VIRTUAL_SOURCE_COLUMN.to_string(),
+                source_column_type,
+            );
         }
 
         Ok(GraphQueryPlan {
@@ -1480,6 +1593,10 @@ impl DuckDbEngine {
                       CAST(__sp_group AS VARCHAR) AS grp,
                       CAST(__sp_x AS VARCHAR) AS cat,
                                             CAST({source_col} AS VARCHAR) AS src,
+                                            CAST(__sp_groupx AS VARCHAR) AS facet_x,
+                                            CAST(__sp_groupy AS VARCHAR) AS facet_y,
+                                            CAST(__sp_groupz AS VARCHAR) AS facet_z,
+                                            CAST(__sp_wrap AS VARCHAR) AS wrp,
                       __sp_y AS y
                     FROM __sp_source
                     WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
@@ -1488,15 +1605,19 @@ impl DuckDbEngine {
                    grp,
                    cat,
                    src,
+                                     facet_x,
+                                     facet_y,
+                                     facet_z,
+                                     wrp,
                    CASE
                                          WHEN ? <= 0 THEN 0
                                          WHEN y = ? THEN ? - 1
                                          ELSE CAST(FLOOR((y - ?) / ?) AS BIGINT)
                    END AS bin_idx,
-                   COUNT(*) AS cnt
+                                     COUNT(*) AS cnt
                  FROM __sp_valid
-                 GROUP BY grp, cat, src, bin_idx
-                 ORDER BY grp, cat, src, bin_idx",
+                                 GROUP BY grp, cat, src, facet_x, facet_y, facet_z, wrp, bin_idx
+                                 ORDER BY grp, cat, src, facet_x, facet_y, facet_z, wrp, bin_idx",
                                 source = plan.source_sql,
                                 source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
             );
@@ -1514,14 +1635,22 @@ impl DuckDbEngine {
                 let group: Option<String> = row.get(0)?;
                 let category: Option<String> = row.get(1)?;
                 let source_column: Option<String> = row.get(2)?;
-                let bin_index: i64 = row.get(3)?;
-                let count: i64 = row.get(4)?;
+                let facet_x: Option<String> = row.get(3)?;
+                let facet_y: Option<String> = row.get(4)?;
+                let facet_z: Option<String> = row.get(5)?;
+                let wrap: Option<String> = row.get(6)?;
+                let bin_index: i64 = row.get(7)?;
+                let count: i64 = row.get(8)?;
                 let clamped_index = bin_index.clamp(0, bin_count_i64 - 1) as f64;
                 let start = min_y.unwrap_or(0.0) + clamped_index * bin_width;
                 bins.push(HistogramBin {
                     group,
                     category,
                     source_column,
+                    facet_x,
+                    facet_y,
+                    facet_z,
+                    wrap,
                     bin_start: start,
                     bin_end: start + bin_width,
                     count: u64::try_from(count)
@@ -1597,6 +1726,10 @@ impl DuckDbEngine {
                      CAST(__sp_group AS VARCHAR) AS grp,
                      CAST(__sp_x AS VARCHAR) AS cat,
                      CAST({source_col} AS VARCHAR) AS src,
+                                         CAST(__sp_groupx AS VARCHAR) AS facet_x,
+                                         CAST(__sp_groupy AS VARCHAR) AS facet_y,
+                                         CAST(__sp_groupz AS VARCHAR) AS facet_z,
+                                         CAST(__sp_wrap AS VARCHAR) AS wrp,
                                          TRY_CAST(__sp_x AS DOUBLE) AS x,
                      __sp_y AS y
                    FROM __sp_source
@@ -1607,6 +1740,10 @@ impl DuckDbEngine {
                    grp,
                    cat,
                    src,
+                                     facet_x,
+                                     facet_y,
+                                     facet_z,
+                                     wrp,
                    CASE
                      WHEN ? <= 0 THEN 0
                      WHEN x = ? THEN ? - 1
@@ -1617,10 +1754,10 @@ impl DuckDbEngine {
                      WHEN y = ? THEN ? - 1
                      ELSE CAST(FLOOR((y - ?) / ?) AS BIGINT)
                    END AS y_idx,
-                   COUNT(*) AS cnt
+                                     COUNT(*) AS cnt
                  FROM __sp_valid
-                 GROUP BY grp, cat, src, x_idx, y_idx
-                 ORDER BY grp, cat, src, x_idx, y_idx",
+                                 GROUP BY grp, cat, src, facet_x, facet_y, facet_z, wrp, x_idx, y_idx
+                                 ORDER BY grp, cat, src, facet_x, facet_y, facet_z, wrp, x_idx, y_idx",
                 source = plan.source_sql,
                 source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
             );
@@ -1643,9 +1780,13 @@ impl DuckDbEngine {
                 let group: Option<String> = row.get(0)?;
                 let category: Option<String> = row.get(1)?;
                 let source_column: Option<String> = row.get(2)?;
-                let x_bin_index: i64 = row.get(3)?;
-                let y_bin_index: i64 = row.get(4)?;
-                let count: i64 = row.get(5)?;
+                let facet_x: Option<String> = row.get(3)?;
+                let facet_y: Option<String> = row.get(4)?;
+                let facet_z: Option<String> = row.get(5)?;
+                let wrap: Option<String> = row.get(6)?;
+                let x_bin_index: i64 = row.get(7)?;
+                let y_bin_index: i64 = row.get(8)?;
+                let count: i64 = row.get(9)?;
                 let x_idx = x_bin_index.clamp(0, x_bin_count_i64 - 1);
                 let y_idx = y_bin_index.clamp(0, y_bin_count_i64 - 1);
                 let x_start = min_x.unwrap_or(0.0) + (x_idx as f64) * x_bin_width;
@@ -1654,6 +1795,10 @@ impl DuckDbEngine {
                     group,
                     category,
                     source_column,
+                    facet_x,
+                    facet_y,
+                    facet_z,
+                    wrap,
                     x_bin_index: x_idx,
                     y_bin_index: y_idx,
                     x_bin_start: x_start,
@@ -1701,6 +1846,10 @@ impl DuckDbEngine {
                  CAST(__sp_group AS VARCHAR) AS grp,
                  CAST(__sp_x AS VARCHAR) AS cat,
                                  CAST({source_col} AS VARCHAR) AS src,
+                                 CAST(__sp_groupx AS VARCHAR) AS facet_x,
+                                 CAST(__sp_groupy AS VARCHAR) AS facet_y,
+                                 CAST(__sp_groupz AS VARCHAR) AS facet_z,
+                                 CAST(__sp_wrap AS VARCHAR) AS wrp,
                  __sp_y AS y
                FROM __sp_source
                WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
@@ -1710,6 +1859,10 @@ impl DuckDbEngine {
                                  grp,
                                  cat,
                                  src,
+                                 facet_x,
+                                 facet_y,
+                                 facet_z,
+                                 wrp,
                                  COUNT(*) AS n,
                                  MIN(y) AS min_y,
                                  quantile_cont(y, 0.25) AS q1,
@@ -1717,13 +1870,17 @@ impl DuckDbEngine {
                                  quantile_cont(y, 0.75) AS q3,
                                  MAX(y) AS max_y
                              FROM __sp_valid
-                             GROUP BY grp, cat, src
+                             GROUP BY grp, cat, src, facet_x, facet_y, facet_z, wrp
                          ),
                          __sp_whiskers AS (
                              SELECT
                                  s.grp,
                                  s.cat,
                                  s.src,
+                                 s.facet_x,
+                                 s.facet_y,
+                                 s.facet_z,
+                                 s.wrp,
                                  MIN(v.y) FILTER (WHERE v.y >= (s.q1 - 1.5 * (s.q3 - s.q1)) AND v.y <= (s.q3 + 1.5 * (s.q3 - s.q1))) AS whisker_low,
                                  MAX(v.y) FILTER (WHERE v.y >= (s.q1 - 1.5 * (s.q3 - s.q1)) AND v.y <= (s.q3 + 1.5 * (s.q3 - s.q1))) AS whisker_high
                              FROM __sp_stats s
@@ -1731,12 +1888,20 @@ impl DuckDbEngine {
                                  ON v.grp IS NOT DISTINCT FROM s.grp
                                 AND v.cat IS NOT DISTINCT FROM s.cat
                                 AND v.src IS NOT DISTINCT FROM s.src
-                             GROUP BY s.grp, s.cat, s.src
+                                AND v.facet_x IS NOT DISTINCT FROM s.facet_x
+                                AND v.facet_y IS NOT DISTINCT FROM s.facet_y
+                                AND v.facet_z IS NOT DISTINCT FROM s.facet_z
+                                AND v.wrp IS NOT DISTINCT FROM s.wrp
+                             GROUP BY s.grp, s.cat, s.src, s.facet_x, s.facet_y, s.facet_z, s.wrp
              )
              SELECT
                              s.grp,
                              s.cat,
                              s.src,
+                             s.facet_x,
+                             s.facet_y,
+                             s.facet_z,
+                             s.wrp,
                              s.n,
                              s.min_y,
                              s.q1,
@@ -1750,35 +1915,66 @@ impl DuckDbEngine {
                              ON w.grp IS NOT DISTINCT FROM s.grp
                             AND w.cat IS NOT DISTINCT FROM s.cat
                             AND w.src IS NOT DISTINCT FROM s.src
-                         ORDER BY s.grp, s.cat, s.src",
+                                     AND w.facet_x IS NOT DISTINCT FROM s.facet_x
+                                     AND w.facet_y IS NOT DISTINCT FROM s.facet_y
+                                     AND w.facet_z IS NOT DISTINCT FROM s.facet_z
+                                     AND w.wrp IS NOT DISTINCT FROM s.wrp
+                                 ORDER BY s.grp, s.cat, s.src, s.facet_x, s.facet_y, s.facet_z, s.wrp",
                         source = plan.source_sql,
                         source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
         );
 
         let mut entries = Vec::new();
-                let mut entry_index_by_key: std::collections::HashMap<(Option<String>, Option<String>, Option<String>), usize> = std::collections::HashMap::new();
+        let mut entry_index_by_key: std::collections::HashMap<
+            (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ),
+            usize,
+        > = std::collections::HashMap::new();
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query(params_from_iter(plan.source_values.iter()))?;
         while let Some(row) = rows.next()? {
             let group: Option<String> = row.get(0)?;
             let category: Option<String> = row.get(1)?;
             let source_column: Option<String> = row.get(2)?;
-            let count: i64 = row.get(3)?;
-            let min: f64 = row.get(4)?;
-            let q1: f64 = row.get(5)?;
-            let median: f64 = row.get(6)?;
-            let q3: f64 = row.get(7)?;
-            let max: f64 = row.get(8)?;
-            let whisker_low: f64 = row.get(9)?;
-            let whisker_high: f64 = row.get(10)?;
+            let facet_x: Option<String> = row.get(3)?;
+            let facet_y: Option<String> = row.get(4)?;
+            let facet_z: Option<String> = row.get(5)?;
+            let wrap: Option<String> = row.get(6)?;
+            let count: i64 = row.get(7)?;
+            let min: f64 = row.get(8)?;
+            let q1: f64 = row.get(9)?;
+            let median: f64 = row.get(10)?;
+            let q3: f64 = row.get(11)?;
+            let max: f64 = row.get(12)?;
+            let whisker_low: f64 = row.get(13)?;
+            let whisker_high: f64 = row.get(14)?;
 
-            let key = (group.clone(), category.clone(), source_column.clone());
+            let key = (
+                group.clone(),
+                category.clone(),
+                source_column.clone(),
+                facet_x.clone(),
+                facet_y.clone(),
+                facet_z.clone(),
+                wrap.clone(),
+            );
             entry_index_by_key.insert(key, entries.len());
 
             entries.push(BoxPlotEntry {
                 group,
                 category,
                 source_column,
+                facet_x,
+                facet_y,
+                facet_z,
+                wrap,
                 count: u64::try_from(count)
                     .map_err(|_| AppError::Database("boxplot count is negative".into()))?,
                 min,
@@ -1800,6 +1996,10 @@ impl DuckDbEngine {
                                  CAST(__sp_group AS VARCHAR) AS grp,
                                  CAST(__sp_x AS VARCHAR) AS cat,
                                  CAST({source_col} AS VARCHAR) AS src,
+                                 CAST(__sp_groupx AS VARCHAR) AS facet_x,
+                                 CAST(__sp_groupy AS VARCHAR) AS facet_y,
+                                 CAST(__sp_groupz AS VARCHAR) AS facet_z,
+                                 CAST(__sp_wrap AS VARCHAR) AS wrp,
                                  __sp_y AS y
                              FROM __sp_source
                              WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
@@ -1809,19 +2009,27 @@ impl DuckDbEngine {
                                  grp,
                                  cat,
                                  src,
+                                 facet_x,
+                                 facet_y,
+                                 facet_z,
+                                 wrp,
                                  quantile_cont(y, 0.25) - 1.5 * (quantile_cont(y, 0.75) - quantile_cont(y, 0.25)) AS lo,
                                  quantile_cont(y, 0.75) + 1.5 * (quantile_cont(y, 0.75) - quantile_cont(y, 0.25)) AS hi
                              FROM __sp_valid
-                             GROUP BY grp, cat, src
+                             GROUP BY grp, cat, src, facet_x, facet_y, facet_z, wrp
                          )
-                         SELECT v.grp, v.cat, v.src, v.row_id, v.y
+                         SELECT v.grp, v.cat, v.src, v.facet_x, v.facet_y, v.facet_z, v.wrp, v.row_id, v.y
                          FROM __sp_valid v
                          JOIN __sp_bounds b
                              ON v.grp IS NOT DISTINCT FROM b.grp
                             AND v.cat IS NOT DISTINCT FROM b.cat
                             AND v.src IS NOT DISTINCT FROM b.src
+                            AND v.facet_x IS NOT DISTINCT FROM b.facet_x
+                            AND v.facet_y IS NOT DISTINCT FROM b.facet_y
+                            AND v.facet_z IS NOT DISTINCT FROM b.facet_z
+                            AND v.wrp IS NOT DISTINCT FROM b.wrp
                          WHERE v.y < b.lo OR v.y > b.hi
-                         ORDER BY v.grp, v.cat, v.src, v.row_id",
+                         ORDER BY v.grp, v.cat, v.src, v.facet_x, v.facet_y, v.facet_z, v.wrp, v.row_id",
                         source = plan.source_sql,
                         source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
                 );
@@ -1832,9 +2040,13 @@ impl DuckDbEngine {
                         let group: Option<String> = row.get(0)?;
                         let category: Option<String> = row.get(1)?;
                         let source_column: Option<String> = row.get(2)?;
-                        let row_id: Option<i64> = row.get(3)?;
-                        let value: f64 = row.get(4)?;
-                        let key = (group, category, source_column.clone());
+                        let facet_x: Option<String> = row.get(3)?;
+                        let facet_y: Option<String> = row.get(4)?;
+                        let facet_z: Option<String> = row.get(5)?;
+                        let wrap: Option<String> = row.get(6)?;
+                        let row_id: Option<i64> = row.get(7)?;
+                        let value: f64 = row.get(8)?;
+                        let key = (group, category, source_column.clone(), facet_x, facet_y, facet_z, wrap);
                         if let Some(entry_index) = entry_index_by_key.get(&key).copied() {
                                 entries[entry_index].outliers.push(BoxPlotOutlier {
                                         value,
@@ -1865,14 +2077,18 @@ impl DuckDbEngine {
                  CAST(__sp_group AS VARCHAR) AS grp,
                  CAST(__sp_x AS VARCHAR) AS cat,
                                  CAST({source_col} AS VARCHAR) AS src,
+                                 CAST(__sp_groupx AS VARCHAR) AS facet_x,
+                                 CAST(__sp_groupy AS VARCHAR) AS facet_y,
+                                 CAST(__sp_groupz AS VARCHAR) AS facet_z,
+                                 CAST(__sp_wrap AS VARCHAR) AS wrp,
                  __sp_y AS y
                FROM __sp_source
                WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
              )
-                         SELECT grp, cat, src, COUNT(*) AS n, AVG(y) AS mean_y, quantile_cont(y, 0.50) AS median_y, COALESCE(stddev_samp(y), 0.0) AS std_y, MIN(y) AS min_y, MAX(y) AS max_y
+                                                 SELECT grp, cat, src, facet_x, facet_y, facet_z, wrp, COUNT(*) AS n, AVG(y) AS mean_y, quantile_cont(y, 0.50) AS median_y, COALESCE(stddev_samp(y), 0.0) AS std_y, MIN(y) AS min_y, MAX(y) AS max_y
              FROM __sp_valid
-             GROUP BY grp, cat, src
-             ORDER BY grp, cat, src",
+                         GROUP BY grp, cat, src, facet_x, facet_y, facet_z, wrp
+                         ORDER BY grp, cat, src, facet_x, facet_y, facet_z, wrp",
                         source = plan.source_sql,
                         source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
         );
@@ -1884,12 +2100,16 @@ impl DuckDbEngine {
             let group: Option<String> = row.get(0)?;
             let category: Option<String> = row.get(1)?;
             let source_column: Option<String> = row.get(2)?;
-            let count: i64 = row.get(3)?;
-            let mean: f64 = row.get(4)?;
-            let median: f64 = row.get(5)?;
-            let stddev: f64 = row.get(6)?;
-            let min: f64 = row.get(7)?;
-            let max: f64 = row.get(8)?;
+            let facet_x: Option<String> = row.get(3)?;
+            let facet_y: Option<String> = row.get(4)?;
+            let facet_z: Option<String> = row.get(5)?;
+            let wrap: Option<String> = row.get(6)?;
+            let count: i64 = row.get(7)?;
+            let mean: f64 = row.get(8)?;
+            let median: f64 = row.get(9)?;
+            let stddev: f64 = row.get(10)?;
+            let min: f64 = row.get(11)?;
+            let max: f64 = row.get(12)?;
             let n = u64::try_from(count)
                 .map_err(|_| AppError::Database("summary count is negative".into()))?;
             let margin = if n > 1 {
@@ -1902,6 +2122,10 @@ impl DuckDbEngine {
                 group,
                 category,
                 source_column,
+                facet_x,
+                facet_y,
+                facet_z,
+                wrap,
                 count: n,
                 mean,
                 median,
