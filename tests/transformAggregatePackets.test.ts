@@ -186,6 +186,189 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
 }
 
 {
+  const inaccessibleRows = new Proxy([] as unknown[][], {
+    get(target, prop, receiver) {
+      if (
+        prop === "length" ||
+        prop === Symbol.iterator ||
+        prop === "map" ||
+        prop === "forEach" ||
+        prop === "filter" ||
+        prop === "some"
+      ) {
+        throw new Error("frame-backed histogram must not access legacy rows when packet extents are malformed");
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+
+  const data = baseData(["cat", "v"], inaccessibleRows);
+  const frame = baseFrame([
+    {
+      kind: "histogram",
+      xColumn: "cat",
+      yColumn: "v",
+      groupColumn: null,
+      sourceColumn: null,
+      binCount: 2,
+      minValue: Number.NaN,
+      maxValue: Number.NaN,
+      missingCount: 0,
+      binWidth: Number.NaN,
+      totalCount: 2,
+      bins: [
+        { category: "A", binStart: Number.NaN, binEnd: Number.NaN, count: 1 },
+        { category: "B", binStart: Number.NaN, binEnd: Number.NaN, count: 1 },
+      ],
+    },
+  ]);
+
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "cat", type: "nominal" },
+      y: { name: "v", type: "continuous" },
+    },
+    elements: [{ kind: "histogram", enabled: true, options: { histStyle: "bar" } }],
+  };
+
+  assert.doesNotThrow(() => {
+    buildGraph(spec, data, theme, undefined, frame);
+  }, "malformed frame-backed histogram extents must not trigger legacy rows fallback reads");
+}
+
+{
+  const data = baseData(["x", "v", "grp"], []);
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "x", type: "continuous" },
+      y: { name: "v", type: "continuous" },
+      color: { name: "grp", type: "nominal" },
+    },
+    hiddenGroups: ["G"],
+    elements: [{ kind: "histogram", enabled: true, options: { histStyle: "bar" } }],
+  };
+
+  const nonEmptyFrame = baseFrame([
+    {
+      kind: "histogram",
+      xColumn: "x",
+      yColumn: "v",
+      groupColumn: "grp",
+      sourceColumn: null,
+      binCount: 2,
+      minValue: 0,
+      maxValue: 2,
+      missingCount: 0,
+      binWidth: 1,
+      totalCount: 3,
+      bins: [
+        { group: "G", binStart: 0, binEnd: 1, count: 2 },
+        { group: "G", binStart: 1, binEnd: 2, count: 1 },
+      ],
+    },
+  ]);
+
+  const nonEmptyBuilt = buildGraph(spec, data, theme, undefined, nonEmptyFrame);
+  const nonEmptySeries = panelSeries(nonEmptyBuilt.panels[0].option as Record<string, unknown>);
+  assert.equal(
+    nonEmptySeries.some((entry) => String(entry.id ?? "").startsWith("__hist_packet_fallback_mode_a")),
+    false,
+    "non-empty packet must not synthesize mode-A fallback series",
+  );
+
+  const emptyFrame = baseFrame([
+    {
+      kind: "histogram",
+      xColumn: "x",
+      yColumn: "v",
+      groupColumn: "grp",
+      sourceColumn: null,
+      binCount: 2,
+      minValue: 0,
+      maxValue: 2,
+      missingCount: 0,
+      binWidth: 1,
+      totalCount: 0,
+      bins: [
+        { group: "G", binStart: 0, binEnd: 1, count: 2 },
+        { group: "G", binStart: 1, binEnd: 2, count: 1 },
+      ],
+    },
+  ]);
+
+  const emptyBuilt = buildGraph(spec, data, theme, undefined, emptyFrame);
+  const emptySeries = panelSeries(emptyBuilt.panels[0].option as Record<string, unknown>);
+  assert.equal(
+    emptySeries.some((entry) => String(entry.id ?? "").startsWith("__hist_packet_fallback_mode_a")),
+    true,
+    "empty packet may synthesize mode-A fallback series",
+  );
+}
+
+{
+  const data = baseData(["cat", "v", "grp"], []);
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "cat", type: "nominal" },
+      y: { name: "v", type: "continuous" },
+      color: { name: "grp", type: "nominal" },
+    },
+    hiddenGroups: ["__all__"],
+    elements: [
+      { kind: "histogram", enabled: true, options: { histStyle: "bar" } },
+      { kind: "points", enabled: true, options: { summaryStat: "mean" } },
+    ],
+  };
+
+  const nonEmptyFrame = baseFrame([
+    {
+      kind: "histogram",
+      xColumn: "cat",
+      yColumn: "v",
+      groupColumn: "grp",
+      sourceColumn: null,
+      binCount: 2,
+      minValue: 0,
+      maxValue: 2,
+      missingCount: 0,
+      binWidth: 1,
+      totalCount: 3,
+      bins: [
+        { category: "A", binStart: 0, binEnd: 1, count: 2 },
+        { category: "B", binStart: 1, binEnd: 2, count: 1 },
+      ],
+    },
+    {
+      kind: "summary",
+      xColumn: "cat",
+      yColumn: "v",
+      groupColumn: "grp",
+      sourceColumn: null,
+      summaries: [
+        {
+          category: "A",
+          group: "S",
+          count: 1,
+          mean: 1,
+          median: 1,
+          stddev: 0,
+          min: 1,
+          max: 1,
+        },
+      ],
+    },
+  ]);
+
+  const nonEmptyBuilt = buildGraph(spec, data, theme, undefined, nonEmptyFrame);
+  const nonEmptySeries = panelSeries(nonEmptyBuilt.panels[0].option as Record<string, unknown>);
+  assert.equal(
+    nonEmptySeries.some((entry) => String(entry.id ?? "").startsWith("__hist_packet_fallback_final_")),
+    false,
+    "non-empty packet must not synthesize final histogram fallback series",
+  );
+}
+
+{
   const data = baseData(["x", "y"], []);
   const spec: GraphSpec = {
     encoding: {

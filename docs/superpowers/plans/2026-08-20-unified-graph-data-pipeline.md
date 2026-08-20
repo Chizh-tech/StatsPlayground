@@ -665,3 +665,44 @@ Existing scale gates (`0/1/10/5000/300000`) remain intact.
 - `node --experimental-strip-types tests/rawPoints.test.ts` ✅
 - `npx tsc -b --pretty false` ✅
 - `npx vite build` ✅
+
+---
+
+## Fix Round 3 Report (2026-08-20)
+
+Scope: Graph Task 6 final Important issue in unified worktree (frame-backed histogram fallback isolation and gating).
+
+### Finding 1 (IMPORTANT) — Frame-backed malformed histogram extents no longer touch legacy rows
+
+- Removed the frame-backed extent fallback that scanned `data.rows` when histogram packet min/max and bin edges were non-finite.
+- Frame-backed histogram extent resolution now stays packet/axis-only:
+    - packet `minValue`/`maxValue` when finite,
+    - packet bin edges when finite,
+    - axis pins (`spec.yAxis.min/max`) when present,
+    - final safe span fallback (`[0, 1]`) when packet extents are malformed.
+- Legacy `GraphData` row scanning remains in a disjoint non-frame branch only.
+
+### Finding 2 (IMPORTANT) — Frame-backed synthetic histogram fallback gating tightened to `totalCount === 0`
+
+- Mode-A packet fallback (`__hist_packet_fallback_mode_a`) is now gated by `Number(histogramPacket.totalCount) === 0`.
+- Final frame-backed histogram fallback block no longer checks `data.rows.length === 0`; it is now gated by `Number(histogramPacket.totalCount) === 0`.
+- Result: non-empty packet style-generation failures are no longer masked by synthetic bars.
+
+### Added RED/GREEN coverage
+
+In `tests/transformAggregatePackets.test.ts`:
+
+- Added malformed packet extent guard with inaccessible/throwing rows proxy and `assert.doesNotThrow` to verify frame-backed histogram mode never accesses legacy rows.
+- Added mode-A fallback gating assertions:
+    - non-empty packet must not emit `__hist_packet_fallback_mode_a`;
+    - empty packet may emit `__hist_packet_fallback_mode_a`.
+- Added non-empty final-fallback guard assertion:
+    - non-empty packet must not emit `__hist_packet_fallback_final_*`.
+
+### Verification run
+
+- `node --experimental-strip-types tests/transformAggregatePackets.test.ts` ✅
+- `node --experimental-strip-types tests/graphDataPipeline.test.ts` ✅
+- `node --experimental-strip-types tests/rawPoints.test.ts` ✅
+- `npx tsc -b --pretty false` ✅
+- `npx vite build` ✅

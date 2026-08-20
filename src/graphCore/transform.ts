@@ -3351,6 +3351,18 @@ function buildSingleOption(
             }
           }
         }
+        if ((!Number.isFinite(lo) || !Number.isFinite(hi)) && frameBackedAggregateMode && histogramPacket) {
+          // Frame-backed histogram mode must never fall back to raw rows.
+          // Use axis pins when present, otherwise an explicit safe empty span.
+          const yPinMin = spec.yAxis?.min;
+          const yPinMax = spec.yAxis?.max;
+          if (Number.isFinite(yPinMin)) lo = yPinMin as number;
+          if (Number.isFinite(yPinMax)) hi = yPinMax as number;
+          if (!Number.isFinite(lo) && Number.isFinite(hi)) lo = (hi as number) - 1;
+          if (!Number.isFinite(hi) && Number.isFinite(lo)) hi = (lo as number) + 1;
+          if (!Number.isFinite(lo)) lo = 0;
+          if (!Number.isFinite(hi)) hi = 1;
+        }
         if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
           for (let i = 0; i < data.rows.length; i++) {
             if (isRowHidden(data.rows[i])) continue;
@@ -4384,7 +4396,7 @@ function buildSingleOption(
       const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), spec.autoSpecX, theme, "x");
       if (refCarrierX) series.push(refCarrierX);
 
-      if (packetModeA && series.length === 0) {
+      if (packetModeA && Number(histogramPacket.totalCount) === 0 && series.length === 0) {
         const fallbackRows = histogramPacket.bins
           .map((bin) => [
             (bin.binStart + bin.binEnd) / 2,
@@ -5167,9 +5179,9 @@ function buildSingleOption(
   }
 
   if (
-    data.rows.length === 0 &&
     frameBackedAggregateMode &&
     histogramPacket &&
+    Number(histogramPacket.totalCount) === 0 &&
     enabledElements.some((e) => e.kind === "histogram")
   ) {
     const hasHistogramSeries = series.some((entry: any) => {
