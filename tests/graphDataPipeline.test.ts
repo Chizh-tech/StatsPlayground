@@ -615,6 +615,30 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
   assert.deepEqual(roleColumns(activeMultiY, "multiY0"), ["my0"]);
   assert.deepEqual(roleColumns(activeMultiY, "multiY1"), ["my1"]);
 
+  const activeMultiBoth = deriveFields(
+    makeGraphBuilderItem({
+      encoding: {
+        x: { name: "x_stale", type: "continuous" },
+        y: { name: "y_stale", type: "continuous" },
+      },
+      multiX: [
+        { name: "mx0", type: "continuous" },
+        { name: "mx1", type: "continuous" },
+      ],
+      multiY: [
+        { name: "my0", type: "continuous" },
+        { name: "my1", type: "continuous" },
+        { name: "my2", type: "continuous" },
+      ],
+    }),
+  );
+
+  assert.deepEqual(roleColumns(activeMultiBoth, "multiX0"), ["mx0"]);
+  assert.deepEqual(roleColumns(activeMultiBoth, "multiX1"), ["mx1"]);
+  assert.deepEqual(roleColumns(activeMultiBoth, "multiY0"), ["my0"]);
+  assert.deepEqual(roleColumns(activeMultiBoth, "multiY1"), ["my1"]);
+  assert.deepEqual(roleColumns(activeMultiBoth, "multiY2"), ["my2"]);
+
   const staleInactiveMulti = deriveFields(
     makeGraphBuilderItem({
       encoding: {

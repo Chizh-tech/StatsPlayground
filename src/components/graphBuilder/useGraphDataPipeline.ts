@@ -420,12 +420,18 @@ function deriveActiveMultiFields(item: GraphBuilderItem): GraphFieldBinding[] {
     return [];
   }
 
-  const activeRole = xActive ? "multiX" : "multiY";
-  const activeFields = xActive ? multiX : multiY;
-  return activeFields.map((field, index) => ({
-    role: `${activeRole}${index}`,
-    column: field.name,
-  }));
+  const out: GraphFieldBinding[] = [];
+  if (xActive) {
+    for (let index = 0; index < multiX.length; index += 1) {
+      out.push({ role: `multiX${index}`, column: multiX[index].name });
+    }
+  }
+  if (yActive) {
+    for (let index = 0; index < multiY.length; index += 1) {
+      out.push({ role: `multiY${index}`, column: multiY[index].name });
+    }
+  }
+  return out;
 }
 
 export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {

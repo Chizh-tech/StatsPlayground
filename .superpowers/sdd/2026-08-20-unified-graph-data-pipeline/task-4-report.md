@@ -250,3 +250,46 @@ From reducer tests in `tests/graphDataPipeline.test.ts`:
 - Restored generated schema artifacts to avoid unrelated diffs:
   - `src-tauri/gen/schemas/desktop-schema.json`
   - `src-tauri/gen/schemas/windows-schema.json`
+
+## Fix Round 3
+
+### Scope
+
+- Closed the remaining Important finding in Task 4 field derivation:
+  - when both `multiX` and `multiY` were active (`length >= 2`), only one set was projected.
+- Kept change minimal and localized to `deriveActiveMultiFields`; no terminal protocol code was modified.
+
+### RED Evidence
+
+- Command: `node --experimental-strip-types tests/graphDataPipeline.test.ts`
+- Failing assertion before fix:
+
+```
+AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
++ actual - expected
+
++ []
+- [
+-   'my0'
+- ]
+
+    at file:///C:/Users/v-zhichuang/git/ashton2914/StatsPlayground-unified-graph-pipeline/tests/graphDataPipeline.test.ts:638:10
+```
+
+### Fix Implemented
+
+- Added focused test coverage for simultaneous active multi-axis bindings:
+  - `multiX` active and `multiY` active in the same item.
+  - Asserts all `multiX*` and `multiY*` role bindings are present exactly once.
+  - Confirms stable non-conflicting role namespaces (`multiX0..n`, `multiY0..n`).
+- Updated derivation behavior to merge both active lists:
+  - Include all `multiX` columns only when `multiX.length >= 2`.
+  - Include all `multiY` columns only when `multiY.length >= 2`.
+  - Preserve stale/inactive exclusion for single-entry lists.
+
+### GREEN Evidence
+
+- Command: `node --experimental-strip-types tests/graphDataPipeline.test.ts`
+  - Result: `graph-data fixture + decoder passed`
+- Command: `npx vite build`
+  - Result: `✓ built in 8.41s`
