@@ -6,6 +6,7 @@ use duckdb::types::{OrderedMap, TimeUnit, Value};
 
 use crate::error::AppError;
 use crate::engine::sql_query::{normalize_identifier, validate_read_only_query};
+use crate::models::graph_data::GraphDataRequest;
 use crate::models::table::{
     CellPosition, CellUpdate, DatasetMeta, SqlQueryResult, TableQueryResult, TableWindowFilterRule,
     TableWindowRequest, TableWindowResult,
@@ -15,6 +16,12 @@ use crate::models::tabulate::{StatisticKind, TabulateRequest, TabulateResult, Ta
 /// DuckDB engine wrapper
 pub struct DuckDbEngine {
     conn: Connection,
+}
+
+pub struct GraphProjectionStats {
+    pub source_rows: u64,
+    pub projected_columns: Vec<String>,
+    pub projected_column_types: Vec<String>,
 }
 
 struct MaterializedQuery {
@@ -986,6 +993,126 @@ impl DuckDbEngine {
             .query_map(params![search, limit], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(values)
+    }
+
+    pub fn stream_graph_projection_rows<F>(
+        &self,
+        request: &GraphDataRequest,
+        include_row_id: bool,
+        mut on_row: F,
+    ) -> Result<GraphProjectionStats, AppError>
+    where
+        F: FnMut(Option<i64>, Vec<Value>) -> Result<bool, AppError>,
+    {
+        let current_generation = self.get_dataset_generation(&request.dataset_id)?;
+        if current_generation != request.generation {
+            return Err(AppError::InvalidParam(format!(
+                "stale dataset generation: expected {current_generation}, received {}",
+                request.generation
+            )));
+        }
+
+        let user_columns = self.get_user_columns(&request.dataset_id)?;
+        let allowed_columns = user_columns
+            .iter()
+            .map(|(name, column_type)| (name.as_str(), column_type.as_str()))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let mut projected_columns = Vec::new();
+        let mut projected_column_types = Vec::new();
+        let mut seen_columns: HashSet<String> = HashSet::new();
+        for field in &request.fields {
+            let column_name = field.column.trim();
+            if column_name.is_empty() {
+                return Err(AppError::InvalidParam(
+                    "graph field column must not be blank".to_string(),
+                ));
+            }
+
+            let Some(column_type) = allowed_columns.get(column_name) else {
+                return Err(AppError::InvalidParam(format!(
+                    "unknown graph column: {column_name}"
+                )));
+            };
+
+            if seen_columns.insert(column_name.to_ascii_lowercase()) {
+                projected_columns.push(column_name.to_string());
+                projected_column_types.push((*column_type).to_string());
+            }
+        }
+
+        if projected_columns.is_empty() {
+            return Err(AppError::InvalidParam(
+                "graph request must include at least one field".to_string(),
+            ));
+        }
+
+        let (where_clause, filter_values) =
+            Self::compile_table_window_filters(&request.filters, &allowed_columns)?;
+        let table_name = Self::quote_identifier(&Self::internal_table_name(&request.dataset_id));
+
+        let count_sql = format!("SELECT COUNT(*) FROM {table_name} {where_clause}");
+        let source_rows: i64 = self.conn.query_row(
+            &count_sql,
+            params_from_iter(filter_values.iter()),
+            |row| row.get(0),
+        )?;
+        let source_rows = u64::try_from(source_rows)
+            .map_err(|_| AppError::Database("graph source row count is negative".into()))?;
+
+        let select_items = projected_columns
+            .iter()
+            .zip(projected_column_types.iter())
+            .map(|(column, column_type)| {
+                let quoted = Self::quote_identifier(column);
+                let normalized_type = column_type.to_ascii_uppercase();
+                if normalized_type.starts_with("DATE")
+                    || normalized_type.starts_with("TIME")
+                    || normalized_type.starts_with("INTERVAL")
+                {
+                    format!("CAST({quoted} AS VARCHAR) AS {quoted}")
+                } else {
+                    quoted
+                }
+            })
+            .collect::<Vec<_>>();
+        let select_sql = if include_row_id {
+            format!(
+                "SELECT \"_row_id\", {} FROM {table_name} {where_clause} ORDER BY \"_row_id\" ASC",
+                select_items.join(", ")
+            )
+        } else {
+            format!(
+                "SELECT {} FROM {table_name} {where_clause} ORDER BY \"_row_id\" ASC",
+                select_items.join(", ")
+            )
+        };
+
+        let mut stmt = self.conn.prepare(&select_sql)?;
+        let mut rows = stmt.query(params_from_iter(filter_values.iter()))?;
+        while let Some(row) = rows.next()? {
+            let row_id = if include_row_id {
+                Some(row.get::<_, i64>(0)?)
+            } else {
+                None
+            };
+
+            let start_index = if include_row_id { 1 } else { 0 };
+            let mut values = Vec::with_capacity(projected_columns.len());
+            for index in 0..projected_columns.len() {
+                values.push(row.get::<_, Value>(start_index + index)?);
+            }
+
+            if !on_row(row_id, values)? {
+                break;
+            }
+        }
+
+        Ok(GraphProjectionStats {
+            source_rows,
+            projected_columns,
+            projected_column_types,
+        })
     }
 
     fn compile_table_window_filters(

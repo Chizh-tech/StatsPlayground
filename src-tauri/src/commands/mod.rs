@@ -1,4 +1,5 @@
 pub mod data_commands;
+pub mod graph_data_commands;
 pub mod history_commands;
 pub mod io_commands;
 pub mod project_commands;

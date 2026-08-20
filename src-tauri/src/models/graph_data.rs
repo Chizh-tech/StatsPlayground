@@ -101,6 +101,7 @@ pub struct GraphChunkHeader {
     pub row_count: usize,
     pub source_rows: u64,
     pub processed_rows: u64,
+    pub projected_columns: Vec<String>,
     pub dictionaries: BTreeMap<String, Vec<String>>,
     pub validity_ranges: BTreeMap<String, GraphTypedSliceDescriptor>,
     pub x_values: GraphTypedSliceDescriptor,
@@ -234,6 +235,7 @@ mod tests {
             row_count: 2,
             source_rows: 2,
             processed_rows: 2,
+            projected_columns: vec!["_row_id".into(), "x".into(), "y".into()],
             dictionaries: std::collections::BTreeMap::new(),
             validity_ranges: std::collections::BTreeMap::from([
                 (
