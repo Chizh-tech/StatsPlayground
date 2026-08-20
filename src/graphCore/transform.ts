@@ -10,6 +10,8 @@ import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerSh
 import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
 import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand";
+import type { GraphDataFrame } from "@/types/graphData";
+import type { RawPointPanelDescriptor } from "./rawPoints";
 import i18n from "@/i18n";
 
 type EChartsOption = Record<string, unknown>;
@@ -5263,6 +5265,9 @@ export interface BuiltGraph {
   panels: {
     title: string;
     option: EChartsOption;
+    /** Optional typed-buffer raw-point payload for the panel-local canvas
+     *  layer. Null means "keep legacy ECharts scatter rendering only". */
+    rawPoints: RawPointPanelDescriptor | null;
     /** Per-panel facet labels (null when that axis isn't faceted). Used
      *  by the renderer to draw row / column header strips around the grid. */
     groupXValue: string | null;
@@ -5564,11 +5569,49 @@ function computeSharedRanges(
   return out;
 }
 
+function buildFrameBackedRawDescriptor(
+  spec: GraphSpec,
+  frame?: GraphDataFrame,
+): RawPointPanelDescriptor | null {
+  if (!frame || frame.rawChunks.length === 0) return null;
+  const yName = spec.encoding.y?.name;
+  if (!yName) return null;
+
+  const pointsElement = spec.elements.find(
+    (el) => el.kind === "points" && el.enabled !== false,
+  );
+  if (!pointsElement) return null;
+  const summaryStat = getOpt<string>(pointsElement.options, "summaryStat", "none");
+  if (summaryStat !== "none") return null;
+
+  const jitterMode = getOpt<string>(pointsElement.options, "rawPointJitter", "none");
+  const jitterSeed = Math.trunc(getOpt<number>(pointsElement.options, "rawPointJitterSeed", 0));
+  const jitterAmplitudePx = getOpt<number>(pointsElement.options, "rawPointJitterAmplitudePx", 0);
+  const jitter =
+    jitterMode === "seeded" && Number.isFinite(jitterAmplitudePx) && jitterAmplitudePx > 0
+      ? { mode: "seeded" as const, seed: jitterSeed, amplitudePx: Math.max(0, jitterAmplitudePx) }
+      : { mode: "none" as const };
+
+  return {
+    colName: yName,
+    xCategories: frame.dictionaries.x,
+    jitter,
+    chunks: frame.rawChunks.map((chunk) => ({
+      xValues: chunk.xValues,
+      yValues: chunk.yValues,
+      rowIds: chunk.rowIds,
+      xValidity: chunk.validity.x,
+      yValidity: chunk.validity.y,
+    })),
+  };
+}
+
 export function buildGraph(
   spec: GraphSpec,
   data: GraphData,
   theme: GraphTheme,
   valueOrders?: Record<string, string[]>,
+  frame?: GraphDataFrame,
 ): BuiltGraph {
   const { encoding } = spec;
   const fx = encoding.groupX;
@@ -5592,6 +5635,7 @@ export function buildGraph(
         panels: [{
           title: spec.title || "",
           option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders),
+          rawPoints: buildFrameBackedRawDescriptor(spec, frame),
           groupXValue: null,
           groupYValue: null,
         }],
@@ -5605,6 +5649,7 @@ export function buildGraph(
         panels: [{
           title: spec.title || "",
           option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders),
+          rawPoints: buildFrameBackedRawDescriptor(spec, frame),
           groupXValue: null,
           groupYValue: null,
         }],
@@ -5641,6 +5686,9 @@ export function buildGraph(
       return {
         title: `${fw.name}=${key}`,
         option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges),
+        // Facet-local masks for typed chunks arrive in the aggregate packet
+        // path (Task 6+); until then keep legacy ECharts scatter behavior.
+        rawPoints: null,
         groupXValue: null,
         groupYValue: null,
       };
@@ -5711,6 +5759,9 @@ export function buildGraph(
       panels.push({
         title: facetTitle(xKey, yKey, encoding),
         option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges),
+        // Facet-local masks for typed chunks arrive in the aggregate packet
+        // path (Task 6+); until then keep legacy ECharts scatter behavior.
+        rawPoints: null,
         groupXValue: xKey,
         groupYValue: yKey,
       });
