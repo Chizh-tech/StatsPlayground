@@ -67,18 +67,54 @@ Use this release command to keep the data shape aligned with the baseline run:
 cargo run --release --manifest-path src-tauri/Cargo.toml --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation graph_projection
 ```
 
-Desktop capture procedure (PowerShell, run while reproducing old
-`GraphBuilderView` render path):
+Manual UI actions (old `GraphBuilderView` path, desktop app):
+
+1. Start StatsPlayground desktop build that still uses old `GraphBuilderView`.
+2. Create/open a workspace and load a table with exactly 300,000 rows and 20
+   columns.
+3. Open graph builder and choose a graph type that renders immediately from the
+   selected table (no additional filters/transforms).
+4. Ensure the table is selected as graph input, then prepare to click the final
+   action that triggers chart render.
+
+Executable PowerShell sampling commands (run in parallel shell):
 
 ```powershell
-$proc = Get-Process -Name StatsPlayground
-Measure-Command {
-  # trigger old GraphBuilderView render path for 300k x 20 baseline data
-} | Select-Object TotalMilliseconds
+# START MARKER: run before you trigger render in the UI
+$proc = Get-Process -Name StatsPlayground -ErrorAction Stop
+$baseline = [pscustomobject]@{
+  WorkingSet64 = $proc.WorkingSet64
+  PeakWorkingSet64 = $proc.PeakWorkingSet64
+}
 
-$proc = Get-Process -Id $proc.Id
-$proc | Select-Object Id, ProcessName, WorkingSet64, PeakWorkingSet64
+"READY: put focus on the desktop UI action that triggers graph render."
+"Press Enter here at the exact moment you click render in the UI."
+Read-Host | Out-Null
+$start = Get-Date
+"START marker: $($start.ToString('o'))"
+
+"Press Enter here when the graph is fully painted and interactive."
+Read-Host | Out-Null
+$stop = Get-Date
+"STOP marker:  $($stop.ToString('o'))"
+
+$proc = Get-Process -Id $proc.Id -ErrorAction Stop
+$capture = [pscustomobject]@{
+  WallMs = [math]::Round(($stop - $start).TotalMilliseconds, 3)
+  WorkingSet64 = $proc.WorkingSet64
+  PeakWorkingSet64 = $proc.PeakWorkingSet64
+  DeltaWorkingSet64 = $proc.WorkingSet64 - $baseline.WorkingSet64
+  DeltaPeakWorkingSet64 = $proc.PeakWorkingSet64 - $baseline.PeakWorkingSet64
+}
+$capture | Format-List
 ```
+
+Timing note:
+
+- The command block above captures both wall-time (`WallMs`) and memory deltas
+  using explicit start/stop markers.
+- For repeatability, run three captures and record median `WallMs` and highest
+  `PeakWorkingSet64`.
 
 Recorded values:
 

@@ -6,7 +6,7 @@ use crate::engine::duckdb_engine::DuckDbEngine;
 use crate::error::AppError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 enum Operation {
     Query,
     Paste,
@@ -236,5 +236,37 @@ mod tests {
 
         assert_eq!(report.result_rows, 300_000);
         assert_eq!(report.selected_columns, 3);
+    }
+
+    #[test]
+    fn performance_cli_serializes_graph_projection_operation_name() {
+        let report = execute(Options {
+            rows: 10,
+            columns: 3,
+            operation: Operation::GraphProjection,
+        })
+        .unwrap();
+
+        let json = serde_json::to_value(report).unwrap();
+        assert_eq!(json.get("operation").and_then(|value| value.as_str()), Some("graph_projection"));
+    }
+
+    #[test]
+    fn performance_cli_rejects_graph_projection_when_columns_below_two() {
+        let result = execute(Options {
+            rows: 10,
+            columns: 1,
+            operation: Operation::GraphProjection,
+        });
+
+        match result {
+            Ok(_) => panic!("expected graph_projection to reject columns < 2"),
+            Err(error) => {
+                assert!(matches!(error, AppError::InvalidParam(_)));
+                assert!(error
+                    .to_string()
+                    .contains("graph_projection requires at least 2 value columns"));
+            }
+        }
     }
 }
