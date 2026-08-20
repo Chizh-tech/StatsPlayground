@@ -105,8 +105,11 @@ const numericProjector: RawPointProjector = {
   const layered = withInterleavedGraphLayers({
     series: [
       { id: "bars", type: "bar" },
-      { id: "__ref_lines_y__", type: "scatter", markLine: { data: [] } },
-      { id: "fit__fitstats", type: "scatter", label: { show: true } },
+      { id: "labels-top", type: "scatter", label: { show: true } },
+      { id: "labels-emphasis", type: "scatter", emphasis: { label: { show: true } } },
+      { id: "__ref_lines_y__", type: "line" },
+      { id: "markline-carrier", type: "line", markLine: { data: [] } },
+      { id: "fit__fitstats", type: "scatter" },
       { id: "upper-custom", type: "custom", zlevel: 20 },
     ],
   }) as { series: Array<{ id: string; zlevel: number }> };
@@ -114,7 +117,10 @@ const numericProjector: RawPointProjector = {
   assert.equal(layered.series[0].zlevel, GRAPH_SERIES_BASE_ZLEVEL);
   assert.equal(layered.series[1].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
   assert.equal(layered.series[2].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
-  assert.equal(layered.series[3].zlevel, 20);
+  assert.equal(layered.series[3].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
+  assert.equal(layered.series[4].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
+  assert.equal(layered.series[5].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
+  assert.equal(layered.series[6].zlevel, 20);
   assert.ok(
     GRAPH_SERIES_BASE_ZLEVEL < GRAPH_RAW_CANVAS_Z_INDEX &&
       GRAPH_RAW_CANVAS_Z_INDEX < GRAPH_SERIES_OVERLAY_ZLEVEL,

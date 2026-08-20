@@ -861,7 +861,7 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
             y2: st.curPy,
           });
           picks = raw
-            .map((pick) => toScatterPick(pick.rowId, pick.colName))
+            .map((pick) => bigintToScatterPointPick(pick.rowId, pick.colName))
             .filter((pick): pick is ScatterPointPick => !!pick);
         } else {
           picks = legacyHitTestBrush(st.startPx, st.startPy, st.curPx, st.curPy);

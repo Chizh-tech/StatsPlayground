@@ -22,12 +22,39 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function hasShowTrue(value: unknown): boolean {
+  return !!value && typeof value === "object" && (value as { show?: unknown }).show === true;
+}
+
+function hasVisibleSeriesLabel(series: SeriesLike): boolean {
+  const coreSeries = series as SeriesLike & {
+    label?: unknown;
+    endLabel?: unknown;
+    upperLabel?: unknown;
+    emphasis?: { label?: unknown; endLabel?: unknown; upperLabel?: unknown };
+    select?: { label?: unknown; endLabel?: unknown; upperLabel?: unknown };
+    blur?: { label?: unknown; endLabel?: unknown; upperLabel?: unknown };
+  };
+  if (hasShowTrue(coreSeries.label) || hasShowTrue(coreSeries.endLabel) || hasShowTrue(coreSeries.upperLabel)) {
+    return true;
+  }
+  const states = [coreSeries.emphasis, coreSeries.select, coreSeries.blur];
+  for (const state of states) {
+    if (!state || typeof state !== "object") continue;
+    if (hasShowTrue(state.label) || hasShowTrue(state.endLabel) || hasShowTrue(state.upperLabel)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isOverlayCarrier(series: SeriesLike): boolean {
   const id = typeof series.id === "string" ? series.id : "";
   if (id.startsWith("__ref_lines_")) return true;
   if (id.startsWith("__band_ref_lines_")) return true;
   if (id.endsWith("__fitstats")) return true;
   if (series.markLine && typeof series.markLine === "object") return true;
+  if (hasVisibleSeriesLabel(series)) return true;
   return false;
 }
 

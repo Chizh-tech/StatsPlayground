@@ -148,3 +148,30 @@ Base: 4b8052ec205768eae95f55a938e54511815c7929
 - `node --experimental-strip-types tests/rawPoints.test.ts` -> pass
 - `node --experimental-strip-types tests/graphDataPipeline.test.ts` -> pass
 - `npx vite build` -> pass (`built in 8.66s`)
+
+## Fix Round 2 (Task 5)
+
+### Open Findings Addressed
+
+- CRITICAL: Replaced brush-path raw pick conversion in `Graph.tsx` with the shared tested helper `bigintToScatterPointPick(...)`.
+- CRITICAL: Added a source-guard test asserting `Graph.tsx` contains no `toScatterPick(` call and uses `bigintToScatterPointPick(` in both click and brush paths.
+- IMPORTANT: Generalized overlay classifier to promote any series with visible labels (`label`, `endLabel`, `upperLabel`) and current nested state labels (`emphasis`, `select`, `blur`) to overlay zlevel.
+- IMPORTANT: Added focused layer-classification tests for representative base bar, label-show series, ref carrier, markLine carrier, and fitstats carrier.
+
+### RED Evidence (TDD)
+
+- After adding tests first:
+  - `node --experimental-strip-types tests/rawPoints.test.ts` failed with overlay zlevel assertion (`0 !== 10`) for label-visible series.
+  - `node --experimental-strip-types tests/graphDataPipeline.test.ts` failed with `Graph.tsx must not call undefined toScatterPick`.
+
+### GREEN Verification
+
+- `node --experimental-strip-types tests/rawPoints.test.ts` -> pass
+- `node --experimental-strip-types tests/graphDataPipeline.test.ts` -> pass
+- `npx vite build` -> pass (`vite v6.4.1`, `970 modules transformed`, built in `12.18s`)
+
+### `_layers` Isolation / Upgrade Risk
+
+- Kept private zrender `_layers` access isolated to the existing boundary (`applyZrenderCanvasZIndices(...)` call sites in `Graph.tsx`).
+- No architecture change was introduced in this round.
+- Upgrade risk note: `_layers` remains a private implementation detail in zrender and may break on upstream internals changes; if that happens, fallback should be to series-only `zlevel` ordering and disable DOM z-index sync until adapted.

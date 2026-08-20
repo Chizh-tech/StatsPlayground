@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphData.ts";
 import {
   createInitialGraphStreamState,
@@ -15,6 +18,8 @@ import type {
 } from "../src/types/graphData.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
 
+const TEST_FILE_DIR = dirname(fileURLToPath(import.meta.url));
+
 export function makeGraphRows(count: number): Array<[number, string, number]> {
   return Array.from({ length: count }, (_, index) => [
     index + 1,
@@ -24,6 +29,13 @@ export function makeGraphRows(count: number): Array<[number, string, number]> {
 }
 
 assert.equal(makeGraphRows(10).length, 10);
+
+{
+  const graphSource = readFileSync(resolve(TEST_FILE_DIR, "../src/graphCore/Graph.tsx"), "utf8");
+  assert.equal(graphSource.includes("toScatterPick("), false, "Graph.tsx must not call undefined toScatterPick");
+  const helperUses = graphSource.match(/bigintToScatterPointPick\(/g) ?? [];
+  assert.ok(helperUses.length >= 2, "Graph.tsx click and brush conversion must share bigintToScatterPointPick helper");
+}
 
 const payload = new ArrayBuffer(80);
 new Float64Array(payload, 0, 2).set([1.5, 2.5]);
