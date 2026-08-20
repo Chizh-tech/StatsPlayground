@@ -1,15 +1,13 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import {
-  decodeGraphPayload,
-  GraphPayloadError,
-  type DecodedGraphChunk,
   type GraphChunkHeader,
   type GraphDataCompletion,
   type GraphDataRequest,
 } from "@/types/graphData";
 
 export interface GraphDataStreamHandlers {
-  onChunk: (chunk: DecodedGraphChunk) => void;
+  onHeader: (header: GraphChunkHeader) => void;
+  onPayload: (payload: ArrayBuffer) => void;
   onComplete: (completion: GraphDataCompletion) => void;
   onError: (message: string) => void;
 }
@@ -54,9 +52,12 @@ export const graphDataService = {
   stream(request: GraphDataRequest, handlers: GraphDataStreamHandlers): GraphDataStreamController {
     const channel = new Channel<unknown>();
     const seenChunkIndexes = new Set<number>();
+    let nextChunkIndex = 0;
     let pendingHeader: GraphChunkHeader | null = null;
     let closed = false;
     let failed = false;
+    let pendingCompletion: GraphDataCompletion | null = null;
+    let completionDispatched = false;
 
     const stopRemoteStream = async (): Promise<void> => {
       try {
@@ -76,6 +77,21 @@ export const graphDataService = {
       void stopRemoteStream();
     };
 
+    const maybeDispatchCompletion = (): void => {
+      if (completionDispatched || !pendingCompletion || closed || failed) {
+        return;
+      }
+      if (pendingHeader) {
+        return;
+      }
+      if (!pendingCompletion.cancelled && seenChunkIndexes.size < pendingCompletion.chunksSent) {
+        return;
+      }
+      completionDispatched = true;
+      closed = true;
+      handlers.onComplete(pendingCompletion);
+    };
+
     channel.onmessage = (message: unknown) => {
       if (closed || failed) {
         return;
@@ -86,25 +102,12 @@ export const graphDataService = {
           fail("graph payload arrived before header");
           return;
         }
-        if (seenChunkIndexes.has(pendingHeader.chunkIndex)) {
-          fail(`duplicate graph chunk index ${pendingHeader.chunkIndex}`);
-          return;
-        }
 
         const header = pendingHeader;
         pendingHeader = null;
-
-        try {
-          const decoded = decodeGraphPayload(header, message);
-          seenChunkIndexes.add(header.chunkIndex);
-          handlers.onChunk(decoded);
-        } catch (error) {
-          const detail =
-            error instanceof GraphPayloadError || error instanceof Error
-              ? error.message
-              : String(error);
-          fail(`invalid graph payload: ${detail}`);
-        }
+        handlers.onHeader(header);
+        handlers.onPayload(message);
+        maybeDispatchCompletion();
         return;
       }
 
@@ -121,7 +124,15 @@ export const graphDataService = {
         fail(`duplicate graph chunk index ${header.chunkIndex}`);
         return;
       }
+      if (header.chunkIndex !== nextChunkIndex) {
+        fail(
+          `graph chunk index ${header.chunkIndex} arrived out of order (expected ${nextChunkIndex})`,
+        );
+        return;
+      }
 
+      seenChunkIndexes.add(header.chunkIndex);
+      nextChunkIndex += 1;
       pendingHeader = header;
     };
 
@@ -133,12 +144,10 @@ export const graphDataService = {
         if (closed || failed) {
           return;
         }
-        closed = true;
-        if (pendingHeader) {
-          fail("graph stream completed before receiving payload for the last header");
-          return;
-        }
-        handlers.onComplete(completion);
+        // Completion can resolve before the final payload callback is delivered.
+        // Keep transport parsing active and dispatch completion after pairing settles.
+        pendingCompletion = completion;
+        maybeDispatchCompletion();
       })
       .catch((error) => {
         if (closed || failed) {

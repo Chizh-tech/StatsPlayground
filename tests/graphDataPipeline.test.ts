@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphData.ts";
 import {
   createInitialGraphStreamState,
+  deriveFields,
   reduceGraphStream,
   type GraphStreamState,
 } from "../src/components/graphBuilder/useGraphDataPipeline.ts";
@@ -11,6 +12,7 @@ import type {
   GraphDataRequest,
   GraphDataFrame,
 } from "../src/types/graphData.ts";
+import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
 
 export function makeGraphRows(count: number): Array<[number, string, number]> {
   return Array.from({ length: count }, (_, index) => [
@@ -237,6 +239,26 @@ function run(state: GraphStreamState, ...messages: Parameters<typeof reduceGraph
   return next;
 }
 
+function makeGraphBuilderItem(overrides: Partial<GraphBuilderItem> = {}): GraphBuilderItem {
+  return {
+    id: "graph-1",
+    name: "Graph 1",
+    sourceDatasetId: "dataset-1",
+    encoding: {
+      x: { name: "region", type: "nominal" },
+      y: { name: "cost", type: "continuous" },
+    },
+    elements: [{ kind: "points", enabled: true }],
+    smootherLambda: 0.5,
+    createdAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): string[] {
+  return fields.filter((field) => field.role === role).map((field) => field.column);
+}
+
 {
   const initial = createInitialGraphStreamState(makeCommittedFrame());
   const request = makeRequest("req-atomic", 7);
@@ -264,6 +286,31 @@ function run(state: GraphStreamState, ...messages: Parameters<typeof reduceGraph
 }
 
 {
+  const request = makeRequest("req-complete-race", 13);
+  const state = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request },
+    { type: "header", header: makeHeader("req-complete-race", 13, 0, false) },
+    { type: "payload", payload: makePayload(0) },
+    { type: "header", header: makeHeader("req-complete-race", 13, 1, true) },
+    { type: "complete", completion: makeCompletion("req-complete-race", 13) },
+  );
+
+  assert.equal(state.pendingCompletion?.requestId, "req-complete-race");
+  assert.equal(state.committed?.requestId, "old-request");
+
+  const committed = reduceGraphStream(state, {
+    type: "payload",
+    payload: makePayload(100),
+  });
+
+  assert.equal(committed.pending, null);
+  assert.equal(committed.pendingCompletion, null);
+  assert.equal(committed.committed?.requestId, "req-complete-race");
+  assert.equal(committed.committed?.rawChunks.length, 2);
+}
+
+{
   const request = makeRequest("req-stale", 3);
   const state = run(
     createInitialGraphStreamState(),
@@ -287,7 +334,19 @@ function run(state: GraphStreamState, ...messages: Parameters<typeof reduceGraph
 
   assert.equal(state.pending, null);
   assert.equal(state.committed?.requestId, "old-request");
-  assert.match(state.error ?? "", /duplicate/i);
+  assert.match(state.error ?? "", /out of order/i);
+}
+
+{
+  const state = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request: makeRequest("req-out-of-order", 17) },
+    { type: "header", header: makeHeader("req-out-of-order", 17, 1, false) },
+  );
+
+  assert.equal(state.pending, null);
+  assert.equal(state.committed?.requestId, "old-request");
+  assert.match(state.error ?? "", /out of order/i);
 }
 
 {
@@ -335,6 +394,142 @@ function run(state: GraphStreamState, ...messages: Parameters<typeof reduceGraph
   assert.equal(errored.pending, null);
   assert.equal(errored.committed?.requestId, "old-request");
   assert.equal(errored.error, "boom");
+}
+
+{
+  const colorGrouped = makeGraphBuilderItem({
+    encoding: {
+      x: { name: "x", type: "continuous" },
+      y: { name: "y", type: "continuous" },
+      color: { name: "segment", type: "nominal" },
+    },
+    hiddenGroups: ["A"],
+  });
+  const fields = deriveFields(colorGrouped);
+  assert.deepEqual(roleColumns(fields, "group"), ["segment"]);
+  assert.deepEqual(roleColumns(fields, "x"), ["x"]);
+  assert.deepEqual(roleColumns(fields, "y"), ["y"]);
+
+  const overlayFallback = deriveFields(
+    makeGraphBuilderItem({
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+        overlay: { name: "ov", type: "nominal" },
+        color: { name: "segment", type: "nominal" },
+      },
+      hiddenGroups: ["A"],
+    }),
+  );
+  assert.deepEqual(roleColumns(overlayFallback, "group"), ["ov"]);
+
+  const groupXFallback = deriveFields(
+    makeGraphBuilderItem({
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+        groupX: { name: "gx", type: "nominal" },
+      },
+      hiddenGroups: ["A"],
+    }),
+  );
+  assert.deepEqual(roleColumns(groupXFallback, "group"), ["gx"]);
+
+  const groupYFallback = deriveFields(
+    makeGraphBuilderItem({
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+        groupY: { name: "gy", type: "nominal" },
+      },
+      hiddenGroups: ["A"],
+    }),
+  );
+  assert.deepEqual(roleColumns(groupYFallback, "group"), ["gy"]);
+
+  const groupZFallback = deriveFields(
+    makeGraphBuilderItem({
+      threeD: true,
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+        z: { name: "z", type: "continuous" },
+        groupZ: { name: "gz", type: "nominal" },
+      },
+      hiddenGroups: ["A"],
+      elements: [{ kind: "scatter3d", enabled: true }],
+    }),
+  );
+  assert.deepEqual(roleColumns(groupZFallback, "group"), ["gz"]);
+}
+
+{
+  const staleUnused = deriveFields(
+    makeGraphBuilderItem({
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+        size: { name: "size_unused", type: "continuous" },
+        color: { name: "color_unused", type: "nominal" },
+        wrap: { name: "wrap_unused", type: "nominal" },
+      },
+      elements: [{ kind: "line", enabled: true }],
+      filters: [
+        {
+          id: "f1",
+          op: "AND",
+          rule: {
+            kind: "categorical",
+            field: { name: "category_filter", type: "nominal" },
+            selected: ["A"],
+            exclude: false,
+          },
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(roleColumns(staleUnused, "size"), []);
+  assert.deepEqual(roleColumns(staleUnused, "group"), ["color_unused"]);
+  assert.deepEqual(roleColumns(staleUnused, "filter"), ["category_filter"]);
+
+  const pointsWithSize = deriveFields(
+    makeGraphBuilderItem({
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+        size: { name: "point_size", type: "continuous" },
+      },
+      elements: [{ kind: "points", enabled: true }],
+    }),
+  );
+  assert.deepEqual(roleColumns(pointsWithSize, "size"), ["point_size"]);
+
+  const no3DElement = deriveFields(
+    makeGraphBuilderItem({
+      threeD: true,
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+        z: { name: "z_unused", type: "continuous" },
+      },
+      elements: [{ kind: "line", enabled: true }],
+    }),
+  );
+  assert.deepEqual(roleColumns(no3DElement, "z"), []);
+
+  const with3DElement = deriveFields(
+    makeGraphBuilderItem({
+      threeD: true,
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+        z: { name: "z", type: "continuous" },
+      },
+      elements: [{ kind: "scatter3d", enabled: true }],
+    }),
+  );
+  assert.deepEqual(roleColumns(with3DElement, "z"), ["z"]);
 }
 
 console.log("graph-data fixture + decoder passed");

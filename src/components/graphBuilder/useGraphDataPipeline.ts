@@ -31,6 +31,7 @@ export interface GraphStreamState {
   committed: GraphDataFrame | null;
   pending: PendingGraphState | null;
   pendingHeader: GraphChunkHeader | null;
+  pendingCompletion: GraphDataCompletion | null;
   error: string | null;
   status: "idle" | "pending" | "ready" | "error";
 }
@@ -61,6 +62,7 @@ export function createInitialGraphStreamState(
     committed,
     pending: null,
     pendingHeader: null,
+    pendingCompletion: null,
     error: null,
     status: idleStatus(committed),
   };
@@ -81,8 +83,47 @@ function failPending(state: GraphStreamState, error: string): GraphStreamState {
     ...state,
     pending: null,
     pendingHeader: null,
+    pendingCompletion: null,
     error,
     status: "error",
+  };
+}
+
+function tryCommitWithPendingCompletion(state: GraphStreamState): GraphStreamState {
+  if (!state.pending || !state.pendingCompletion) {
+    return state;
+  }
+  if (state.pendingHeader) {
+    return state;
+  }
+  if (!hasCoherentCompletion(state.pending, state.pendingCompletion.chunksSent)) {
+    return state;
+  }
+
+  const rawChunks = [...state.pending.chunks].sort(
+    (left, right) => left.chunkIndex - right.chunkIndex,
+  );
+
+  const committed: GraphDataFrame = {
+    requestId: state.pending.request.requestId,
+    datasetId: state.pendingCompletion.datasetId,
+    generation: state.pendingCompletion.generation,
+    sourceRows: state.pendingCompletion.sourceRows,
+    processedRows: state.pendingCompletion.processedRows,
+    sampling: state.pending.request.sampling,
+    dictionaries: state.pending.dictionaries,
+    extents: state.pending.extents,
+    rawChunks,
+    aggregates: [],
+  };
+
+  return {
+    committed,
+    pending: null,
+    pendingHeader: null,
+    pendingCompletion: null,
+    error: null,
+    status: "ready",
   };
 }
 
@@ -198,6 +239,7 @@ function ingestDecodedChunk(state: GraphStreamState, chunk: DecodedGraphChunk): 
       extents,
     },
     pendingHeader: null,
+    pendingCompletion: state.pendingCompletion,
     error: null,
     status: "pending",
   };
@@ -235,6 +277,7 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
           extents: {},
         },
         pendingHeader: null,
+        pendingCompletion: null,
         error: null,
         status: "pending",
       };
@@ -242,6 +285,13 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
     case "header": {
       if (!isMatchingPending(state, message.header.requestId, message.header.generation)) {
         return state;
+      }
+      const expectedIndex = state.pending?.chunkIndexes.size ?? 0;
+      if (message.header.chunkIndex !== expectedIndex) {
+        return failPending(
+          state,
+          `graph header chunk index ${message.header.chunkIndex} arrived out of order (expected ${expectedIndex})`,
+        );
       }
       if (state.pendingHeader) {
         return failPending(state, "graph header arrived before payload for previous chunk");
@@ -264,13 +314,13 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
       }
       try {
         const decoded = decodeGraphPayload(header, message.payload);
-        return ingestDecodedChunk(state, decoded);
+        return tryCommitWithPendingCompletion(ingestDecodedChunk(state, decoded));
       } catch (error) {
         return failPending(state, `invalid graph payload: ${String(error)}`);
       }
     }
     case "chunk": {
-      return ingestDecodedChunk(state, message.chunk);
+      return tryCommitWithPendingCompletion(ingestDecodedChunk(state, message.chunk));
     }
     case "complete": {
       const completion = message.completion;
@@ -282,6 +332,7 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
           ...state,
           pending: null,
           pendingHeader: null,
+          pendingCompletion: null,
           error: null,
           status: idleStatus(state.committed),
         };
@@ -289,37 +340,12 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
       if (!state.pending) {
         return state;
       }
-      if (state.pendingHeader) {
-        return failPending(state, "graph completion arrived before the pending payload");
-      }
-      if (!hasCoherentCompletion(state.pending, completion.chunksSent)) {
-        return failPending(state, "graph completion is incoherent with received chunks");
-      }
-
-      const rawChunks = [...state.pending.chunks].sort(
-        (left, right) => left.chunkIndex - right.chunkIndex,
-      );
-
-      const committed: GraphDataFrame = {
-        requestId: state.pending.request.requestId,
-        datasetId: completion.datasetId,
-        generation: completion.generation,
-        sourceRows: completion.sourceRows,
-        processedRows: completion.processedRows,
-        sampling: state.pending.request.sampling,
-        dictionaries: state.pending.dictionaries,
-        extents: state.pending.extents,
-        rawChunks,
-        aggregates: [],
-      };
-
-      return {
-        committed,
-        pending: null,
-        pendingHeader: null,
+      const withPendingCompletion: GraphStreamState = {
+        ...state,
+        pendingCompletion: completion,
         error: null,
-        status: "ready",
       };
+      return tryCommitWithPendingCompletion(withPendingCompletion);
     }
     case "error": {
       if (!isMatchingPending(state, message.requestId, message.generation)) {
@@ -384,9 +410,29 @@ function deriveElements(item: GraphBuilderItem): GraphElementRequest[] {
     }));
 }
 
-function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
+function hasEnabledElementKinds(item: GraphBuilderItem): Set<string> {
+  return new Set(
+    item.elements
+      .filter((element) => element.enabled !== false)
+      .map((element) => String(element.kind).toLowerCase()),
+  );
+}
+
+function deriveGroupingColumn(item: GraphBuilderItem): string | undefined {
+  return (
+    item.encoding.overlay?.name
+    ?? item.encoding.color?.name
+    ?? item.encoding.groupX?.name
+    ?? item.encoding.groupY?.name
+    ?? (item.threeD ? item.encoding.groupZ?.name : undefined)
+    ?? item.encoding.wrap?.name
+  );
+}
+
+export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
   const fields: GraphFieldBinding[] = [];
   const seen = new Set<string>();
+  const enabledKinds = hasEnabledElementKinds(item);
 
   const addField = (role: string, column: string | undefined): void => {
     if (!column || seen.has(`${role}:${column}`)) {
@@ -398,30 +444,20 @@ function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
 
   addField("x", item.encoding.x?.name);
   addField("y", item.encoding.y?.name);
-  addField("z", item.threeD ? item.encoding.z?.name : undefined);
-  addField("size", item.encoding.size?.name);
-  addField("overlay", item.encoding.overlay?.name);
-  addField("groupX", item.encoding.groupX?.name);
-  addField("groupY", item.encoding.groupY?.name);
-  addField("groupZ", item.threeD ? item.encoding.groupZ?.name : undefined);
-  addField("color", item.encoding.color?.name);
-  addField("wrap", item.encoding.wrap?.name);
-
-  for (const field of item.multiX ?? []) {
-    addField("xMulti", field.name);
-  }
-  for (const field of item.multiY ?? []) {
-    addField("yMulti", field.name);
+  const has3DElement = enabledKinds.has("surface") || enabledKinds.has("scatter3d");
+  if (item.threeD && has3DElement) {
+    addField("z", item.encoding.z?.name);
   }
 
-  const hiddenGroups = item.hiddenGroups ?? [];
-  if (hiddenGroups.length > 0) {
-    const groupColumn =
-      item.encoding.overlay?.name
-      ?? item.encoding.groupX?.name
-      ?? item.encoding.groupY?.name
-      ?? (item.threeD ? item.encoding.groupZ?.name : undefined);
-    addField("group", groupColumn);
+  const canUseSize = enabledKinds.has("points") || enabledKinds.has("scatter3d");
+  if (canUseSize) {
+    addField("size", item.encoding.size?.name);
+  }
+
+  const hasHiddenGroups = (item.hiddenGroups?.length ?? 0) > 0;
+  const canUseGroup = enabledKinds.size > 0 || hasHiddenGroups;
+  if (canUseGroup) {
+    addField("group", deriveGroupingColumn(item));
   }
 
   for (const filter of item.filters ?? []) {
@@ -515,8 +551,11 @@ export function useGraphDataPipeline(
         setState((previous) => reduceGraphStream(previous, { type: "start", request }));
 
         const stream = graphDataService.stream(request, {
-          onChunk: (chunk) => {
-            setState((previous) => reduceGraphStream(previous, { type: "chunk", chunk }));
+          onHeader: (header) => {
+            setState((previous) => reduceGraphStream(previous, { type: "header", header }));
+          },
+          onPayload: (payload) => {
+            setState((previous) => reduceGraphStream(previous, { type: "payload", payload }));
           },
           onComplete: (completion) => {
             setState((previous) => reduceGraphStream(previous, { type: "complete", completion }));
