@@ -1120,6 +1120,67 @@ mod tests {
             request
         }
 
+        fn aggregate_melt_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
+            GraphDataRequest {
+                request_id: format!("request-{dataset_id}-melt"),
+                dataset_id: dataset_id.to_string(),
+                generation,
+                fields: vec![
+                    GraphFieldBinding {
+                        role: "x".to_string(),
+                        column: "region".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "y".to_string(),
+                        column: "m1".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "group".to_string(),
+                        column: "region".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "multiY0".to_string(),
+                        column: "m1".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "multiY1".to_string(),
+                        column: "m2".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "filter".to_string(),
+                        column: "batch".to_string(),
+                    },
+                ],
+                filters: vec![TableWindowFilter {
+                    op: "AND".to_string(),
+                    rule: TableWindowFilterRule::Categorical {
+                        field: "batch".to_string(),
+                        selected: vec!["B0".to_string(), "B1".to_string()],
+                        exclude: false,
+                    },
+                }],
+                elements: vec![
+                    GraphElementRequest {
+                        kind: "histogram".to_string(),
+                        summary_stat: "none".to_string(),
+                    },
+                    GraphElementRequest {
+                        kind: "boxplot".to_string(),
+                        summary_stat: "none".to_string(),
+                    },
+                    GraphElementRequest {
+                        kind: "summary".to_string(),
+                        summary_stat: "median".to_string(),
+                    },
+                ],
+                sampling: GraphSampling::Full,
+                viewport: GraphViewport {
+                    width: 1280,
+                    height: 720,
+                },
+            }
+        }
+
         fn direct_filtered_rows(state: &AppState, dataset_id: &str) -> i64 {
             let db = state.db.lock().expect("db lock");
             let table = format!("dataset_{}", dataset_id.replace('-', "_"));
@@ -1208,6 +1269,110 @@ mod tests {
                 .iter()
                 .any(|entry| entry.median.is_finite());
             assert!(has_finite_median, "summary packet must include median");
+        }
+
+        #[test]
+        fn aggregate_packets_preserve_melt_source_identity_and_match_direct_sql() {
+            let state = AppState::new().expect("state");
+            let dataset_id = "agg-melt-source";
+            {
+                let db = state.db.lock().expect("db lock");
+                db.create_empty_table(
+                    dataset_id,
+                    "Aggregate Melt Source",
+                    &["region".into(), "batch".into(), "m1".into(), "m2".into()],
+                    &["VARCHAR".into(), "VARCHAR".into(), "DOUBLE".into(), "DOUBLE".into()],
+                )
+                .expect("create table");
+                let table = "dataset_agg_melt_source";
+                db.conn()
+                    .execute(
+                        &format!(
+                            "INSERT INTO \"{table}\" (_row_id, region, batch, m1, m2) VALUES
+                             (1, 'North', 'B0', 10.0, 100.0),
+                             (2, 'North', 'B1', 20.0, NULL),
+                             (3, 'South', 'B0', NULL, 300.0),
+                             (4, 'South', 'B1', 40.0, 400.0),
+                             (5, 'South', 'B2', 50.0, 500.0)"
+                        ),
+                        [],
+                    )
+                    .expect("insert rows");
+                db.conn()
+                    .execute(
+                        "UPDATE _meta_datasets SET row_count = 5 WHERE id = $1",
+                        params![dataset_id],
+                    )
+                    .expect("update row count");
+            }
+
+            let service = GraphDataService::new(&state);
+            let request = aggregate_melt_request(dataset_id, 0);
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("aggregate packets");
+
+            let histogram = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::Histogram(value) => Some(value),
+                    _ => None,
+                })
+                .expect("histogram packet");
+            let summary = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::Summary(value) => Some(value),
+                    _ => None,
+                })
+                .expect("summary packet");
+            let boxplot = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::BoxPlot(value) => Some(value),
+                    _ => None,
+                })
+                .expect("boxplot packet");
+
+            let histogram_sources = histogram
+                .bins
+                .iter()
+                .filter_map(|bin| bin.source_column.as_deref())
+                .collect::<std::collections::HashSet<_>>();
+            assert!(histogram_sources.contains("m1"));
+            assert!(histogram_sources.contains("m2"));
+
+            let summary_sources = summary
+                .summaries
+                .iter()
+                .filter_map(|entry| entry.source_column.as_deref())
+                .collect::<std::collections::HashSet<_>>();
+            assert!(summary_sources.contains("m1"));
+            assert!(summary_sources.contains("m2"));
+
+            let outlier_sources = boxplot
+                .entries
+                .iter()
+                .filter_map(|entry| entry.source_column.as_deref())
+                .collect::<std::collections::HashSet<_>>();
+            assert!(outlier_sources.contains("m1") || outlier_sources.contains("m2"));
+
+            let db = state.db.lock().expect("db lock");
+            let expected: i64 = db
+                .conn()
+                .query_row(
+                    "SELECT COUNT(*)
+                     FROM (
+                        SELECT m1 AS v, batch FROM dataset_agg_melt_source
+                        UNION ALL
+                        SELECT m2 AS v, batch FROM dataset_agg_melt_source
+                     ) t
+                     WHERE batch IN ('B0','B1') AND v IS NOT NULL",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("direct melt count");
+            assert_eq!(histogram.total_count as i64, expected);
         }
 
         #[test]

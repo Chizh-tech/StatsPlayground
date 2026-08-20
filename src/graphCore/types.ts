@@ -28,6 +28,7 @@ export type ElementKind =
   | "points"       // 散点
   | "line"         // 折线
   | "bar"          // 柱状（含分组均值）
+  | "heatmap"      // 热力图
   | "histogram"    // 直方图
   | "boxplot"      // 箱线
   | "smoother"     // 平滑曲线

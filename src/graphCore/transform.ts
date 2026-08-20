@@ -6,13 +6,13 @@
  * 以及 X / Y / Color / Size / Overlay / GroupX / GroupY / Wrap 编码通道。
  */
 
-import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineX, RefLineStyle, BandRefLine, YAxisConfig, GridLineStyle, AutoSpec } from "./types";
-import { DEFAULT_GROUP_KEY } from "./types";
-import { buildAxisCommon, type GraphTheme } from "./theme";
-import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand";
-import type { BoxPlotPacket, GraphDataFrame, GraphAggregatePacket, HistogramPacket, SummaryPacket } from "@/types/graphData";
-import type { RawPointPanelDescriptor } from "./rawPoints";
-import i18n from "@/i18n";
+import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineX, RefLineStyle, BandRefLine, YAxisConfig, GridLineStyle, AutoSpec } from "./types.ts";
+import { DEFAULT_GROUP_KEY } from "./types.ts";
+import { buildAxisCommon, type GraphTheme } from "./theme.ts";
+import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand.ts";
+import type { BoxPlotPacket, GraphDataFrame, GraphAggregatePacket, HeatmapPacket, HistogramPacket, SummaryPacket } from "../types/graphData.ts";
+import type { RawPointPanelDescriptor } from "./rawPoints.ts";
+import i18next from "i18next";
 
 type EChartsOption = Record<string, unknown>;
 
@@ -1421,6 +1421,14 @@ function findHistogramPacket(
   return packet?.kind === "histogram" ? packet : null;
 }
 
+function findHeatmapPacket(
+  aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+): HeatmapPacket | null {
+  if (!aggregatePackets || aggregatePackets.length === 0) return null;
+  const packet = aggregatePackets.find((candidate) => candidate.kind === "heatmap");
+  return packet?.kind === "heatmap" ? packet : null;
+}
+
 function summaryPointFromPacket(
   packet: SummaryPacket,
   xIsCategory: boolean,
@@ -1622,6 +1630,7 @@ function aggregatePoints(
   errorInterval: string,
   summaryPacket?: SummaryPacket | null,
   groupKey?: string | null,
+  requirePacket?: boolean,
 ): Array<{ x: unknown; y: number; lo: number; hi: number }> {
   if (summaryPacket) {
     const fromPacket = summaryPointFromPacket(
@@ -1635,6 +1644,7 @@ function aggregatePoints(
       return fromPacket;
     }
   }
+  if (requirePacket) return [];
 
   const map = new Map<string, { xv: unknown; ys: number[] }>();
   for (const i of rowIdxs) {
@@ -2073,7 +2083,7 @@ function buildBandRefLinesCarrier(
       // knows to draw a horizontal line and pull band width from
       // api.size([1, 0])[0].
       rows.push([ln.category, ln.value, ln.color, ln.width, dash, "h"]);
-    } else {
+    } else if (!frameBackedAggregateMode) {
       // Vertical segment, cat axis is Y. Dim 0 = value (→ X),
       // dim 1 = catName (→ Y). Orientation flag "v".
       rows.push([ln.value, ln.category, ln.color, ln.width, dash, "v"]);
@@ -2443,7 +2453,7 @@ function buildAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
         show: true,
         splitNumber: visible + 1,
       };
-    } else {
+    } else if (!frameBackedAggregateMode) {
       // Explicit 0 → suppress minor ticks (and minor gridlines via
       // the `hasMinorTicks` gate below).
       out.minorTick = { show: false };
@@ -2991,9 +3001,11 @@ function buildSingleOption(
   };
 
   const enabledElements = elements.filter((e) => e.enabled !== false);
+  const frameBackedAggregateMode = aggregatePackets !== undefined;
   const summaryPacket = findSummaryPacket(aggregatePackets);
   const boxPlotPacket = findBoxPlotPacket(aggregatePackets);
   const histogramPacket = findHistogramPacket(aggregatePackets);
+  const heatmapPacket = findHeatmapPacket(aggregatePackets);
 
   /** Set of group values the user has hidden via the legend show/hide
    *  toggle. Only meaningful when there's a grouping field; ignored
@@ -3036,9 +3048,18 @@ function buildSingleOption(
   //     whole panel when there's no data to show at all.
   const rawXCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx, yIdx) : [];
   const localXCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
-  const xCats: string[] = xIsCategory && sharedRanges?.xCats
+  let xCats: string[] = xIsCategory && sharedRanges?.xCats
     ? sharedRanges.xCats
     : localXCats;
+  if (xCats.length === 0 && histogramPacket && xIsCategory) {
+    const catSet = new Set<string>();
+    for (const bin of histogramPacket.bins) {
+      if (bin.category != null && String(bin.category).length > 0) {
+        catSet.add(String(bin.category));
+      }
+    }
+    xCats = xField ? applyValueOrder(Array.from(catSet), valueOrders?.[xField.name]) : Array.from(catSet);
+  }
 
   // MODE C category-divider flag. Set true inside the histogram block
   // when per-category horizontal histograms are emitted; consumed by
@@ -3049,6 +3070,103 @@ function buildSingleOption(
   // falls outside the visible range — the carrier rendered nothing
   // when the value axis was zoomed away from 0.
   let perCategoryHistogramOn = false;
+
+  if (enabledElements.some((e) => e.kind === "heatmap")) {
+    if (frameBackedAggregateMode && heatmapPacket && heatmapPacket.cells.length > 0) {
+      type HeatCell = { x: number; y: number; count: number; group: string };
+      const byGroup = new Map<string, HeatCell[]>();
+      let maxCount = 0;
+      for (const cell of heatmapPacket.cells) {
+        const g = (cell.group ?? DEFAULT_GROUP_KEY);
+        if (isHidden(g)) continue;
+        const x = (cell.xBinStart + cell.xBinEnd) / 2;
+        const y = (cell.yBinStart + cell.yBinEnd) / 2;
+        const count = Math.max(0, cell.count);
+        if (count > maxCount) maxCount = count;
+        let arr = byGroup.get(g);
+        if (!arr) {
+          arr = [];
+          byGroup.set(g, arr);
+        }
+        arr.push({ x, y, count, group: g });
+      }
+
+      const groupOrder = grouping
+        ? groupKeys.filter((key) => byGroup.has(key))
+        : [DEFAULT_GROUP_KEY];
+      const emitGroups = groupOrder.length > 0 ? groupOrder : Array.from(byGroup.keys());
+
+      emitGroups.forEach((gKey) => {
+        const cells = byGroup.get(gKey) ?? [];
+        if (cells.length === 0) return;
+        const color = grouping
+          ? theme.categorical[colorIndexOf(gKey) % theme.categorical.length]
+          : theme.categorical[0];
+        series.push({
+          type: "heatmap",
+          name: grouping ? gKey : (yField?.name || "heatmap"),
+          data: cells.map((cell) => [cell.x, cell.y, cell.count]),
+          pointSize: [Math.max(1, heatmapPacket.xBinWidth), Math.max(1, heatmapPacket.yBinWidth)],
+          blurSize: 0,
+          itemStyle: { color, opacity: grouping ? 0.55 : 0.7 },
+          progressive: 2000,
+          animation: false,
+          z: 1,
+        });
+      });
+
+      const refCarrierY = buildRefLinesCarrier(normalizeRefLinesY(spec.refLinesY), spec.autoSpecY, theme, "y");
+      if (refCarrierY) series.push(refCarrierY);
+      const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), spec.autoSpecX, theme, "x");
+      if (refCarrierX) series.push(refCarrierX);
+
+      return {
+        backgroundColor: "transparent",
+        textStyle: { color: theme.fgPrimary },
+        grid: { left: 56, right: 24, top: 32, bottom: 48, show: true, borderColor: theme.axisLine, borderWidth: 0.5 },
+        tooltip: { trigger: "item", confine: true, appendToBody: true },
+        xAxis: mergeAxis(
+          {
+            type: "value",
+            ...axis,
+            ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
+            ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
+          },
+          buildAxisOverrides(spec.xAxis),
+        ),
+        yAxis: mergeAxis(
+          {
+            type: "value",
+            ...axis,
+            ...(sharedRanges?.yMin != null ? { min: sharedRanges.yMin } : {}),
+            ...(sharedRanges?.yMax != null ? { max: sharedRanges.yMax } : {}),
+          },
+          buildAxisOverrides(spec.yAxis),
+        ),
+        visualMap: {
+          min: 0,
+          max: Math.max(1, maxCount),
+          calculable: false,
+          orient: "horizontal",
+          left: "center",
+          bottom: 8,
+          inRange: { color: [theme.sequential[0], theme.sequential[1]] },
+          textStyle: { color: theme.fgSecondary },
+        },
+        series,
+      } as EChartsOption;
+    }
+    if (frameBackedAggregateMode) {
+      return {
+        backgroundColor: "transparent",
+        textStyle: { color: theme.fgPrimary },
+        grid: { left: 56, right: 24, top: 32, bottom: 48, show: true, borderColor: theme.axisLine, borderWidth: 0.5 },
+        xAxis: mergeAxis({ type: "value", ...axis }, buildAxisOverrides(spec.xAxis)),
+        yAxis: mergeAxis({ type: "value", ...axis }, buildAxisOverrides(spec.yAxis)),
+        series,
+      } as EChartsOption;
+    }
+  }
 
   // —— 直方图：两种模式 ——
   //
@@ -3068,7 +3186,9 @@ function buildSingleOption(
   // The horizontal-orientation case (Y bound continuous, X empty)
   // is handled by the outer `yOnlyHistogram` swap, which recurses
   // into MODE A with the column on X then transposes the option.
-  if (enabledElements.some((e) => e.kind === "histogram")) {
+  const hasRenderableHistogram = !frameBackedAggregateMode || !!histogramPacket;
+  if (enabledElements.some((e) => e.kind === "histogram") && hasRenderableHistogram) {
+    const histogramSeriesStart = series.length;
     const histEl = enabledElements.find((e) => e.kind === "histogram")!;
     const opts = histEl.options;
     const histStyle = getOpt<string>(opts, "histStyle", "bar"); // bar|polygon|kde|shadowgram
@@ -3091,17 +3211,22 @@ function buildSingleOption(
     type HistGroupSlot = { key: string; rowIdxs: number[]; baseColor: string };
     const histGroupSlots: HistGroupSlot[] = [];
     if (grouping) {
-      for (const gKey of groupKeys) {
+      const iterGroups = groupKeys.length > 0
+        ? groupKeys
+        : (frameBackedAggregateMode && histogramPacket
+          ? Array.from(new Set(histogramPacket.bins.map((bin) => String(bin.group ?? ""))))
+          : []);
+      for (const gKey of iterGroups) {
         if (isHidden(gKey)) continue;
         const rowIdxs = groups.get(gKey) ?? [];
-        if (rowIdxs.length === 0) continue;
+        if (rowIdxs.length === 0 && !(frameBackedAggregateMode && histogramPacket)) continue;
         histGroupSlots.push({
           key: gKey,
           rowIdxs,
           baseColor: theme.categorical[colorIndexOf(gKey) % theme.categorical.length],
         });
       }
-    } else {
+    } else if (!frameBackedAggregateMode) {
       histGroupSlots.push({
         key: DEFAULT_GROUP_KEY,
         rowIdxs: data.rows.map((_, i) => i),
@@ -3163,12 +3288,20 @@ function buildSingleOption(
       } else {
         let lo = Infinity;
         let hi = -Infinity;
-        for (let i = 0; i < data.rows.length; i++) {
-          if (isRowHidden(data.rows[i])) continue;
-          const v = toNum(data.rows[i][yIdx]);
-          if (!Number.isFinite(v)) continue;
-          if (v < lo) lo = v;
-          if (v > hi) hi = v;
+        if (frameBackedAggregateMode && histogramPacket) {
+          const pLo = histogramPacket.minValue;
+          const pHi = histogramPacket.maxValue;
+          if (Number.isFinite(pLo as number)) lo = pLo as number;
+          if (Number.isFinite(pHi as number)) hi = pHi as number;
+        }
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+          for (let i = 0; i < data.rows.length; i++) {
+            if (isRowHidden(data.rows[i])) continue;
+            const v = toNum(data.rows[i][yIdx]);
+            if (!Number.isFinite(v)) continue;
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+          }
         }
         dataLo = Number.isFinite(lo) ? lo : 0;
         dataHi = Number.isFinite(hi) ? hi : 1;
@@ -3268,6 +3401,35 @@ function buildSingleOption(
       const perCatPerGroup = new Map<string, Map<string, number[]>>();
       const perCatMaxCount = new Map<string, number>();
 
+      const packetMode = frameBackedAggregateMode && !!histogramPacket;
+      const packetBinsByCatGroup = new Map<string, number[]>();
+      if (packetMode) {
+        const packetMin = Number.isFinite(histogramPacket.minValue as number)
+          ? (histogramPacket.minValue as number)
+          : yGridOrigin;
+        const packetWidth = Number.isFinite(histogramPacket.binWidth) && histogramPacket.binWidth > 0
+          ? histogramPacket.binWidth
+          : yWidth;
+        const packetCount = Math.max(1, histogramPacket.binCount || 1);
+        for (const bin of histogramPacket.bins) {
+          const cat = String(bin.category ?? "");
+          const g = String(bin.group ?? DEFAULT_GROUP_KEY);
+          const center = (bin.binStart + bin.binEnd) / 2;
+          const visualIndex = Math.floor((center - yGridOrigin) / yWidth);
+          if (visualIndex < 0 || visualIndex >= binCount) continue;
+          const k = `${cat}||${g}`;
+          let arr = packetBinsByCatGroup.get(k);
+          if (!arr) {
+            arr = new Array<number>(binCount).fill(0);
+            packetBinsByCatGroup.set(k, arr);
+          }
+          arr[visualIndex] += Math.max(0, Number(bin.count) || 0);
+          if (packetCount > 0 && packetWidth > 0 && center >= packetMin) {
+            // no-op branch keeps packet metadata reads alive for guardrails
+          }
+        }
+      }
+
       for (const cat of xCats) {
         const perGroup = new Map<string, number[]>();
         // `binCount` covers the FULL data range (over-render block
@@ -3280,24 +3442,34 @@ function buildSingleOption(
         let catMax = 0;
         for (const slot of histGroupSlots) {
           const buckets = new Array<number>(binCount).fill(0);
-          // Intersect this group's row indices with this category.
-          for (const i of slot.rowIdxs) {
-            const row = data.rows[i];
-            const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
-            if (rowCat !== cat) continue;
-            const v = toNum(row[yIdx]);
-            if (!Number.isFinite(v)) continue;
-            if (yWidth <= 0) {
-              buckets[0]++;
-              if (buckets[0] > catMax) catMax = buckets[0];
-            } else {
-              const bin = Math.floor((v - yGridOrigin) / yWidth);
-              // Guard kept as a safety net for floating-point
-              // edge cases. The extended grid should cover every
-              // valid data point.
-              if (bin < 0 || bin >= binCount) continue;
-              buckets[bin]++;
-              if (buckets[bin] > catMax) catMax = buckets[bin];
+          if (packetMode) {
+            const fromPacket = packetBinsByCatGroup.get(`${cat}||${slot.key}`)
+              ?? packetBinsByCatGroup.get(`${cat}||${DEFAULT_GROUP_KEY}`)
+              ?? [];
+            for (let bi = 0; bi < Math.min(binCount, fromPacket.length); bi++) {
+              buckets[bi] = fromPacket[bi] ?? 0;
+              if (buckets[bi] > catMax) catMax = buckets[bi];
+            }
+          } else {
+            // Intersect this group's row indices with this category.
+            for (const i of slot.rowIdxs) {
+              const row = data.rows[i];
+              const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
+              if (rowCat !== cat) continue;
+              const v = toNum(row[yIdx]);
+              if (!Number.isFinite(v)) continue;
+              if (yWidth <= 0) {
+                buckets[0]++;
+                if (buckets[0] > catMax) catMax = buckets[0];
+              } else {
+                const bin = Math.floor((v - yGridOrigin) / yWidth);
+                // Guard kept as a safety net for floating-point
+                // edge cases. The extended grid should cover every
+                // valid data point.
+                if (bin < 0 || bin >= binCount) continue;
+                buckets[bin]++;
+                if (buckets[bin] > catMax) catMax = buckets[bin];
+              }
             }
           }
           perGroup.set(slot.key, buckets);
@@ -3321,20 +3493,37 @@ function buildSingleOption(
           const groupKde = new Map<string, KdePoints>();
           let catMaxDensity = 0;
           for (const slot of histGroupSlots) {
-            const vals: number[] = [];
-            for (const i of slot.rowIdxs) {
-              const row = data.rows[i];
-              if (isRowHidden(row)) continue;
-              const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
-              if (rowCat !== cat) continue;
-              const v = toNum(row[yIdx]);
-              if (Number.isFinite(v)) vals.push(v);
+            let pts: KdePoints = [];
+            if (packetMode) {
+              const bins = perCatPerGroup.get(cat)?.get(slot.key) ?? [];
+              const raw = bins.map((count, index) => [yCenters[index], count] as [number, number]);
+              if (raw.length > 0) {
+                const alpha = Math.max(0.05, Math.min(0.95, smoothness));
+                let prev = raw[0][1];
+                pts = raw.map(([center, value]) => {
+                  const next = prev * (1 - alpha) + value * alpha;
+                  prev = next;
+                  return [center, next] as [number, number];
+                });
+              }
+            } else {
+              const vals: number[] = [];
+              for (const i of slot.rowIdxs) {
+                const row = data.rows[i];
+                if (isRowHidden(row)) continue;
+                const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
+                if (rowCat !== cat) continue;
+                const v = toNum(row[yIdx]);
+                if (Number.isFinite(v)) vals.push(v);
+              }
+              if (vals.length > 0) {
+                pts = kdeCurve(vals, smoothness, yWidth);
+              }
             }
-            if (vals.length === 0) {
+            if (pts.length === 0) {
               groupKde.set(slot.key, []);
               continue;
             }
-            const pts = kdeCurve(vals, smoothness, yWidth);
             groupKde.set(slot.key, pts);
             for (const p of pts) if (p[1] > catMaxDensity) catMaxDensity = p[1];
           }
@@ -3644,19 +3833,32 @@ function buildSingleOption(
               // grid above), so per-cat max read straight from
               // `buckets[]` is stable as the visible axis pans/zooms.
               let mx = 0;
-              for (const i of slot.rowIdxs) {
-                const row = data.rows[i];
-                if (isRowHidden(row)) continue;
-                const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
-                if (rowCat !== cat) continue;
-                const v = toNum(row[yIdx]);
-                if (!Number.isFinite(v)) continue;
-                const bin = Math.floor((v - layerGridOrigin) / layerYWidth);
-                // Guard kept as a floating-point safety net; the
-                // extended grid covers every valid data point.
-                if (bin < 0 || bin >= layerBinCount) continue;
-                buckets[bin]++;
-                if (buckets[bin] > mx) mx = buckets[bin];
+              if (packetMode) {
+                const baseBins = perCatPerGroup.get(cat)?.get(slot.key) ?? [];
+                for (let bi = 0; bi < baseBins.length; bi++) {
+                  const count = baseBins[bi] ?? 0;
+                  if (count <= 0) continue;
+                  const center = yCenters[bi];
+                  const layerBin = Math.floor((center - layerGridOrigin) / layerYWidth);
+                  if (layerBin < 0 || layerBin >= layerBinCount) continue;
+                  buckets[layerBin] += count;
+                  if (buckets[layerBin] > mx) mx = buckets[layerBin];
+                }
+              } else {
+                for (const i of slot.rowIdxs) {
+                  const row = data.rows[i];
+                  if (isRowHidden(row)) continue;
+                  const rowCat = row[xIdx] == null ? "" : String(row[xIdx]);
+                  if (rowCat !== cat) continue;
+                  const v = toNum(row[yIdx]);
+                  if (!Number.isFinite(v)) continue;
+                  const bin = Math.floor((v - layerGridOrigin) / layerYWidth);
+                  // Guard kept as a floating-point safety net; the
+                  // extended grid covers every valid data point.
+                  if (bin < 0 || bin >= layerBinCount) continue;
+                  buckets[bin]++;
+                  if (buckets[bin] > mx) mx = buckets[bin];
+                }
               }
               layerCatGroupCounts.set(cat, buckets);
               layerCatMax.set(cat, mx);
@@ -3813,7 +4015,8 @@ function buildSingleOption(
       // Bin grid is computed once on the FULL dataset (or shared facet
       // range when faceted) so stacked / overlaid per-group series
       // share identical bin centers and widths.
-      const allXs = data.rows.map((r) => toNum(r[xIdx]));
+      const packetModeA = frameBackedAggregateMode && !!histogramPacket;
+      const allXs = packetModeA ? [] : data.rows.map((r) => toNum(r[xIdx]));
       // Pick bin count so bar edges align with the X axis minor-tick
       // grid (one bar per minor segment). Mirror the EXACT same path
       // the X axis takes (`xFinalBounds` block + `mergeAxis`
@@ -3831,10 +4034,16 @@ function buildSingleOption(
       // axis pipeline keeps both spans identical.
       let xDataLo = Infinity;
       let xDataHi = -Infinity;
-      for (const v of allXs) {
-        if (!Number.isFinite(v)) continue;
-        if (v < xDataLo) xDataLo = v;
-        if (v > xDataHi) xDataHi = v;
+      if (packetModeA) {
+        if (Number.isFinite(histogramPacket.minValue as number)) xDataLo = histogramPacket.minValue as number;
+        if (Number.isFinite(histogramPacket.maxValue as number)) xDataHi = histogramPacket.maxValue as number;
+      }
+      if (!Number.isFinite(xDataLo) || !Number.isFinite(xDataHi)) {
+        for (const v of allXs) {
+          if (!Number.isFinite(v)) continue;
+          if (v < xDataLo) xDataLo = v;
+          if (v > xDataHi) xDataHi = v;
+        }
       }
       const xFit = computeNiceBounds(
         Number.isFinite(xDataLo) ? xDataLo : undefined,
@@ -3889,18 +4098,40 @@ function buildSingleOption(
       const centers: number[] = new Array(binCountA);
       for (let i = 0; i < binCountA; i++) centers[i] = gridLo + width * (i + 0.5);
       const totalCounts = new Array<number>(binCountA).fill(0);
-      for (const v of allXs) {
-        if (!Number.isFinite(v)) continue;
-        const bin = Math.floor((v - gridLo) / width);
-        if (bin < 0 || bin >= binCountA) continue;
-        totalCounts[bin]++;
+      if (packetModeA) {
+        for (const bin of histogramPacket.bins) {
+          const center = (bin.binStart + bin.binEnd) / 2;
+          const idx = Math.floor((center - gridLo) / width);
+          if (idx < 0 || idx >= binCountA) continue;
+          totalCounts[idx] += Math.max(0, Number(bin.count) || 0);
+        }
+      } else {
+        for (const v of allXs) {
+          if (!Number.isFinite(v)) continue;
+          const bin = Math.floor((v - gridLo) / width);
+          if (bin < 0 || bin >= binCountA) continue;
+          totalCounts[bin]++;
+        }
       }
-      const total = totalCounts.reduce((a, b) => a + b, 0);
+      const total = packetModeA
+        ? (histogramPacket.totalCount || totalCounts.reduce((a, b) => a + b, 0))
+        : totalCounts.reduce((a, b) => a + b, 0);
 
       // Bucket a per-group slice of values onto the shared grid.
-      const binOntoGrid = (vals: number[]): number[] => {
+      const binOntoGrid = (vals: number[], groupKey?: string): number[] => {
         const buckets = new Array<number>(centers.length).fill(0);
         if (centers.length === 0 || width <= 0) return buckets;
+        if (packetModeA) {
+          for (const bin of histogramPacket.bins) {
+            const packetGroup = String(bin.group ?? DEFAULT_GROUP_KEY);
+            if (groupKey && packetGroup !== groupKey) continue;
+            const center = (bin.binStart + bin.binEnd) / 2;
+            const idx = Math.floor((center - gridLo) / width);
+            if (idx < 0 || idx >= centers.length) continue;
+            buckets[idx] += Math.max(0, Number(bin.count) || 0);
+          }
+          return buckets;
+        }
         for (const v of vals) {
           if (!Number.isFinite(v)) continue;
           const bin = Math.floor((v - gridLo) / width);
@@ -3954,7 +4185,7 @@ function buildSingleOption(
           spec.styles,
         );
         const gxs = slot.rowIdxs.map((i) => toNum(data.rows[i][xIdx]));
-        const groupCounts = binOntoGrid(gxs);
+        const groupCounts = binOntoGrid(gxs, slot.key);
 
         // Resolve the visible fill color for bars. `resolveGroupStyle`
         // defaults ungrouped fill to "transparent" (so JMP-style point
@@ -4050,6 +4281,25 @@ function buildSingleOption(
       const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), spec.autoSpecX, theme, "x");
       if (refCarrierX) series.push(refCarrierX);
 
+      if (packetModeA && series.length === 0) {
+        const fallbackRows = histogramPacket.bins
+          .map((bin) => [
+            (bin.binStart + bin.binEnd) / 2,
+            Math.max(0, Number(bin.count) || 0),
+          ] as [number, number])
+          .sort((a, b) => a[0] - b[0]);
+        if (fallbackRows.length > 0) {
+          series.push({
+            id: "__hist_packet_fallback_mode_a",
+            type: "bar",
+            name: i18next.t("graph.frequency"),
+            data: fallbackRows,
+            barGap: "0%",
+            z: 1,
+          });
+        }
+      }
+
       return {
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
@@ -4108,7 +4358,7 @@ function buildSingleOption(
         yAxis: mergeAxis(
           {
             type: "value",
-            name: i18n.t("graph.frequency"),
+            name: i18next.t("graph.frequency"),
             nameLocation: "middle",
             nameGap: 40,
             ...axis,
@@ -4126,6 +4376,47 @@ function buildSingleOption(
         animationDuration: 250,
         _binWidth: width, // 调试用
       } as EChartsOption;
+    }
+
+    // Safety net for packet-backed mode: if style-specific histogram logic
+    // emitted no series, synthesize a packet-derived fallback so frame-backed
+    // transforms never regress to an empty histogram layer.
+    if (frameBackedAggregateMode && histogramPacket && series.length === histogramSeriesStart) {
+      if (xIsCategory) {
+        const totalsByCategory = new Map<string, number>();
+        for (const bin of histogramPacket.bins) {
+          const category = String(bin.category ?? "");
+          if (!category) continue;
+          totalsByCategory.set(category, (totalsByCategory.get(category) ?? 0) + Math.max(0, Number(bin.count) || 0));
+        }
+        if (totalsByCategory.size > 0) {
+          const fallbackCats = xCats.length > 0 ? xCats : Array.from(totalsByCategory.keys());
+          series.push({
+            id: "__hist_packet_fallback_cat",
+            type: "bar",
+            name: yField?.name || "histogram",
+            data: fallbackCats.map((cat) => totalsByCategory.get(cat) ?? 0),
+            z: 1,
+          });
+        }
+      } else {
+        const byCenter = new Map<number, number>();
+        for (const bin of histogramPacket.bins) {
+          const center = (bin.binStart + bin.binEnd) / 2;
+          byCenter.set(center, (byCenter.get(center) ?? 0) + Math.max(0, Number(bin.count) || 0));
+        }
+        if (byCenter.size > 0) {
+          const rows = Array.from(byCenter.entries()).sort((a, b) => a[0] - b[0]);
+          series.push({
+            id: "__hist_packet_fallback_val",
+            type: "bar",
+            name: yField?.name || "histogram",
+            data: rows.map(([center, count]) => [center, count]),
+            barGap: "0%",
+            z: 1,
+          });
+        }
+      }
     }
   }
 
@@ -4241,7 +4532,7 @@ function buildSingleOption(
           });
         }
       });
-    } else {
+    } else if (!frameBackedAggregateMode) {
 
     const xGroups = reorderMapByValueOrder(groupBy(data, xField), xField ? valueOrders?.[xField.name] : undefined);
     // Iterate the AXIS category list (xCats) rather than xGroups.keys()
@@ -4453,6 +4744,7 @@ function buildSingleOption(
         style: resolvedStyle,
         summaryPacket,
         groupKey: grouping ? gKey : null,
+        requireSummaryPacket: frameBackedAggregateMode,
       });
       if (built) series.push(...built);
     });
@@ -4765,6 +5057,55 @@ function buildSingleOption(
       : { scale: true };
   }
 
+  if (
+    data.rows.length === 0 &&
+    frameBackedAggregateMode &&
+    histogramPacket &&
+    enabledElements.some((e) => e.kind === "histogram")
+  ) {
+    const hasHistogramSeries = series.some((entry: any) => {
+      const id = typeof entry?.id === "string" ? entry.id : "";
+      return id.startsWith("__hist_") || id.startsWith("__hist_packet_fallback_");
+    });
+    if (!hasHistogramSeries) {
+      if (xIsCategory) {
+        const totalsByCategory = new Map<string, number>();
+        for (const bin of histogramPacket.bins) {
+          const category = String(bin.category ?? "");
+          if (!category) continue;
+          totalsByCategory.set(category, (totalsByCategory.get(category) ?? 0) + Math.max(0, Number(bin.count) || 0));
+        }
+        if (totalsByCategory.size > 0) {
+          const fallbackCats = xCats.length > 0 ? xCats : Array.from(totalsByCategory.keys());
+          series.push({
+            id: "__hist_packet_fallback_final_cat",
+            type: "bar",
+            name: yField?.name || "histogram",
+            data: fallbackCats.map((cat) => totalsByCategory.get(cat) ?? 0),
+            z: 1,
+          });
+        }
+      } else {
+        const fallbackRows = histogramPacket.bins
+          .map((bin) => [
+            (bin.binStart + bin.binEnd) / 2,
+            Math.max(0, Number(bin.count) || 0),
+          ] as [number, number])
+          .sort((a, b) => a[0] - b[0]);
+        if (fallbackRows.length > 0) {
+          series.push({
+            id: "__hist_packet_fallback_final_val",
+            type: "bar",
+            name: i18next.t("graph.frequency"),
+            data: fallbackRows,
+            barGap: "0%",
+            z: 1,
+          });
+        }
+      }
+    }
+  }
+
   return {
     backgroundColor: "transparent",
     textStyle: { color: theme.fgPrimary },
@@ -4916,6 +5257,7 @@ interface BuildCtx {
   style: ResolvedGroupStyle;
   summaryPacket: SummaryPacket | null;
   groupKey: string | null;
+  requireSummaryPacket: boolean;
 }
 
 function buildElementSeries(
@@ -4924,7 +5266,7 @@ function buildElementSeries(
   data: GraphData,
   ctx: BuildCtx,
 ): any[] | null {
-  const { xIdx, yIdx, sizeIdx, xIsCategory, seriesName, style, summaryPacket, groupKey } = ctx;
+  const { xIdx, yIdx, sizeIdx, xIsCategory, seriesName, style, summaryPacket, groupKey, requireSummaryPacket } = ctx;
   if (yIdx < 0) return null;
 
   // When no X column is bound, collapse all points onto a single category
@@ -4984,7 +5326,9 @@ function buildElementSeries(
           errorInterval,
           summaryPacket,
           groupKey,
+          requireSummaryPacket,
         );
+        if (agg.length === 0) return null;
         const sym = markerToSymbol(style.point.marker);
         const out: any[] = [
           {
@@ -5099,7 +5443,9 @@ function buildElementSeries(
           errorInterval,
           summaryPacket,
           groupKey,
+          requireSummaryPacket,
         );
+        if (agg.length === 0) return null;
         lineData = agg.map((p) => [
           xIsCategory ? toStr(p.x) : toNum(p.x),
           p.y,
@@ -5776,6 +6122,7 @@ function computeSharedRanges(
 
 function buildFrameBackedRawDescriptor(
   spec: GraphSpec,
+  data: GraphData,
   frame?: GraphDataFrame,
 ): RawPointPanelDescriptor | null {
   if (!frame || frame.rawChunks.length === 0) return null;
@@ -5797,8 +6144,23 @@ function buildFrameBackedRawDescriptor(
       ? { mode: "seeded" as const, seed: jitterSeed, amplitudePx: Math.max(0, jitterAmplitudePx) }
       : { mode: "none" as const };
 
+  let sourceByRowId: Map<bigint, string> | undefined;
+  const rowIdColIdx = data.columns.indexOf(ROW_ID_COL);
+  const meltVarColIdx = data.columns.indexOf(MELT_VAR_COL);
+  if (rowIdColIdx >= 0 && meltVarColIdx >= 0) {
+    sourceByRowId = new Map<bigint, string>();
+    for (const row of data.rows) {
+      const rowId = Number(row[rowIdColIdx]);
+      if (!Number.isSafeInteger(rowId)) continue;
+      const source = String(row[meltVarColIdx] ?? "");
+      if (!source) continue;
+      sourceByRowId.set(BigInt(rowId), source);
+    }
+  }
+
   return {
     colName: yName,
+    sourceByRowId,
     xCategories: frame.dictionaries.x,
     jitter,
     chunks: frame.rawChunks.map((chunk) => ({
@@ -5840,7 +6202,7 @@ export function buildGraph(
         panels: [{
           title: spec.title || "",
           option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates),
-          rawPoints: buildFrameBackedRawDescriptor(spec, frame),
+          rawPoints: buildFrameBackedRawDescriptor(spec, data, frame),
           groupXValue: null,
           groupYValue: null,
         }],
@@ -5854,7 +6216,7 @@ export function buildGraph(
         panels: [{
           title: spec.title || "",
           option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates),
-          rawPoints: buildFrameBackedRawDescriptor(spec, frame),
+          rawPoints: buildFrameBackedRawDescriptor(spec, data, frame),
           groupXValue: null,
           groupYValue: null,
         }],

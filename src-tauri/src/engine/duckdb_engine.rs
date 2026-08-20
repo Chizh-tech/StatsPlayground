@@ -53,6 +53,22 @@ fn role_column(request: &GraphDataRequest, role_name: &str) -> Option<String> {
         .map(|field| field.column.clone())
 }
 
+fn is_sampling_strata_role(role: &str) -> bool {
+    matches!(
+        role,
+        "group"
+            | "filter"
+            | "groupx"
+            | "groupy"
+            | "groupz"
+            | "wrap"
+            | "overlay"
+            | "color"
+            | "x"
+    ) || role.starts_with("multix")
+        || role.starts_with("multiy")
+}
+
 impl DuckDbEngine {
     /// Get a reference to the underlying connection
     pub fn conn(&self) -> &Connection {
@@ -1153,6 +1169,54 @@ impl DuckDbEngine {
             validate_column(column)?;
         }
 
+        let mut sampling_strata_columns: Vec<String> = Vec::new();
+        for field in &request.fields {
+            let role = field.role.to_ascii_lowercase();
+            if !is_sampling_strata_role(role.as_str()) {
+                continue;
+            }
+            let column = field.column.trim().to_string();
+            if column.is_empty() || !allowed_columns.contains_key(column.as_str()) {
+                continue;
+            }
+            if !sampling_strata_columns.iter().any(|existing| existing == &column) {
+                sampling_strata_columns.push(column);
+            }
+        }
+        if sampling_strata_columns.is_empty() {
+            if let Some(column) = group_column.clone() {
+                sampling_strata_columns.push(column);
+            } else if let Some(column) = x_column.clone() {
+                sampling_strata_columns.push(column);
+            }
+        }
+
+        let mut sampling_strata_aliases: Vec<String> = Vec::new();
+        let mut sampling_strata_select_sql: Vec<String> = Vec::new();
+        for (index, column) in sampling_strata_columns.iter().enumerate() {
+            let alias = format!("__sp_strata_{index}");
+            sampling_strata_select_sql.push(format!(
+                "CAST({column} AS VARCHAR) AS {alias}",
+                column = Self::quote_identifier(column),
+                alias = Self::quote_identifier(alias.as_str()),
+            ));
+            sampling_strata_aliases.push(alias);
+        }
+
+        let mut strata_key_parts = if sampling_strata_aliases.is_empty() {
+            vec!["COALESCE(CAST(__sp_group AS VARCHAR), COALESCE(CAST(__sp_x AS VARCHAR), '__sp_all__'))".to_string()]
+        } else {
+            sampling_strata_aliases
+                .iter()
+                .map(|alias| format!("COALESCE(CAST({alias} AS VARCHAR), '')"))
+                .collect::<Vec<_>>()
+        };
+        strata_key_parts.push(format!(
+            "COALESCE(CAST({source_col} AS VARCHAR), '')",
+            source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN)
+        ));
+        let sampling_strata_key_expr = format!("CONCAT_WS('|', {})", strata_key_parts.join(", "));
+
         let (where_clause, filter_values) =
             Self::compile_table_window_filters(&request.filters, allowed_columns)?;
         let table_name = Self::quote_identifier(&Self::internal_table_name(&request.dataset_id));
@@ -1169,15 +1233,21 @@ impl DuckDbEngine {
             .as_ref()
             .map(|column| Self::quote_identifier(column))
             .unwrap_or_else(|| "NULL".to_string());
+        let strata_select_sql = if sampling_strata_select_sql.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", sampling_strata_select_sql.join(", "))
+        };
 
         let (source_sql, source_values, source_column_type) = if multi_y_columns.len() >= 2 {
             let mut branches = Vec::with_capacity(multi_y_columns.len());
             let mut values = Vec::with_capacity(filter_values.len() * multi_y_columns.len() + multi_y_columns.len());
             for column in &multi_y_columns {
                 let branch = format!(
-                    "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, ? AS {source_col} FROM {table_name} {where_clause}",
+                    "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size{strata_select}, ? AS {source_col} FROM {table_name} {where_clause}",
                     y_col = Self::quote_identifier(column),
                     source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                    strata_select = strata_select_sql,
                 );
                 branches.push(branch);
                 values.push(Value::Text(column.clone()));
@@ -1195,9 +1265,10 @@ impl DuckDbEngine {
                 y_column.clone()
             };
             let sql = format!(
-                "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, ? AS {source_col} FROM {table_name} {where_clause}",
+                "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size{strata_select}, ? AS {source_col} FROM {table_name} {where_clause}",
                 y_col = Self::quote_identifier(&source_col),
                 source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                strata_select = strata_select_sql,
             );
             let mut values = Vec::with_capacity(filter_values.len() + 1);
             values.push(Value::Text(source_col));
@@ -1219,11 +1290,11 @@ impl DuckDbEngine {
                     "WITH __sp_source AS ({source_sql}),
                       __sp_ranked AS (
                         SELECT *,
-                               COALESCE(CAST(__sp_group AS VARCHAR), COALESCE(CAST(__sp_x AS VARCHAR), '__sp_all__')) AS __sp_stratum,
+                                                             {strata_key} AS __sp_stratum,
                                COUNT(*) OVER () AS __sp_total_rows,
-                                                             COUNT(*) OVER (PARTITION BY CONCAT_WS('|', COALESCE(CAST(__sp_group AS VARCHAR), ''), COALESCE(CAST(__sp_x AS VARCHAR), ''), COALESCE(CAST({source_col} AS VARCHAR), ''))) AS __sp_stratum_rows,
+                                                             COUNT(*) OVER (PARTITION BY {strata_key}) AS __sp_stratum_rows,
                                ROW_NUMBER() OVER (
-                                                                 PARTITION BY CONCAT_WS('|', COALESCE(CAST(__sp_group AS VARCHAR), ''), COALESCE(CAST(__sp_x AS VARCHAR), ''), COALESCE(CAST({source_col} AS VARCHAR), ''))
+                                                                 PARTITION BY {strata_key}
                                  ORDER BY hash(CAST(\"_row_id\" AS BIGINT), CAST({seed_i64} AS BIGINT))
                                ) AS __sp_rank
                         FROM __sp_source
@@ -1238,6 +1309,7 @@ impl DuckDbEngine {
                         )
                                             END",
                                         source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                                        strata_key = sampling_strata_key_expr,
                 )
             }
         };
@@ -6582,6 +6654,9 @@ fn dedupe_sqlite_table_name(base: &str, used: &mut std::collections::HashSet<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::graph_data::{
+        GraphDataRequest, GraphElementRequest, GraphFieldBinding, GraphSampling, GraphViewport,
+    };
     use duckdb::types::Decimal;
     use crate::models::table::{
         TableWindowFilter, TableWindowFilterRule, TableWindowRequest, TableWindowSort,
@@ -6615,6 +6690,103 @@ mod tests {
             filters: Vec::new(),
             generation: 0,
         }
+    }
+
+    #[test]
+    fn sample_projection_stratifies_by_all_active_categorical_roles() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "graph-strata-id",
+            "Graph Strata",
+            &[
+                "region".into(),
+                "batch".into(),
+                "family".into(),
+                "cost".into(),
+                "m1".into(),
+                "m2".into(),
+            ],
+            &[
+                "VARCHAR".into(),
+                "VARCHAR".into(),
+                "VARCHAR".into(),
+                "DOUBLE".into(),
+                "DOUBLE".into(),
+                "DOUBLE".into(),
+            ],
+        )
+        .unwrap();
+
+        let allowed_columns = db
+            .get_user_columns("graph-strata-id")
+            .unwrap()
+            .into_iter()
+            .map(|(name, column_type)| (name, column_type))
+            .collect::<std::collections::HashMap<_, _>>();
+        let allowed = allowed_columns
+            .iter()
+            .map(|(name, column_type)| (name.as_str(), column_type.as_str()))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let request = GraphDataRequest {
+            request_id: "req-strata".into(),
+            dataset_id: "graph-strata-id".into(),
+            generation: 0,
+            fields: vec![
+                GraphFieldBinding {
+                    role: "x".into(),
+                    column: "region".into(),
+                },
+                GraphFieldBinding {
+                    role: "y".into(),
+                    column: "cost".into(),
+                },
+                GraphFieldBinding {
+                    role: "group".into(),
+                    column: "family".into(),
+                },
+                GraphFieldBinding {
+                    role: "filter".into(),
+                    column: "batch".into(),
+                },
+                GraphFieldBinding {
+                    role: "multiX0".into(),
+                    column: "batch".into(),
+                },
+                GraphFieldBinding {
+                    role: "multiY0".into(),
+                    column: "m1".into(),
+                },
+                GraphFieldBinding {
+                    role: "multiY1".into(),
+                    column: "m2".into(),
+                },
+            ],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "points".into(),
+                summary_stat: "none".into(),
+            }],
+            sampling: GraphSampling::Sample { size: 32, seed: 7 },
+            viewport: GraphViewport {
+                width: 1280,
+                height: 720,
+            },
+        };
+
+        let plan = db.compile_graph_query_plan(&request, &allowed).unwrap();
+        assert!(
+            plan.source_sql.contains("__sp_strata_0")
+                && plan.source_sql.contains("__sp_strata_1")
+                && plan.source_sql.contains("__sp_strata_2"),
+            "source projection must carry categorical/facet strata aliases"
+        );
+        assert!(
+            plan.projection_sql.contains("PARTITION BY CONCAT_WS('|', COALESCE(CAST(__sp_strata_0 AS VARCHAR), ''),")
+                && plan.projection_sql.contains("COALESCE(CAST(__sp_strata_1 AS VARCHAR), '')")
+                && plan.projection_sql.contains("COALESCE(CAST(__sp_strata_2 AS VARCHAR), '')"),
+            "sample partition key must include all active categorical role aliases"
+        );
     }
 
     #[test]

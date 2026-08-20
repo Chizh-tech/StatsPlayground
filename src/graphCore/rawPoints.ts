@@ -13,6 +13,7 @@ export type RawPointJitter =
 
 export interface RawPointPanelDescriptor {
   colName: string;
+  sourceByRowId?: ReadonlyMap<bigint, string>;
   xCategories?: readonly string[];
   jitter?: RawPointJitter;
   chunks: readonly RawPointChunkViews[];
@@ -212,7 +213,7 @@ export function drawRawPoints(
         px,
         py,
         rowId: chunk.rowIds[row],
-        colName: descriptor.colName,
+        colName: descriptor.sourceByRowId?.get(chunk.rowIds[row]) ?? descriptor.colName,
       });
     }
   }
