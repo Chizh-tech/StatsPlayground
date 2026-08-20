@@ -2,13 +2,16 @@ import { useEffect, useRef } from "react";
 import * as echarts from "echarts";
 import {
   buildPixelIndex,
+  computeCanvasBackingStore,
   drawRawPoints,
+  resetAndScaleCanvasContext,
   type CategoricalProjector,
   type NumericProjector,
   type RawPointPanelDescriptor,
   type RawPointPixelIndex,
   type RawPointProjector,
 } from "./rawPoints";
+import { GRAPH_RAW_CANVAS_Z_INDEX } from "./layers";
 
 interface RawPointsLayerProps {
   chart: echarts.ECharts | null;
@@ -105,13 +108,22 @@ export function RawPointsLayer({ chart, descriptor, onIndexChange }: RawPointsLa
     let frame = 0;
     const render = () => {
       frame = 0;
-      const w = Math.max(1, Math.round(host.clientWidth));
-      const h = Math.max(1, Math.round(host.clientHeight));
-      if (canvas.width !== w) canvas.width = w;
-      if (canvas.height !== h) canvas.height = h;
+      const backing = computeCanvasBackingStore(
+        host.clientWidth,
+        host.clientHeight,
+        window.devicePixelRatio || 1,
+      );
+      const w = backing.cssWidth;
+      const h = backing.cssHeight;
+      if (canvas.width !== backing.pixelWidth) canvas.width = backing.pixelWidth;
+      if (canvas.height !== backing.pixelHeight) canvas.height = backing.pixelHeight;
+      const cssWidth = `${w}px`;
+      const cssHeight = `${h}px`;
+      if (canvas.style.width !== cssWidth) canvas.style.width = cssWidth;
+      if (canvas.style.height !== cssHeight) canvas.style.height = cssHeight;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      ctx.clearRect(0, 0, w, h);
+      resetAndScaleCanvasContext(ctx, backing);
 
       if (!chart || !descriptor) {
         onIndexChange?.(null);
@@ -163,7 +175,7 @@ export function RawPointsLayer({ chart, descriptor, onIndexChange }: RawPointsLa
         position: "absolute",
         inset: 0,
         pointerEvents: "none",
-        zIndex: 7,
+        zIndex: GRAPH_RAW_CANVAS_Z_INDEX,
       }}
     />
   );

@@ -12,6 +12,8 @@ import { getGraphTheme } from "./theme";
 import { buildGraph, type ScatterPointPick } from "./transform";
 import { RawPointsLayer } from "./RawPointsLayer";
 import { hitTestBrush as hitTestRawBrush, hitTestPoint as hitTestRawPoint, type RawPointPixelIndex } from "./rawPoints";
+import { bigintToScatterPointPick } from "./rawPoints";
+import { applyZrenderCanvasZIndices, withInterleavedGraphLayers } from "./layers";
 import { Chart3D } from "./Chart3D";
 import type { GraphDataFrame } from "@/types/graphData";
 import { useThemeStore } from "@/stores/useThemeStore";
@@ -218,6 +220,12 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
     setChart(inst);
     const ro = new ResizeObserver(() => inst.resize());
     ro.observe(panelRef.current);
+    const syncLayerZIndices = () => {
+      const painter = (inst as unknown as { getZr?: () => { painter?: { _layers?: Record<string, { dom?: { style?: { zIndex?: string } } }> } } })
+        .getZr?.()
+        ?.painter;
+      applyZrenderCanvasZIndices(painter?._layers);
+    };
 
     // ----- Rubber-band brush overlay ---------------------------------
     // A transparent abs-positioned div painted over the ECharts canvas
@@ -288,6 +296,7 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
     // first; only fall back to the geometric strip if both axis hit
     // tests fail — then prefer Y (the historical default).
     const zr = inst.getZr();
+    zr.on("rendered", syncLayerZIndices);
     const zrHandler = (e: { offsetX: number; offsetY: number }) => {
       const yCb = onYAxisDblClickRef.current;
       const xCb = onXAxisDblClickRef.current;
@@ -346,12 +355,6 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
     // tuples without `__pick` and are silently ignored — they don't map
     // to a single source row, so a "jump to cell" gesture would be
     // ambiguous.
-    const toScatterPick = (rowId: bigint, colName: string): ScatterPointPick | null => {
-      const n = Number(rowId);
-      if (!Number.isSafeInteger(n) || n < 0) return null;
-      return { rowId: n, colName };
-    };
-
     const onSeriesClick = (params: any) => {
       const cb = onPointClickRef.current;
       if (!cb) return;
@@ -361,7 +364,7 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
       if (rawIndex && Number.isFinite(offsetX) && Number.isFinite(offsetY)) {
         const hit = hitTestRawPoint(rawIndex, offsetX, offsetY);
         if (hit) {
-          const pick = toScatterPick(hit.topmost.rowId, hit.topmost.colName);
+          const pick = bigintToScatterPointPick(hit.topmost.rowId, hit.topmost.colName);
           if (pick) {
             cb(pick);
             return;
@@ -985,6 +988,7 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
     window.addEventListener("mouseup", onWindowMouseUpSafety);
 
     return () => {
+      zr.off("rendered", syncLayerZIndices);
       zr.off("dblclick", zrHandler);
       inst.off("click", onSeriesClick);
       el.removeEventListener("pointerdown", onPointerDown);
@@ -1010,7 +1014,13 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
 
   // 更新选项
   useEffect(() => {
-    chartRef.current?.setOption(option as echarts.EChartsCoreOption, true);
+    const inst = chartRef.current;
+    if (!inst) return;
+    inst.setOption(withInterleavedGraphLayers(option) as echarts.EChartsCoreOption, true);
+    const painter = (inst as unknown as { getZr?: () => { painter?: { _layers?: Record<string, { dom?: { style?: { zIndex?: string } } }> } } })
+      .getZr?.()
+      ?.painter;
+    applyZrenderCanvasZIndices(painter?._layers);
   }, [option]);
 
   // Right-click on an axis strip → open the axis context menu. Handled

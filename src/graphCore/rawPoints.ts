@@ -58,6 +58,24 @@ export interface RawPointHit {
   overlaps: RawPointPick[];
 }
 
+export interface ScatterPointPickLike {
+  rowId: number;
+  colName: string;
+}
+
+export interface CanvasBackingStore {
+  cssWidth: number;
+  cssHeight: number;
+  pixelWidth: number;
+  pixelHeight: number;
+  scale: number;
+}
+
+export interface CanvasTransformContext {
+  setTransform(a: number, b: number, c: number, d: number, e: number, f: number): void;
+  clearRect(x: number, y: number, w: number, h: number): void;
+}
+
 export interface RawPointPixelIndex {
   width: number;
   height: number;
@@ -66,6 +84,53 @@ export interface RawPointPixelIndex {
   sourceOffsets: Uint32Array;
   sourceRowIds: BigInt64Array;
   sourceColNames: string[];
+}
+
+export function bigintToSafeNumber(value: bigint): number | null {
+  const max = BigInt(Number.MAX_SAFE_INTEGER);
+  const min = BigInt(Number.MIN_SAFE_INTEGER);
+  if (value > max || value < min) return null;
+  const n = Number(value);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+export function bigintToScatterPointPick(
+  rowId: bigint,
+  colName: string,
+): ScatterPointPickLike | null {
+  const n = bigintToSafeNumber(rowId);
+  if (n == null || n < 0) return null;
+  return { rowId: n, colName };
+}
+
+export function computeCanvasBackingStore(
+  cssWidth: number,
+  cssHeight: number,
+  devicePixelRatio: number,
+): CanvasBackingStore {
+  const safeCssWidth = Math.max(1, Math.round(cssWidth));
+  const safeCssHeight = Math.max(1, Math.round(cssHeight));
+  const safeDpr = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0
+    ? devicePixelRatio
+    : 1;
+  const pixelWidth = Math.max(1, Math.round(safeCssWidth * safeDpr));
+  const pixelHeight = Math.max(1, Math.round(safeCssHeight * safeDpr));
+  return {
+    cssWidth: safeCssWidth,
+    cssHeight: safeCssHeight,
+    pixelWidth,
+    pixelHeight,
+    scale: pixelWidth / safeCssWidth,
+  };
+}
+
+export function resetAndScaleCanvasContext(
+  ctx: CanvasTransformContext,
+  backingStore: CanvasBackingStore,
+): void {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, backingStore.pixelWidth, backingStore.pixelHeight);
+  ctx.setTransform(backingStore.scale, 0, 0, backingStore.scale, 0, 0);
 }
 
 function bitIsSet(bitmap: Uint8Array | undefined, rowIndex: number): boolean {

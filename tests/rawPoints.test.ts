@@ -1,15 +1,26 @@
 import assert from "node:assert/strict";
 import {
+  bigintToSafeNumber,
+  bigintToScatterPointPick,
   buildPixelIndex,
+  computeCanvasBackingStore,
   drawRawPoints,
   hitTestBrush,
   hitTestPoint,
+  resetAndScaleCanvasContext,
   rasterizeToRgba,
   stableRgbaDigest,
   type RawPointChunkViews,
   type RawPointPanelDescriptor,
   type RawPointProjector,
 } from "../src/graphCore/rawPoints.ts";
+import {
+  applyZrenderCanvasZIndices,
+  GRAPH_RAW_CANVAS_Z_INDEX,
+  GRAPH_SERIES_BASE_ZLEVEL,
+  GRAPH_SERIES_OVERLAY_ZLEVEL,
+  withInterleavedGraphLayers,
+} from "../src/graphCore/layers.ts";
 
 function bitsFromFlags(flags: number[]): Uint8Array {
   const bytes = new Uint8Array(Math.max(1, Math.ceil(flags.length / 8)));
@@ -42,6 +53,83 @@ const numericProjector: RawPointProjector = {
   x: { kind: "numeric", scale: 2, offset: 1 },
   y: { scale: -2, offset: 62 },
 };
+
+{
+  assert.equal(bigintToSafeNumber(BigInt(Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER);
+  assert.equal(bigintToSafeNumber(BigInt(Number.MIN_SAFE_INTEGER)), Number.MIN_SAFE_INTEGER);
+  assert.equal(bigintToSafeNumber(BigInt(Number.MAX_SAFE_INTEGER) + 1n), null);
+  assert.equal(bigintToSafeNumber(BigInt(Number.MIN_SAFE_INTEGER) - 1n), null);
+
+  assert.deepEqual(bigintToScatterPointPick(42n, "metric"), { rowId: 42, colName: "metric" });
+  assert.equal(bigintToScatterPointPick(-1n, "metric"), null);
+  assert.equal(bigintToScatterPointPick(BigInt(Number.MAX_SAFE_INTEGER) + 1n, "metric"), null);
+}
+
+{
+  const dpr1 = computeCanvasBackingStore(640, 480, 1);
+  assert.deepEqual(dpr1, {
+    cssWidth: 640,
+    cssHeight: 480,
+    pixelWidth: 640,
+    pixelHeight: 480,
+    scale: 1,
+  });
+
+  const dpr2 = computeCanvasBackingStore(640, 480, 2);
+  assert.deepEqual(dpr2, {
+    cssWidth: 640,
+    cssHeight: 480,
+    pixelWidth: 1280,
+    pixelHeight: 960,
+    scale: 2,
+  });
+
+  const calls: string[] = [];
+  const ctx = {
+    setTransform(a: number, _b: number, _c: number, d: number) {
+      calls.push(`setTransform:${a},${d}`);
+    },
+    clearRect(_x: number, _y: number, w: number, h: number) {
+      calls.push(`clearRect:${w}x${h}`);
+    },
+  };
+  resetAndScaleCanvasContext(ctx, dpr2);
+  assert.deepEqual(calls, [
+    "setTransform:1,1",
+    "clearRect:1280x960",
+    "setTransform:2,2",
+  ]);
+}
+
+{
+  const layered = withInterleavedGraphLayers({
+    series: [
+      { id: "bars", type: "bar" },
+      { id: "__ref_lines_y__", type: "scatter", markLine: { data: [] } },
+      { id: "fit__fitstats", type: "scatter", label: { show: true } },
+      { id: "upper-custom", type: "custom", zlevel: 20 },
+    ],
+  }) as { series: Array<{ id: string; zlevel: number }> };
+
+  assert.equal(layered.series[0].zlevel, GRAPH_SERIES_BASE_ZLEVEL);
+  assert.equal(layered.series[1].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
+  assert.equal(layered.series[2].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
+  assert.equal(layered.series[3].zlevel, 20);
+  assert.ok(
+    GRAPH_SERIES_BASE_ZLEVEL < GRAPH_RAW_CANVAS_Z_INDEX &&
+      GRAPH_RAW_CANVAS_Z_INDEX < GRAPH_SERIES_OVERLAY_ZLEVEL,
+  );
+
+  const layers = {
+    "10": { dom: { style: {} } },
+    "0": { dom: { style: {} } },
+    "bad": { dom: { style: {} } },
+  } as Record<string, { dom: { style: { zIndex?: string } } }>;
+  const applied = applyZrenderCanvasZIndices(layers);
+  assert.equal(applied, 2);
+  assert.equal(layers["0"].dom.style.zIndex, "0");
+  assert.equal(layers["10"].dom.style.zIndex, "10");
+}
 
 {
   const descriptor: RawPointPanelDescriptor = {

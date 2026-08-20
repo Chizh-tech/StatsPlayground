@@ -73,3 +73,78 @@ Base: 4b8052ec205768eae95f55a938e54511815c7929
 
 - `ScatterPointPick.rowId` remains `number`; frame-backed `i64` row IDs are converted to `number` for existing callback contracts. Very large row IDs (> `Number.MAX_SAFE_INTEGER`) are skipped in raw click/brush conversion.
 - Facet-local typed chunk masking is deferred until aggregate packet metadata can identify panel membership (Task 6/7 cutover path).
+
+## Fix Round 1 (Task 5)
+
+### Scope
+
+- Fixed raw/ECharts interleaving to support: base chart geometry below raw pixels, raw points in the middle, and reference/interaction carriers above raw points.
+- Factored bigint row-id conversion into pure helpers and added explicit safe-range tests.
+- Factored DPR backing-store math + transform reset into pure helpers and wired panel canvas redraw to keep geometry/hit index in CSS pixels.
+
+### RED Evidence (TDD)
+
+- After adding focused tests first, running:
+  - `node --experimental-strip-types tests/rawPoints.test.ts`
+- Failed as expected with:
+  - `ERR_MODULE_NOT_FOUND: ../src/graphCore/layers.ts`
+
+### DOM/ZLevel Investigation Evidence
+
+- Local zrender source confirms zlevel-based layer model and default zlevel behavior:
+  - `node_modules/zrender/dist/zrender.js:2766` (`return a.zlevel - b.zlevel;`)
+  - `node_modules/zrender/dist/zrender.js:2855` (`disp.zlevel = 0;`)
+- Graph host remains absolute without its own z-index:
+  - `src/graphCore/Graph.tsx:1080` (`<div ref={chartHostRef} style={{ position: "absolute", inset: 0 }} />`)
+- Raw canvas is sibling absolute layer with pointer passthrough:
+  - `src/graphCore/RawPointsLayer.tsx:177` (`pointerEvents: "none"`)
+  - `src/graphCore/RawPointsLayer.tsx:178` (`zIndex: GRAPH_RAW_CANVAS_Z_INDEX`)
+
+### Mechanism Implemented
+
+- New layer constants and policy in `src/graphCore/layers.ts`:
+  - `GRAPH_SERIES_BASE_ZLEVEL = 0`
+  - `GRAPH_RAW_CANVAS_Z_INDEX = 5`
+  - `GRAPH_SERIES_OVERLAY_ZLEVEL = 10`
+- Series-level policy via `withInterleavedGraphLayers(...)`:
+  - Base series default to zlevel 0.
+  - Reference/interaction carriers are promoted to zlevel >= 10:
+    - ids `__ref_lines_*`, `__band_ref_lines_*`, `*__fitstats`, or series carrying `markLine`.
+- Runtime zrender DOM synchronization via `applyZrenderCanvasZIndices(...)`:
+  - Reads zrender painter `_layers` map and writes each layer canvas `style.zIndex = zlevel`.
+  - Called after `setOption` and on zrender `rendered`.
+  - This ensures chart-host canvases and raw canvas share one stacking context and can interleave by z-index.
+
+### Row ID Policy Fix
+
+- Added pure helpers in `src/graphCore/rawPoints.ts`:
+  - `bigintToSafeNumber(...)`
+  - `bigintToScatterPointPick(...)`
+- Graph click path now uses shared helper in `src/graphCore/Graph.tsx`.
+- Policy preserved: out-of-safe-range and negative row IDs are skipped; public pick contract remains `number`.
+
+### DPR Fix
+
+- Added pure helpers in `src/graphCore/rawPoints.ts`:
+  - `computeCanvasBackingStore(...)`
+  - `resetAndScaleCanvasContext(...)`
+- `RawPointsLayer` now:
+  - Sets backing store to `CSS * devicePixelRatio`.
+  - Keeps CSS width/height unchanged.
+  - Resets transform before clear/scale each redraw to avoid cumulative scaling.
+  - Keeps draw geometry + pixel index in CSS-pixel coordinates.
+
+### New Focused Contract Tests
+
+- `tests/rawPoints.test.ts` now covers:
+  - Safe-range bigint conversion (min/max safe bounds) and out-of-range rejection.
+  - `bigint -> ScatterPointPick` conversion policy (negative/out-of-range rejected).
+  - DPR 1 and 2 backing-store dimensions.
+  - Transform reset ordering (`setTransform(1) -> clearRect -> setTransform(scale)`).
+  - Interleaved layer contract (`base < raw < overlay`) and zrender layer z-index synchronization.
+
+### GREEN Verification
+
+- `node --experimental-strip-types tests/rawPoints.test.ts` -> pass
+- `node --experimental-strip-types tests/graphDataPipeline.test.ts` -> pass
+- `npx vite build` -> pass (`built in 8.66s`)
