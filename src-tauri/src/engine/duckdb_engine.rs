@@ -995,14 +995,16 @@ impl DuckDbEngine {
         Ok(values)
     }
 
-    pub fn stream_graph_projection_rows<F>(
+    pub fn stream_graph_projection_rows<FMeta, F>(
         &self,
         request: &GraphDataRequest,
         include_row_id: bool,
+        mut on_projection: FMeta,
         mut on_row: F,
     ) -> Result<GraphProjectionStats, AppError>
     where
-        F: FnMut(Option<i64>, Vec<Value>) -> Result<bool, AppError>,
+        FMeta: FnMut(&GraphProjectionStats) -> Result<(), AppError>,
+        F: FnMut(Option<i64>, Vec<Value>, u64) -> Result<bool, AppError>,
     {
         let current_generation = self.get_dataset_generation(&request.dataset_id)?;
         if current_generation != request.generation {
@@ -1051,14 +1053,12 @@ impl DuckDbEngine {
             Self::compile_table_window_filters(&request.filters, &allowed_columns)?;
         let table_name = Self::quote_identifier(&Self::internal_table_name(&request.dataset_id));
 
-        let count_sql = format!("SELECT COUNT(*) FROM {table_name} {where_clause}");
-        let source_rows: i64 = self.conn.query_row(
-            &count_sql,
-            params_from_iter(filter_values.iter()),
-            |row| row.get(0),
-        )?;
-        let source_rows = u64::try_from(source_rows)
-            .map_err(|_| AppError::Database("graph source row count is negative".into()))?;
+        let mut stats = GraphProjectionStats {
+            source_rows: 0,
+            projected_columns: projected_columns.clone(),
+            projected_column_types: projected_column_types.clone(),
+        };
+        on_projection(&stats)?;
 
         let select_items = projected_columns
             .iter()
@@ -1078,12 +1078,12 @@ impl DuckDbEngine {
             .collect::<Vec<_>>();
         let select_sql = if include_row_id {
             format!(
-                "SELECT \"_row_id\", {} FROM {table_name} {where_clause} ORDER BY \"_row_id\" ASC",
+                "SELECT \"_row_id\", {}, COUNT(*) OVER () AS \"__sp_source_rows\" FROM {table_name} {where_clause} ORDER BY \"_row_id\" ASC",
                 select_items.join(", ")
             )
         } else {
             format!(
-                "SELECT {} FROM {table_name} {where_clause} ORDER BY \"_row_id\" ASC",
+                "SELECT {}, COUNT(*) OVER () AS \"__sp_source_rows\" FROM {table_name} {where_clause} ORDER BY \"_row_id\" ASC",
                 select_items.join(", ")
             )
         };
@@ -1103,16 +1103,16 @@ impl DuckDbEngine {
                 values.push(row.get::<_, Value>(start_index + index)?);
             }
 
-            if !on_row(row_id, values)? {
+            let source_rows: i64 = row.get(start_index + projected_columns.len())?;
+            stats.source_rows = u64::try_from(source_rows)
+                .map_err(|_| AppError::Database("graph source row count is negative".into()))?;
+
+            if !on_row(row_id, values, stats.source_rows)? {
                 break;
             }
         }
 
-        Ok(GraphProjectionStats {
-            source_rows,
-            projected_columns,
-            projected_column_types,
-        })
+        Ok(stats)
     }
 
     fn compile_table_window_filters(

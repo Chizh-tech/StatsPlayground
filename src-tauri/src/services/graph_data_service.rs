@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, OnceLock};
 
 use duckdb::types::Value;
@@ -14,9 +15,101 @@ use crate::state::AppState;
 
 const INITIAL_PAYLOAD_BUDGET_BYTES: usize = 4 * 1024 * 1024;
 
-fn cancelled_requests() -> &'static Mutex<HashSet<String>> {
-    static CANCELLED_REQUESTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    CANCELLED_REQUESTS.get_or_init(|| Mutex::new(HashSet::new()))
+#[derive(Debug, Clone)]
+struct CancellationEntry {
+    cancelled: bool,
+    nonce: u64,
+}
+
+fn cancelled_requests() -> &'static Mutex<HashMap<String, CancellationEntry>> {
+    static CANCELLED_REQUESTS: OnceLock<Mutex<HashMap<String, CancellationEntry>>> = OnceLock::new();
+    CANCELLED_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RequestRun {
+    nonce: u64,
+    pre_cancelled: bool,
+}
+
+#[derive(Debug)]
+enum GraphSinkError {
+    Closed,
+    Invalid(String),
+}
+
+trait GraphChunkSink {
+    fn send_header(&mut self, header: &GraphChunkHeader) -> Result<(), GraphSinkError>;
+
+    fn send_payload(&mut self, payload: Vec<u8>) -> Result<(), GraphSinkError>;
+}
+
+struct ChannelChunkSink<'a> {
+    on_chunk: &'a Channel<InvokeResponseBody>,
+}
+
+impl GraphChunkSink for ChannelChunkSink<'_> {
+    fn send_header(&mut self, header: &GraphChunkHeader) -> Result<(), GraphSinkError> {
+        let serialized = serde_json::to_string(header)
+            .map_err(|error| GraphSinkError::Invalid(error.to_string()))?;
+        if self
+            .on_chunk
+            .send(InvokeResponseBody::from(serialized))
+            .is_err()
+        {
+            return Err(GraphSinkError::Closed);
+        }
+        Ok(())
+    }
+
+    fn send_payload(&mut self, payload: Vec<u8>) -> Result<(), GraphSinkError> {
+        if self.on_chunk.send(InvokeResponseBody::from(payload)).is_err() {
+            return Err(GraphSinkError::Closed);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct CollectingChunkSink {
+    chunks: Vec<GraphDataChunk>,
+    pending_header: Option<GraphChunkHeader>,
+}
+
+#[cfg(test)]
+impl CollectingChunkSink {
+    fn into_chunks(self) -> Result<Vec<GraphDataChunk>, AppError> {
+        if self.pending_header.is_some() {
+            return Err(AppError::Database(
+                "graph chunk header was not followed by payload".to_string(),
+            ));
+        }
+        Ok(self.chunks)
+    }
+}
+
+#[cfg(test)]
+impl GraphChunkSink for CollectingChunkSink {
+    fn send_header(&mut self, header: &GraphChunkHeader) -> Result<(), GraphSinkError> {
+        if self.pending_header.is_some() {
+            return Err(GraphSinkError::Invalid(
+                "graph sink received a header before payload".to_string(),
+            ));
+        }
+        self.pending_header = Some(header.clone());
+        Ok(())
+    }
+
+    fn send_payload(&mut self, payload: Vec<u8>) -> Result<(), GraphSinkError> {
+        let Some(header) = self.pending_header.take() else {
+            return Err(GraphSinkError::Invalid(
+                "graph sink received payload before header".to_string(),
+            ));
+        };
+        self.chunks.push(GraphDataChunk { header, payload });
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -39,30 +132,8 @@ impl<'a> GraphDataService<'a> {
         request: &GraphDataRequest,
         on_chunk: &Channel<InvokeResponseBody>,
     ) -> Result<GraphDataCompletion, AppError> {
-        let (chunks, completion) = self.collect_chunks(request)?;
-        for chunk in chunks {
-            let header = serde_json::to_string(&chunk.header)
-                .map_err(|error| AppError::InvalidParam(error.to_string()))?;
-            if on_chunk.send(InvokeResponseBody::from(header)).is_err()
-                || on_chunk.send(InvokeResponseBody::from(chunk.payload)).is_err()
-            {
-                if self.is_cancelled(&request.request_id)? {
-                    return Ok(GraphDataCompletion {
-                        request_id: request.request_id.clone(),
-                        dataset_id: request.dataset_id.clone(),
-                        generation: request.generation,
-                        source_rows: completion.source_rows,
-                        processed_rows: completion.processed_rows,
-                        chunks_sent: completion.chunks_sent,
-                        cancelled: true,
-                    });
-                }
-                return Err(AppError::InvalidParam(
-                    "graph data channel closed".to_string(),
-                ));
-            }
-        }
-        Ok(completion)
+        let mut sink = ChannelChunkSink { on_chunk };
+        self.stream_with_sink(request, &mut sink)
     }
 
     pub fn cancel(&self, request_id: &str) -> Result<(), AppError> {
@@ -74,27 +145,37 @@ impl<'a> GraphDataService<'a> {
         let mut cancelled = cancelled_requests()
             .lock()
             .map_err(|error| AppError::Database(error.to_string()))?;
-        cancelled.insert(request_id.to_string());
+        let entry = cancelled
+            .entry(request_id.to_string())
+            .or_insert(CancellationEntry {
+                cancelled: false,
+                nonce: 0,
+            });
+        entry.cancelled = true;
+        entry.nonce = entry.nonce.saturating_add(1);
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn collect_for_test(
         &self,
         request: &GraphDataRequest,
     ) -> Result<Vec<GraphDataChunk>, AppError> {
-        let (chunks, completion) = self.collect_chunks(request)?;
+        let mut sink = CollectingChunkSink::default();
+        let completion = self.stream_with_sink(request, &mut sink)?;
         if completion.cancelled {
             return Err(AppError::InvalidParam(
                 "request was cancelled during graph projection".to_string(),
             ));
         }
-        Ok(chunks)
+        sink.into_chunks()
     }
 
-    fn collect_chunks(
+    fn stream_with_sink<S: GraphChunkSink>(
         &self,
         request: &GraphDataRequest,
-    ) -> Result<(Vec<GraphDataChunk>, GraphDataCompletion), AppError> {
+        sink: &mut S,
+    ) -> Result<GraphDataCompletion, AppError> {
         if request.request_id.trim().is_empty() {
             return Err(AppError::InvalidParam(
                 "request_id must not be blank".to_string(),
@@ -116,94 +197,228 @@ impl<'a> GraphDataService<'a> {
             ));
         }
 
-        self.clear_cancellation(&request.request_id)?;
+        let run = self.begin_request_run(&request.request_id)?;
+        if run.pre_cancelled {
+            self.finish_request_run(&request.request_id, run.nonce, true)?;
+            return Ok(GraphDataCompletion {
+                request_id: request.request_id.clone(),
+                dataset_id: request.dataset_id.clone(),
+                generation: request.generation,
+                source_rows: 0,
+                processed_rows: 0,
+                chunks_sent: 0,
+                cancelled: true,
+            });
+        }
 
-        let include_row_id = request
-            .elements
-            .iter()
-            .any(|element| element.kind.eq_ignore_ascii_case("points"));
-        let db = self
-            .state
-            .db
-            .lock()
-            .map_err(|error| AppError::Database(error.to_string()))?;
+        let result = (|| -> Result<GraphDataCompletion, AppError> {
+            let include_row_id = request
+                .elements
+                .iter()
+                .any(|element| element.kind.eq_ignore_ascii_case("points"));
+            let db = self
+                .state
+                .db
+                .lock()
+                .map_err(|error| AppError::Database(error.to_string()))?;
 
-        let stats = db.stream_graph_projection_rows(request, include_row_id, |_row_id, _values| {
-            Ok(false)
-        })?;
-        let metadata = ProjectionMetadata::new(request, include_row_id, &stats)?;
+            let metadata: RefCell<Option<ProjectionMetadata>> = RefCell::new(None);
+            let accumulator: RefCell<Option<ChunkAccumulator>> = RefCell::new(None);
+            let mut chunk_index: u32 = 0;
+            let mut row_offset: u64 = 0;
+            let mut processed_rows: u64 = 0;
+            let mut source_rows: u64 = 0;
+            let mut chunks_sent: u32 = 0;
+            let mut cancelled = false;
+            let mut projection_callbacks: u32 = 0;
 
-        let mut chunks = Vec::new();
-        let mut accumulator = ChunkAccumulator::new(&metadata);
-        let mut chunk_index: u32 = 0;
-        let mut row_offset: u64 = 0;
-        let mut processed_rows: u64 = 0;
-        let mut cancelled = false;
+            let stats = db.stream_graph_projection_rows(
+                request,
+                include_row_id,
+                |stats| {
+                    projection_callbacks = projection_callbacks.saturating_add(1);
+                    if projection_callbacks > 1 {
+                        return Err(AppError::Database(
+                            "graph projection callback invoked multiple times".to_string(),
+                        ));
+                    }
+                    let resolved = ProjectionMetadata::new(request, include_row_id, stats)?;
+                    *accumulator.borrow_mut() = Some(ChunkAccumulator::new(&resolved));
+                    *metadata.borrow_mut() = Some(resolved);
+                    Ok(())
+                },
+                |row_id, values, row_source_rows| {
+                    source_rows = row_source_rows;
+                    if self.is_cancelled(&request.request_id, run.nonce)? {
+                        cancelled = true;
+                        return Ok(false);
+                    }
 
-        let _ = db.stream_graph_projection_rows(request, include_row_id, |row_id, values| {
-            if self.is_cancelled(&request.request_id)? {
-                cancelled = true;
-                return Ok(false);
+                    let metadata_ref = metadata.borrow();
+                    let metadata = metadata_ref.as_ref().ok_or_else(|| {
+                        AppError::Database("graph projection metadata not initialized".to_string())
+                    })?;
+                    let mut accumulator_ref = accumulator.borrow_mut();
+                    let accumulator = accumulator_ref.as_mut().ok_or_else(|| {
+                        AppError::Database("graph chunk accumulator not initialized".to_string())
+                    })?;
+
+                    accumulator.push_row(metadata, row_id, &values)?;
+                    processed_rows = processed_rows.checked_add(1).ok_or_else(|| {
+                        AppError::InvalidParam("graph processed row count overflow".into())
+                    })?;
+
+                    if accumulator.row_count() >= accumulator.rows_per_chunk {
+                        let chunk = accumulator.finish_chunk(
+                            metadata,
+                            request,
+                            chunk_index,
+                            row_offset,
+                            source_rows,
+                            processed_rows,
+                            false,
+                        )?;
+                        if let Err(error) = self.send_chunk(sink, chunk) {
+                            if self.is_cancelled(&request.request_id, run.nonce)? {
+                                cancelled = true;
+                                return Ok(false);
+                            }
+                            return Err(error);
+                        }
+                        chunks_sent = chunks_sent.saturating_add(1);
+                        chunk_index = chunk_index.saturating_add(1);
+                        row_offset = processed_rows;
+                    }
+                    Ok(true)
+                },
+            )?;
+
+            if projection_callbacks != 1 {
+                return Err(AppError::Database(
+                    "graph projection callback was not invoked exactly once".to_string(),
+                ));
             }
 
-            accumulator.push_row(&metadata, row_id, &values)?;
-            processed_rows = processed_rows
-                .checked_add(1)
-                .ok_or_else(|| AppError::InvalidParam("graph processed row count overflow".into()))?;
+            source_rows = stats.source_rows;
+            if !cancelled {
+                let metadata_ref = metadata.borrow();
+                let metadata = metadata_ref.as_ref().ok_or_else(|| {
+                    AppError::Database("graph projection metadata not initialized".to_string())
+                })?;
+                let mut accumulator_ref = accumulator.borrow_mut();
+                let accumulator = accumulator_ref.as_mut().ok_or_else(|| {
+                    AppError::Database("graph chunk accumulator not initialized".to_string())
+                })?;
 
-            if accumulator.row_count() >= accumulator.rows_per_chunk {
-                chunks.push(accumulator.finish_chunk(
-                    &metadata,
+                let chunk = accumulator.finish_chunk(
+                    metadata,
                     request,
                     chunk_index,
                     row_offset,
-                    stats.source_rows,
+                    source_rows,
                     processed_rows,
-                    false,
-                )?);
-                chunk_index = chunk_index.saturating_add(1);
-                row_offset = processed_rows;
+                    true,
+                )?;
+                if let Err(error) = self.send_chunk(sink, chunk) {
+                    if self.is_cancelled(&request.request_id, run.nonce)? {
+                        cancelled = true;
+                    } else {
+                        return Err(error);
+                    }
+                } else {
+                    chunks_sent = chunks_sent.saturating_add(1);
+                }
             }
-            Ok(true)
-        })?;
 
-        if !cancelled {
-            chunks.push(accumulator.finish_chunk(
-                &metadata,
-                request,
-                chunk_index,
-                row_offset,
-                stats.source_rows,
+            Ok(GraphDataCompletion {
+                request_id: request.request_id.clone(),
+                dataset_id: request.dataset_id.clone(),
+                generation: request.generation,
+                source_rows,
                 processed_rows,
-                true,
-            )?);
+                chunks_sent,
+                cancelled,
+            })
+        })();
+
+        let observed_cancelled = matches!(&result, Ok(completion) if completion.cancelled);
+        self.finish_request_run(&request.request_id, run.nonce, observed_cancelled)?;
+        result
+    }
+
+    fn send_chunk<S: GraphChunkSink>(
+        &self,
+        sink: &mut S,
+        chunk: GraphDataChunk,
+    ) -> Result<(), AppError> {
+        sink.send_header(&chunk.header)
+            .map_err(Self::map_sink_error_to_app_error)?;
+        sink.send_payload(chunk.payload)
+            .map_err(Self::map_sink_error_to_app_error)?;
+        Ok(())
+    }
+
+    fn map_sink_error_to_app_error(error: GraphSinkError) -> AppError {
+        match error {
+            GraphSinkError::Closed => AppError::InvalidParam("graph data channel closed".to_string()),
+            GraphSinkError::Invalid(message) => AppError::InvalidParam(message),
         }
-
-        let completion = GraphDataCompletion {
-            request_id: request.request_id.clone(),
-            dataset_id: request.dataset_id.clone(),
-            generation: request.generation,
-            source_rows: stats.source_rows,
-            processed_rows,
-            chunks_sent: chunks.len() as u32,
-            cancelled,
-        };
-        self.clear_cancellation(&request.request_id)?;
-        Ok((chunks, completion))
     }
 
-    fn is_cancelled(&self, request_id: &str) -> Result<bool, AppError> {
-        let cancelled = cancelled_requests()
-            .lock()
-            .map_err(|error| AppError::Database(error.to_string()))?;
-        Ok(cancelled.contains(request_id))
-    }
-
-    fn clear_cancellation(&self, request_id: &str) -> Result<(), AppError> {
+    fn begin_request_run(&self, request_id: &str) -> Result<RequestRun, AppError> {
         let mut cancelled = cancelled_requests()
             .lock()
             .map_err(|error| AppError::Database(error.to_string()))?;
-        cancelled.remove(request_id);
+        let entry = cancelled
+            .entry(request_id.to_string())
+            .or_insert(CancellationEntry {
+                cancelled: false,
+                nonce: 0,
+            });
+        entry.nonce = entry.nonce.saturating_add(1);
+        let pre_cancelled = entry.cancelled;
+        if pre_cancelled {
+            entry.cancelled = false;
+        }
+        Ok(RequestRun {
+            nonce: entry.nonce,
+            pre_cancelled,
+        })
+    }
+
+    fn is_cancelled(&self, request_id: &str, run_nonce: u64) -> Result<bool, AppError> {
+        let cancelled = cancelled_requests()
+            .lock()
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        let Some(entry) = cancelled.get(request_id) else {
+            return Ok(false);
+        };
+        Ok(entry.cancelled && entry.nonce > run_nonce)
+    }
+
+    fn finish_request_run(
+        &self,
+        request_id: &str,
+        run_nonce: u64,
+        observed_cancelled: bool,
+    ) -> Result<(), AppError> {
+        let mut cancelled = cancelled_requests()
+            .lock()
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        let remove_entry = if let Some(entry) = cancelled.get(request_id) {
+            if entry.nonce == run_nonce {
+                true
+            } else {
+                observed_cancelled
+                    && entry.cancelled
+                    && entry.nonce == run_nonce.saturating_add(1)
+            }
+        } else {
+            false
+        };
+        if remove_entry {
+            cancelled.remove(request_id);
+        }
         Ok(())
     }
 }
@@ -303,7 +518,9 @@ impl ProjectionMetadata {
         if self.size_index.is_some() {
             row_width += 1;
         }
-        std::cmp::max(1, INITIAL_PAYLOAD_BUDGET_BYTES / row_width)
+        // Reserve fixed headroom for per-slice alignment padding so payload stays under budget.
+        let payload_budget = INITIAL_PAYLOAD_BUDGET_BYTES.saturating_sub(64);
+        std::cmp::max(1, payload_budget / row_width)
     }
 }
 
@@ -885,6 +1102,150 @@ mod tests {
             offset += 8;
         }
         result
+    }
+
+    #[derive(Default)]
+    struct BoundedSink {
+        first_header_processed_rows: Option<u64>,
+        first_header_source_rows: Option<u64>,
+        pending_chunks: usize,
+        max_pending_chunks: usize,
+        pending_payload_bytes: usize,
+        max_pending_payload_bytes: usize,
+    }
+
+    impl GraphChunkSink for BoundedSink {
+        fn send_header(&mut self, header: &GraphChunkHeader) -> Result<(), GraphSinkError> {
+            if self.first_header_processed_rows.is_none() {
+                self.first_header_processed_rows = Some(header.processed_rows);
+                self.first_header_source_rows = Some(header.source_rows);
+            }
+            self.pending_chunks = self.pending_chunks.saturating_add(1);
+            self.max_pending_chunks = self.max_pending_chunks.max(self.pending_chunks);
+            Ok(())
+        }
+
+        fn send_payload(&mut self, payload: Vec<u8>) -> Result<(), GraphSinkError> {
+            self.pending_payload_bytes = self.pending_payload_bytes.saturating_add(payload.len());
+            self.max_pending_payload_bytes =
+                self.max_pending_payload_bytes.max(self.pending_payload_bytes);
+            self.pending_payload_bytes = self.pending_payload_bytes.saturating_sub(payload.len());
+            self.pending_chunks = self.pending_chunks.saturating_sub(1);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct OrderingSink {
+        events: Vec<&'static str>,
+    }
+
+    impl GraphChunkSink for OrderingSink {
+        fn send_header(&mut self, _header: &GraphChunkHeader) -> Result<(), GraphSinkError> {
+            self.events.push("header");
+            Ok(())
+        }
+
+        fn send_payload(&mut self, _payload: Vec<u8>) -> Result<(), GraphSinkError> {
+            self.events.push("payload");
+            Ok(())
+        }
+    }
+
+    struct ClosedSink;
+
+    impl GraphChunkSink for ClosedSink {
+        fn send_header(&mut self, _header: &GraphChunkHeader) -> Result<(), GraphSinkError> {
+            Err(GraphSinkError::Closed)
+        }
+
+        fn send_payload(&mut self, _payload: Vec<u8>) -> Result<(), GraphSinkError> {
+            Err(GraphSinkError::Closed)
+        }
+    }
+
+    #[test]
+    fn stream_with_sink_emits_first_chunk_before_all_rows_and_bounds_inflight_payload() {
+        let state = AppState::new().expect("state");
+        seed_dataset(&state, "bounded-stream", 300_000);
+
+        let service = GraphDataService::new(&state);
+        let request = build_request("bounded-stream", 0);
+        let mut sink = BoundedSink::default();
+
+        let completion = service
+            .stream_with_sink(&request, &mut sink)
+            .expect("stream completion");
+
+        assert!(!completion.cancelled);
+        assert_eq!(completion.processed_rows, 300_000);
+        assert!(completion.chunks_sent > 1);
+
+        let first_processed = sink
+            .first_header_processed_rows
+            .expect("expected at least one header event");
+        let first_source = sink
+            .first_header_source_rows
+            .expect("expected source row metadata on first header");
+        assert!(first_processed < first_source);
+        assert!(sink.max_pending_chunks <= 1);
+        assert!(sink.max_pending_payload_bytes <= INITIAL_PAYLOAD_BUDGET_BYTES);
+    }
+
+    #[test]
+    fn stream_with_sink_respects_pre_start_cancellation() {
+        let state = AppState::new().expect("state");
+        seed_dataset(&state, "prestart-cancel", 128);
+
+        let service = GraphDataService::new(&state);
+        let request = build_request("prestart-cancel", 0);
+        service.cancel(&request.request_id).expect("cancel request");
+
+        let mut sink = OrderingSink::default();
+        let completion = service
+            .stream_with_sink(&request, &mut sink)
+            .expect("prestart cancellation should be observed");
+
+        assert!(completion.cancelled);
+        assert_eq!(completion.processed_rows, 0);
+        assert_eq!(completion.chunks_sent, 0);
+        assert!(sink.events.is_empty());
+    }
+
+    #[test]
+    fn stream_with_sink_orders_header_then_payload() {
+        let state = AppState::new().expect("state");
+        seed_dataset(&state, "ordered-events", 32);
+
+        let service = GraphDataService::new(&state);
+        let request = build_request("ordered-events", 0);
+        let mut sink = OrderingSink::default();
+
+        let completion = service
+            .stream_with_sink(&request, &mut sink)
+            .expect("stream completion");
+        assert!(!completion.cancelled);
+        assert!(!sink.events.is_empty());
+        assert_eq!(sink.events.len() % 2, 0);
+        for pair in sink.events.chunks(2) {
+            assert_eq!(pair[0], "header");
+            assert_eq!(pair[1], "payload");
+        }
+    }
+
+    #[test]
+    fn stream_with_sink_maps_closed_sink_to_invalid_param() {
+        let state = AppState::new().expect("state");
+        seed_dataset(&state, "closed-sink", 8);
+
+        let service = GraphDataService::new(&state);
+        let request = build_request("closed-sink", 0);
+        let mut sink = ClosedSink;
+
+        let error = service
+            .stream_with_sink(&request, &mut sink)
+            .expect_err("closed sink should fail");
+        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("graph data channel closed")));
     }
 }
 
