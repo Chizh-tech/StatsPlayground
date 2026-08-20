@@ -106,7 +106,7 @@ const numericProjector: RawPointProjector = {
     series: [
       { id: "bars", type: "bar" },
       { id: "labels-top", type: "scatter", label: { show: true } },
-      { id: "labels-emphasis", type: "scatter", emphasis: { label: { show: true } } },
+      { id: "labels-emphasis", type: "bar", emphasis: { label: { show: true } } },
       { id: "__ref_lines_y__", type: "line" },
       { id: "markline-carrier", type: "line", markLine: { data: [] } },
       { id: "fit__fitstats", type: "scatter" },
@@ -116,7 +116,7 @@ const numericProjector: RawPointProjector = {
 
   assert.equal(layered.series[0].zlevel, GRAPH_SERIES_BASE_ZLEVEL);
   assert.equal(layered.series[1].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
-  assert.equal(layered.series[2].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
+  assert.equal(layered.series[2].zlevel, GRAPH_SERIES_BASE_ZLEVEL);
   assert.equal(layered.series[3].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
   assert.equal(layered.series[4].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);
   assert.equal(layered.series[5].zlevel, GRAPH_SERIES_OVERLAY_ZLEVEL);

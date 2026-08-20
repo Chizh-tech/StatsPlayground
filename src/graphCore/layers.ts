@@ -31,19 +31,9 @@ function hasVisibleSeriesLabel(series: SeriesLike): boolean {
     label?: unknown;
     endLabel?: unknown;
     upperLabel?: unknown;
-    emphasis?: { label?: unknown; endLabel?: unknown; upperLabel?: unknown };
-    select?: { label?: unknown; endLabel?: unknown; upperLabel?: unknown };
-    blur?: { label?: unknown; endLabel?: unknown; upperLabel?: unknown };
   };
   if (hasShowTrue(coreSeries.label) || hasShowTrue(coreSeries.endLabel) || hasShowTrue(coreSeries.upperLabel)) {
     return true;
-  }
-  const states = [coreSeries.emphasis, coreSeries.select, coreSeries.blur];
-  for (const state of states) {
-    if (!state || typeof state !== "object") continue;
-    if (hasShowTrue(state.label) || hasShowTrue(state.endLabel) || hasShowTrue(state.upperLabel)) {
-      return true;
-    }
   }
   return false;
 }

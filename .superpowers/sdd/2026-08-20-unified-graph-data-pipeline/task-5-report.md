@@ -175,3 +175,31 @@ Base: 4b8052ec205768eae95f55a938e54511815c7929
 - Kept private zrender `_layers` access isolated to the existing boundary (`applyZrenderCanvasZIndices(...)` call sites in `Graph.tsx`).
 - No architecture change was introduced in this round.
 - Upgrade risk note: `_layers` remains a private implementation detail in zrender and may break on upstream internals changes; if that happens, fallback should be to series-only `zlevel` ordering and disable DOM z-index sync until adapted.
+
+## Fix Round 3 (Task 5)
+
+### Open Issue Addressed
+
+- `isOverlayCarrier(...)` no longer promotes a whole base series solely because interaction-state labels are visible (`emphasis/select/blur` with `label.show`).
+- Overlay label classification is now limited to persistent top-level label carriers:
+  - `label.show === true`
+  - `endLabel.show === true`
+  - `upperLabel.show === true`
+- Dedicated overlay carriers remain unchanged and still promote to overlay zlevel:
+  - `__ref_lines_*`
+  - `__band_ref_lines_*`
+  - `*__fitstats`
+  - series carrying `markLine`
+
+### Focused Test Coverage
+
+- Top-level visible label (`label.show`) -> overlay zlevel.
+- Emphasis-only visible label on a bar -> base zlevel.
+- Ordinary bar -> base zlevel.
+- Reference carriers (`__ref_lines_*`, `markLine`, `*__fitstats`) -> overlay zlevel.
+
+### Verification
+
+- `node --experimental-strip-types tests/rawPoints.test.ts` -> pass
+- `node --experimental-strip-types tests/graphDataPipeline.test.ts` -> pass
+- `npx vite build` -> pass (`vite v6.4.1`, `970 modules transformed`, built in `8.39s`)
