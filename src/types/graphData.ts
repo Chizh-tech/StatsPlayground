@@ -89,6 +89,10 @@ export interface HistogramPacket {
   yColumn: string;
   groupColumn?: string;
   sourceColumn?: string;
+  binCount: number;
+  minValue?: number;
+  maxValue?: number;
+  missingCount: number;
   binWidth: number;
   totalCount: number;
   bins: HistogramBin[];
@@ -96,6 +100,10 @@ export interface HistogramPacket {
 
 export interface HeatmapCell {
   group?: string;
+  category?: string;
+  sourceColumn?: string;
+  xBinIndex: number;
+  yBinIndex: number;
   xBinStart: number;
   xBinEnd: number;
   yBinStart: number;
@@ -108,10 +116,24 @@ export interface HeatmapPacket {
   xColumn: string;
   yColumn: string;
   groupColumn?: string;
+  sourceColumn?: string;
+  xBinCount: number;
+  yBinCount: number;
+  xMin?: number;
+  xMax?: number;
+  yMin?: number;
+  yMax?: number;
+  missingCount: number;
   xBinWidth: number;
   yBinWidth: number;
   totalCount: number;
   cells: HeatmapCell[];
+}
+
+export interface BoxPlotOutlier {
+  value: number;
+  rowId?: number;
+  sourceColumn?: string;
 }
 
 export interface BoxPlotEntry {
@@ -126,7 +148,7 @@ export interface BoxPlotEntry {
   max: number;
   whiskerLow: number;
   whiskerHigh: number;
-  outliers: number[];
+  outliers: BoxPlotOutlier[];
 }
 
 export interface BoxPlotPacket {
@@ -144,6 +166,7 @@ export interface SummaryEntry {
   sourceColumn?: string;
   count: number;
   mean: number;
+  median: number;
   stddev: number;
   min: number;
   max: number;
@@ -166,16 +189,142 @@ export type GraphAggregatePacket =
   | BoxPlotPacket
   | SummaryPacket;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 0;
+}
+
+function isHistogramBin(value: unknown): value is HistogramBin {
+  if (!isRecord(value)) return false;
+  return isOptionalString(value.group)
+    && isOptionalString(value.category)
+    && isOptionalString(value.sourceColumn)
+    && isFiniteNumber(value.binStart)
+    && isFiniteNumber(value.binEnd)
+    && isNonNegativeInteger(value.count);
+}
+
+function isHeatmapCell(value: unknown): value is HeatmapCell {
+  if (!isRecord(value)) return false;
+  return isOptionalString(value.group)
+    && isOptionalString(value.category)
+    && isOptionalString(value.sourceColumn)
+    && Number.isInteger(value.xBinIndex)
+    && Number.isInteger(value.yBinIndex)
+    && isFiniteNumber(value.xBinStart)
+    && isFiniteNumber(value.xBinEnd)
+    && isFiniteNumber(value.yBinStart)
+    && isFiniteNumber(value.yBinEnd)
+    && isNonNegativeInteger(value.count);
+}
+
+function isBoxPlotOutlier(value: unknown): value is BoxPlotOutlier {
+  if (!isRecord(value)) return false;
+  return isFiniteNumber(value.value)
+    && (value.rowId === undefined || Number.isInteger(value.rowId))
+    && isOptionalString(value.sourceColumn);
+}
+
+function isBoxPlotEntry(value: unknown): value is BoxPlotEntry {
+  if (!isRecord(value)) return false;
+  return isOptionalString(value.group)
+    && isOptionalString(value.category)
+    && isOptionalString(value.sourceColumn)
+    && isNonNegativeInteger(value.count)
+    && isFiniteNumber(value.min)
+    && isFiniteNumber(value.q1)
+    && isFiniteNumber(value.median)
+    && isFiniteNumber(value.q3)
+    && isFiniteNumber(value.max)
+    && isFiniteNumber(value.whiskerLow)
+    && isFiniteNumber(value.whiskerHigh)
+    && Array.isArray(value.outliers)
+    && value.outliers.every(isBoxPlotOutlier);
+}
+
+function isSummaryEntry(value: unknown): value is SummaryEntry {
+  if (!isRecord(value)) return false;
+  return isOptionalString(value.group)
+    && isOptionalString(value.category)
+    && isOptionalString(value.sourceColumn)
+    && isNonNegativeInteger(value.count)
+    && isFiniteNumber(value.mean)
+    && isFiniteNumber(value.median)
+    && isFiniteNumber(value.stddev)
+    && isFiniteNumber(value.min)
+    && isFiniteNumber(value.max)
+    && (value.intervalLow === undefined || isFiniteNumber(value.intervalLow))
+    && (value.intervalHigh === undefined || isFiniteNumber(value.intervalHigh));
+}
+
 export function isGraphAggregatePacket(value: unknown): value is GraphAggregatePacket {
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value) || !isString(value.kind)) {
     return false;
   }
-
-  const packet = value as Record<string, unknown>;
-  return packet.kind === "histogram"
-    || packet.kind === "heatmap"
-    || packet.kind === "boxPlot"
-    || packet.kind === "summary";
+  if (value.kind === "histogram") {
+    return isOptionalString(value.xColumn)
+      && isString(value.yColumn)
+      && isOptionalString(value.groupColumn)
+      && isOptionalString(value.sourceColumn)
+      && isNonNegativeInteger(value.binCount)
+      && (value.minValue === undefined || isFiniteNumber(value.minValue))
+      && (value.maxValue === undefined || isFiniteNumber(value.maxValue))
+      && isNonNegativeInteger(value.missingCount)
+      && isFiniteNumber(value.binWidth)
+      && isNonNegativeInteger(value.totalCount)
+      && Array.isArray(value.bins)
+      && value.bins.every(isHistogramBin);
+  }
+  if (value.kind === "heatmap") {
+    return isString(value.xColumn)
+      && isString(value.yColumn)
+      && isOptionalString(value.groupColumn)
+      && isOptionalString(value.sourceColumn)
+      && isNonNegativeInteger(value.xBinCount)
+      && isNonNegativeInteger(value.yBinCount)
+      && (value.xMin === undefined || isFiniteNumber(value.xMin))
+      && (value.xMax === undefined || isFiniteNumber(value.xMax))
+      && (value.yMin === undefined || isFiniteNumber(value.yMin))
+      && (value.yMax === undefined || isFiniteNumber(value.yMax))
+      && isNonNegativeInteger(value.missingCount)
+      && isFiniteNumber(value.xBinWidth)
+      && isFiniteNumber(value.yBinWidth)
+      && isNonNegativeInteger(value.totalCount)
+      && Array.isArray(value.cells)
+      && value.cells.every(isHeatmapCell);
+  }
+  if (value.kind === "boxPlot") {
+    return isOptionalString(value.xColumn)
+      && isString(value.yColumn)
+      && isOptionalString(value.groupColumn)
+      && isOptionalString(value.sourceColumn)
+      && Array.isArray(value.entries)
+      && value.entries.every(isBoxPlotEntry);
+  }
+  if (value.kind === "summary") {
+    return isOptionalString(value.xColumn)
+      && isString(value.yColumn)
+      && isOptionalString(value.groupColumn)
+      && isOptionalString(value.sourceColumn)
+      && Array.isArray(value.summaries)
+      && value.summaries.every(isSummaryEntry);
+  }
+  return false;
 }
 
 export interface DecodedRawPointChunk {

@@ -273,6 +273,9 @@ pub enum GraphAggregatePacket {
     Summary(SummaryPacket),
 }
 
+pub const GRAPH_VIRTUAL_VALUE_COLUMN: &str = "__sp_value__";
+pub const GRAPH_VIRTUAL_SOURCE_COLUMN: &str = "__sp_variable__";
+
 impl GraphAggregatePacket {
     #[cfg(test)]
     pub fn histogram_total_count(&self) -> Option<u64> {
@@ -290,6 +293,10 @@ pub struct HistogramPacket {
     pub y_column: String,
     pub group_column: Option<String>,
     pub source_column: Option<String>,
+    pub bin_count: u32,
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub missing_count: u64,
     pub bin_width: f64,
     pub total_count: u64,
     pub bins: Vec<HistogramBin>,
@@ -312,6 +319,14 @@ pub struct HeatmapPacket {
     pub x_column: String,
     pub y_column: String,
     pub group_column: Option<String>,
+    pub source_column: Option<String>,
+    pub x_bin_count: u32,
+    pub y_bin_count: u32,
+    pub x_min: Option<f64>,
+    pub x_max: Option<f64>,
+    pub y_min: Option<f64>,
+    pub y_max: Option<f64>,
+    pub missing_count: u64,
     pub x_bin_width: f64,
     pub y_bin_width: f64,
     pub total_count: u64,
@@ -322,6 +337,10 @@ pub struct HeatmapPacket {
 #[serde(rename_all = "camelCase")]
 pub struct HeatmapCell {
     pub group: Option<String>,
+    pub category: Option<String>,
+    pub source_column: Option<String>,
+    pub x_bin_index: i64,
+    pub y_bin_index: i64,
     pub x_bin_start: f64,
     pub x_bin_end: f64,
     pub y_bin_start: f64,
@@ -353,7 +372,15 @@ pub struct BoxPlotEntry {
     pub max: f64,
     pub whisker_low: f64,
     pub whisker_high: f64,
-    pub outliers: Vec<f64>,
+    pub outliers: Vec<BoxPlotOutlier>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BoxPlotOutlier {
+    pub value: f64,
+    pub row_id: Option<i64>,
+    pub source_column: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -374,6 +401,7 @@ pub struct SummaryEntry {
     pub source_column: Option<String>,
     pub count: u64,
     pub mean: f64,
+    pub median: f64,
     pub stddev: f64,
     pub min: f64,
     pub max: f64,

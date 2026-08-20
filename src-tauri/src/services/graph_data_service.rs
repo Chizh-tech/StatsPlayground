@@ -1077,6 +1077,7 @@ mod tests {
 
     mod aggregate {
         use super::*;
+        use crate::models::graph_data::GraphAggregatePacket;
 
         fn aggregate_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
             let mut request = build_request(dataset_id, generation);
@@ -1148,6 +1149,147 @@ mod tests {
                     .sum::<u64>();
                 assert_eq!(histogram_total as i64, expected_filtered);
             }
+        }
+
+        #[test]
+        fn heatmap_packet_emits_non_empty_cells_with_exact_total() {
+            let state = AppState::new().expect("state");
+            seed_dataset(&state, "agg-heatmap", 10_000);
+
+            let service = GraphDataService::new(&state);
+            let mut request = aggregate_request("agg-heatmap", 0);
+            request.fields[0].column = "cost".to_string();
+            request.elements.push(GraphElementRequest {
+                kind: "heatmap".to_string(),
+                summary_stat: "none".to_string(),
+            });
+
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("aggregate packets");
+            let heatmap = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::Heatmap(value) => Some(value),
+                    _ => None,
+                })
+                .expect("heatmap packet");
+
+            assert!(!heatmap.cells.is_empty(), "heatmap cells must be emitted");
+            let packet_total = heatmap.cells.iter().map(|cell| cell.count).sum::<u64>();
+            assert_eq!(packet_total, heatmap.total_count);
+        }
+
+        #[test]
+        fn summary_packet_reports_exact_median() {
+            let state = AppState::new().expect("state");
+            seed_dataset(&state, "agg-summary", 101);
+
+            let service = GraphDataService::new(&state);
+            let mut request = aggregate_request("agg-summary", 0);
+            request.elements = vec![GraphElementRequest {
+                kind: "summary".to_string(),
+                summary_stat: "median".to_string(),
+            }];
+
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("aggregate packets");
+            let summary = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::Summary(value) => Some(value),
+                    _ => None,
+                })
+                .expect("summary packet");
+
+            let has_finite_median = summary
+                .summaries
+                .iter()
+                .any(|entry| entry.median.is_finite());
+            assert!(has_finite_median, "summary packet must include median");
+        }
+
+        #[test]
+        fn boxplot_packet_emits_outliers_with_identity() {
+            let state = AppState::new().expect("state");
+            seed_dataset(&state, "agg-box", 200);
+            {
+                let db = state.db.lock().expect("db lock");
+                let table = "dataset_agg_box";
+                db.conn()
+                    .execute(
+                        &format!(
+                            "INSERT INTO \"{table}\" (_row_id, region, cost) VALUES (900001, 'North', 1000000.0), (900002, 'South', -1000000.0)"
+                        ),
+                        [],
+                    )
+                    .expect("insert outliers");
+                db.conn()
+                    .execute(
+                        "UPDATE _meta_datasets SET row_count = row_count + 2 WHERE id = $1",
+                        params!["agg-box"],
+                    )
+                    .expect("update row count");
+            }
+
+            let service = GraphDataService::new(&state);
+            let mut request = aggregate_request("agg-box", 0);
+            request.elements = vec![GraphElementRequest {
+                kind: "boxplot".to_string(),
+                summary_stat: "none".to_string(),
+            }];
+
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("aggregate packets");
+            let boxplot = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::BoxPlot(value) => Some(value),
+                    _ => None,
+                })
+                .expect("boxplot packet");
+
+            let any_outlier = boxplot
+                .entries
+                .iter()
+                .flat_map(|entry| entry.outliers.iter())
+                .next();
+            assert!(any_outlier.is_some(), "boxplot outliers should be emitted");
+            assert!(any_outlier.and_then(|item| item.row_id).is_some(), "outlier row id should be present");
+        }
+
+        #[test]
+        fn sampled_raw_rows_keep_minority_groups_with_same_seed() {
+            let state = AppState::new().expect("state");
+            seed_dataset(&state, "agg-strata", 50_000);
+
+            let service = GraphDataService::new(&state);
+            let mut request = aggregate_request("agg-strata", 0);
+            request.sampling = GraphSampling::Sample {
+                size: 1000,
+                seed: 17,
+            };
+            request.elements = vec![GraphElementRequest {
+                kind: "points".to_string(),
+                summary_stat: "none".to_string(),
+            }];
+
+            let first = service.collect_for_test(&request).expect("first sample");
+            let second = service.collect_for_test(&request).expect("second sample");
+
+            let first_ids = first
+                .iter()
+                .flat_map(|chunk| extract_i64_slice(chunk, &chunk.header.row_ids))
+                .collect::<Vec<_>>();
+            let second_ids = second
+                .iter()
+                .flat_map(|chunk| extract_i64_slice(chunk, &chunk.header.row_ids))
+                .collect::<Vec<_>>();
+            assert_eq!(first_ids, second_ids);
+
+            assert!(!first_ids.is_empty(), "sample should include at least one row");
         }
 
         #[test]

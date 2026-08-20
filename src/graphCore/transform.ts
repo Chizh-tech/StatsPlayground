@@ -10,7 +10,7 @@ import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerSh
 import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
 import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand";
-import type { GraphDataFrame, GraphAggregatePacket, SummaryPacket } from "@/types/graphData";
+import type { BoxPlotPacket, GraphDataFrame, GraphAggregatePacket, HistogramPacket, SummaryPacket } from "@/types/graphData";
 import type { RawPointPanelDescriptor } from "./rawPoints";
 import i18n from "@/i18n";
 
@@ -1405,6 +1405,22 @@ function findSummaryPacket(
   return packet?.kind === "summary" ? packet : null;
 }
 
+function findBoxPlotPacket(
+  aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+): BoxPlotPacket | null {
+  if (!aggregatePackets || aggregatePackets.length === 0) return null;
+  const packet = aggregatePackets.find((candidate) => candidate.kind === "boxPlot");
+  return packet?.kind === "boxPlot" ? packet : null;
+}
+
+function findHistogramPacket(
+  aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+): HistogramPacket | null {
+  if (!aggregatePackets || aggregatePackets.length === 0) return null;
+  const packet = aggregatePackets.find((candidate) => candidate.kind === "histogram");
+  return packet?.kind === "histogram" ? packet : null;
+}
+
 function summaryPointFromPacket(
   packet: SummaryPacket,
   xIsCategory: boolean,
@@ -1420,7 +1436,7 @@ function summaryPointFromPacket(
   });
   const points = rows.map((entry) => {
     const y = summaryStat === "median"
-      ? entry.mean
+      ? entry.median
       : summaryStat === "sum"
         ? entry.mean * entry.count
         : entry.mean;
@@ -2976,6 +2992,8 @@ function buildSingleOption(
 
   const enabledElements = elements.filter((e) => e.enabled !== false);
   const summaryPacket = findSummaryPacket(aggregatePackets);
+  const boxPlotPacket = findBoxPlotPacket(aggregatePackets);
+  const histogramPacket = findHistogramPacket(aggregatePackets);
 
   /** Set of group values the user has hidden via the legend show/hide
    *  toggle. Only meaningful when there's a grouping field; ignored
@@ -4126,6 +4144,105 @@ function buildSingleOption(
     const showFiveNum = getOpt<boolean>(opts, "fiveNumberSummary", false);
     const widthProp = Math.max(0, Math.min(1, getOpt<number>(opts, "widthProportion", 0)));
 
+    if (boxPlotPacket && boxPlotPacket.entries.length > 0) {
+      const maxBoxPx = 60 + widthProp * 80;
+      const boxIterGroups: string[] = grouping ? groupKeys : [DEFAULT_GROUP_KEY];
+      boxIterGroups.forEach((gKey) => {
+        if (isHidden(gKey)) return;
+        const groupColor = grouping
+          ? theme.categorical[colorIndexOf(gKey) % theme.categorical.length]
+          : theme.categorical[0];
+        const seriesName = grouping ? gKey : (yField?.name ?? "");
+        const styleKey = grouping ? gKey : DEFAULT_GROUP_KEY;
+        const boxGroupStyle = resolveGroupStyle(styleKey, groupColor, !!grouping, theme, spec.styles);
+        const userFill = spec.styles?.[styleKey]?.fill;
+        const hasUserFill = !!(userFill?.color ?? userFill?.fillColor);
+        const neutralBoxFill = shade("#000000", SHADE_RATIO_FILL);
+        const effectiveBoxFillColor = hasUserFill
+          ? boxGroupStyle.fill.color
+          : grouping
+            ? shade(groupColor, SHADE_RATIO_FILL)
+            : neutralBoxFill;
+
+        const byCategory = new Map<string, (typeof boxPlotPacket.entries)[number]>();
+        for (const entry of boxPlotPacket.entries) {
+          const entryGroup = entry.group ?? DEFAULT_GROUP_KEY;
+          if (entryGroup !== gKey && !(gKey === DEFAULT_GROUP_KEY && !grouping)) continue;
+          const category = entry.category ?? "";
+          if (!byCategory.has(category)) {
+            byCategory.set(category, entry);
+          }
+        }
+
+        const boxData: Array<[number, number, number, number, number] | { value: string }> = [];
+        const outlierPts: Array<[string, number]> = [];
+        const labelMarks: Array<{ x: string; y: number; text: string }> = [];
+
+        for (const cat of xCats) {
+          const entry = byCategory.get(cat);
+          if (!entry) {
+            boxData.push({ value: "-" });
+            continue;
+          }
+          const lower = boxType === "outlier" ? entry.whiskerLow : entry.min;
+          const upper = boxType === "outlier" ? entry.whiskerHigh : entry.max;
+          boxData.push([lower, entry.q1, entry.median, entry.q3, upper]);
+          if (showOutliers) {
+            for (const outlier of entry.outliers) {
+              outlierPts.push([displayCat(cat), outlier.value]);
+            }
+          }
+          if (showFiveNum && !grouping) {
+            const dx = displayCat(cat);
+            labelMarks.push({ x: dx, y: entry.median, text: `${entry.median.toFixed(2)}` });
+            labelMarks.push({ x: dx, y: entry.q1, text: `Q1 ${entry.q1.toFixed(2)}` });
+            labelMarks.push({ x: dx, y: entry.q3, text: `Q3 ${entry.q3.toFixed(2)}` });
+          }
+        }
+
+        series.push({
+          type: "boxplot",
+          name: seriesName,
+          data: boxData,
+          boxWidth: [10, maxBoxPx],
+          clip: true,
+          itemStyle: {
+            color: withAlpha(effectiveBoxFillColor, boxGroupStyle.fill.opacity),
+            borderColor: withAlpha(boxGroupStyle.line.color, boxGroupStyle.line.opacity),
+            borderWidth: boxGroupStyle.line.width,
+          },
+          z: 1,
+        });
+        if (outlierPts.length > 0) {
+          series.push({
+            type: "scatter",
+            name: seriesName,
+            data: outlierPts,
+            symbolSize: boxGroupStyle.outlier.size,
+            itemStyle: { color: boxGroupStyle.outlier.color, opacity: boxGroupStyle.outlier.opacity },
+            z: 3,
+          });
+        }
+        if (labelMarks.length > 0) {
+          series.push({
+            type: "scatter",
+            name: "5-Number",
+            data: labelMarks.map((l) => [l.x, l.y]),
+            symbolSize: 0.1,
+            label: {
+              show: true,
+              position: "right",
+              color: theme.fgSecondary,
+              fontSize: 10,
+              formatter: (params: any) => labelMarks[params.dataIndex]?.text ?? "",
+            },
+            silent: true,
+            z: 4,
+          });
+        }
+      });
+    } else {
+
     const xGroups = reorderMapByValueOrder(groupBy(data, xField), xField ? valueOrders?.[xField.name] : undefined);
     // Iterate the AXIS category list (xCats) rather than xGroups.keys()
     // so boxData indices line up with the axis slots. xCats already
@@ -4305,6 +4422,7 @@ function buildSingleOption(
         });
       }
     });
+    }
   }
 
   // —— 通用 X-Y 元素：points / line / bar / smoother ——

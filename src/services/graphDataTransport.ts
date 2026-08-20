@@ -4,6 +4,7 @@ import type {
   GraphDataCompletion,
   GraphDataRequest,
 } from "../types/graphData.ts";
+import { isGraphAggregatePacket as isStrictGraphAggregatePacket } from "../types/graphData.ts";
 
 export interface GraphStreamTransportHandlers {
   onHeader: (header: GraphChunkHeader) => void;
@@ -82,12 +83,7 @@ function isGraphAggregatePacket(value: unknown): value is GraphAggregatePacket {
   if (!record || !isMessageType(record, "aggregate")) {
     return false;
   }
-  return (
-    record.kind === "histogram"
-    || record.kind === "heatmap"
-    || record.kind === "boxPlot"
-    || record.kind === "summary"
-  );
+  return isStrictGraphAggregatePacket(record);
 }
 
 function completionEquals(left: GraphDataCompletion, right: GraphDataCompletion): boolean {

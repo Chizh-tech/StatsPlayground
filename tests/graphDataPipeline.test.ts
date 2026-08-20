@@ -80,8 +80,17 @@ assert.deepEqual(decoded.dictionaries.x, ["Central", "East"]);
 assert.deepEqual(Array.from(decoded.validity.x), [1, 0]);
 assert.deepEqual(Array.from(decoded.validity.y), [1, 1]);
 
-assert.equal(isGraphAggregatePacket({ kind: "histogram" }), true);
-assert.equal(isGraphAggregatePacket({ kind: "histogram", payload: {} }), true);
+assert.equal(isGraphAggregatePacket({ kind: "histogram" }), false);
+assert.equal(isGraphAggregatePacket({ kind: "histogram", payload: {} }), false);
+assert.equal(isGraphAggregatePacket({
+  kind: "histogram",
+  yColumn: "cost",
+  binCount: 20,
+  missingCount: 0,
+  binWidth: 1,
+  totalCount: 2,
+  bins: [],
+}), true);
 
 assert.throws(
   () =>
@@ -247,6 +256,8 @@ function makeCommittedFrame(): GraphDataFrame {
 const histogramPacket = {
   kind: "histogram" as const,
   yColumn: "cost",
+  binCount: 20,
+  missingCount: 0,
   binWidth: 1,
   totalCount: 2,
   bins: [],

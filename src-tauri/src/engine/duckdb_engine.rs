@@ -7,8 +7,9 @@ use duckdb::types::{OrderedMap, TimeUnit, Value};
 use crate::error::AppError;
 use crate::engine::sql_query::{normalize_identifier, validate_read_only_query};
 use crate::models::graph_data::{
-    BoxPlotEntry, BoxPlotPacket, GraphAggregatePacket, GraphDataRequest, GraphSampling,
-    HeatmapPacket, HistogramBin, HistogramPacket, SummaryEntry, SummaryPacket,
+    BoxPlotEntry, BoxPlotOutlier, BoxPlotPacket, GraphAggregatePacket, GraphDataRequest,
+    GraphSampling, HeatmapCell, HeatmapPacket, HistogramBin, HistogramPacket, SummaryEntry,
+    SummaryPacket, GRAPH_VIRTUAL_SOURCE_COLUMN, GRAPH_VIRTUAL_VALUE_COLUMN,
 };
 use crate::models::table::{
     CellPosition, CellUpdate, DatasetMeta, SqlQueryResult, TableQueryResult, TableWindowFilterRule,
@@ -1174,8 +1175,9 @@ impl DuckDbEngine {
             let mut values = Vec::with_capacity(filter_values.len() * multi_y_columns.len() + multi_y_columns.len());
             for column in &multi_y_columns {
                 let branch = format!(
-                    "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, ? AS __sp_variable FROM {table_name} {where_clause}",
+                    "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, ? AS {source_col} FROM {table_name} {where_clause}",
                     y_col = Self::quote_identifier(column),
+                    source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
                 );
                 branches.push(branch);
                 values.push(Value::Text(column.clone()));
@@ -1193,8 +1195,9 @@ impl DuckDbEngine {
                 y_column.clone()
             };
             let sql = format!(
-                "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, ? AS __sp_variable FROM {table_name} {where_clause}",
+                "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, ? AS {source_col} FROM {table_name} {where_clause}",
                 y_col = Self::quote_identifier(&source_col),
+                source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
             );
             let mut values = Vec::with_capacity(filter_values.len() + 1);
             values.push(Value::Text(source_col));
@@ -1218,14 +1221,14 @@ impl DuckDbEngine {
                         SELECT *,
                                COALESCE(CAST(__sp_group AS VARCHAR), COALESCE(CAST(__sp_x AS VARCHAR), '__sp_all__')) AS __sp_stratum,
                                COUNT(*) OVER () AS __sp_total_rows,
-                               COUNT(*) OVER (PARTITION BY COALESCE(CAST(__sp_group AS VARCHAR), COALESCE(CAST(__sp_x AS VARCHAR), '__sp_all__'))) AS __sp_stratum_rows,
+                                                             COUNT(*) OVER (PARTITION BY CONCAT_WS('|', COALESCE(CAST(__sp_group AS VARCHAR), ''), COALESCE(CAST(__sp_x AS VARCHAR), ''), COALESCE(CAST({source_col} AS VARCHAR), ''))) AS __sp_stratum_rows,
                                ROW_NUMBER() OVER (
-                                 PARTITION BY COALESCE(CAST(__sp_group AS VARCHAR), COALESCE(CAST(__sp_x AS VARCHAR), '__sp_all__'))
+                                                                 PARTITION BY CONCAT_WS('|', COALESCE(CAST(__sp_group AS VARCHAR), ''), COALESCE(CAST(__sp_x AS VARCHAR), ''), COALESCE(CAST({source_col} AS VARCHAR), ''))
                                  ORDER BY hash(CAST(\"_row_id\" AS BIGINT), CAST({seed_i64} AS BIGINT))
                                ) AS __sp_rank
                         FROM __sp_source
                       )
-                      SELECT \"_row_id\", __sp_x, __sp_y, __sp_group, __sp_size, __sp_variable
+                      SELECT \"_row_id\", __sp_x, __sp_y, __sp_group, __sp_size, {source_col}
                       FROM __sp_ranked
                       WHERE __sp_rank <= CASE
                         WHEN __sp_total_rows <= {sample_size} THEN __sp_stratum_rows
@@ -1233,7 +1236,8 @@ impl DuckDbEngine {
                           1,
                           CAST(ROUND(({sample_size}::DOUBLE * __sp_stratum_rows) / NULLIF(__sp_total_rows, 0)) AS BIGINT)
                         )
-                      END"
+                                            END",
+                                        source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
                 )
             }
         };
@@ -1257,7 +1261,7 @@ impl DuckDbEngine {
         );
 
         let y_public = if melt_active {
-            "__sp_value__".to_string()
+            GRAPH_VIRTUAL_VALUE_COLUMN.to_string()
         } else {
             y_column.clone()
         };
@@ -1290,8 +1294,12 @@ impl DuckDbEngine {
         }
 
         if melt_active {
-            projection_select_items.push("__sp_variable AS \"__sp_variable__\"".to_string());
-            projected_columns.push("__sp_variable__".to_string());
+            projection_select_items.push(format!(
+                "{} AS {}",
+                Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN)
+            ));
+            projected_columns.push(GRAPH_VIRTUAL_SOURCE_COLUMN.to_string());
             projected_column_types.push(source_column_type.clone());
         }
 
@@ -1360,18 +1368,27 @@ impl DuckDbEngine {
         plan: &GraphQueryPlan,
     ) -> Result<HistogramPacket, AppError> {
         let stats_sql = format!(
-            "SELECT COUNT(*), MIN(__sp_y), MAX(__sp_y) FROM ({}) AS __sp_source WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)",
+            "WITH __sp_source AS ({})
+             SELECT
+                             COALESCE(SUM(CASE WHEN __sp_y IS NOT NULL AND isfinite(__sp_y) THEN 1 ELSE 0 END), 0) AS valid_rows,
+                             COALESCE(SUM(CASE WHEN __sp_y IS NOT NULL AND isfinite(__sp_y) THEN 0 ELSE 1 END), 0) AS missing_rows,
+               MIN(CASE WHEN __sp_y IS NOT NULL AND isfinite(__sp_y) THEN __sp_y ELSE NULL END) AS min_y,
+               MAX(CASE WHEN __sp_y IS NOT NULL AND isfinite(__sp_y) THEN __sp_y ELSE NULL END) AS max_y
+             FROM __sp_source",
             plan.source_sql
         );
-        let (total_count, min_y, max_y): (i64, Option<f64>, Option<f64>) = self.conn.query_row(
+        let (total_count, missing_count, min_y, max_y): (i64, i64, Option<f64>, Option<f64>) = self.conn.query_row(
             &stats_sql,
             params_from_iter(plan.source_values.iter()),
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         let total_count_u64 = u64::try_from(total_count)
             .map_err(|_| AppError::Database("histogram total count is negative".into()))?;
+        let missing_count_u64 = u64::try_from(missing_count)
+            .map_err(|_| AppError::Database("histogram missing count is negative".into()))?;
 
-        let bin_count = 20.0_f64;
+        let bin_count_i64: i64 = 20;
+        let bin_count = bin_count_i64 as f64;
         let bin_width = if let (Some(minimum), Some(maximum)) = (min_y, max_y) {
             if maximum > minimum {
                 (maximum - minimum) / bin_count
@@ -1390,7 +1407,7 @@ impl DuckDbEngine {
                     SELECT
                       CAST(__sp_group AS VARCHAR) AS grp,
                       CAST(__sp_x AS VARCHAR) AS cat,
-                      CAST(__sp_variable AS VARCHAR) AS src,
+                                            CAST({source_col} AS VARCHAR) AS src,
                       __sp_y AS y
                     FROM __sp_source
                     WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
@@ -1400,18 +1417,22 @@ impl DuckDbEngine {
                    cat,
                    src,
                    CASE
-                     WHEN y = ? THEN 19
-                     ELSE CAST(FLOOR((y - ?) / ?) AS BIGINT)
+                                         WHEN ? <= 0 THEN 0
+                                         WHEN y = ? THEN ? - 1
+                                         ELSE CAST(FLOOR((y - ?) / ?) AS BIGINT)
                    END AS bin_idx,
                    COUNT(*) AS cnt
                  FROM __sp_valid
                  GROUP BY grp, cat, src, bin_idx
                  ORDER BY grp, cat, src, bin_idx",
-                source = plan.source_sql
+                                source = plan.source_sql,
+                                source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
             );
 
             let mut values = plan.source_values.clone();
+                        values.push(Value::Double(bin_width.max(1e-12)));
             values.push(Value::Double(max_y.unwrap_or(0.0)));
+                        values.push(Value::BigInt(bin_count_i64));
             values.push(Value::Double(min_y.unwrap_or(0.0)));
             values.push(Value::Double(bin_width.max(1e-12)));
 
@@ -1423,7 +1444,7 @@ impl DuckDbEngine {
                 let source_column: Option<String> = row.get(2)?;
                 let bin_index: i64 = row.get(3)?;
                 let count: i64 = row.get(4)?;
-                let clamped_index = bin_index.clamp(0, 19) as f64;
+                let clamped_index = bin_index.clamp(0, bin_count_i64 - 1) as f64;
                 let start = min_y.unwrap_or(0.0) + clamped_index * bin_width;
                 bins.push(HistogramBin {
                     group,
@@ -1441,7 +1462,12 @@ impl DuckDbEngine {
             x_column: role_column(request, "x"),
             y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
             group_column: role_column(request, "group"),
-            source_column: Some("__sp_variable".to_string()),
+            source_column: Some(GRAPH_VIRTUAL_SOURCE_COLUMN.to_string()),
+            bin_count: u32::try_from(bin_count_i64)
+                .map_err(|_| AppError::Database("histogram bin count overflow".into()))?,
+            min_value: min_y,
+            max_value: max_y,
+            missing_count: missing_count_u64,
             bin_width,
             total_count: total_count_u64,
             bins,
@@ -1453,38 +1479,140 @@ impl DuckDbEngine {
         request: &GraphDataRequest,
         plan: &GraphQueryPlan,
     ) -> Result<HeatmapPacket, AppError> {
+        let x_bin_count_i64: i64 = 20;
+        let y_bin_count_i64: i64 = 20;
         let stats_sql = format!(
             "WITH __sp_source AS ({})
-             SELECT COUNT(*), MIN(CAST(__sp_x AS DOUBLE)), MAX(CAST(__sp_x AS DOUBLE)), MIN(__sp_y), MAX(__sp_y)
+             SELECT
+                             COALESCE(SUM(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN 1 ELSE 0 END), 0),
+                             COALESCE(SUM(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN 0 ELSE 1 END), 0),
+                             MIN(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN TRY_CAST(__sp_x AS DOUBLE) ELSE NULL END),
+                             MAX(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN TRY_CAST(__sp_x AS DOUBLE) ELSE NULL END),
+                             MIN(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN __sp_y ELSE NULL END),
+                             MAX(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN __sp_y ELSE NULL END)
              FROM __sp_source
-             WHERE __sp_x IS NOT NULL AND __sp_y IS NOT NULL
-               AND isfinite(CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y)",
+            ",
             plan.source_sql
         );
-        let (total_count, min_x, max_x, min_y, max_y): (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>) = self.conn.query_row(
+        let (total_count, missing_count, min_x, max_x, min_y, max_y): (i64, i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>) = self.conn.query_row(
             &stats_sql,
             params_from_iter(plan.source_values.iter()),
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
         )?;
         let total_count_u64 = u64::try_from(total_count)
             .map_err(|_| AppError::Database("heatmap total count is negative".into()))?;
+        let missing_count_u64 = u64::try_from(missing_count)
+            .map_err(|_| AppError::Database("heatmap missing count is negative".into()))?;
         let x_bin_width = match (min_x, max_x) {
-            (Some(minimum), Some(maximum)) if maximum > minimum => (maximum - minimum) / 20.0,
+            (Some(minimum), Some(maximum)) if maximum > minimum => {
+                (maximum - minimum) / (x_bin_count_i64 as f64)
+            }
             _ => 1.0,
         };
         let y_bin_width = match (min_y, max_y) {
-            (Some(minimum), Some(maximum)) if maximum > minimum => (maximum - minimum) / 20.0,
+            (Some(minimum), Some(maximum)) if maximum > minimum => {
+                (maximum - minimum) / (y_bin_count_i64 as f64)
+            }
             _ => 1.0,
         };
+
+        let mut cells: Vec<HeatmapCell> = Vec::new();
+        if total_count_u64 > 0 {
+            let cells_sql = format!(
+                "WITH __sp_source AS ({source}),
+                 __sp_valid AS (
+                   SELECT
+                     CAST(__sp_group AS VARCHAR) AS grp,
+                     CAST(__sp_x AS VARCHAR) AS cat,
+                     CAST({source_col} AS VARCHAR) AS src,
+                                         TRY_CAST(__sp_x AS DOUBLE) AS x,
+                     __sp_y AS y
+                   FROM __sp_source
+                   WHERE __sp_x IS NOT NULL AND __sp_y IS NOT NULL
+                                         AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y)
+                 )
+                 SELECT
+                   grp,
+                   cat,
+                   src,
+                   CASE
+                     WHEN ? <= 0 THEN 0
+                     WHEN x = ? THEN ? - 1
+                     ELSE CAST(FLOOR((x - ?) / ?) AS BIGINT)
+                   END AS x_idx,
+                   CASE
+                     WHEN ? <= 0 THEN 0
+                     WHEN y = ? THEN ? - 1
+                     ELSE CAST(FLOOR((y - ?) / ?) AS BIGINT)
+                   END AS y_idx,
+                   COUNT(*) AS cnt
+                 FROM __sp_valid
+                 GROUP BY grp, cat, src, x_idx, y_idx
+                 ORDER BY grp, cat, src, x_idx, y_idx",
+                source = plan.source_sql,
+                source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+            );
+
+            let mut values = plan.source_values.clone();
+            values.push(Value::Double(x_bin_width.max(1e-12)));
+            values.push(Value::Double(max_x.unwrap_or(0.0)));
+            values.push(Value::BigInt(x_bin_count_i64));
+            values.push(Value::Double(min_x.unwrap_or(0.0)));
+            values.push(Value::Double(x_bin_width.max(1e-12)));
+            values.push(Value::Double(y_bin_width.max(1e-12)));
+            values.push(Value::Double(max_y.unwrap_or(0.0)));
+            values.push(Value::BigInt(y_bin_count_i64));
+            values.push(Value::Double(min_y.unwrap_or(0.0)));
+            values.push(Value::Double(y_bin_width.max(1e-12)));
+
+            let mut stmt = self.conn.prepare(&cells_sql)?;
+            let mut rows = stmt.query(params_from_iter(values.iter()))?;
+            while let Some(row) = rows.next()? {
+                let group: Option<String> = row.get(0)?;
+                let category: Option<String> = row.get(1)?;
+                let source_column: Option<String> = row.get(2)?;
+                let x_bin_index: i64 = row.get(3)?;
+                let y_bin_index: i64 = row.get(4)?;
+                let count: i64 = row.get(5)?;
+                let x_idx = x_bin_index.clamp(0, x_bin_count_i64 - 1);
+                let y_idx = y_bin_index.clamp(0, y_bin_count_i64 - 1);
+                let x_start = min_x.unwrap_or(0.0) + (x_idx as f64) * x_bin_width;
+                let y_start = min_y.unwrap_or(0.0) + (y_idx as f64) * y_bin_width;
+                cells.push(HeatmapCell {
+                    group,
+                    category,
+                    source_column,
+                    x_bin_index: x_idx,
+                    y_bin_index: y_idx,
+                    x_bin_start: x_start,
+                    x_bin_end: x_start + x_bin_width,
+                    y_bin_start: y_start,
+                    y_bin_end: y_start + y_bin_width,
+                    count: u64::try_from(count).map_err(|_| {
+                        AppError::Database("heatmap cell count is negative".into())
+                    })?,
+                });
+            }
+        }
 
         Ok(HeatmapPacket {
             x_column: role_column(request, "x").unwrap_or_else(|| "__sp_x".to_string()),
             y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
             group_column: role_column(request, "group"),
+            source_column: Some(GRAPH_VIRTUAL_SOURCE_COLUMN.to_string()),
+            x_bin_count: u32::try_from(x_bin_count_i64)
+                .map_err(|_| AppError::Database("heatmap x bin count overflow".into()))?,
+            y_bin_count: u32::try_from(y_bin_count_i64)
+                .map_err(|_| AppError::Database("heatmap y bin count overflow".into()))?,
+            x_min: min_x,
+            x_max: max_x,
+            y_min: min_y,
+            y_max: max_y,
+            missing_count: missing_count_u64,
             x_bin_width,
             y_bin_width,
             total_count: total_count_u64,
-            cells: Vec::new(),
+            cells,
         })
     }
 
@@ -1497,30 +1625,66 @@ impl DuckDbEngine {
             "WITH __sp_source AS ({source}),
              __sp_valid AS (
                SELECT
+                                 CAST(\"_row_id\" AS BIGINT) AS row_id,
                  CAST(__sp_group AS VARCHAR) AS grp,
                  CAST(__sp_x AS VARCHAR) AS cat,
-                 CAST(__sp_variable AS VARCHAR) AS src,
+                                 CAST({source_col} AS VARCHAR) AS src,
                  __sp_y AS y
                FROM __sp_source
                WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
+                         ),
+                         __sp_stats AS (
+                             SELECT
+                                 grp,
+                                 cat,
+                                 src,
+                                 COUNT(*) AS n,
+                                 MIN(y) AS min_y,
+                                 quantile_cont(y, 0.25) AS q1,
+                                 quantile_cont(y, 0.50) AS median,
+                                 quantile_cont(y, 0.75) AS q3,
+                                 MAX(y) AS max_y
+                             FROM __sp_valid
+                             GROUP BY grp, cat, src
+                         ),
+                         __sp_whiskers AS (
+                             SELECT
+                                 s.grp,
+                                 s.cat,
+                                 s.src,
+                                 MIN(v.y) FILTER (WHERE v.y >= (s.q1 - 1.5 * (s.q3 - s.q1)) AND v.y <= (s.q3 + 1.5 * (s.q3 - s.q1))) AS whisker_low,
+                                 MAX(v.y) FILTER (WHERE v.y >= (s.q1 - 1.5 * (s.q3 - s.q1)) AND v.y <= (s.q3 + 1.5 * (s.q3 - s.q1))) AS whisker_high
+                             FROM __sp_stats s
+                             JOIN __sp_valid v
+                                 ON v.grp IS NOT DISTINCT FROM s.grp
+                                AND v.cat IS NOT DISTINCT FROM s.cat
+                                AND v.src IS NOT DISTINCT FROM s.src
+                             GROUP BY s.grp, s.cat, s.src
              )
              SELECT
-               grp,
-               cat,
-               src,
-               COUNT(*) AS n,
-               MIN(y) AS min_y,
-               quantile_cont(y, 0.25) AS q1,
-               quantile_cont(y, 0.50) AS median,
-               quantile_cont(y, 0.75) AS q3,
-               MAX(y) AS max_y
-             FROM __sp_valid
-             GROUP BY grp, cat, src
-             ORDER BY grp, cat, src",
-            source = plan.source_sql
+                             s.grp,
+                             s.cat,
+                             s.src,
+                             s.n,
+                             s.min_y,
+                             s.q1,
+                             s.median,
+                             s.q3,
+                             s.max_y,
+                             COALESCE(w.whisker_low, s.min_y) AS whisker_low,
+                             COALESCE(w.whisker_high, s.max_y) AS whisker_high
+                         FROM __sp_stats s
+                         LEFT JOIN __sp_whiskers w
+                             ON w.grp IS NOT DISTINCT FROM s.grp
+                            AND w.cat IS NOT DISTINCT FROM s.cat
+                            AND w.src IS NOT DISTINCT FROM s.src
+                         ORDER BY s.grp, s.cat, s.src",
+                        source = plan.source_sql,
+                        source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
         );
 
         let mut entries = Vec::new();
+                let mut entry_index_by_key: std::collections::HashMap<(Option<String>, Option<String>, Option<String>), usize> = std::collections::HashMap::new();
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query(params_from_iter(plan.source_values.iter()))?;
         while let Some(row) = rows.next()? {
@@ -1533,9 +1697,11 @@ impl DuckDbEngine {
             let median: f64 = row.get(6)?;
             let q3: f64 = row.get(7)?;
             let max: f64 = row.get(8)?;
-            let iqr = q3 - q1;
-            let whisker_low = q1 - 1.5 * iqr;
-            let whisker_high = q3 + 1.5 * iqr;
+            let whisker_low: f64 = row.get(9)?;
+            let whisker_high: f64 = row.get(10)?;
+
+            let key = (group.clone(), category.clone(), source_column.clone());
+            entry_index_by_key.insert(key, entries.len());
 
             entries.push(BoxPlotEntry {
                 group,
@@ -1554,11 +1720,63 @@ impl DuckDbEngine {
             });
         }
 
+                let outlier_sql = format!(
+                        "WITH __sp_source AS ({source}),
+                         __sp_valid AS (
+                             SELECT
+                                 CAST(\"_row_id\" AS BIGINT) AS row_id,
+                                 CAST(__sp_group AS VARCHAR) AS grp,
+                                 CAST(__sp_x AS VARCHAR) AS cat,
+                                 CAST({source_col} AS VARCHAR) AS src,
+                                 __sp_y AS y
+                             FROM __sp_source
+                             WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
+                         ),
+                         __sp_bounds AS (
+                             SELECT
+                                 grp,
+                                 cat,
+                                 src,
+                                 quantile_cont(y, 0.25) - 1.5 * (quantile_cont(y, 0.75) - quantile_cont(y, 0.25)) AS lo,
+                                 quantile_cont(y, 0.75) + 1.5 * (quantile_cont(y, 0.75) - quantile_cont(y, 0.25)) AS hi
+                             FROM __sp_valid
+                             GROUP BY grp, cat, src
+                         )
+                         SELECT v.grp, v.cat, v.src, v.row_id, v.y
+                         FROM __sp_valid v
+                         JOIN __sp_bounds b
+                             ON v.grp IS NOT DISTINCT FROM b.grp
+                            AND v.cat IS NOT DISTINCT FROM b.cat
+                            AND v.src IS NOT DISTINCT FROM b.src
+                         WHERE v.y < b.lo OR v.y > b.hi
+                         ORDER BY v.grp, v.cat, v.src, v.row_id",
+                        source = plan.source_sql,
+                        source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                );
+
+                let mut outlier_stmt = self.conn.prepare(&outlier_sql)?;
+                let mut outlier_rows = outlier_stmt.query(params_from_iter(plan.source_values.iter()))?;
+                while let Some(row) = outlier_rows.next()? {
+                        let group: Option<String> = row.get(0)?;
+                        let category: Option<String> = row.get(1)?;
+                        let source_column: Option<String> = row.get(2)?;
+                        let row_id: Option<i64> = row.get(3)?;
+                        let value: f64 = row.get(4)?;
+                        let key = (group, category, source_column.clone());
+                        if let Some(entry_index) = entry_index_by_key.get(&key).copied() {
+                                entries[entry_index].outliers.push(BoxPlotOutlier {
+                                        value,
+                                        row_id,
+                                        source_column,
+                                });
+                        }
+                }
+
         Ok(BoxPlotPacket {
             x_column: role_column(request, "x"),
             y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
             group_column: role_column(request, "group"),
-            source_column: Some("__sp_variable".to_string()),
+                        source_column: Some(GRAPH_VIRTUAL_SOURCE_COLUMN.to_string()),
             entries,
         })
     }
@@ -1574,16 +1792,17 @@ impl DuckDbEngine {
                SELECT
                  CAST(__sp_group AS VARCHAR) AS grp,
                  CAST(__sp_x AS VARCHAR) AS cat,
-                 CAST(__sp_variable AS VARCHAR) AS src,
+                                 CAST({source_col} AS VARCHAR) AS src,
                  __sp_y AS y
                FROM __sp_source
                WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
              )
-             SELECT grp, cat, src, COUNT(*) AS n, AVG(y) AS mean_y, COALESCE(stddev_samp(y), 0.0) AS std_y, MIN(y) AS min_y, MAX(y) AS max_y
+                         SELECT grp, cat, src, COUNT(*) AS n, AVG(y) AS mean_y, quantile_cont(y, 0.50) AS median_y, COALESCE(stddev_samp(y), 0.0) AS std_y, MIN(y) AS min_y, MAX(y) AS max_y
              FROM __sp_valid
              GROUP BY grp, cat, src
              ORDER BY grp, cat, src",
-            source = plan.source_sql
+                        source = plan.source_sql,
+                        source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
         );
 
         let mut summaries = Vec::new();
@@ -1595,9 +1814,10 @@ impl DuckDbEngine {
             let source_column: Option<String> = row.get(2)?;
             let count: i64 = row.get(3)?;
             let mean: f64 = row.get(4)?;
-            let stddev: f64 = row.get(5)?;
-            let min: f64 = row.get(6)?;
-            let max: f64 = row.get(7)?;
+            let median: f64 = row.get(5)?;
+            let stddev: f64 = row.get(6)?;
+            let min: f64 = row.get(7)?;
+            let max: f64 = row.get(8)?;
             let n = u64::try_from(count)
                 .map_err(|_| AppError::Database("summary count is negative".into()))?;
             let margin = if n > 1 {
@@ -1612,6 +1832,7 @@ impl DuckDbEngine {
                 source_column,
                 count: n,
                 mean,
+                median,
                 stddev,
                 min,
                 max,
@@ -1624,7 +1845,7 @@ impl DuckDbEngine {
             x_column: role_column(request, "x"),
             y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
             group_column: role_column(request, "group"),
-            source_column: Some("__sp_variable".to_string()),
+            source_column: Some(GRAPH_VIRTUAL_SOURCE_COLUMN.to_string()),
             summaries,
         })
     }
