@@ -11,6 +11,7 @@ enum Operation {
     Query,
     Paste,
     Restore,
+    GraphProjection,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -30,6 +31,7 @@ struct PerformanceReport {
     operation_ms: u128,
     total_ms: u128,
     result_rows: usize,
+    selected_columns: usize,
 }
 
 fn parse_positive_usize(flag: &str, value: Option<String>) -> Result<usize, AppError> {
@@ -65,6 +67,7 @@ where
                     "query" => Operation::Query,
                     "paste" => Operation::Paste,
                     "restore" => Operation::Restore,
+                    "graph_projection" => Operation::GraphProjection,
                     _ => {
                         return Err(AppError::InvalidParam(format!(
                             "unknown operation: {value}"
@@ -91,11 +94,13 @@ fn execute(options: Options) -> Result<PerformanceReport, AppError> {
     let setup_ms = setup_started.elapsed().as_millis();
 
     let operation_started = Instant::now();
-    let result_rows = match options.operation {
-        Operation::Query => db
-            .query_table("performance-baseline", 0, 500, None, None)?
-            .rows
-            .len(),
+    let (result_rows, selected_columns) = match options.operation {
+        Operation::Query => (
+            db.query_table("performance-baseline", 0, 500, None, None)?
+                .rows
+                .len(),
+            0,
+        ),
         Operation::Paste => {
             let paste_columns = options.columns.min(10);
             let rows = (0..options.rows)
@@ -113,7 +118,7 @@ fn execute(options: Options) -> Result<PerformanceReport, AppError> {
                 None,
                 &vec!["BIGINT".to_string(); paste_columns],
             )?;
-            rows.len()
+            (rows.len(), 0)
         }
         Operation::Restore => {
             let snapshot = db.query_table(
@@ -129,7 +134,25 @@ fn execute(options: Options) -> Result<PerformanceReport, AppError> {
                 &snapshot.column_types[1..],
                 &snapshot.rows,
             )?;
-            snapshot.rows.len()
+            (snapshot.rows.len(), 0)
+        }
+        Operation::GraphProjection => {
+            if options.columns < 2 {
+                return Err(AppError::InvalidParam(
+                    "graph_projection requires at least 2 value columns".into(),
+                ));
+            }
+
+            let mut stmt = db.conn().prepare(
+                "SELECT \"_row_id\", \"value_1\" AS \"col_0\", \"value_2\" AS \"col_1\" FROM \"dataset_performance_baseline\"",
+            )?;
+            let mut rows = stmt.query([])?;
+            let mut consumed_rows = 0usize;
+            while rows.next()?.is_some() {
+                consumed_rows += 1;
+            }
+
+            (consumed_rows, 3)
         }
     };
     let operation_ms = operation_started.elapsed().as_millis();
@@ -142,6 +165,7 @@ fn execute(options: Options) -> Result<PerformanceReport, AppError> {
         operation_ms,
         total_ms: total_started.elapsed().as_millis(),
         result_rows,
+        selected_columns,
     })
 }
 
@@ -175,7 +199,12 @@ mod tests {
 
     #[test]
     fn performance_cli_executes_each_operation() {
-        for operation in [Operation::Query, Operation::Paste, Operation::Restore] {
+        for operation in [
+            Operation::Query,
+            Operation::Paste,
+            Operation::Restore,
+            Operation::GraphProjection,
+        ] {
             let report = execute(Options {
                 rows: 25,
                 columns: 4,
@@ -187,11 +216,25 @@ mod tests {
             assert_eq!(report.columns, 4);
             assert_eq!(report.operation, operation);
             assert_eq!(report.result_rows, 25);
+            assert_eq!(report.selected_columns, if operation == Operation::GraphProjection { 3 } else { 0 });
 
             let json = serde_json::to_value(report).unwrap();
             assert!(json.get("setupMs").is_some());
             assert!(json.get("operationMs").is_some());
             assert!(json.get("totalMs").is_some());
         }
+    }
+
+    #[test]
+    fn performance_cli_projects_only_graph_columns() {
+        let report = execute(Options {
+            rows: 300_000,
+            columns: 20,
+            operation: Operation::GraphProjection,
+        })
+        .unwrap();
+
+        assert_eq!(report.result_rows, 300_000);
+        assert_eq!(report.selected_columns, 3);
     }
 }
