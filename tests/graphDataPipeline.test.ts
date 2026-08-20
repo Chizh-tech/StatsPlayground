@@ -37,6 +37,28 @@ assert.equal(makeGraphRows(10).length, 10);
   assert.ok(helperUses.length >= 2, "Graph.tsx click and brush conversion must share bigintToScatterPointPick helper");
 }
 
+{
+  const graphBuilderViewSource = readFileSync(
+    resolve(TEST_FILE_DIR, "../src/components/graphBuilder/GraphBuilderView.tsx"),
+    "utf8",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("dataService.queryTable("),
+    false,
+    "GraphBuilderView production graph path must not query full table via dataService.queryTable",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("applyFilters(data"),
+    false,
+    "GraphBuilderView production graph path must not use frontend applyFilters(data, ...)",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("newRows.push([...row"),
+    false,
+    "GraphBuilderView production graph path must not do frontend melt expansion with newRows.push([...row, ...])",
+  );
+}
+
 const payload = new ArrayBuffer(80);
 new Float64Array(payload, 0, 2).set([1.5, 2.5]);
 new Float64Array(payload, 16, 2).set([10.25, 20.5]);

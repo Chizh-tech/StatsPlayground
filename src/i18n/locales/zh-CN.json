@@ -781,6 +781,25 @@
       "clearAllRules": "清除全部",
       "clearAllTitle": "移除所有筛选规则",
       "noMatches": "无匹配项"
+    },
+    "sampling": {
+      "label": "采样模式",
+      "full": "全量",
+      "sample": "采样",
+      "size": "样本大小",
+      "seed": "采样种子"
+    },
+    "rowStatus": {
+      "empty": "尚无图形数据帧",
+      "full": "全量数据：{{processed}} 行",
+      "sampled": "采样：{{processed}} / {{source}} 行"
+    },
+    "pipeline": {
+      "ready": "就绪",
+      "pending": "正在更新图形...",
+      "error": "更新失败",
+      "metaLoading": "正在加载列信息...",
+      "metaError": "列元数据不可用"
     }
   }
 }

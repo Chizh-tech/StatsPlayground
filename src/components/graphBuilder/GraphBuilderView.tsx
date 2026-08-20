@@ -30,7 +30,8 @@ import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPalet
 import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
-import { FilterPanel, applyFilters } from "@/components/filter";
+import { FilterPanel } from "@/components/filter";
+import { useGraphDataPipeline } from "./useGraphDataPipeline";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -100,9 +101,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
   const [columns, setColumns] = useState<FieldRef[]>([]);
   const [colSqlTypes, setColSqlTypes] = useState<string[]>([]);
-  const [data, setData] = useState<GraphData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [metaLoading, setMetaLoading] = useState(true);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [viewport, setViewport] = useState({ width: 1280, height: 720 });
+  const canvasRef = useRef<HTMLDivElement | null>(null);
   // Y-axis settings dialog open state. Opened by double-clicking the Y
   // axis (or its label/title area) in <Graph>; closed via the dialog's
   // Done button or overlay click.
@@ -288,22 +290,36 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     [leftTopPct],
   );
 
+  useLayoutEffect(() => {
+    const host = canvasRef.current;
+    if (!host) return;
+
+    const commitSize = () => {
+      const rect = host.getBoundingClientRect();
+      const width = Math.max(1, Math.floor(rect.width));
+      const height = Math.max(1, Math.floor(rect.height));
+      setViewport((prev) => (
+        prev.width === width && prev.height === height
+          ? prev
+          : { width, height }
+      ));
+    };
+
+    commitSize();
+    const ro = new ResizeObserver(commitSize);
+    ro.observe(host);
+    return () => {
+      ro.disconnect();
+    };
+  }, []);
+
   // 编码状态从 store 派生
   const encoding = item.encoding;
   const elements = item.elements;
   const smootherLambda = item.smootherLambda;
   // Filter rules (JMP-style Local Data Filter). Persist on the item so
-  // they survive project save/load. `filteredData` below feeds the
-  // renderer instead of the raw `data`.
+  // they survive project save/load.
   const filters = useMemo(() => item.filters ?? [], [item.filters]);
-
-  // Apply the user's filter rules to the raw data once per change.
-  // Everything downstream (groupKeys, the spec, the rendered Graph and
-  // the legend's distinct-value enumeration) reads `filteredData`.
-  const filteredData = useMemo(
-    () => applyFilters(data, filters),
-    [data, filters],
-  );
 
   // ---- Multi-column melt (multi-mode rendering) ---------------------
   //
@@ -370,26 +386,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     };
   }, [item.multiX, item.multiY, item.encoding.x, item.encoding.y]);
 
-  // Build the melted dataset. Returns `filteredData` unchanged when
-  // not in multi-mode (zero-cost no-op). */
-  const effectiveData = useMemo<GraphData | null>(() => {
-    if (!filteredData) return filteredData;
-    if (!meltInfo) return filteredData;
-    const colIdx = meltInfo.cols.map((c) =>
-      filteredData.columns.indexOf(c.name),
-    );
-    const newCols = [...filteredData.columns, MELT_VAR, MELT_VAL];
-    const newRows: unknown[][] = [];
-    for (const row of filteredData.rows) {
-      for (let i = 0; i < meltInfo.cols.length; i++) {
-        const ci = colIdx[i];
-        const v = ci >= 0 ? row[ci] : null;
-        newRows.push([...row, meltInfo.cols[i].name, v]);
-      }
-    }
-    return { columns: newCols, rows: newRows };
-  }, [filteredData, meltInfo]);
-
   // Build the effective encoding for the renderer. In multi-mode the
   // synthetic FieldRefs replace the affected slot(s); other slots
   // (overlay, group X/Y, etc.) pass through untouched. */
@@ -416,48 +412,72 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     return enc;
   }, [item.encoding, meltInfo]);
 
+  const graphData = useMemo<GraphData>(() => {
+    const baseColumns = columns.map((c) => c.name);
+    if (!meltInfo) {
+      return { columns: baseColumns, rows: [] };
+    }
+    const out = [...baseColumns];
+    if (!out.includes(MELT_VAR)) out.push(MELT_VAR);
+    if (!out.includes(MELT_VAL)) out.push(MELT_VAL);
+    return { columns: out, rows: [] };
+  }, [columns, meltInfo]);
+
+  const {
+    frame,
+    status: pipelineStatus,
+    error: pipelineError,
+  } = useGraphDataPipeline(item, dataset, viewport);
+
   // User-saved CustomPalettes feed into legend default-color assignment:
   // when a group doesn't have an explicit style override yet, the renderer
   // walks these palettes first before falling back to GROUP_COLORS.
   const customPalettes = useGraphPaletteStore((s) => s.palettes);
 
-  // Distinct group values driving the legend. Lifted from LegendStylePanel
-  // so the parent can pre-compute effectiveStyles in the same single source
-  // of truth that gets handed both to the renderer (via spec.styles) and to
-  // the panel (for swatches and the editor's "default vs override" check).
-  //
-  // Two rules govern which group keys make the cut:
-  //   1. The group value itself must be non-missing (skip blanks/whitespace
-  //      so we don't surface a phantom "" legend entry).
-  //   2. After applying the user's filter rules the group must still have
-  //      at least one row that would actually plot something — i.e. every
-  //      encoded field in {x, y} is non-missing for that row. A group
-  //      whose Y is entirely null in the filtered region produces zero
-  //      marks and would otherwise leave a dead legend swatch behind.
   const groupKeys = useMemo<string[]>(() => {
-    const groupField = encoding.overlay;
-    if (!groupField || !filteredData) return [DEFAULT_GROUP_KEY];
-    const colIdx = filteredData.columns.indexOf(groupField.name);
-    if (colIdx < 0) return [DEFAULT_GROUP_KEY];
-    const xIdx = encoding.x ? filteredData.columns.indexOf(encoding.x.name) : -1;
-    const yIdx = encoding.y ? filteredData.columns.indexOf(encoding.y.name) : -1;
+    if (!encoding.overlay) return [DEFAULT_GROUP_KEY];
+    if (!frame) return [DEFAULT_GROUP_KEY];
+
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const r of filteredData.rows) {
-      const gv = r[colIdx];
-      if (isMissing(gv)) continue;
-      // Drop the row from the legend census if a bound encoding channel
-      // is missing on it — the renderer would skip it too, so it must
-      // not count toward "this group has data".
-      if (xIdx >= 0 && isMissing(r[xIdx])) continue;
-      if (yIdx >= 0 && isMissing(r[yIdx])) continue;
-      const k = String(gv);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(k);
+    const push = (value: unknown) => {
+      if (isMissing(value)) return;
+      const key = String(value);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(key);
+    };
+
+    for (const chunk of frame.rawChunks) {
+      if (!chunk.groupCodes) continue;
+      const dict = frame.dictionaries.group;
+      if (!dict || dict.length === 0) continue;
+      for (let i = 0; i < chunk.groupCodes.length; i += 1) {
+        const code = Number(chunk.groupCodes[i]);
+        if (!Number.isInteger(code) || code < 0 || code >= dict.length) continue;
+        push(dict[code]);
+      }
     }
+
+    for (const packet of frame.aggregates) {
+      switch (packet.kind) {
+        case "histogram":
+          for (const bin of packet.bins) push(bin.group);
+          break;
+        case "heatmap":
+          for (const cell of packet.cells) push(cell.group);
+          break;
+        case "boxPlot":
+          for (const entry of packet.entries) push(entry.group);
+          break;
+        case "summary":
+          for (const summary of packet.summaries) push(summary.group);
+          break;
+      }
+    }
+
     return out.length > 0 ? out : [DEFAULT_GROUP_KEY];
-  }, [encoding.overlay, encoding.x, encoding.y, filteredData]);
+  }, [encoding.overlay, frame]);
 
   const effectiveStyles = useMemo<GroupStyleMap>(
     () =>
@@ -514,11 +534,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     [item.id, updateItem, markDirty],
   );
 
-  // 加载列信息 + 全表数据
+  // 加载列信息和列显示属性（图形数据由 useGraphDataPipeline 提供）。
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+    setMetaLoading(true);
+    setMetaError(null);
     (async () => {
       try {
         const cols = await dataService.getColumns(dataset.id);
@@ -527,12 +547,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           type: inferFieldType(type),
         }));
         const sqlTypes = cols.map(([, type]) => type);
-        // 简化：一次性拉取全部数据（后续可流式优化）
-        const result = await dataService.queryTable({
-          datasetId: dataset.id,
-          page: 0,
-          pageSize: Math.max(1, dataset.rowCount || 100000),
-        });
         // Pull per-column display props in parallel with data so the
         // Value Order metadata is available on first render. Display
         // props can legitimately be missing (older projects, fresh
@@ -577,19 +591,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         }
         setColumns(fields);
         setColSqlTypes(sqlTypes);
-        setData({ columns: result.columns, rows: result.rows });
         setValueOrders(vo);
         setSpecByCol(sp);
       } catch (e) {
-        if (!cancelled) setError(String(e));
+        if (!cancelled) setMetaError(String(e));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setMetaLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [dataset.id, dataset.rowCount]);
+  }, [dataset.id]);
 
   /** Resolve final per-element options. The smoother layer used to be
    *  driven by a single workspace-level `smootherLambda` slider; that
@@ -1328,6 +1341,91 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     markDirty();
   }, [item.id, item.threeD, updateItem, markDirty]);
 
+  const samplingMode = item.sampling?.mode === "sample" ? "sample" : "full";
+  const sampleSize = useMemo(() => {
+    if (item.sampling?.mode !== "sample") return 20000;
+    const value = Math.trunc(item.sampling.size);
+    return Number.isFinite(value) && value > 0 ? value : 20000;
+  }, [item.sampling]);
+  const sampleSeed = useMemo(() => {
+    if (item.sampling?.mode !== "sample") return 0;
+    const value = Math.trunc(item.sampling.seed);
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  }, [item.sampling]);
+
+  const setSamplingMode = useCallback((mode: "full" | "sample") => {
+    if (mode === "full") {
+      updateItem(item.id, { sampling: { mode: "full" } });
+      markDirty();
+      return;
+    }
+    updateItem(item.id, {
+      sampling: {
+        mode: "sample",
+        size: sampleSize,
+        seed: sampleSeed,
+      },
+    });
+    markDirty();
+  }, [item.id, updateItem, markDirty, sampleSize, sampleSeed]);
+
+  const setSampleSize = useCallback((raw: number) => {
+    const size = Math.max(1, Math.trunc(raw) || sampleSize);
+    updateItem(item.id, {
+      sampling: {
+        mode: "sample",
+        size,
+        seed: sampleSeed,
+      },
+    });
+    markDirty();
+  }, [item.id, updateItem, markDirty, sampleSeed, sampleSize]);
+
+  const setSampleSeed = useCallback((raw: number) => {
+    const seed = Math.max(0, Math.trunc(raw) || 0);
+    updateItem(item.id, {
+      sampling: {
+        mode: "sample",
+        size: sampleSize,
+        seed,
+      },
+    });
+    markDirty();
+  }, [item.id, updateItem, markDirty, sampleSize]);
+
+  const rowStatus = useMemo(() => {
+    if (!frame) {
+      return t("graph.rowStatus.empty", { defaultValue: "No graph frame yet" });
+    }
+    if (frame.sampling.mode === "sample") {
+      return t("graph.rowStatus.sampled", {
+        processed: frame.processedRows,
+        source: frame.sourceRows,
+        defaultValue: "Sampled: {{processed}} / {{source}} rows",
+      });
+    }
+    return t("graph.rowStatus.full", {
+      processed: frame.processedRows,
+      defaultValue: "Full Data: {{processed}} rows",
+    });
+  }, [frame, t]);
+
+  const pipelineStatusLabel = useMemo(() => {
+    if (pipelineStatus === "pending") {
+      return t("graph.pipeline.pending", { defaultValue: "Updating graph..." });
+    }
+    if (pipelineStatus === "error") {
+      return t("graph.pipeline.error", { defaultValue: "Update failed" });
+    }
+    if (metaError) {
+      return t("graph.pipeline.metaError", { defaultValue: "Column metadata unavailable" });
+    }
+    if (metaLoading) {
+      return t("graph.pipeline.metaLoading", { defaultValue: "Loading columns..." });
+    }
+    return t("graph.pipeline.ready", { defaultValue: "Ready" });
+  }, [pipelineStatus, metaError, metaLoading, t]);
+
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
   );
@@ -1426,6 +1524,50 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           </div>
         </div>
         <div className="gb-toolbar-spacer" />
+        <div className="gb-toolbar-right">
+          <div className="gb-sampling" role="radiogroup" aria-label={t("graph.sampling.label", { defaultValue: "Sampling mode" })}>
+            <button
+              type="button"
+              className={`gb-sampling-btn${samplingMode === "full" ? " is-active" : ""}`}
+              onClick={() => setSamplingMode("full")}
+            >
+              {t("graph.sampling.full", { defaultValue: "Full" })}
+            </button>
+            <button
+              type="button"
+              className={`gb-sampling-btn${samplingMode === "sample" ? " is-active" : ""}`}
+              onClick={() => setSamplingMode("sample")}
+            >
+              {t("graph.sampling.sample", { defaultValue: "Sample" })}
+            </button>
+            {samplingMode === "sample" && (
+              <>
+                <input
+                  className="gb-sampling-input"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={sampleSize}
+                  onChange={(e) => setSampleSize(Number(e.target.value))}
+                  title={t("graph.sampling.size", { defaultValue: "Sample size" })}
+                />
+                <input
+                  className="gb-sampling-input"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={sampleSeed}
+                  onChange={(e) => setSampleSeed(Number(e.target.value))}
+                  title={t("graph.sampling.seed", { defaultValue: "Sample seed" })}
+                />
+              </>
+            )}
+          </div>
+          <div className="gb-pipeline-status">
+            <span className={`gb-pipeline-state gb-pipeline-state-${pipelineStatus}`}>{pipelineStatusLabel}</span>
+            <span className="gb-row-status">{rowStatus}</span>
+          </div>
+        </div>
       </div>
 
       <div className="gb-body">
@@ -1433,7 +1575,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         {showFilters && (
           <>
             <FilterPanel
-              data={data}
+              data={graphData}
               columns={columns}
               filters={filters}
               onChange={setFilters}
@@ -1590,6 +1732,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             />
             <div
               className="gb-canvas"
+              ref={canvasRef}
               onDragOver={(e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "copy";
@@ -1620,13 +1763,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 routeDropToSlot(slot, fields);
               }}
             >
-              {loading ? (
-                <div className="gb-empty">{t("graph.loading")}</div>
-              ) : error ? (
-                <div className="gb-empty gb-error">{error}</div>
-              ) : !data ? (
-                <div className="gb-empty">{t("graph.noData")}</div>
-              ) : !item.threeD && !encoding.x && !encoding.y && !(item.multiX?.length) && !(item.multiY?.length) && !activeKinds.has("histogram") ? (
+              {!item.threeD && !encoding.x && !encoding.y && !(item.multiX?.length) && !(item.multiY?.length) && !activeKinds.has("histogram") ? (
                 // Drag-hint shows only when neither axis is bound (and
                 // there's no histogram). Y-only renders a vertical strip
                 // and X-only renders a horizontal strip (mirror), so the
@@ -1638,40 +1775,41 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 // melt fields at render time.
                 <div className="gb-empty">{t("graph.dragHint")}</div>
               ) : (
-                // `effectiveData` is null iff `data` is null; the `!data`
-                // branch above already handled that, so the fallback to
-                // `data` is unreachable and just satisfies the type
-                // checker. `effectiveData` carries the melted view in
-                // multi-mode and equals `filteredData` otherwise.
-                <Graph
-                  spec={spec}
-                  data={effectiveData ?? data}
-                  valueOrders={valueOrders}
-                  onYAxisDblClick={() => setYAxisDialogOpen(true)}
-                  onXAxisDblClick={() => setXAxisDialogOpen(true)}
-                  onAxisRangeChange={(axis, min, max) => {
-                    // JMP-style direct-manipulation drag-zoom / drag-pan
-                    // on the axis strip. The renderer previews via
-                    // setOption during the gesture; on mouseup it hands
-                    // back the final numeric bounds, which we pin onto
-                    // the per-builder yAxis / xAxis config. Other
-                    // overrides (decimals / inverse / grid styling) are
-                    // preserved by spreading the existing config first.
-                    if (axis === "y") {
-                      setYAxisConfig({ ...(item.yAxis ?? {}), min, max });
-                    } else {
-                      setXAxisConfig({ ...(item.xAxis ?? {}), min, max });
-                    }
-                  }}
-                  onAxisContextMenu={(axis, x, y) => setAxisCtxMenu({ axis, x, y })}
-                  onPointClick={(pick) => {
-                    pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
-                  }}
-                  brushMode={cursorMode === "select"}
-                  onBrushSelect={(picks) => {
-                    pickCells(dataset.id, picks);
-                  }}
-                />
+                <>
+                  <Graph
+                    spec={spec}
+                    data={graphData}
+                    frame={frame}
+                    valueOrders={valueOrders}
+                    onYAxisDblClick={() => setYAxisDialogOpen(true)}
+                    onXAxisDblClick={() => setXAxisDialogOpen(true)}
+                    onAxisRangeChange={(axis, min, max) => {
+                      // JMP-style direct-manipulation drag-zoom / drag-pan
+                      // on the axis strip. The renderer previews via
+                      // setOption during the gesture; on mouseup it hands
+                      // back the final numeric bounds, which we pin onto
+                      // the per-builder yAxis / xAxis config. Other
+                      // overrides (decimals / inverse / grid styling) are
+                      // preserved by spreading the existing config first.
+                      if (axis === "y") {
+                        setYAxisConfig({ ...(item.yAxis ?? {}), min, max });
+                      } else {
+                        setXAxisConfig({ ...(item.xAxis ?? {}), min, max });
+                      }
+                    }}
+                    onAxisContextMenu={(axis, x, y) => setAxisCtxMenu({ axis, x, y })}
+                    onPointClick={(pick) => {
+                      pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
+                    }}
+                    brushMode={cursorMode === "select"}
+                    onBrushSelect={(picks) => {
+                      pickCells(dataset.id, picks);
+                    }}
+                  />
+                  {pipelineStatus === "error" && pipelineError && (
+                    <div className="gb-canvas-overlay gb-canvas-overlay-error">{pipelineError}</div>
+                  )}
+                </>
               )}
             </div>
             <Slot
@@ -1727,7 +1865,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             - 底部样式编辑器：针对当前选中的图例条目，分别设置线/填充/点。
             无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
         <LegendStylePanel
-          data={data}
+          data={graphData}
           encoding={encoding}
           elements={elements}
           groupStyles={item.groupStyles ?? {}}

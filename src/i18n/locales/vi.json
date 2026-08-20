@@ -769,5 +769,24 @@
       "clearAllRules": "Xoá tất cả",
       "clearAllTitle": "Gỡ bỏ mọi quy tắc lọc",
       "noMatches": "Không có kết quả"    }
+    },
+    "sampling": {
+      "label": "Chế độ lấy mẫu",
+      "full": "Toàn bộ",
+      "sample": "Lấy mẫu",
+      "size": "Kích thước mẫu",
+      "seed": "Hạt giống mẫu"
+    },
+    "rowStatus": {
+      "empty": "Chưa có khung dữ liệu đồ thị",
+      "full": "Toàn bộ dữ liệu: {{processed}} hàng",
+      "sampled": "Đã lấy mẫu: {{processed}} / {{source}} hàng"
+    },
+    "pipeline": {
+      "ready": "Sẵn sàng",
+      "pending": "Đang cập nhật đồ thị...",
+      "error": "Cập nhật thất bại",
+      "metaLoading": "Đang tải cột...",
+      "metaError": "Không tải được metadata cột"
   }
 }

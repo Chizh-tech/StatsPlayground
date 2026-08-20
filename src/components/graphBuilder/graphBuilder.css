@@ -31,6 +31,71 @@
   flex: 1;
 }
 
+.gb-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gb-sampling {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gb-sampling-btn {
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  background: var(--bg-btn-secondary);
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.gb-sampling-btn.is-active {
+  border-color: var(--fg-accent);
+  color: var(--fg-primary);
+  background: var(--bg-cell-selected);
+}
+
+.gb-sampling-input {
+  width: 76px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  background: var(--bg-main);
+  color: var(--fg-primary);
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
+.gb-pipeline-status {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 180px;
+  line-height: 1.2;
+}
+
+.gb-pipeline-state {
+  font-size: 11px;
+  color: var(--fg-secondary);
+}
+
+.gb-pipeline-state-pending {
+  color: var(--fg-accent);
+}
+
+.gb-pipeline-state-error {
+  color: var(--fg-danger);
+}
+
+.gb-row-status {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
 .gb-tb-btn {
   background: var(--bg-btn-secondary);
   border: 1px solid var(--border-input);
@@ -485,6 +550,24 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+}
+
+.gb-canvas-overlay {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--bg-card) 78%, transparent);
+  pointer-events: none;
+}
+
+.gb-canvas-overlay-error {
+  color: var(--fg-danger);
+  border: 1px solid color-mix(in srgb, var(--fg-danger) 40%, transparent);
 }
 
 .gb-empty {
