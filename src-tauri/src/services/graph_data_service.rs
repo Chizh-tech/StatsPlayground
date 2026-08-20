@@ -9,8 +9,8 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use crate::engine::duckdb_engine::GraphProjectionStats;
 use crate::error::AppError;
 use crate::models::graph_data::{
-    GraphAxisEncoding, GraphChunkHeader, GraphDataCompletion, GraphDataRequest, GraphPayloadType,
-    GraphSampling, GraphTypedSliceDescriptor,
+    GraphAggregatePacket, GraphAxisEncoding, GraphChunkHeader, GraphDataCompletion,
+    GraphDataRequest, GraphPayloadType, GraphSampling, GraphTypedSliceDescriptor,
 };
 use crate::state::AppState;
 
@@ -44,6 +44,8 @@ trait GraphChunkSink {
 
     fn send_payload(&mut self, payload: Vec<u8>) -> Result<(), GraphSinkError>;
 
+    fn send_aggregate(&mut self, packet: &GraphAggregatePacket) -> Result<(), GraphSinkError>;
+
     fn send_terminal(&mut self, completion: &GraphDataCompletion) -> Result<(), GraphSinkError>;
 }
 
@@ -67,6 +69,14 @@ struct GraphStreamCompletionMessage<'a> {
     completion: &'a GraphDataCompletion,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphStreamAggregateMessage<'a> {
+    message_type: &'static str,
+    #[serde(flatten)]
+    packet: &'a GraphAggregatePacket,
+}
+
 impl GraphChunkSink for ChannelChunkSink<'_> {
     fn send_header(&mut self, header: &GraphChunkHeader) -> Result<(), GraphSinkError> {
         let message = GraphStreamHeaderMessage {
@@ -87,6 +97,23 @@ impl GraphChunkSink for ChannelChunkSink<'_> {
 
     fn send_payload(&mut self, payload: Vec<u8>) -> Result<(), GraphSinkError> {
         if self.on_chunk.send(InvokeResponseBody::from(payload)).is_err() {
+            return Err(GraphSinkError::Closed);
+        }
+        Ok(())
+    }
+
+    fn send_aggregate(&mut self, packet: &GraphAggregatePacket) -> Result<(), GraphSinkError> {
+        let message = GraphStreamAggregateMessage {
+            message_type: "aggregate",
+            packet,
+        };
+        let serialized = serde_json::to_string(&message)
+            .map_err(|error| GraphSinkError::Invalid(error.to_string()))?;
+        if self
+            .on_chunk
+            .send(InvokeResponseBody::from(serialized))
+            .is_err()
+        {
             return Err(GraphSinkError::Closed);
         }
         Ok(())
@@ -148,6 +175,10 @@ impl GraphChunkSink for CollectingChunkSink {
             ));
         };
         self.chunks.push(GraphDataChunk { header, payload });
+        Ok(())
+    }
+
+    fn send_aggregate(&mut self, _packet: &GraphAggregatePacket) -> Result<(), GraphSinkError> {
         Ok(())
     }
 
@@ -220,6 +251,19 @@ impl<'a> GraphDataService<'a> {
         sink.into_chunks()
     }
 
+    #[cfg(test)]
+    pub fn collect_aggregates_for_test(
+        &self,
+        request: &GraphDataRequest,
+    ) -> Result<Vec<GraphAggregatePacket>, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        db.collect_graph_aggregate_packets(request)
+    }
+
     fn stream_with_sink<S: GraphChunkSink>(
         &self,
         request: &GraphDataRequest,
@@ -240,12 +284,6 @@ impl<'a> GraphDataService<'a> {
                 "graph request must include at least one field".to_string(),
             ));
         }
-        if !matches!(request.sampling, GraphSampling::Full) {
-            return Err(AppError::InvalidParam(
-                "graph sampling modes are not supported yet".to_string(),
-            ));
-        }
-
         let run = self.begin_request_run(&request.request_id)?;
         if run.pre_cancelled {
             let completion = GraphDataCompletion {
@@ -273,6 +311,12 @@ impl<'a> GraphDataService<'a> {
                 .db
                 .lock()
                 .map_err(|error| AppError::Database(error.to_string()))?;
+
+            let aggregate_packets = db.collect_graph_aggregate_packets(request)?;
+            for packet in &aggregate_packets {
+                sink.send_aggregate(packet)
+                    .map_err(Self::map_sink_error_to_app_error)?;
+            }
 
             let metadata: RefCell<Option<ProjectionMetadata>> = RefCell::new(None);
             let accumulator: RefCell<Option<ChunkAccumulator>> = RefCell::new(None);
@@ -504,30 +548,80 @@ impl ProjectionMetadata {
                 .or_insert_with(|| field.column.clone());
         }
 
-        let x_column = role_columns
-            .get("x")
-            .ok_or_else(|| AppError::InvalidParam("graph request is missing role x".to_string()))?;
+        let x_column = role_columns.get("x");
         let y_column = role_columns
             .get("y")
             .ok_or_else(|| AppError::InvalidParam("graph request is missing role y".to_string()))?;
 
+        let has_backend_projection_aliases = stats
+            .projected_columns
+            .iter()
+            .any(|column| column == "__sp_x")
+            && stats
+                .projected_columns
+                .iter()
+                .any(|column| column == "__sp_y");
+        let has_melt_value_alias = stats
+            .projected_columns
+            .iter()
+            .any(|column| column == "__sp_value__");
+
+        let resolved_x_column = if has_backend_projection_aliases {
+            "__sp_x"
+        } else if let Some(column) = x_column {
+            column.as_str()
+        } else if stats
+            .projected_columns
+            .iter()
+            .any(|column| column == "__sp_x")
+        {
+            "__sp_x"
+        } else {
+            stats
+                .projected_columns
+                .first()
+                .map(String::as_str)
+                .ok_or_else(|| AppError::InvalidParam("graph request has no projected x column".to_string()))?
+        };
+        let resolved_y_column = if has_backend_projection_aliases {
+            "__sp_y"
+        } else if has_melt_value_alias {
+            "__sp_value__"
+        } else {
+            y_column
+        };
+
         let x_index = stats
             .projected_columns
             .iter()
-            .position(|column| column == x_column)
+            .position(|column| column == resolved_x_column)
             .ok_or_else(|| AppError::InvalidParam("unknown graph column for role x".to_string()))?;
         let y_index = stats
             .projected_columns
             .iter()
-            .position(|column| column == y_column)
+            .position(|column| column == resolved_y_column)
             .ok_or_else(|| AppError::InvalidParam("unknown graph column for role y".to_string()))?;
 
-        let group_index = role_columns
-            .get("group")
-            .and_then(|column| stats.projected_columns.iter().position(|name| name == column));
-        let size_index = role_columns
-            .get("size")
-            .and_then(|column| stats.projected_columns.iter().position(|name| name == column));
+        let group_index = if has_backend_projection_aliases {
+            stats
+                .projected_columns
+                .iter()
+                .position(|name| name == "__sp_group")
+        } else {
+            role_columns
+                .get("group")
+                .and_then(|column| stats.projected_columns.iter().position(|name| name == column))
+        };
+        let size_index = if has_backend_projection_aliases {
+            stats
+                .projected_columns
+                .iter()
+                .position(|name| name == "__sp_size")
+        } else {
+            role_columns
+                .get("size")
+                .and_then(|column| stats.projected_columns.iter().position(|name| name == column))
+        };
 
         let x_type = stats
             .projected_column_types
@@ -981,6 +1075,137 @@ mod tests {
     use crate::models::table::{TableWindowFilter, TableWindowFilterRule};
     use crate::state::AppState;
 
+    mod aggregate {
+        use super::*;
+
+        fn aggregate_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
+            let mut request = build_request(dataset_id, generation);
+            request.elements = vec![
+                GraphElementRequest {
+                    kind: "histogram".to_string(),
+                    summary_stat: "none".to_string(),
+                },
+                GraphElementRequest {
+                    kind: "boxplot".to_string(),
+                    summary_stat: "none".to_string(),
+                },
+                GraphElementRequest {
+                    kind: "points".to_string(),
+                    summary_stat: "mean".to_string(),
+                },
+            ];
+            request.fields = vec![
+                GraphFieldBinding {
+                    role: "x".to_string(),
+                    column: "region".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "y".to_string(),
+                    column: "cost".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "group".to_string(),
+                    column: "region".to_string(),
+                },
+            ];
+            request.filters = vec![TableWindowFilter {
+                op: "AND".to_string(),
+                rule: TableWindowFilterRule::Categorical {
+                    field: "region".to_string(),
+                    selected: vec!["North".to_string(), "South".to_string()],
+                    exclude: false,
+                },
+            }];
+            request
+        }
+
+        fn direct_filtered_rows(state: &AppState, dataset_id: &str) -> i64 {
+            let db = state.db.lock().expect("db lock");
+            let table = format!("dataset_{}", dataset_id.replace('-', "_"));
+            let sql = format!(
+                "SELECT COUNT(*) FROM \"{table}\" WHERE region IN ('North', 'South')"
+            );
+            db.conn().query_row(&sql, [], |row| row.get(0)).expect("count")
+        }
+
+        #[test]
+        fn aggregate_packets_match_full_data_sql_counts_across_scales() {
+            for row_count in [0usize, 1, 10, 5_000, 300_000] {
+                let state = AppState::new().expect("state");
+                let dataset_id = format!("agg-scale-{row_count}");
+                seed_dataset(&state, &dataset_id, row_count);
+
+                let service = GraphDataService::new(&state);
+                let request = aggregate_request(&dataset_id, 0);
+                let packets = service
+                    .collect_aggregates_for_test(&request)
+                    .expect("aggregate packets");
+
+                let expected_filtered = direct_filtered_rows(&state, &dataset_id);
+                let histogram_total = packets
+                    .iter()
+                    .filter_map(|packet| packet.histogram_total_count())
+                    .sum::<u64>();
+                assert_eq!(histogram_total as i64, expected_filtered);
+            }
+        }
+
+        #[test]
+        fn aggregate_packets_are_identical_between_full_and_sample() {
+            let state = AppState::new().expect("state");
+            seed_dataset(&state, "agg-parity", 25_000);
+
+            let service = GraphDataService::new(&state);
+            let full_request = aggregate_request("agg-parity", 0);
+            let mut sample_request = aggregate_request("agg-parity", 0);
+            sample_request.sampling = GraphSampling::Sample {
+                size: 2_500,
+                seed: 20260820,
+            };
+
+            let full_packets = service
+                .collect_aggregates_for_test(&full_request)
+                .expect("full packets");
+            let sample_packets = service
+                .collect_aggregates_for_test(&sample_request)
+                .expect("sample packets");
+
+            let full_bytes = serde_json::to_vec(&full_packets).expect("serialize full");
+            let sample_bytes = serde_json::to_vec(&sample_packets).expect("serialize sample");
+            assert_eq!(full_bytes, sample_bytes);
+        }
+
+        #[test]
+        fn sampled_raw_rows_are_deterministic_for_the_same_seed() {
+            let state = AppState::new().expect("state");
+            seed_dataset(&state, "sample-repro", 30_000);
+
+            let service = GraphDataService::new(&state);
+            let mut request = aggregate_request("sample-repro", 0);
+            request.sampling = GraphSampling::Sample {
+                size: 3_000,
+                seed: 17,
+            };
+            request.elements = vec![GraphElementRequest {
+                kind: "points".to_string(),
+                summary_stat: "none".to_string(),
+            }];
+
+            let first = service.collect_for_test(&request).expect("first sample");
+            let second = service.collect_for_test(&request).expect("second sample");
+
+            let first_ids = first
+                .iter()
+                .flat_map(|chunk| extract_i64_slice(chunk, &chunk.header.row_ids))
+                .collect::<Vec<_>>();
+            let second_ids = second
+                .iter()
+                .flat_map(|chunk| extract_i64_slice(chunk, &chunk.header.row_ids))
+                .collect::<Vec<_>>();
+            assert_eq!(first_ids, second_ids);
+        }
+    }
+
     fn build_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
         GraphDataRequest {
             request_id: format!("request-{dataset_id}"),
@@ -1191,6 +1416,10 @@ mod tests {
             Ok(())
         }
 
+        fn send_aggregate(&mut self, _packet: &GraphAggregatePacket) -> Result<(), GraphSinkError> {
+            Ok(())
+        }
+
         fn send_terminal(&mut self, _completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
             Ok(())
         }
@@ -1212,6 +1441,11 @@ mod tests {
             Ok(())
         }
 
+        fn send_aggregate(&mut self, _packet: &GraphAggregatePacket) -> Result<(), GraphSinkError> {
+            self.events.push("aggregate");
+            Ok(())
+        }
+
         fn send_terminal(&mut self, _completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
             self.events.push("complete");
             Ok(())
@@ -1226,6 +1460,10 @@ mod tests {
         }
 
         fn send_payload(&mut self, _payload: Vec<u8>) -> Result<(), GraphSinkError> {
+            Err(GraphSinkError::Closed)
+        }
+
+        fn send_aggregate(&mut self, _packet: &GraphAggregatePacket) -> Result<(), GraphSinkError> {
             Err(GraphSinkError::Closed)
         }
 
@@ -1297,8 +1535,13 @@ mod tests {
         assert!(!completion.cancelled);
         assert!(!sink.events.is_empty());
         assert_eq!(sink.events.last().copied(), Some("complete"));
-        assert_eq!((sink.events.len() - 1) % 2, 0);
-        for pair in sink.events[..sink.events.len() - 1].chunks(2) {
+        let ordered_events = sink.events[..sink.events.len() - 1]
+            .iter()
+            .copied()
+            .filter(|event| *event != "aggregate")
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_events.len() % 2, 0);
+        for pair in ordered_events.chunks(2) {
             assert_eq!(pair[0], "header");
             assert_eq!(pair[1], "payload");
         }

@@ -10,7 +10,7 @@ import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerSh
 import { DEFAULT_GROUP_KEY } from "./types";
 import { buildAxisCommon, type GraphTheme } from "./theme";
 import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand";
-import type { GraphDataFrame } from "@/types/graphData";
+import type { GraphDataFrame, GraphAggregatePacket, SummaryPacket } from "@/types/graphData";
 import type { RawPointPanelDescriptor } from "./rawPoints";
 import i18n from "@/i18n";
 
@@ -1397,6 +1397,55 @@ function intervalHalf(ys: number[], kind: string): number {
   }
 }
 
+function findSummaryPacket(
+  aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+): SummaryPacket | null {
+  if (!aggregatePackets || aggregatePackets.length === 0) return null;
+  const packet = aggregatePackets.find((candidate) => candidate.kind === "summary");
+  return packet?.kind === "summary" ? packet : null;
+}
+
+function summaryPointFromPacket(
+  packet: SummaryPacket,
+  xIsCategory: boolean,
+  summaryStat: string,
+  errorInterval: string,
+  groupKey: string | null,
+): Array<{ x: unknown; y: number; lo: number; hi: number }> {
+  const rows = packet.summaries.filter((entry) => {
+    if (groupKey == null) {
+      return entry.group == null || entry.group === "";
+    }
+    return entry.group === groupKey;
+  });
+  const points = rows.map((entry) => {
+    const y = summaryStat === "median"
+      ? entry.mean
+      : summaryStat === "sum"
+        ? entry.mean * entry.count
+        : entry.mean;
+    let half = 0;
+    if (errorInterval === "stdDev") {
+      half = entry.stddev;
+    } else if (errorInterval === "ci95") {
+      if (Number.isFinite(entry.intervalHigh ?? NaN) && Number.isFinite(entry.intervalLow ?? NaN)) {
+        half = ((entry.intervalHigh ?? y) - (entry.intervalLow ?? y)) / 2;
+      } else {
+        half = entry.count > 1 ? 1.96 * (entry.stddev / Math.sqrt(entry.count)) : 0;
+      }
+    } else if (errorInterval === "stdErr" || errorInterval === "auto") {
+      half = entry.count > 1 ? entry.stddev / Math.sqrt(entry.count) : 0;
+    }
+
+    const xValue = xIsCategory ? (entry.category ?? "") : toNum(entry.category);
+    return { x: xValue, y, lo: y - half, hi: y + half };
+  });
+  if (!xIsCategory) {
+    points.sort((left, right) => toNum(left.x) - toNum(right.x));
+  }
+  return points;
+}
+
 /** Compute per-point horizontal jitter offsets in CSS pixels.
  *
  *  - `auto` produces JMP-style "stack jitter": within each X category, Y
@@ -1555,7 +1604,22 @@ function aggregatePoints(
   xIsCategory: boolean,
   summaryStat: string,
   errorInterval: string,
+  summaryPacket?: SummaryPacket | null,
+  groupKey?: string | null,
 ): Array<{ x: unknown; y: number; lo: number; hi: number }> {
+  if (summaryPacket) {
+    const fromPacket = summaryPointFromPacket(
+      summaryPacket,
+      xIsCategory,
+      summaryStat,
+      errorInterval,
+      groupKey ?? null,
+    );
+    if (fromPacket.length > 0) {
+      return fromPacket;
+    }
+  }
+
   const map = new Map<string, { xv: unknown; ys: number[] }>();
   for (const i of rowIdxs) {
     const xv = data.rows[i][xIdx];
@@ -2702,6 +2766,7 @@ function buildSingleOption(
   globalGroupKeys?: string[],
   valueOrders?: Record<string, string[]>,
   sharedRanges?: SharedAxisRanges,
+  aggregatePackets?: readonly GraphAggregatePacket[],
 ): EChartsOption {
   const { encoding, elements } = spec;
   const xField = encoding.x;
@@ -2841,6 +2906,7 @@ function buildSingleOption(
       globalGroupKeys,
       valueOrders,
       swappedShared,
+      aggregatePackets,
     );
     return transposeOption(verticalOpt);
   }
@@ -2909,6 +2975,7 @@ function buildSingleOption(
   };
 
   const enabledElements = elements.filter((e) => e.enabled !== false);
+  const summaryPacket = findSummaryPacket(aggregatePackets);
 
   /** Set of group values the user has hidden via the legend show/hide
    *  toggle. Only meaningful when there's a grouping field; ignored
@@ -4266,6 +4333,8 @@ function buildSingleOption(
         grouping: !!grouping,
         theme,
         style: resolvedStyle,
+        summaryPacket,
+        groupKey: grouping ? gKey : null,
       });
       if (built) series.push(...built);
     });
@@ -4727,6 +4796,8 @@ interface BuildCtx {
   /** Resolved {line, fill, point, outlier} sub-marks for the current group.
    *  Every series rendered for this element should pull from these. */
   style: ResolvedGroupStyle;
+  summaryPacket: SummaryPacket | null;
+  groupKey: string | null;
 }
 
 function buildElementSeries(
@@ -4735,7 +4806,7 @@ function buildElementSeries(
   data: GraphData,
   ctx: BuildCtx,
 ): any[] | null {
-  const { xIdx, yIdx, sizeIdx, xIsCategory, seriesName, style } = ctx;
+  const { xIdx, yIdx, sizeIdx, xIsCategory, seriesName, style, summaryPacket, groupKey } = ctx;
   if (yIdx < 0) return null;
 
   // When no X column is bound, collapse all points onto a single category
@@ -4786,7 +4857,15 @@ function buildElementSeries(
       // (mean/median/sum) plus optional error interval.
       if (summaryStat !== "none" && !useRowIdx && xIdx >= 0) {
         const agg = aggregatePoints(
-          rowIdxs, data, xIdx, yIdx, xIsCategory, summaryStat, errorInterval,
+          rowIdxs,
+          data,
+          xIdx,
+          yIdx,
+          xIsCategory,
+          summaryStat,
+          errorInterval,
+          summaryPacket,
+          groupKey,
         );
         const sym = markerToSymbol(style.point.marker);
         const out: any[] = [
@@ -4893,7 +4972,15 @@ function buildElementSeries(
       let intervalSeries: any[] = [];
       if (useAgg) {
         const agg = aggregatePoints(
-          rowIdxs, data, xIdx, yIdx, xIsCategory, summaryStat, errorInterval,
+          rowIdxs,
+          data,
+          xIdx,
+          yIdx,
+          xIsCategory,
+          summaryStat,
+          errorInterval,
+          summaryPacket,
+          groupKey,
         );
         lineData = agg.map((p) => [
           xIsCategory ? toStr(p.x) : toNum(p.x),
@@ -5634,7 +5721,7 @@ export function buildGraph(
       return {
         panels: [{
           title: spec.title || "",
-          option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders),
+          option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates),
           rawPoints: buildFrameBackedRawDescriptor(spec, frame),
           groupXValue: null,
           groupYValue: null,
@@ -5648,7 +5735,7 @@ export function buildGraph(
       return {
         panels: [{
           title: spec.title || "",
-          option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders),
+          option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates),
           rawPoints: buildFrameBackedRawDescriptor(spec, frame),
           groupXValue: null,
           groupYValue: null,
@@ -5685,7 +5772,7 @@ export function buildGraph(
       };
       return {
         title: `${fw.name}=${key}`,
-        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges),
+        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates),
         // Facet-local masks for typed chunks arrive in the aggregate packet
         // path (Task 6+); until then keep legacy ECharts scatter behavior.
         rawPoints: null,
@@ -5758,7 +5845,7 @@ export function buildGraph(
       };
       panels.push({
         title: facetTitle(xKey, yKey, encoding),
-        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges),
+        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates),
         // Facet-local masks for typed chunks arrive in the aggregate packet
         // path (Task 6+); until then keep legacy ECharts scatter behavior.
         rawPoints: null,

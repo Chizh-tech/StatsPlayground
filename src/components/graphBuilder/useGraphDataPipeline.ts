@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   decodeGraphPayload,
+  type GraphAggregatePacket,
   type DecodedGraphChunk,
   type DecodedRawPointChunk,
   type GraphChunkHeader,
@@ -21,6 +22,7 @@ const VIEWPORT_DEBOUNCE_MS = 120;
 interface PendingGraphState {
   request: GraphDataRequest;
   chunks: DecodedRawPointChunk[];
+  aggregates: GraphAggregatePacket[];
   chunkIndexes: Set<number>;
   finalChunkIndex: number | null;
   dictionaries: Record<string, readonly string[]>;
@@ -39,6 +41,7 @@ export type GraphStreamMessage =
   | { type: "start"; request: GraphDataRequest }
   | { type: "header"; header: GraphChunkHeader }
   | { type: "payload"; payload: ArrayBuffer }
+  | { type: "aggregate"; packet: GraphAggregatePacket }
   | { type: "chunk"; chunk: DecodedGraphChunk }
   | { type: "complete"; completion: GraphDataCompletion }
   | { type: "error"; requestId: string; generation: number; error: string };
@@ -229,6 +232,7 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
         pending: {
           request: message.request,
           chunks: [],
+          aggregates: [],
           chunkIndexes: new Set<number>(),
           finalChunkIndex: null,
           dictionaries: {},
@@ -279,6 +283,18 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
     case "chunk": {
       return ingestDecodedChunk(state, message.chunk);
     }
+    case "aggregate": {
+      if (!state.pending) {
+        return state;
+      }
+      return {
+        ...state,
+        pending: {
+          ...state.pending,
+          aggregates: [...state.pending.aggregates, message.packet],
+        },
+      };
+    }
     case "complete": {
       const completion = message.completion;
       if (!isMatchingPending(state, completion.requestId, completion.generation)) {
@@ -317,7 +333,7 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
         dictionaries: state.pending.dictionaries,
         extents: state.pending.extents,
         rawChunks,
-        aggregates: [],
+        aggregates: state.pending.aggregates,
       };
 
       return {
@@ -565,6 +581,9 @@ export function useGraphDataPipeline(
           },
           onPayload: (payload) => {
             setState((previous) => reduceGraphStream(previous, { type: "payload", payload }));
+          },
+          onAggregate: (packet) => {
+            setState((previous) => reduceGraphStream(previous, { type: "aggregate", packet }));
           },
           onComplete: (completion) => {
             setState((previous) => reduceGraphStream(previous, { type: "complete", completion }));

@@ -1,4 +1,5 @@
 import type {
+  GraphAggregatePacket,
   GraphChunkHeader,
   GraphDataCompletion,
   GraphDataRequest,
@@ -7,6 +8,7 @@ import type {
 export interface GraphStreamTransportHandlers {
   onHeader: (header: GraphChunkHeader) => void;
   onPayload: (payload: ArrayBuffer) => void;
+  onAggregate: (packet: GraphAggregatePacket) => void;
   onComplete: (completion: GraphDataCompletion) => void;
   onError: (message: string) => void;
 }
@@ -72,6 +74,19 @@ function isGraphDataCompletion(value: unknown): value is GraphDataCompletion {
     && typeof record.generation === "number"
     && Number.isInteger(record.chunksSent)
     && typeof record.cancelled === "boolean"
+  );
+}
+
+function isGraphAggregatePacket(value: unknown): value is GraphAggregatePacket {
+  const record = toRecord(value);
+  if (!record || !isMessageType(record, "aggregate")) {
+    return false;
+  }
+  return (
+    record.kind === "histogram"
+    || record.kind === "heatmap"
+    || record.kind === "boxPlot"
+    || record.kind === "summary"
   );
 }
 
@@ -180,6 +195,15 @@ export function createGraphStreamTransport(
 
         closed = true;
         handlers.onComplete(structured);
+        return;
+      }
+
+      if (isGraphAggregatePacket(structured)) {
+        if (!pendingHeader) {
+          handlers.onAggregate(structured);
+          return;
+        }
+        fail("graph aggregate packet arrived before payload for the previous chunk");
         return;
       }
 

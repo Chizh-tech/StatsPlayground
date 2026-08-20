@@ -74,11 +74,97 @@ export interface GraphChunkMessage {
   payload: ArrayBuffer;
 }
 
+export interface HistogramBin {
+  group?: string;
+  category?: string;
+  sourceColumn?: string;
+  binStart: number;
+  binEnd: number;
+  count: number;
+}
+
+export interface HistogramPacket {
+  kind: "histogram";
+  xColumn?: string;
+  yColumn: string;
+  groupColumn?: string;
+  sourceColumn?: string;
+  binWidth: number;
+  totalCount: number;
+  bins: HistogramBin[];
+}
+
+export interface HeatmapCell {
+  group?: string;
+  xBinStart: number;
+  xBinEnd: number;
+  yBinStart: number;
+  yBinEnd: number;
+  count: number;
+}
+
+export interface HeatmapPacket {
+  kind: "heatmap";
+  xColumn: string;
+  yColumn: string;
+  groupColumn?: string;
+  xBinWidth: number;
+  yBinWidth: number;
+  totalCount: number;
+  cells: HeatmapCell[];
+}
+
+export interface BoxPlotEntry {
+  group?: string;
+  category?: string;
+  sourceColumn?: string;
+  count: number;
+  min: number;
+  q1: number;
+  median: number;
+  q3: number;
+  max: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+  outliers: number[];
+}
+
+export interface BoxPlotPacket {
+  kind: "boxPlot";
+  xColumn?: string;
+  yColumn: string;
+  groupColumn?: string;
+  sourceColumn?: string;
+  entries: BoxPlotEntry[];
+}
+
+export interface SummaryEntry {
+  group?: string;
+  category?: string;
+  sourceColumn?: string;
+  count: number;
+  mean: number;
+  stddev: number;
+  min: number;
+  max: number;
+  intervalLow?: number;
+  intervalHigh?: number;
+}
+
+export interface SummaryPacket {
+  kind: "summary";
+  xColumn?: string;
+  yColumn: string;
+  groupColumn?: string;
+  sourceColumn?: string;
+  summaries: SummaryEntry[];
+}
+
 export type GraphAggregatePacket =
-  | { kind: "histogram" }
-  | { kind: "heatmap" }
-  | { kind: "boxPlot" }
-  | { kind: "summary" };
+  | HistogramPacket
+  | HeatmapPacket
+  | BoxPlotPacket
+  | SummaryPacket;
 
 export function isGraphAggregatePacket(value: unknown): value is GraphAggregatePacket {
   if (!value || typeof value !== "object") {
@@ -86,13 +172,10 @@ export function isGraphAggregatePacket(value: unknown): value is GraphAggregateP
   }
 
   const packet = value as Record<string, unknown>;
-  return (
-    Object.keys(packet).length === 1
-    && (packet.kind === "histogram"
-      || packet.kind === "heatmap"
-      || packet.kind === "boxPlot"
-      || packet.kind === "summary")
-  );
+  return packet.kind === "histogram"
+    || packet.kind === "heatmap"
+    || packet.kind === "boxPlot"
+    || packet.kind === "summary";
 }
 
 export interface DecodedRawPointChunk {

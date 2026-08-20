@@ -6,7 +6,10 @@ use duckdb::types::{OrderedMap, TimeUnit, Value};
 
 use crate::error::AppError;
 use crate::engine::sql_query::{normalize_identifier, validate_read_only_query};
-use crate::models::graph_data::GraphDataRequest;
+use crate::models::graph_data::{
+    BoxPlotEntry, BoxPlotPacket, GraphAggregatePacket, GraphDataRequest, GraphSampling,
+    HeatmapPacket, HistogramBin, HistogramPacket, SummaryEntry, SummaryPacket,
+};
 use crate::models::table::{
     CellPosition, CellUpdate, DatasetMeta, SqlQueryResult, TableQueryResult, TableWindowFilterRule,
     TableWindowRequest, TableWindowResult,
@@ -24,12 +27,30 @@ pub struct GraphProjectionStats {
     pub projected_column_types: Vec<String>,
 }
 
+struct GraphQueryPlan {
+    source_sql: String,
+    source_values: Vec<Value>,
+    projection_sql: String,
+    projection_values: Vec<Value>,
+    projection_select_items: Vec<String>,
+    projected_columns: Vec<String>,
+    projected_column_types: Vec<String>,
+}
+
 struct MaterializedQuery {
     columns: Vec<String>,
     column_types: Vec<String>,
     rows: Vec<Vec<Value>>,
 }
 type GroupedStatisticValues = std::collections::HashMap<(String, String), Vec<Option<f64>>>;
+
+fn role_column(request: &GraphDataRequest, role_name: &str) -> Option<String> {
+    request
+        .fields
+        .iter()
+        .find(|field| field.role.eq_ignore_ascii_case(role_name))
+        .map(|field| field.column.clone())
+}
 
 impl DuckDbEngine {
     /// Get a reference to the underlying connection
@@ -1020,76 +1041,40 @@ impl DuckDbEngine {
             .map(|(name, column_type)| (name.as_str(), column_type.as_str()))
             .collect::<std::collections::HashMap<_, _>>();
 
-        let mut projected_columns = Vec::new();
-        let mut projected_column_types = Vec::new();
-        let mut seen_columns: HashSet<String> = HashSet::new();
-        for field in &request.fields {
-            let column_name = field.column.trim();
-            if column_name.is_empty() {
-                return Err(AppError::InvalidParam(
-                    "graph field column must not be blank".to_string(),
-                ));
-            }
-
-            let Some(column_type) = allowed_columns.get(column_name) else {
-                return Err(AppError::InvalidParam(format!(
-                    "unknown graph column: {column_name}"
-                )));
-            };
-
-            if seen_columns.insert(column_name.to_ascii_lowercase()) {
-                projected_columns.push(column_name.to_string());
-                projected_column_types.push((*column_type).to_string());
-            }
-        }
-
-        if projected_columns.is_empty() {
-            return Err(AppError::InvalidParam(
-                "graph request must include at least one field".to_string(),
-            ));
-        }
-
-        let (where_clause, filter_values) =
-            Self::compile_table_window_filters(&request.filters, &allowed_columns)?;
-        let table_name = Self::quote_identifier(&Self::internal_table_name(&request.dataset_id));
+        let plan = self.compile_graph_query_plan(request, &allowed_columns)?;
 
         let mut stats = GraphProjectionStats {
             source_rows: 0,
-            projected_columns: projected_columns.clone(),
-            projected_column_types: projected_column_types.clone(),
+            projected_columns: plan.projected_columns.clone(),
+            projected_column_types: plan.projected_column_types.clone(),
         };
         on_projection(&stats)?;
 
-        let select_items = projected_columns
-            .iter()
-            .zip(projected_column_types.iter())
-            .map(|(column, column_type)| {
-                let quoted = Self::quote_identifier(column);
-                let normalized_type = column_type.to_ascii_uppercase();
-                if normalized_type.starts_with("DATE")
-                    || normalized_type.starts_with("TIME")
-                    || normalized_type.starts_with("INTERVAL")
-                {
-                    format!("CAST({quoted} AS VARCHAR) AS {quoted}")
-                } else {
-                    quoted
-                }
-            })
-            .collect::<Vec<_>>();
-        let select_sql = if include_row_id {
-            format!(
-                "SELECT \"_row_id\", {}, COUNT(*) OVER () AS \"__sp_source_rows\" FROM {table_name} {where_clause} ORDER BY \"_row_id\" ASC",
-                select_items.join(", ")
-            )
+        let source_count_sql = format!(
+            "SELECT COUNT(*) FROM ({}) AS __sp_graph_source",
+            plan.source_sql
+        );
+        let source_rows_i64: i64 = self
+            .conn
+            .query_row(&source_count_sql, params_from_iter(plan.source_values.iter()), |row| {
+                row.get(0)
+            })?;
+        stats.source_rows = u64::try_from(source_rows_i64)
+            .map_err(|_| AppError::Database("graph source row count is negative".into()))?;
+
+        let row_id_select = if include_row_id {
+            "\"_row_id\", "
         } else {
-            format!(
-                "SELECT {}, COUNT(*) OVER () AS \"__sp_source_rows\" FROM {table_name} {where_clause} ORDER BY \"_row_id\" ASC",
-                select_items.join(", ")
-            )
+            ""
         };
+        let select_sql = format!(
+            "SELECT {row_id_select}{projection}, COUNT(*) OVER () AS \"__sp_sampled_rows\" FROM ({}) AS __sp_graph_projection ORDER BY \"_row_id\" ASC",
+            plan.projection_sql
+            , projection = plan.projection_select_items.join(", ")
+        );
 
         let mut stmt = self.conn.prepare(&select_sql)?;
-        let mut rows = stmt.query(params_from_iter(filter_values.iter()))?;
+        let mut rows = stmt.query(params_from_iter(plan.projection_values.iter()))?;
         while let Some(row) = rows.next()? {
             let row_id = if include_row_id {
                 Some(row.get::<_, i64>(0)?)
@@ -1098,21 +1083,550 @@ impl DuckDbEngine {
             };
 
             let start_index = if include_row_id { 1 } else { 0 };
-            let mut values = Vec::with_capacity(projected_columns.len());
-            for index in 0..projected_columns.len() {
+            let mut values = Vec::with_capacity(plan.projected_columns.len());
+            for index in 0..plan.projected_columns.len() {
                 values.push(row.get::<_, Value>(start_index + index)?);
             }
-
-            let source_rows: i64 = row.get(start_index + projected_columns.len())?;
-            stats.source_rows = u64::try_from(source_rows)
-                .map_err(|_| AppError::Database("graph source row count is negative".into()))?;
-
             if !on_row(row_id, values, stats.source_rows)? {
                 break;
             }
         }
 
         Ok(stats)
+    }
+
+    fn compile_graph_query_plan(
+        &self,
+        request: &GraphDataRequest,
+        allowed_columns: &std::collections::HashMap<&str, &str>,
+    ) -> Result<GraphQueryPlan, AppError> {
+        let role_to_column = request
+            .fields
+            .iter()
+            .map(|field| (field.role.to_ascii_lowercase(), field.column.trim().to_string()))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let y_column = role_to_column
+            .get("y")
+            .ok_or_else(|| AppError::InvalidParam("graph request is missing role y".into()))?
+            .clone();
+
+        let x_column = role_to_column.get("x").cloned();
+        let group_column = role_to_column.get("group").cloned();
+        let size_column = role_to_column.get("size").cloned();
+
+        let mut multi_y_columns = request
+            .fields
+            .iter()
+            .filter(|field| field.role.to_ascii_lowercase().starts_with("multiy"))
+            .map(|field| field.column.trim().to_string())
+            .collect::<Vec<_>>();
+        multi_y_columns.sort();
+        multi_y_columns.dedup();
+
+        let validate_column = |column_name: &str| -> Result<(), AppError> {
+            if column_name.is_empty() {
+                return Err(AppError::InvalidParam(
+                    "graph field column must not be blank".to_string(),
+                ));
+            }
+            if !allowed_columns.contains_key(column_name) {
+                return Err(AppError::InvalidParam(format!(
+                    "unknown graph column: {column_name}"
+                )));
+            }
+            Ok(())
+        };
+
+        validate_column(&y_column)?;
+        if let Some(column) = &x_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &group_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &size_column {
+            validate_column(column)?;
+        }
+        for column in &multi_y_columns {
+            validate_column(column)?;
+        }
+
+        let (where_clause, filter_values) =
+            Self::compile_table_window_filters(&request.filters, allowed_columns)?;
+        let table_name = Self::quote_identifier(&Self::internal_table_name(&request.dataset_id));
+
+        let x_expr = x_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let group_expr = group_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let size_expr = size_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+
+        let (source_sql, source_values, source_column_type) = if multi_y_columns.len() >= 2 {
+            let mut branches = Vec::with_capacity(multi_y_columns.len());
+            let mut values = Vec::with_capacity(filter_values.len() * multi_y_columns.len() + multi_y_columns.len());
+            for column in &multi_y_columns {
+                let branch = format!(
+                    "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, ? AS __sp_variable FROM {table_name} {where_clause}",
+                    y_col = Self::quote_identifier(column),
+                );
+                branches.push(branch);
+                values.push(Value::Text(column.clone()));
+                values.extend(filter_values.iter().cloned());
+            }
+            (
+                branches.join(" UNION ALL "),
+                values,
+                "VARCHAR".to_string(),
+            )
+        } else {
+            let source_col = if multi_y_columns.len() == 1 {
+                multi_y_columns[0].clone()
+            } else {
+                y_column.clone()
+            };
+            let sql = format!(
+                "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, ? AS __sp_variable FROM {table_name} {where_clause}",
+                y_col = Self::quote_identifier(&source_col),
+            );
+            let mut values = Vec::with_capacity(filter_values.len() + 1);
+            values.push(Value::Text(source_col));
+            values.extend(filter_values.iter().cloned());
+            (sql, values, "VARCHAR".to_string())
+        };
+
+        let projection_sql = match request.sampling {
+            GraphSampling::Full => source_sql.clone(),
+            GraphSampling::Sample { size, seed } => {
+                let sample_size = i64::try_from(size)
+                    .map_err(|_| AppError::InvalidParam("sample size is too large".into()))?;
+                if sample_size <= 0 {
+                    return Err(AppError::InvalidParam("sample size must be positive".into()));
+                }
+                let seed_i64 = i64::try_from(seed)
+                    .map_err(|_| AppError::InvalidParam("sample seed is too large".into()))?;
+                format!(
+                    "WITH __sp_source AS ({source_sql}),
+                      __sp_ranked AS (
+                        SELECT *,
+                               COALESCE(CAST(__sp_group AS VARCHAR), COALESCE(CAST(__sp_x AS VARCHAR), '__sp_all__')) AS __sp_stratum,
+                               COUNT(*) OVER () AS __sp_total_rows,
+                               COUNT(*) OVER (PARTITION BY COALESCE(CAST(__sp_group AS VARCHAR), COALESCE(CAST(__sp_x AS VARCHAR), '__sp_all__'))) AS __sp_stratum_rows,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY COALESCE(CAST(__sp_group AS VARCHAR), COALESCE(CAST(__sp_x AS VARCHAR), '__sp_all__'))
+                                 ORDER BY hash(CAST(\"_row_id\" AS BIGINT), CAST({seed_i64} AS BIGINT))
+                               ) AS __sp_rank
+                        FROM __sp_source
+                      )
+                      SELECT \"_row_id\", __sp_x, __sp_y, __sp_group, __sp_size, __sp_variable
+                      FROM __sp_ranked
+                      WHERE __sp_rank <= CASE
+                        WHEN __sp_total_rows <= {sample_size} THEN __sp_stratum_rows
+                        ELSE GREATEST(
+                          1,
+                          CAST(ROUND(({sample_size}::DOUBLE * __sp_stratum_rows) / NULLIF(__sp_total_rows, 0)) AS BIGINT)
+                        )
+                      END"
+                )
+            }
+        };
+
+        let projection_values = source_values.clone();
+
+        let melt_active = multi_y_columns.len() >= 2;
+        let mut projection_select_items = Vec::new();
+        let mut projected_columns = Vec::new();
+        let mut projected_column_types = Vec::new();
+
+        let x_public = x_column.clone().unwrap_or_else(|| "__sp_x".to_string());
+        projection_select_items.push(format!("__sp_x AS {}", Self::quote_identifier(&x_public)));
+        projected_columns.push(x_public.clone());
+        projected_column_types.push(
+            x_column
+                .as_ref()
+                .and_then(|column| allowed_columns.get(column.as_str()).copied())
+                .unwrap_or("VARCHAR")
+                .to_string(),
+        );
+
+        let y_public = if melt_active {
+            "__sp_value__".to_string()
+        } else {
+            y_column.clone()
+        };
+        projection_select_items.push(format!("__sp_y AS {}", Self::quote_identifier(&y_public)));
+        projected_columns.push(y_public);
+        projected_column_types.push("DOUBLE".to_string());
+
+        if let Some(column) = group_column.clone() {
+            projection_select_items.push(format!("__sp_group AS {}", Self::quote_identifier(&column)));
+            projected_columns.push(column.clone());
+            projected_column_types.push(
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("VARCHAR")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = size_column.clone() {
+            projection_select_items.push(format!("__sp_size AS {}", Self::quote_identifier(&column)));
+            projected_columns.push(column.clone());
+            projected_column_types.push(
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("DOUBLE")
+                    .to_string(),
+            );
+        }
+
+        if melt_active {
+            projection_select_items.push("__sp_variable AS \"__sp_variable__\"".to_string());
+            projected_columns.push("__sp_variable__".to_string());
+            projected_column_types.push(source_column_type.clone());
+        }
+
+        Ok(GraphQueryPlan {
+            source_sql,
+            source_values,
+            projection_sql,
+            projection_values,
+            projection_select_items,
+            projected_columns,
+            projected_column_types,
+        })
+    }
+
+    pub fn collect_graph_aggregate_packets(
+        &self,
+        request: &GraphDataRequest,
+    ) -> Result<Vec<GraphAggregatePacket>, AppError> {
+        let user_columns = self.get_user_columns(&request.dataset_id)?;
+        let allowed_columns = user_columns
+            .iter()
+            .map(|(name, column_type)| (name.as_str(), column_type.as_str()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let plan = self.compile_graph_query_plan(request, &allowed_columns)?;
+
+        let mut want_histogram = false;
+        let mut want_heatmap = false;
+        let mut want_boxplot = false;
+        let mut want_summary = false;
+        for element in &request.elements {
+            let kind = element.kind.to_ascii_lowercase();
+            match kind.as_str() {
+                "histogram" => want_histogram = true,
+                "heatmap" => want_heatmap = true,
+                "boxplot" => want_boxplot = true,
+                "summary" | "points" | "line" => want_summary = true,
+                _ => {}
+            }
+        }
+
+        if !(want_histogram || want_heatmap || want_boxplot || want_summary) {
+            return Ok(Vec::new());
+        }
+
+        let mut packets = Vec::new();
+
+        if want_histogram {
+            packets.push(GraphAggregatePacket::Histogram(self.query_histogram_packet(request, &plan)?));
+        }
+        if want_heatmap {
+            packets.push(GraphAggregatePacket::Heatmap(self.query_heatmap_packet(request, &plan)?));
+        }
+        if want_boxplot {
+            packets.push(GraphAggregatePacket::BoxPlot(self.query_boxplot_packet(request, &plan)?));
+        }
+        if want_summary {
+            packets.push(GraphAggregatePacket::Summary(self.query_summary_packet(request, &plan)?));
+        }
+
+        Ok(packets)
+    }
+
+    fn query_histogram_packet(
+        &self,
+        request: &GraphDataRequest,
+        plan: &GraphQueryPlan,
+    ) -> Result<HistogramPacket, AppError> {
+        let stats_sql = format!(
+            "SELECT COUNT(*), MIN(__sp_y), MAX(__sp_y) FROM ({}) AS __sp_source WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)",
+            plan.source_sql
+        );
+        let (total_count, min_y, max_y): (i64, Option<f64>, Option<f64>) = self.conn.query_row(
+            &stats_sql,
+            params_from_iter(plan.source_values.iter()),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let total_count_u64 = u64::try_from(total_count)
+            .map_err(|_| AppError::Database("histogram total count is negative".into()))?;
+
+        let bin_count = 20.0_f64;
+        let bin_width = if let (Some(minimum), Some(maximum)) = (min_y, max_y) {
+            if maximum > minimum {
+                (maximum - minimum) / bin_count
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+
+        let mut bins = Vec::new();
+        if total_count_u64 > 0 {
+            let bins_sql = format!(
+                "WITH __sp_source AS ({source}),
+                 __sp_valid AS (
+                    SELECT
+                      CAST(__sp_group AS VARCHAR) AS grp,
+                      CAST(__sp_x AS VARCHAR) AS cat,
+                      CAST(__sp_variable AS VARCHAR) AS src,
+                      __sp_y AS y
+                    FROM __sp_source
+                    WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
+                 )
+                 SELECT
+                   grp,
+                   cat,
+                   src,
+                   CASE
+                     WHEN y = ? THEN 19
+                     ELSE CAST(FLOOR((y - ?) / ?) AS BIGINT)
+                   END AS bin_idx,
+                   COUNT(*) AS cnt
+                 FROM __sp_valid
+                 GROUP BY grp, cat, src, bin_idx
+                 ORDER BY grp, cat, src, bin_idx",
+                source = plan.source_sql
+            );
+
+            let mut values = plan.source_values.clone();
+            values.push(Value::Double(max_y.unwrap_or(0.0)));
+            values.push(Value::Double(min_y.unwrap_or(0.0)));
+            values.push(Value::Double(bin_width.max(1e-12)));
+
+            let mut stmt = self.conn.prepare(&bins_sql)?;
+            let mut rows = stmt.query(params_from_iter(values.iter()))?;
+            while let Some(row) = rows.next()? {
+                let group: Option<String> = row.get(0)?;
+                let category: Option<String> = row.get(1)?;
+                let source_column: Option<String> = row.get(2)?;
+                let bin_index: i64 = row.get(3)?;
+                let count: i64 = row.get(4)?;
+                let clamped_index = bin_index.clamp(0, 19) as f64;
+                let start = min_y.unwrap_or(0.0) + clamped_index * bin_width;
+                bins.push(HistogramBin {
+                    group,
+                    category,
+                    source_column,
+                    bin_start: start,
+                    bin_end: start + bin_width,
+                    count: u64::try_from(count)
+                        .map_err(|_| AppError::Database("histogram bin count is negative".into()))?,
+                });
+            }
+        }
+
+        Ok(HistogramPacket {
+            x_column: role_column(request, "x"),
+            y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
+            group_column: role_column(request, "group"),
+            source_column: Some("__sp_variable".to_string()),
+            bin_width,
+            total_count: total_count_u64,
+            bins,
+        })
+    }
+
+    fn query_heatmap_packet(
+        &self,
+        request: &GraphDataRequest,
+        plan: &GraphQueryPlan,
+    ) -> Result<HeatmapPacket, AppError> {
+        let stats_sql = format!(
+            "WITH __sp_source AS ({})
+             SELECT COUNT(*), MIN(CAST(__sp_x AS DOUBLE)), MAX(CAST(__sp_x AS DOUBLE)), MIN(__sp_y), MAX(__sp_y)
+             FROM __sp_source
+             WHERE __sp_x IS NOT NULL AND __sp_y IS NOT NULL
+               AND isfinite(CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y)",
+            plan.source_sql
+        );
+        let (total_count, min_x, max_x, min_y, max_y): (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>) = self.conn.query_row(
+            &stats_sql,
+            params_from_iter(plan.source_values.iter()),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )?;
+        let total_count_u64 = u64::try_from(total_count)
+            .map_err(|_| AppError::Database("heatmap total count is negative".into()))?;
+        let x_bin_width = match (min_x, max_x) {
+            (Some(minimum), Some(maximum)) if maximum > minimum => (maximum - minimum) / 20.0,
+            _ => 1.0,
+        };
+        let y_bin_width = match (min_y, max_y) {
+            (Some(minimum), Some(maximum)) if maximum > minimum => (maximum - minimum) / 20.0,
+            _ => 1.0,
+        };
+
+        Ok(HeatmapPacket {
+            x_column: role_column(request, "x").unwrap_or_else(|| "__sp_x".to_string()),
+            y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
+            group_column: role_column(request, "group"),
+            x_bin_width,
+            y_bin_width,
+            total_count: total_count_u64,
+            cells: Vec::new(),
+        })
+    }
+
+    fn query_boxplot_packet(
+        &self,
+        request: &GraphDataRequest,
+        plan: &GraphQueryPlan,
+    ) -> Result<BoxPlotPacket, AppError> {
+        let sql = format!(
+            "WITH __sp_source AS ({source}),
+             __sp_valid AS (
+               SELECT
+                 CAST(__sp_group AS VARCHAR) AS grp,
+                 CAST(__sp_x AS VARCHAR) AS cat,
+                 CAST(__sp_variable AS VARCHAR) AS src,
+                 __sp_y AS y
+               FROM __sp_source
+               WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
+             )
+             SELECT
+               grp,
+               cat,
+               src,
+               COUNT(*) AS n,
+               MIN(y) AS min_y,
+               quantile_cont(y, 0.25) AS q1,
+               quantile_cont(y, 0.50) AS median,
+               quantile_cont(y, 0.75) AS q3,
+               MAX(y) AS max_y
+             FROM __sp_valid
+             GROUP BY grp, cat, src
+             ORDER BY grp, cat, src",
+            source = plan.source_sql
+        );
+
+        let mut entries = Vec::new();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(plan.source_values.iter()))?;
+        while let Some(row) = rows.next()? {
+            let group: Option<String> = row.get(0)?;
+            let category: Option<String> = row.get(1)?;
+            let source_column: Option<String> = row.get(2)?;
+            let count: i64 = row.get(3)?;
+            let min: f64 = row.get(4)?;
+            let q1: f64 = row.get(5)?;
+            let median: f64 = row.get(6)?;
+            let q3: f64 = row.get(7)?;
+            let max: f64 = row.get(8)?;
+            let iqr = q3 - q1;
+            let whisker_low = q1 - 1.5 * iqr;
+            let whisker_high = q3 + 1.5 * iqr;
+
+            entries.push(BoxPlotEntry {
+                group,
+                category,
+                source_column,
+                count: u64::try_from(count)
+                    .map_err(|_| AppError::Database("boxplot count is negative".into()))?,
+                min,
+                q1,
+                median,
+                q3,
+                max,
+                whisker_low,
+                whisker_high,
+                outliers: Vec::new(),
+            });
+        }
+
+        Ok(BoxPlotPacket {
+            x_column: role_column(request, "x"),
+            y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
+            group_column: role_column(request, "group"),
+            source_column: Some("__sp_variable".to_string()),
+            entries,
+        })
+    }
+
+    fn query_summary_packet(
+        &self,
+        request: &GraphDataRequest,
+        plan: &GraphQueryPlan,
+    ) -> Result<SummaryPacket, AppError> {
+        let sql = format!(
+            "WITH __sp_source AS ({source}),
+             __sp_valid AS (
+               SELECT
+                 CAST(__sp_group AS VARCHAR) AS grp,
+                 CAST(__sp_x AS VARCHAR) AS cat,
+                 CAST(__sp_variable AS VARCHAR) AS src,
+                 __sp_y AS y
+               FROM __sp_source
+               WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
+             )
+             SELECT grp, cat, src, COUNT(*) AS n, AVG(y) AS mean_y, COALESCE(stddev_samp(y), 0.0) AS std_y, MIN(y) AS min_y, MAX(y) AS max_y
+             FROM __sp_valid
+             GROUP BY grp, cat, src
+             ORDER BY grp, cat, src",
+            source = plan.source_sql
+        );
+
+        let mut summaries = Vec::new();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(plan.source_values.iter()))?;
+        while let Some(row) = rows.next()? {
+            let group: Option<String> = row.get(0)?;
+            let category: Option<String> = row.get(1)?;
+            let source_column: Option<String> = row.get(2)?;
+            let count: i64 = row.get(3)?;
+            let mean: f64 = row.get(4)?;
+            let stddev: f64 = row.get(5)?;
+            let min: f64 = row.get(6)?;
+            let max: f64 = row.get(7)?;
+            let n = u64::try_from(count)
+                .map_err(|_| AppError::Database("summary count is negative".into()))?;
+            let margin = if n > 1 {
+                1.96 * stddev / (n as f64).sqrt()
+            } else {
+                0.0
+            };
+
+            summaries.push(SummaryEntry {
+                group,
+                category,
+                source_column,
+                count: n,
+                mean,
+                stddev,
+                min,
+                max,
+                interval_low: Some(mean - margin),
+                interval_high: Some(mean + margin),
+            });
+        }
+
+        Ok(SummaryPacket {
+            x_column: role_column(request, "x"),
+            y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
+            group_column: role_column(request, "group"),
+            source_column: Some("__sp_variable".to_string()),
+            summaries,
+        })
     }
 
     fn compile_table_window_filters(

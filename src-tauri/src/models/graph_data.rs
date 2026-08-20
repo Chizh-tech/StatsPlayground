@@ -263,3 +263,120 @@ mod tests {
         assert!(overlapping.validate_layout(80).is_err());
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum GraphAggregatePacket {
+    Histogram(HistogramPacket),
+    Heatmap(HeatmapPacket),
+    BoxPlot(BoxPlotPacket),
+    Summary(SummaryPacket),
+}
+
+impl GraphAggregatePacket {
+    #[cfg(test)]
+    pub fn histogram_total_count(&self) -> Option<u64> {
+        match self {
+            Self::Histogram(packet) => Some(packet.total_count),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistogramPacket {
+    pub x_column: Option<String>,
+    pub y_column: String,
+    pub group_column: Option<String>,
+    pub source_column: Option<String>,
+    pub bin_width: f64,
+    pub total_count: u64,
+    pub bins: Vec<HistogramBin>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistogramBin {
+    pub group: Option<String>,
+    pub category: Option<String>,
+    pub source_column: Option<String>,
+    pub bin_start: f64,
+    pub bin_end: f64,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HeatmapPacket {
+    pub x_column: String,
+    pub y_column: String,
+    pub group_column: Option<String>,
+    pub x_bin_width: f64,
+    pub y_bin_width: f64,
+    pub total_count: u64,
+    pub cells: Vec<HeatmapCell>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HeatmapCell {
+    pub group: Option<String>,
+    pub x_bin_start: f64,
+    pub x_bin_end: f64,
+    pub y_bin_start: f64,
+    pub y_bin_end: f64,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BoxPlotPacket {
+    pub x_column: Option<String>,
+    pub y_column: String,
+    pub group_column: Option<String>,
+    pub source_column: Option<String>,
+    pub entries: Vec<BoxPlotEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BoxPlotEntry {
+    pub group: Option<String>,
+    pub category: Option<String>,
+    pub source_column: Option<String>,
+    pub count: u64,
+    pub min: f64,
+    pub q1: f64,
+    pub median: f64,
+    pub q3: f64,
+    pub max: f64,
+    pub whisker_low: f64,
+    pub whisker_high: f64,
+    pub outliers: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryPacket {
+    pub x_column: Option<String>,
+    pub y_column: String,
+    pub group_column: Option<String>,
+    pub source_column: Option<String>,
+    pub summaries: Vec<SummaryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryEntry {
+    pub group: Option<String>,
+    pub category: Option<String>,
+    pub source_column: Option<String>,
+    pub count: u64,
+    pub mean: f64,
+    pub stddev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub interval_low: Option<f64>,
+    pub interval_high: Option<f64>,
+}

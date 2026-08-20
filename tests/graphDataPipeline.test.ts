@@ -81,7 +81,7 @@ assert.deepEqual(Array.from(decoded.validity.x), [1, 0]);
 assert.deepEqual(Array.from(decoded.validity.y), [1, 1]);
 
 assert.equal(isGraphAggregatePacket({ kind: "histogram" }), true);
-assert.equal(isGraphAggregatePacket({ kind: "histogram", payload: {} }), false);
+assert.equal(isGraphAggregatePacket({ kind: "histogram", payload: {} }), true);
 
 assert.throws(
   () =>
@@ -244,6 +244,14 @@ function makeCommittedFrame(): GraphDataFrame {
   };
 }
 
+const histogramPacket = {
+  kind: "histogram" as const,
+  yColumn: "cost",
+  binWidth: 1,
+  totalCount: 2,
+  bins: [],
+};
+
 function run(state: GraphStreamState, ...messages: Parameters<typeof reduceGraphStream>[1][]): GraphStreamState {
   let next = state;
   for (const message of messages) {
@@ -278,6 +286,7 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
   const afterChunks = run(
     initial,
     { type: "start", request },
+    { type: "aggregate", packet: histogramPacket },
     { type: "header", header: makeHeader("req-atomic", 7, 0, false) },
     { type: "payload", payload: makePayload(0) },
     { type: "header", header: makeHeader("req-atomic", 7, 1, true) },
@@ -295,6 +304,7 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
   assert.equal(committed.pending, null);
   assert.equal(committed.committed?.requestId, "req-atomic");
   assert.equal(committed.committed?.rawChunks.length, 2);
+  assert.equal(committed.committed?.aggregates.length, 1);
   assert.equal(committed.error, null);
 }
 

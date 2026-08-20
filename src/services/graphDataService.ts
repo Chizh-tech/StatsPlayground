@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import {
+  type GraphAggregatePacket,
   type GraphChunkHeader,
   type GraphDataCompletion,
   type GraphDataRequest,
@@ -12,6 +13,7 @@ import {
 export interface GraphDataStreamHandlers {
   onHeader: (header: GraphChunkHeader) => void;
   onPayload: (payload: ArrayBuffer) => void;
+  onAggregate: (packet: GraphAggregatePacket) => void;
   onComplete: (completion: GraphDataCompletion) => void;
   onError: (message: string) => void;
 }
@@ -45,6 +47,12 @@ export const graphDataService = {
           return;
         }
         handlers.onPayload(payload);
+      },
+      onAggregate: (packet) => {
+        if (closed) {
+          return;
+        }
+        handlers.onAggregate(packet);
       },
       onComplete: (completion) => {
         if (closed) {
