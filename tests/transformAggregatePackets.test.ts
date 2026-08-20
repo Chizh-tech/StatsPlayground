@@ -485,13 +485,14 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
 }
 
 {
-  const data = baseData(
-    ["_row_id", "cat", "__sp_value__", "__sp_variable__"],
-    [
-      [1, "A", 10, "m1"],
-      [2, "A", 11, "m2"],
-    ],
-  );
+  const throwingRows = new Proxy([] as unknown[][], {
+    get(_target, prop) {
+      if (prop === "length") return 0;
+      throw new Error("legacy rows access is forbidden for typed melt-source mapping");
+    },
+  });
+
+  const data = baseData(["_row_id", "cat", "__sp_value__", "__sp_variable__"], throwingRows);
 
   const spec: GraphSpec = {
     encoding: {
@@ -503,7 +504,7 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
 
   const frame: GraphDataFrame = {
     ...baseFrame([]),
-    dictionaries: { x: ["A"] },
+    dictionaries: { x: ["A"], source: ["m1", "m2"] },
     rawChunks: [
       {
         chunkIndex: 0,
@@ -512,9 +513,11 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
         xValues: new Uint32Array([0, 0]),
         yValues: new Float64Array([10, 11]),
         rowIds: new BigInt64Array([1n, 2n]),
+        sourceCodes: new Uint32Array([0, 1]),
         validity: {
           x: new Uint8Array([0b00000011]),
           y: new Uint8Array([0b00000011]),
+          source: new Uint8Array([0b00000011]),
         },
       },
     ],
@@ -531,5 +534,88 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
   });
 
   const colNames = new Set(drawn.points.map((point) => point.colName));
-  assert.deepEqual(colNames, new Set(["m1", "m2"]), "raw point picks must preserve normalized melted source identity");
+  assert.deepEqual(colNames, new Set(["m1", "m2"]), "raw point picks must preserve typed melted source identity from source codes");
+}
+
+{
+  const throwingRows = new Proxy([] as unknown[][], {
+    get(_target, prop) {
+      if (prop === "length") return 0;
+      throw new Error("legacy rows access is forbidden for frame-backed facets");
+    },
+  });
+
+  const data = baseData(["cat", "v"], throwingRows);
+  const frame: GraphDataFrame = {
+    ...baseFrame([
+      {
+        kind: "histogram",
+        xColumn: "cat",
+        yColumn: "v",
+        binCount: 1,
+        minValue: 0,
+        maxValue: 1,
+        missingCount: 0,
+        binWidth: 1,
+        totalCount: 4,
+        bins: [
+          { category: "A", facetX: "L", facetY: "Top", binStart: 0, binEnd: 1, count: 1 },
+          { category: "A", facetX: "R", facetY: "Top", binStart: 0, binEnd: 1, count: 1 },
+          { category: "A", facetX: "L", facetY: "Bottom", binStart: 0, binEnd: 1, count: 1 },
+          { category: "A", facetX: "R", facetY: "Bottom", binStart: 0, binEnd: 1, count: 1 },
+        ],
+      },
+    ]),
+    dictionaries: {
+      x: ["A"],
+      facetX: ["L", "R"],
+      facetY: ["Top", "Bottom"],
+    },
+    rawChunks: [
+      {
+        chunkIndex: 0,
+        rowOffset: 0,
+        rowCount: 4,
+        xValues: new Uint32Array([0, 0, 0, 0]),
+        yValues: new Float64Array([1, 2, 3, 4]),
+        rowIds: new BigInt64Array([1n, 2n, 3n, 4n]),
+        facetXCodes: new Uint32Array([0, 1, 0, 1]),
+        facetYCodes: new Uint32Array([0, 0, 1, 1]),
+        validity: {
+          x: new Uint8Array([0b00001111]),
+          y: new Uint8Array([0b00001111]),
+          facetX: new Uint8Array([0b00001111]),
+          facetY: new Uint8Array([0b00001111]),
+        },
+      },
+    ],
+  };
+
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "cat", type: "nominal" },
+      y: { name: "v", type: "continuous" },
+      groupX: { name: "fx", type: "nominal" },
+      groupY: { name: "fy", type: "nominal" },
+    },
+    elements: [
+      { kind: "histogram", enabled: true, options: { histStyle: "bar" } },
+      { kind: "points", enabled: true, options: { summaryStat: "none" } },
+    ],
+  };
+
+  const built = buildGraph(spec, data, theme, undefined, frame);
+  assert.equal(built.cols, 2);
+  assert.equal(built.rows, 2);
+  for (const panel of built.panels) {
+    assert.ok(panel.rawPoints, "frame-backed faceted panel should expose a panel-local raw descriptor");
+    const drawn = drawRawPoints(panel.rawPoints!, {
+      plotRect: { x: 0, y: 0, width: 64, height: 64 },
+      x: { kind: "categorical", pixelsByCategory: new Float64Array([10]) },
+      y: { kind: "numeric", scale: -1, offset: 32 },
+    });
+    assert.equal(drawn.points.length, 1, "each facet panel should keep only its local typed rows via facet mask");
+    const series = panelSeries(panel.option as Record<string, unknown>);
+    assert.ok(series.length > 0, "facet panel should render packet-backed series");
+  }
 }

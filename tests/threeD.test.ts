@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import type { GraphTheme } from "../src/graphCore/theme";
 import type { GraphData, GraphSpec } from "../src/graphCore/types";
+import type { GraphDataFrame } from "../src/types/graphData";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: {
@@ -59,6 +60,51 @@ assert.equal(series.some((item) => item.type === "lines3D"), false);
 const intervalSeries = series.filter((item) => item.type === "line3D");
 assert.equal(intervalSeries.length, 1);
 assert.deepEqual(intervalSeries[0].data, [[1, 2, 10], [1, 2, 14]]);
+
+const throwingRows = new Proxy([] as unknown[][], {
+  get(_target, prop) {
+    if (prop === "length") return 2;
+    throw new Error("legacy rows access is forbidden for frame-backed 3D");
+  },
+});
+
+const frame3dData: GraphData = {
+  columns: ["x", "y", "z"],
+  rows: throwingRows,
+};
+
+const frame3d: GraphDataFrame = {
+  requestId: "req-3d",
+  datasetId: "ds-3d",
+  generation: 1,
+  sourceRows: 2,
+  processedRows: 2,
+  sampling: { mode: "full" },
+  dictionaries: {},
+  extents: {},
+  aggregates: [],
+  rawChunks: [
+    {
+      chunkIndex: 0,
+      rowOffset: 0,
+      rowCount: 2,
+      xValues: new Float64Array([1, 1]),
+      yValues: new Float64Array([2, 2]),
+      zValues: new Float64Array([10, 14]),
+      rowIds: new BigInt64Array([1n, 2n]),
+      validity: {
+        x: new Uint8Array([0b00000011]),
+        y: new Uint8Array([0b00000011]),
+        z: new Uint8Array([0b00000011]),
+      },
+    },
+  ],
+};
+
+const frameResult = build3DOption(spec, frame3dData, theme, frame3d);
+assert.ok(frameResult.option);
+const frameSeries = frameResult.option.series as Array<Record<string, unknown>>;
+assert.equal(frameSeries.some((item) => item.type === "scatter3D"), true);
 
 const surfaceData: GraphData = {
   columns: ["x", "y", "z"],

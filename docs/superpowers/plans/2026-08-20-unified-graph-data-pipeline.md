@@ -665,3 +665,47 @@ Existing scale gates (`0/1/10/5000/300000`) remain intact.
 - `node --experimental-strip-types tests/rawPoints.test.ts` ✅
 - `npx tsc -b --pretty false` ✅
 - `npx vite build` ✅
+
+---
+
+## Graph Task 7 — Fix Round 1 Report (2026-08-20)
+
+Scope: Task 7 follow-up fixes in the unified worktree.
+
+### Completed
+
+- Extended typed graph chunk decode + frame transport with optional vectors for:
+    - `zValues`
+    - `sourceCodes`
+    - `facetXCodes`
+    - `facetYCodes`
+    - `wrapCodes`
+- Updated pipeline field derivation to emit explicit facet roles:
+    - `groupX`
+    - `groupY`
+    - `wrap`
+- Replaced melt source mapping in frame-backed raw overlay with typed-source dictionary/code mapping (no legacy row scan).
+- Added panel-local typed facet masks in raw overlay descriptors so faceted panels render panel-local `RawPointsLayer` data.
+- Added per-panel aggregate packet filtering by optional packet facet metadata (`facetX`/`facetY`/`wrap`).
+- Wired 3D frame path end-to-end:
+    - `Graph` passes `frame` to `Chart3D`.
+    - `Chart3D` forwards `frame` to `build3DOption`.
+    - `threeD.ts` consumes typed frame points directly for scatter/surface assembly.
+
+### Tests Added/Updated
+
+- `tests/threeD.test.ts`
+    - frame-backed 3D regression with throwing legacy rows getter.
+- `tests/transformAggregatePackets.test.ts`
+    - typed melt-source provenance guard via `sourceCodes` dictionary.
+    - frame-backed facet panel regression for panel-local masks and panel packet rendering.
+- `tests/graphDataPipeline.test.ts`
+    - `deriveFields` coverage for explicit `groupX`/`groupY`/`wrap` roles.
+
+### Verification run
+
+- `npx --yes tsx tests/graphDataPipeline.test.ts` ✅
+- `npx --yes tsx tests/rawPoints.test.ts` ✅
+- `npx --yes tsx tests/transformAggregatePackets.test.ts` ✅
+- `npx --yes tsx tests/threeD.test.ts` ✅
+- `npm run build` ✅

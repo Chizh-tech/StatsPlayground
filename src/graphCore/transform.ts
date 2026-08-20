@@ -53,6 +53,35 @@ const ROW_ID_COL = "_row_id";
 // which would be the synthetic `__sp_value__`).
 const MELT_VAR_COL = "__sp_variable__";
 
+interface PanelFacetContext {
+  groupXValue: string | null;
+  groupYValue: string | null;
+  wrapValue?: string | null;
+}
+
+function matchesPanelFacet(
+  value: { facetX?: string; facetY?: string; wrap?: string },
+  panelFacet: PanelFacetContext,
+): boolean {
+  if (panelFacet.groupXValue !== null && value.facetX !== panelFacet.groupXValue) {
+    return false;
+  }
+  if (panelFacet.groupYValue !== null && value.facetY !== panelFacet.groupYValue) {
+    return false;
+  }
+  if (panelFacet.wrapValue != null && value.wrap !== panelFacet.wrapValue) {
+    return false;
+  }
+  return true;
+}
+
+function bitIsSet(bitmap: Uint8Array | undefined, rowIndex: number): boolean {
+  if (!bitmap) return true;
+  const byteIndex = rowIndex >> 3;
+  if (byteIndex >= bitmap.length) return false;
+  return (bitmap[byteIndex] & (1 << (rowIndex & 7))) !== 0;
+}
+
 /** Marker attached to scatter `data` items so the GraphBuilder can map
  *  a click back to the source dataset row and the user-visible column.
  *  Optional — emitted only for raw scatter (not for aggregated summary
@@ -1399,34 +1428,58 @@ function intervalHalf(ys: number[], kind: string): number {
 
 function findSummaryPacket(
   aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+  panelFacet?: PanelFacetContext,
 ): SummaryPacket | null {
   if (!aggregatePackets || aggregatePackets.length === 0) return null;
   const packet = aggregatePackets.find((candidate) => candidate.kind === "summary");
-  return packet?.kind === "summary" ? packet : null;
+  if (!packet || packet.kind !== "summary") return null;
+  if (!panelFacet) return packet;
+  return {
+    ...packet,
+    summaries: packet.summaries.filter((entry) => matchesPanelFacet(entry, panelFacet)),
+  };
 }
 
 function findBoxPlotPacket(
   aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+  panelFacet?: PanelFacetContext,
 ): BoxPlotPacket | null {
   if (!aggregatePackets || aggregatePackets.length === 0) return null;
   const packet = aggregatePackets.find((candidate) => candidate.kind === "boxPlot");
-  return packet?.kind === "boxPlot" ? packet : null;
+  if (!packet || packet.kind !== "boxPlot") return null;
+  if (!panelFacet) return packet;
+  return {
+    ...packet,
+    entries: packet.entries.filter((entry) => matchesPanelFacet(entry, panelFacet)),
+  };
 }
 
 function findHistogramPacket(
   aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+  panelFacet?: PanelFacetContext,
 ): HistogramPacket | null {
   if (!aggregatePackets || aggregatePackets.length === 0) return null;
   const packet = aggregatePackets.find((candidate) => candidate.kind === "histogram");
-  return packet?.kind === "histogram" ? packet : null;
+  if (!packet || packet.kind !== "histogram") return null;
+  if (!panelFacet) return packet;
+  return {
+    ...packet,
+    bins: packet.bins.filter((entry) => matchesPanelFacet(entry, panelFacet)),
+  };
 }
 
 function findHeatmapPacket(
   aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+  panelFacet?: PanelFacetContext,
 ): HeatmapPacket | null {
   if (!aggregatePackets || aggregatePackets.length === 0) return null;
   const packet = aggregatePackets.find((candidate) => candidate.kind === "heatmap");
-  return packet?.kind === "heatmap" ? packet : null;
+  if (!packet || packet.kind !== "heatmap") return null;
+  if (!panelFacet) return packet;
+  return {
+    ...packet,
+    cells: packet.cells.filter((entry) => matchesPanelFacet(entry, panelFacet)),
+  };
 }
 
 function summaryPointFromPacket(
@@ -2797,6 +2850,7 @@ function buildSingleOption(
   valueOrders?: Record<string, string[]>,
   sharedRanges?: SharedAxisRanges,
   aggregatePackets?: readonly GraphAggregatePacket[],
+  panelFacet?: PanelFacetContext,
 ): EChartsOption {
   const { encoding, elements } = spec;
   const xField = encoding.x;
@@ -2937,6 +2991,7 @@ function buildSingleOption(
       valueOrders,
       swappedShared,
       aggregatePackets,
+      panelFacet,
     );
     return transposeOption(verticalOpt);
   }
@@ -2964,10 +3019,10 @@ function buildSingleOption(
   const aggregateMode: "legacyRows" | "frameBacked" = frameBackedAggregateMode
     ? "frameBacked"
     : "legacyRows";
-  const summaryPacket = findSummaryPacket(aggregatePackets);
-  const boxPlotPacket = findBoxPlotPacket(aggregatePackets);
-  const histogramPacket = findHistogramPacket(aggregatePackets);
-  const heatmapPacket = findHeatmapPacket(aggregatePackets);
+  const summaryPacket = findSummaryPacket(aggregatePackets, panelFacet);
+  const boxPlotPacket = findBoxPlotPacket(aggregatePackets, panelFacet);
+  const histogramPacket = findHistogramPacket(aggregatePackets, panelFacet);
+  const heatmapPacket = findHeatmapPacket(aggregatePackets, panelFacet);
   const histogramElementCount = enabledElements.filter((e) => e.kind === "histogram").length;
   const histogramOnlyPacketMode =
     frameBackedAggregateMode &&
@@ -6243,8 +6298,8 @@ function computeSharedRanges(
 
 function buildFrameBackedRawDescriptor(
   spec: GraphSpec,
-  data: GraphData,
   frame?: GraphDataFrame,
+  panelFacet?: PanelFacetContext,
 ): RawPointPanelDescriptor | null {
   if (!frame || frame.rawChunks.length === 0) return null;
   const yName = spec.encoding.y?.name;
@@ -6266,18 +6321,59 @@ function buildFrameBackedRawDescriptor(
       : { mode: "none" as const };
 
   let sourceByRowId: Map<bigint, string> | undefined;
-  const rowIdColIdx = data.columns.indexOf(ROW_ID_COL);
-  const meltVarColIdx = data.columns.indexOf(MELT_VAR_COL);
-  if (rowIdColIdx >= 0 && meltVarColIdx >= 0) {
+  const sourceDict = frame.dictionaries.source;
+  if (sourceDict && sourceDict.length > 0) {
     sourceByRowId = new Map<bigint, string>();
-    for (const row of data.rows) {
-      const rowId = Number(row[rowIdColIdx]);
-      if (!Number.isSafeInteger(rowId)) continue;
-      const source = String(row[meltVarColIdx] ?? "");
-      if (!source) continue;
-      sourceByRowId.set(BigInt(rowId), source);
+    for (const chunk of frame.rawChunks) {
+      if (!chunk.sourceCodes) continue;
+      const n = Math.min(chunk.rowIds.length, chunk.sourceCodes.length);
+      for (let row = 0; row < n; row += 1) {
+        const sourceCode = chunk.sourceCodes[row] >>> 0;
+        const source = sourceDict[sourceCode] ?? "";
+        if (!source) continue;
+        sourceByRowId.set(chunk.rowIds[row], source);
+      }
     }
   }
+
+  const matchesFacet = (
+    chunk: GraphDataFrame["rawChunks"][number],
+    row: number,
+  ): boolean => {
+    if (!panelFacet) return true;
+    if (panelFacet.groupXValue !== null) {
+      if (!chunk.facetXCodes || !bitIsSet(chunk.validity.facetX, row)) return false;
+      const code = chunk.facetXCodes[row] >>> 0;
+      const label = frame.dictionaries.facetX?.[code];
+      if (label !== panelFacet.groupXValue) return false;
+    }
+    if (panelFacet.groupYValue !== null) {
+      if (!chunk.facetYCodes || !bitIsSet(chunk.validity.facetY, row)) return false;
+      const code = chunk.facetYCodes[row] >>> 0;
+      const label = frame.dictionaries.facetY?.[code];
+      if (label !== panelFacet.groupYValue) return false;
+    }
+    if (panelFacet.wrapValue != null) {
+      if (!chunk.wrapCodes || !bitIsSet(chunk.validity.wrap, row)) return false;
+      const code = chunk.wrapCodes[row] >>> 0;
+      const label = frame.dictionaries.wrap?.[code];
+      if (label !== panelFacet.wrapValue) return false;
+    }
+    return true;
+  };
+
+  const buildFacetMask = (
+    chunk: GraphDataFrame["rawChunks"][number],
+  ): Uint8Array | undefined => {
+    if (!panelFacet) return undefined;
+    const byteLength = Math.max(1, Math.ceil(chunk.rowCount / 8));
+    const out = new Uint8Array(byteLength);
+    for (let row = 0; row < chunk.rowCount; row += 1) {
+      if (!matchesFacet(chunk, row)) continue;
+      out[row >> 3] |= 1 << (row & 7);
+    }
+    return out;
+  };
 
   return {
     colName: yName,
@@ -6290,8 +6386,20 @@ function buildFrameBackedRawDescriptor(
       rowIds: chunk.rowIds,
       xValidity: chunk.validity.x,
       yValidity: chunk.validity.y,
+      facetMask: buildFacetMask(chunk),
     })),
   };
+}
+
+function collectFacetKeysFromFrame(
+  frame: GraphDataFrame | undefined,
+  dictionaryKey: "facetX" | "facetY" | "wrap",
+  order: string[] | undefined,
+): string[] | null {
+  if (!frame) return null;
+  const dict = frame.dictionaries[dictionaryKey];
+  if (!dict || dict.length === 0) return null;
+  return applyValueOrder([...dict], order);
 }
 
 export function buildGraph(
@@ -6304,6 +6412,8 @@ export function buildGraph(
   const { encoding } = spec;
   const fx = encoding.groupX;
   const fy = encoding.groupY;
+  const frameBacked = !!frame;
+  const frameSafeData: GraphData = frameBacked ? { columns: data.columns, rows: [] } : data;
 
   // Compute the global ordering of overlay/color groups across the FULL
   // dataset so each panel can map its local group(s) back to the same
@@ -6311,7 +6421,12 @@ export function buildGraph(
   // and the per-group themes set in the legend collapse to a single hue.
   const grouping = encoding.color || encoding.overlay;
   const globalGroupKeys = grouping
-    ? applyValueOrder(Array.from(groupBy(data, grouping).keys()), valueOrders?.[grouping.name])
+    ? applyValueOrder(
+      frameBacked && frame?.dictionaries.group
+        ? [...frame.dictionaries.group]
+        : Array.from(groupBy(data, grouping).keys()),
+      valueOrders?.[grouping.name],
+    )
     : undefined;
 
   // No explicit groupX / groupY — fall through to the legacy single-axis
@@ -6322,8 +6437,8 @@ export function buildGraph(
       return {
         panels: [{
           title: spec.title || "",
-          option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates),
-          rawPoints: buildFrameBackedRawDescriptor(spec, data, frame),
+          option: buildSingleOption(spec, frameSafeData, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates),
+          rawPoints: buildFrameBackedRawDescriptor(spec, frame),
           groupXValue: null,
           groupYValue: null,
         }],
@@ -6331,13 +6446,14 @@ export function buildGraph(
         rows: 1,
       };
     }
-    const wrapKeys = collectFacetKeys(data, fw, valueOrders);
+    const wrapKeys = collectFacetKeysFromFrame(frame, "wrap", valueOrders?.[fw.name])
+      ?? collectFacetKeys(data, fw, valueOrders);
     if (!wrapKeys) {
       return {
         panels: [{
           title: spec.title || "",
-          option: buildSingleOption(spec, data, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates),
-          rawPoints: buildFrameBackedRawDescriptor(spec, data, frame),
+          option: buildSingleOption(spec, frameSafeData, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates),
+          rawPoints: buildFrameBackedRawDescriptor(spec, frame),
           groupXValue: null,
           groupYValue: null,
         }],
@@ -6347,14 +6463,16 @@ export function buildGraph(
     }
     const wIdx = colIndex(data, fw.name);
     // Pin every wrap panel to the same axis bounds for fair comparison.
-    const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec), collectRefLineXs(spec));
+    const sharedRanges = frameBacked
+      ? undefined
+      : computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec), collectRefLineXs(spec));
     // Drop wrap keys whose subset has no plottable rows so we don't
     // render an empty panel taking up grid space (e.g. Build=EV2 with
     // every Y NaN). Bug fix: previously these blank panels still
     // claimed a cell, leaving the visible panels squeezed alongside
     // wasted whitespace. See `hasPlottableRows` for the "plottable"
     // definition (matches collectCategories' yIdx finiteness filter).
-    const nonEmptyWrapKeys = wrapKeys.filter((key) => {
+    const nonEmptyWrapKeys = frameBacked ? wrapKeys : wrapKeys.filter((key) => {
       const subRows = data.rows.filter((r) => toStr(r[wIdx]) === key);
       return hasPlottableRows(subRows, encoding, data);
     });
@@ -6365,18 +6483,21 @@ export function buildGraph(
     const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(effectiveWrapKeys.length))));
     const rows = Math.max(1, Math.ceil(effectiveWrapKeys.length / cols));
     const panels = effectiveWrapKeys.map((key) => {
-      const subRows = data.rows.filter((r) => toStr(r[wIdx]) === key);
-      const subData: GraphData = { columns: data.columns, rows: subRows };
+      const subRows = frameBacked ? [] : data.rows.filter((r) => toStr(r[wIdx]) === key);
+      const subData: GraphData = frameBacked ? frameSafeData : { columns: data.columns, rows: subRows };
       const subSpec: GraphSpec = {
         ...spec,
         encoding: { ...encoding, wrap: undefined },
       };
+      const panelFacet: PanelFacetContext = {
+        groupXValue: null,
+        groupYValue: null,
+        wrapValue: key,
+      };
       return {
         title: `${fw.name}=${key}`,
-        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates),
-        // Facet-local masks for typed chunks arrive in the aggregate packet
-        // path (Task 6+); until then keep legacy ECharts scatter behavior.
-        rawPoints: null,
+        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates, panelFacet),
+        rawPoints: buildFrameBackedRawDescriptor(subSpec, frame, panelFacet),
         groupXValue: null,
         groupYValue: null,
       };
@@ -6387,8 +6508,16 @@ export function buildGraph(
   // groupX and/or groupY active — build a 2D Trellis grid. Either axis
   // may be missing, in which case its key list collapses to a single
   // sentinel slot so the cross-product still produces panels.
-  const xKeys = fx ? (collectFacetKeys(data, fx, valueOrders) ?? [""]) : [null];
-  const yKeys = fy ? (collectFacetKeys(data, fy, valueOrders) ?? [""]) : [null];
+  const xKeys = fx
+    ? (collectFacetKeysFromFrame(frame, "facetX", valueOrders?.[fx.name])
+      ?? collectFacetKeys(data, fx, valueOrders)
+      ?? [""])
+    : [null];
+  const yKeys = fy
+    ? (collectFacetKeysFromFrame(frame, "facetY", valueOrders?.[fy.name])
+      ?? collectFacetKeys(data, fy, valueOrders)
+      ?? [""])
+    : [null];
   const fxIdx = fx ? colIndex(data, fx.name) : -1;
   const fyIdx = fy ? colIndex(data, fy.name) : -1;
 
@@ -6397,7 +6526,9 @@ export function buildGraph(
   // tiling actually comparable ("完全相同的 Y 轴坐标"). Hidden legend
   // groups are excluded from the range calc so visible data fills the
   // chart area instead of being squashed by data that never renders.
-  const sharedRanges = computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec), collectRefLineXs(spec));
+  const sharedRanges = frameBacked
+    ? undefined
+    : computeSharedRanges(data, encoding, valueOrders, spec.hiddenGroups, collectRefLineYs(spec), collectRefLineXs(spec));
   // Drop facet keys whose ENTIRE row / column has no plottable rows.
   // Works the same in 1D (only groupX or only groupY) and 2D Trellis:
   //   • If every row in the Y stripe `Build=EV2` is non-plottable,
@@ -6411,12 +6542,12 @@ export function buildGraph(
   //     is itself a useful signal that "this Y×X combo has no data".
   // Without this, the user's screenshot showed `Build=EV2` as a row
   // of four blank panels eating ¼ of the grid height.
-  const nonEmptyXKeys = !fx ? xKeys : xKeys.filter((xKey) => {
+  const nonEmptyXKeys = frameBacked ? xKeys : !fx ? xKeys : xKeys.filter((xKey) => {
     if (xKey === null) return true;
     const subRows = data.rows.filter((r) => toStr(r[fxIdx]) === xKey);
     return hasPlottableRows(subRows, encoding, data);
   });
-  const nonEmptyYKeys = !fy ? yKeys : yKeys.filter((yKey) => {
+  const nonEmptyYKeys = frameBacked ? yKeys : !fy ? yKeys : yKeys.filter((yKey) => {
     if (yKey === null) return true;
     const subRows = data.rows.filter((r) => toStr(r[fyIdx]) === yKey);
     return hasPlottableRows(subRows, encoding, data);
@@ -6431,12 +6562,12 @@ export function buildGraph(
   // (left → right within each row). Matches the CSS grid in <Graph>.
   for (const yKey of effectiveYKeys) {
     for (const xKey of effectiveXKeys) {
-      const subRows = data.rows.filter((r) => {
+      const subRows = frameBacked ? [] : data.rows.filter((r) => {
         if (fx && xKey !== null && toStr(r[fxIdx]) !== xKey) return false;
         if (fy && yKey !== null && toStr(r[fyIdx]) !== yKey) return false;
         return true;
       });
-      const subData: GraphData = { columns: data.columns, rows: subRows };
+      const subData: GraphData = frameBacked ? frameSafeData : { columns: data.columns, rows: subRows };
       // Strip the facet encodings from the sub-spec so the inner builder
       // doesn't try to re-facet recursively, and drop `wrap` too — when
       // groupX / groupY are present, wrap is ignored (see header comment).
@@ -6444,12 +6575,14 @@ export function buildGraph(
         ...spec,
         encoding: { ...encoding, groupX: undefined, groupY: undefined, wrap: undefined },
       };
+      const panelFacet: PanelFacetContext = {
+        groupXValue: xKey,
+        groupYValue: yKey,
+      };
       panels.push({
         title: facetTitle(xKey, yKey, encoding),
-        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates),
-        // Facet-local masks for typed chunks arrive in the aggregate packet
-        // path (Task 6+); until then keep legacy ECharts scatter behavior.
-        rawPoints: null,
+        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates, panelFacet),
+        rawPoints: buildFrameBackedRawDescriptor(subSpec, frame, panelFacet),
         groupXValue: xKey,
         groupYValue: yKey,
       });

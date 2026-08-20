@@ -53,8 +53,13 @@ export interface GraphChunkHeader {
   xValues: GraphTypedSliceDescriptor;
   yValues: GraphTypedSliceDescriptor;
   rowIds: GraphTypedSliceDescriptor;
+  zValues?: GraphTypedSliceDescriptor;
   groupCodes?: GraphTypedSliceDescriptor;
   sizeValues?: GraphTypedSliceDescriptor;
+  sourceCodes?: GraphTypedSliceDescriptor;
+  facetXCodes?: GraphTypedSliceDescriptor;
+  facetYCodes?: GraphTypedSliceDescriptor;
+  wrapCodes?: GraphTypedSliceDescriptor;
   xEncoding: GraphAxisEncoding;
   finalChunk: boolean;
 }
@@ -78,6 +83,9 @@ export interface HistogramBin {
   group?: string;
   category?: string;
   sourceColumn?: string;
+  facetX?: string;
+  facetY?: string;
+  wrap?: string;
   binStart: number;
   binEnd: number;
   count: number;
@@ -102,6 +110,9 @@ export interface HeatmapCell {
   group?: string;
   category?: string;
   sourceColumn?: string;
+  facetX?: string;
+  facetY?: string;
+  wrap?: string;
   xBinIndex: number;
   yBinIndex: number;
   xBinStart: number;
@@ -140,6 +151,9 @@ export interface BoxPlotEntry {
   group?: string;
   category?: string;
   sourceColumn?: string;
+  facetX?: string;
+  facetY?: string;
+  wrap?: string;
   count: number;
   min: number;
   q1: number;
@@ -164,6 +178,9 @@ export interface SummaryEntry {
   group?: string;
   category?: string;
   sourceColumn?: string;
+  facetX?: string;
+  facetY?: string;
+  wrap?: string;
   count: number;
   mean: number;
   median: number;
@@ -214,6 +231,9 @@ function isHistogramBin(value: unknown): value is HistogramBin {
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
+    && isOptionalString(value.facetX)
+    && isOptionalString(value.facetY)
+    && isOptionalString(value.wrap)
     && isFiniteNumber(value.binStart)
     && isFiniteNumber(value.binEnd)
     && isNonNegativeInteger(value.count);
@@ -224,6 +244,9 @@ function isHeatmapCell(value: unknown): value is HeatmapCell {
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
+    && isOptionalString(value.facetX)
+    && isOptionalString(value.facetY)
+    && isOptionalString(value.wrap)
     && Number.isInteger(value.xBinIndex)
     && Number.isInteger(value.yBinIndex)
     && isFiniteNumber(value.xBinStart)
@@ -245,6 +268,9 @@ function isBoxPlotEntry(value: unknown): value is BoxPlotEntry {
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
+    && isOptionalString(value.facetX)
+    && isOptionalString(value.facetY)
+    && isOptionalString(value.wrap)
     && isNonNegativeInteger(value.count)
     && isFiniteNumber(value.min)
     && isFiniteNumber(value.q1)
@@ -262,6 +288,9 @@ function isSummaryEntry(value: unknown): value is SummaryEntry {
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
+    && isOptionalString(value.facetX)
+    && isOptionalString(value.facetY)
+    && isOptionalString(value.wrap)
     && isNonNegativeInteger(value.count)
     && isFiniteNumber(value.mean)
     && isFiniteNumber(value.median)
@@ -334,8 +363,13 @@ export interface DecodedRawPointChunk {
   xValues: Float64Array | Uint32Array;
   yValues: Float64Array;
   rowIds: BigInt64Array;
+  zValues?: Float64Array;
   groupCodes?: Uint32Array;
   sizeValues?: Float64Array;
+  sourceCodes?: Uint32Array;
+  facetXCodes?: Uint32Array;
+  facetYCodes?: Uint32Array;
+  wrapCodes?: Uint32Array;
   validity: Record<string, Uint8Array>;
 }
 
@@ -450,8 +484,23 @@ export function decodeGraphPayload(
   if (header.groupCodes) {
     assertType(header.groupCodes, "u32", "groupCodes");
   }
+  if (header.zValues) {
+    assertType(header.zValues, "f64", "zValues");
+  }
   if (header.sizeValues) {
     assertType(header.sizeValues, "f64", "sizeValues");
+  }
+  if (header.sourceCodes) {
+    assertType(header.sourceCodes, "u32", "sourceCodes");
+  }
+  if (header.facetXCodes) {
+    assertType(header.facetXCodes, "u32", "facetXCodes");
+  }
+  if (header.facetYCodes) {
+    assertType(header.facetYCodes, "u32", "facetYCodes");
+  }
+  if (header.wrapCodes) {
+    assertType(header.wrapCodes, "u32", "wrapCodes");
   }
 
   const ranges: Array<{ start: number; end: number; label: string }> = [];
@@ -465,11 +514,26 @@ export function decodeGraphPayload(
   register(header.xValues, "xValues");
   register(header.yValues, "yValues");
   register(header.rowIds, "rowIds");
+  if (header.zValues) {
+    register(header.zValues, "zValues");
+  }
   if (header.groupCodes) {
     register(header.groupCodes, "groupCodes");
   }
   if (header.sizeValues) {
     register(header.sizeValues, "sizeValues");
+  }
+  if (header.sourceCodes) {
+    register(header.sourceCodes, "sourceCodes");
+  }
+  if (header.facetXCodes) {
+    register(header.facetXCodes, "facetXCodes");
+  }
+  if (header.facetYCodes) {
+    register(header.facetYCodes, "facetYCodes");
+  }
+  if (header.wrapCodes) {
+    register(header.wrapCodes, "wrapCodes");
   }
 
   for (const [key, descriptor] of Object.entries(header.validityRanges)) {
@@ -494,8 +558,23 @@ export function decodeGraphPayload(
   if (header.groupCodes) {
     assertRowVectorCardinality(header.groupCodes, header.rowCount, "groupCodes");
   }
+  if (header.zValues) {
+    assertRowVectorCardinality(header.zValues, header.rowCount, "zValues");
+  }
   if (header.sizeValues) {
     assertRowVectorCardinality(header.sizeValues, header.rowCount, "sizeValues");
+  }
+  if (header.sourceCodes) {
+    assertRowVectorCardinality(header.sourceCodes, header.rowCount, "sourceCodes");
+  }
+  if (header.facetXCodes) {
+    assertRowVectorCardinality(header.facetXCodes, header.rowCount, "facetXCodes");
+  }
+  if (header.facetYCodes) {
+    assertRowVectorCardinality(header.facetYCodes, header.rowCount, "facetYCodes");
+  }
+  if (header.wrapCodes) {
+    assertRowVectorCardinality(header.wrapCodes, header.rowCount, "wrapCodes");
   }
 
   // Validity bitmaps may include trailing bytes for alignment or future metadata,
@@ -515,11 +594,26 @@ export function decodeGraphPayload(
       : new Uint32Array(payload, header.xValues.offset, header.xValues.byteLength / 4);
   const yValues = new Float64Array(payload, header.yValues.offset, header.yValues.byteLength / 8);
   const rowIds = new BigInt64Array(payload, header.rowIds.offset, header.rowIds.byteLength / 8);
+  const zValues = header.zValues
+    ? new Float64Array(payload, header.zValues.offset, header.zValues.byteLength / 8)
+    : undefined;
   const groupCodes = header.groupCodes
     ? new Uint32Array(payload, header.groupCodes.offset, header.groupCodes.byteLength / 4)
     : undefined;
   const sizeValues = header.sizeValues
     ? new Float64Array(payload, header.sizeValues.offset, header.sizeValues.byteLength / 8)
+    : undefined;
+  const sourceCodes = header.sourceCodes
+    ? new Uint32Array(payload, header.sourceCodes.offset, header.sourceCodes.byteLength / 4)
+    : undefined;
+  const facetXCodes = header.facetXCodes
+    ? new Uint32Array(payload, header.facetXCodes.offset, header.facetXCodes.byteLength / 4)
+    : undefined;
+  const facetYCodes = header.facetYCodes
+    ? new Uint32Array(payload, header.facetYCodes.offset, header.facetYCodes.byteLength / 4)
+    : undefined;
+  const wrapCodes = header.wrapCodes
+    ? new Uint32Array(payload, header.wrapCodes.offset, header.wrapCodes.byteLength / 4)
     : undefined;
 
   const validity: Record<string, Uint8Array> = {};
@@ -541,8 +635,13 @@ export function decodeGraphPayload(
     xValues,
     yValues,
     rowIds,
+    zValues,
     groupCodes,
     sizeValues,
+    sourceCodes,
+    facetXCodes,
+    facetYCodes,
+    wrapCodes,
     validity,
   };
 }

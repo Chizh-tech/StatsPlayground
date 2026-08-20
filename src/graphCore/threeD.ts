@@ -14,6 +14,7 @@ import type { GraphSpec, GraphData } from "./types";
 import type { GraphTheme } from "./theme";
 import { isMissing } from "./transform";
 import { DEFAULT_GROUP_KEY } from "./types";
+import type { GraphDataFrame } from "@/types/graphData";
 
 /** 3D 散点上限。 */
 const POINT_CAP = 8000;
@@ -74,6 +75,49 @@ function errMagnitude(zs: number[], kind: string): number {
   if (k === "stdDev") return sd;
   if (k === "ci95") return 1.96 * se;
   return se;
+}
+
+interface Typed3DPoint {
+  x: number;
+  y: number;
+  z?: number;
+  group?: string;
+}
+
+function bitIsSet(bitmap: Uint8Array | undefined, rowIndex: number): boolean {
+  if (!bitmap) return true;
+  const byteIndex = rowIndex >> 3;
+  if (byteIndex >= bitmap.length) return false;
+  const mask = 1 << (rowIndex & 7);
+  return (bitmap[byteIndex] & mask) !== 0;
+}
+
+function collectFrame3DPoints(frame: GraphDataFrame): Typed3DPoint[] {
+  const points: Typed3DPoint[] = [];
+  const groupDict = frame.dictionaries.group ?? [];
+  for (const chunk of frame.rawChunks) {
+    const n = Math.min(chunk.xValues.length, chunk.yValues.length, chunk.rowIds.length);
+    for (let row = 0; row < n; row += 1) {
+      if (!bitIsSet(chunk.validity.x, row)) continue;
+      if (!bitIsSet(chunk.validity.y, row)) continue;
+      const x = Number(chunk.xValues[row]);
+      const y = Number(chunk.yValues[row]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      let z: number | undefined;
+      if (chunk.zValues) {
+        if (!bitIsSet(chunk.validity.z, row)) continue;
+        const zv = Number(chunk.zValues[row]);
+        if (!Number.isFinite(zv)) continue;
+        z = zv;
+      }
+      let group: string | undefined;
+      if (chunk.groupCodes && bitIsSet(chunk.validity.group, row)) {
+        group = groupDict[chunk.groupCodes[row] >>> 0];
+      }
+      points.push({ x, y, z, group });
+    }
+  }
+  return points;
 }
 
 /** 按原始 X/Y 网格聚合，并可对有限 Z 做保留空洞的邻域平滑。 */
@@ -218,6 +262,135 @@ function buildScatterData(
   return { pts: out, zmin, zmax };
 }
 
+function buildSurfaceDataFromPoints(
+  points: readonly Typed3DPoint[],
+  stat: SurfaceStat,
+  smoothness: number,
+): { verts: number[][]; dataShape: [number, number]; zmin: number; zmax: number } | null {
+  const xSet = new Set<number>();
+  const ySet = new Set<number>();
+  const observations: { x: number; y: number; z: number }[] = [];
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z ?? NaN)) continue;
+    const z = point.z as number;
+    xSet.add(point.x);
+    ySet.add(point.y);
+    observations.push({ x: point.x, y: point.y, z });
+  }
+  const xs = [...xSet].sort((a, b) => a - b);
+  const ys = [...ySet].sort((a, b) => a - b);
+  const nx = xs.length;
+  const ny = ys.length;
+  if (nx < 2 || ny < 2) return null;
+
+  const xIndex = new Map(xs.map((x, i) => [x, i]));
+  const yIndex = new Map(ys.map((y, i) => [y, i]));
+  const cells: (number[] | undefined)[] = new Array(nx * ny);
+  for (const observation of observations) {
+    const i = xIndex.get(observation.x);
+    const j = yIndex.get(observation.y);
+    if (i === undefined || j === undefined) continue;
+    (cells[j * nx + i] ??= []).push(observation.z);
+  }
+
+  let values = new Float64Array(nx * ny);
+  values.fill(NaN);
+  for (let idx = 0; idx < cells.length; idx++) {
+    const cell = cells[idx];
+    if (cell?.length) values[idx] = aggZ(cell, stat);
+  }
+
+  let hasCompleteQuad = false;
+  for (let j = 0; j < ny - 1 && !hasCompleteQuad; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      if (
+        Number.isFinite(values[j * nx + i])
+        && Number.isFinite(values[j * nx + i + 1])
+        && Number.isFinite(values[(j + 1) * nx + i])
+        && Number.isFinite(values[(j + 1) * nx + i + 1])
+      ) {
+        hasCompleteQuad = true;
+        break;
+      }
+    }
+  }
+  if (!hasCompleteQuad) return null;
+
+  const blend = Math.max(0, Math.min(1, smoothness));
+  if (blend > 0) {
+    const neighbors = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
+    for (let pass = 0; pass < 4; pass++) {
+      const next = new Float64Array(values.length);
+      next.fill(NaN);
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const idx = j * nx + i;
+          const current = values[idx];
+          if (!Number.isFinite(current)) continue;
+          let sum = 0;
+          let count = 0;
+          for (const [di, dj] of neighbors) {
+            const ni = i + di;
+            const nj = j + dj;
+            if (ni < 0 || ni >= nx || nj < 0 || nj >= ny) continue;
+            const neighbor = values[nj * nx + ni];
+            if (!Number.isFinite(neighbor)) continue;
+            sum += neighbor;
+            count++;
+          }
+          next[idx] = count > 0 ? current * (1 - blend) + (sum / count) * blend : current;
+        }
+      }
+      values = next;
+    }
+  }
+
+  const verts: number[][] = [];
+  let zmin = Infinity;
+  let zmax = -Infinity;
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const z = values[j * nx + i];
+      verts.push([xs[i], ys[j], z]);
+      if (Number.isFinite(z)) {
+        if (z < zmin) zmin = z;
+        if (z > zmax) zmax = z;
+      }
+    }
+  }
+  return { verts, dataShape: [ny, nx], zmin, zmax };
+}
+
+function buildScatterDataFromPoints(
+  points: readonly Typed3DPoint[],
+  requireZ: boolean,
+): { pts: number[][]; zmin: number; zmax: number } | null {
+  const pts: number[][] = [];
+  let zmin = Infinity;
+  let zmax = -Infinity;
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+    let z = 0;
+    if (requireZ) {
+      if (!Number.isFinite(point.z ?? NaN)) continue;
+      z = point.z as number;
+    }
+    pts.push([point.x, point.y, z]);
+    if (z < zmin) zmin = z;
+    if (z > zmax) zmax = z;
+  }
+  if (pts.length === 0) return null;
+  if (!requireZ) {
+    zmin = 0;
+    zmax = 0;
+  }
+  if (pts.length <= POINT_CAP) return { pts, zmin, zmax };
+  const capped: number[][] = [];
+  const step = pts.length / POINT_CAP;
+  for (let i = 0; i < POINT_CAP; i++) capped.push(pts[Math.floor(i * step)]);
+  return { pts: capped, zmin, zmax };
+}
+
 export interface Build3DResult {
   /** echarts-gl option（宽松类型）。空表示还不足以渲染。 */
   option: Record<string, unknown> | null;
@@ -226,7 +399,12 @@ export interface Build3DResult {
 }
 
 /** 构建 3D option。当绑定不足时返回 hint。 */
-export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphTheme): Build3DResult {
+export function build3DOption(
+  spec: GraphSpec,
+  data: GraphData,
+  theme: GraphTheme,
+  frame?: GraphDataFrame,
+): Build3DResult {
   const xf = spec.encoding.x;
   const yf = spec.encoding.y;
   const zf = spec.encoding.z;
@@ -275,11 +453,15 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   const errInterval = String(scOpts.errorInterval ?? "auto");
   const intStyle = String(scOpts.intervalStyle ?? "errorBar") === "band" ? "band" : "errorBar";
   const summarize = summaryStat !== "none" && !!zf;
+  const framePoints = frame ? collectFrame3DPoints(frame) : [];
+  const useFramePoints = framePoints.length > 0;
 
-  const addLayers = (gdata: GraphData, name: string, color: string) => {
+  const addLayers = (gdata: GraphData | null, gpoints: readonly Typed3DPoint[] | null, name: string, color: string) => {
     const indices: number[] = [];
     if (surfaceEl && xf && yf && zf) {
-      const s = buildSurfaceData(gdata, xf.name, yf.name, zf.name, stat, surfaceSmoothness);
+      const s = gpoints
+        ? buildSurfaceDataFromPoints(gpoints, stat, surfaceSmoothness)
+        : (gdata ? buildSurfaceData(gdata, xf.name, yf.name, zf.name, stat, surfaceSmoothness) : null);
       if (s) {
         series.push({
           type: "surface",
@@ -301,7 +483,9 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
     if (pointsEl && xf && yf) {
       if (!summarize) {
         // 原始散点：全部点，参与深度渐变着色。
-        const sc = buildScatterData(gdata, xf.name, yf.name, zf?.name);
+        const sc = gpoints
+          ? buildScatterDataFromPoints(gpoints, !!zf)
+          : (gdata ? buildScatterData(gdata, xf.name, yf.name, zf?.name) : null);
         if (sc) {
           series.push({
             type: "scatter3D",
@@ -317,19 +501,32 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       } else {
         // 汇总：按 (X, Y) 坐标分箱，每个位置画一个点 (x, y, agg(Z))；
         // 误差沿 Z 方向绘制（误差棒 / 色带），跟 2D 选项一致。
-        const xi = gdata.columns.indexOf(xf.name);
-        const yi = gdata.columns.indexOf(yf.name);
-        const zi = gdata.columns.indexOf(zf!.name);
         const cells = new Map<string, { x: number; y: number; zs: number[] }>();
-        for (const r of gdata.rows) {
-          const x = Number(r[xi]);
-          const y = Number(r[yi]);
-          const z = Number(r[zi]);
-          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-          const key = `${x}|${y}`;
-          let c = cells.get(key);
-          if (!c) { c = { x, y, zs: [] }; cells.set(key, c); }
-          c.zs.push(z);
+        if (gpoints) {
+          for (const point of gpoints) {
+            const x = point.x;
+            const y = point.y;
+            const z = Number(point.z);
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+            const key = `${x}|${y}`;
+            let c = cells.get(key);
+            if (!c) { c = { x, y, zs: [] }; cells.set(key, c); }
+            c.zs.push(z);
+          }
+        } else if (gdata) {
+          const xi = gdata.columns.indexOf(xf.name);
+          const yi = gdata.columns.indexOf(yf.name);
+          const zi = gdata.columns.indexOf(zf!.name);
+          for (const r of gdata.rows) {
+            const x = Number(r[xi]);
+            const y = Number(r[yi]);
+            const z = Number(r[zi]);
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+            const key = `${x}|${y}`;
+            let c = cells.get(key);
+            if (!c) { c = { x, y, zs: [] }; cells.set(key, c); }
+            c.zs.push(z);
+          }
         }
         const pts: number[][] = [];
         const errSegs: number[][][] = [];
@@ -378,7 +575,22 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   };
 
   let grouped = false;
-  if (overlay) {
+  if (overlay && useFramePoints) {
+    const seen = new Set<string>();
+    const groups: string[] = [];
+    for (const point of framePoints) {
+      const key = String(point.group ?? "");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      groups.push(key);
+    }
+    grouped = groups.length > 0;
+    const hidden = new Set(spec.hiddenGroups ?? []);
+    for (const gkey of groups) {
+      if (hidden.has(gkey)) continue;
+      addLayers(null, framePoints.filter((point) => String(point.group ?? "") === gkey), gkey, colorOf(gkey));
+    }
+  } else if (overlay) {
     const gi = data.columns.indexOf(overlay.name);
     if (gi >= 0) {
       // 首次出现顺序去重分组。
@@ -397,12 +609,12 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       for (const gkey of groups) {
         if (hidden.has(gkey)) continue;
         const rows = data.rows.filter((r) => String(r[gi]) === gkey);
-        addLayers({ columns: data.columns, rows }, gkey, colorOf(gkey));
+        addLayers({ columns: data.columns, rows }, null, gkey, colorOf(gkey));
       }
     }
   }
   if (!grouped) {
-    addLayers(data, zf?.name ?? "series", colorOf(DEFAULT_GROUP_KEY));
+    addLayers(useFramePoints ? null : data, useFramePoints ? framePoints : null, zf?.name ?? "series", colorOf(DEFAULT_GROUP_KEY));
   }
 
   if (series.length === 0) {

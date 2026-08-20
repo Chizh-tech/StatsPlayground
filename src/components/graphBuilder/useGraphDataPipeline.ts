@@ -137,6 +137,9 @@ function applyChunkExtents(
     if (chunk.sizeValues && bitIsSet(chunk.validity.size, row)) {
       updateExtent(next, "size", Number(chunk.sizeValues[row]));
     }
+    if (chunk.zValues && bitIsSet(chunk.validity.z, row)) {
+      updateExtent(next, "z", Number(chunk.zValues[row]));
+    }
   }
   return next;
 }
@@ -149,8 +152,13 @@ function toRawChunk(chunk: DecodedGraphChunk): DecodedRawPointChunk {
     xValues: chunk.xValues,
     yValues: chunk.yValues,
     rowIds: chunk.rowIds,
+    zValues: chunk.zValues,
     groupCodes: chunk.groupCodes,
     sizeValues: chunk.sizeValues,
+    sourceCodes: chunk.sourceCodes,
+    facetXCodes: chunk.facetXCodes,
+    facetYCodes: chunk.facetYCodes,
+    wrapCodes: chunk.wrapCodes,
     validity: chunk.validity,
   };
 }
@@ -480,6 +488,10 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
   if (canUseGroup) {
     addField("group", deriveGroupingColumn(item));
   }
+
+  addField("groupX", item.encoding.groupX?.name);
+  addField("groupY", item.encoding.groupY?.name);
+  addField("wrap", item.encoding.wrap?.name);
 
   for (const filter of item.filters ?? []) {
     addField("filter", filter.rule.field.name);

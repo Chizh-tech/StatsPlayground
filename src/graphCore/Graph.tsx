@@ -123,7 +123,7 @@ export function Graph({ spec, data, frame, className, minPanelWidth = 320, minPa
   if (use3DScene) {
     return (
       <div className={`gc-graph${className ? " " + className : ""}`} style={{ width: "100%", height: "100%" }}>
-        <Chart3D spec={spec} data={data} />
+        <Chart3D spec={spec} data={data} frame={frame ?? undefined} />
       </div>
     );
   }

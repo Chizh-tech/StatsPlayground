@@ -604,6 +604,7 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
     }),
   );
   assert.deepEqual(roleColumns(groupXFallback, "group"), ["gx"]);
+  assert.deepEqual(roleColumns(groupXFallback, "groupX"), ["gx"]);
 
   const groupYFallback = deriveFields(
     makeGraphBuilderItem({
@@ -616,6 +617,7 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
     }),
   );
   assert.deepEqual(roleColumns(groupYFallback, "group"), ["gy"]);
+  assert.deepEqual(roleColumns(groupYFallback, "groupY"), ["gy"]);
 
   const groupZFallback = deriveFields(
     makeGraphBuilderItem({
@@ -721,6 +723,7 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
     }),
   );
   assert.deepEqual(roleColumns(hiddenWrapFacet, "group"), ["facet_col"]);
+  assert.deepEqual(roleColumns(hiddenWrapFacet, "wrap"), ["facet_col"]);
 }
 
 {
