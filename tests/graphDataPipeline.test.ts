@@ -6,6 +6,7 @@ import {
   reduceGraphStream,
   type GraphStreamState,
 } from "../src/components/graphBuilder/useGraphDataPipeline.ts";
+import { createGraphStreamTransport } from "../src/services/graphDataTransport.ts";
 import type {
   GraphChunkHeader,
   GraphDataCompletion,
@@ -286,28 +287,19 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
 }
 
 {
-  const request = makeRequest("req-complete-race", 13);
+  const request = makeRequest("req-terminal-before-payload", 13);
   const state = run(
     createInitialGraphStreamState(makeCommittedFrame()),
     { type: "start", request },
-    { type: "header", header: makeHeader("req-complete-race", 13, 0, false) },
+    { type: "header", header: makeHeader("req-terminal-before-payload", 13, 0, false) },
     { type: "payload", payload: makePayload(0) },
-    { type: "header", header: makeHeader("req-complete-race", 13, 1, true) },
-    { type: "complete", completion: makeCompletion("req-complete-race", 13) },
+    { type: "header", header: makeHeader("req-terminal-before-payload", 13, 1, true) },
+    { type: "complete", completion: makeCompletion("req-terminal-before-payload", 13) },
   );
 
-  assert.equal(state.pendingCompletion?.requestId, "req-complete-race");
+  assert.equal(state.pending, null);
   assert.equal(state.committed?.requestId, "old-request");
-
-  const committed = reduceGraphStream(state, {
-    type: "payload",
-    payload: makePayload(100),
-  });
-
-  assert.equal(committed.pending, null);
-  assert.equal(committed.pendingCompletion, null);
-  assert.equal(committed.committed?.requestId, "req-complete-race");
-  assert.equal(committed.committed?.rawChunks.length, 2);
+  assert.match(state.error ?? "", /pending header/i);
 }
 
 {
@@ -377,6 +369,26 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
 }
 
 {
+  const mismatch = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request: makeRequest("req-terminal-mismatch", 12) },
+    { type: "header", header: makeHeader("req-terminal-mismatch", 12, 0, true) },
+    { type: "payload", payload: makePayload(0) },
+    {
+      type: "complete",
+      completion: {
+        ...makeCompletion("req-terminal-mismatch", 12),
+        chunksSent: 2,
+      },
+    },
+  );
+
+  assert.equal(mismatch.pending, null);
+  assert.equal(mismatch.committed?.requestId, "old-request");
+  assert.match(mismatch.error ?? "", /inconsistent/i);
+}
+
+{
   const state = run(
     createInitialGraphStreamState(makeCommittedFrame()),
     { type: "start", request: makeRequest("req-error", 11) },
@@ -394,6 +406,109 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
   assert.equal(errored.pending, null);
   assert.equal(errored.committed?.requestId, "old-request");
   assert.equal(errored.error, "boom");
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
+  let completionCalls = 0;
+  const request = makeRequest("req-transport-order", 22);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {
+      events.push("header");
+    },
+    onPayload: () => {
+      events.push("payload");
+    },
+    onComplete: () => {
+      events.push("complete");
+      completionCalls += 1;
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader("req-transport-order", 22, 0, true),
+  });
+  transport.onChannelMessage(makePayload(0));
+  transport.onChannelMessage({
+    messageType: "complete",
+    ...makeCompletion("req-transport-order", 22),
+    chunksSent: 1,
+  });
+
+  assert.equal(transportError, null);
+  assert.deepEqual(events, ["header", "payload", "complete"]);
+  assert.equal(completionCalls, 1);
+}
+
+{
+  let completed = false;
+  let transportError: string | null = null;
+  const request = makeRequest("req-invoke-before-terminal", 23);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {},
+    onPayload: () => {},
+    onComplete: () => {
+      completed = true;
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onInvokeResolved({
+    ...makeCompletion("req-invoke-before-terminal", 23),
+    chunksSent: 1,
+  });
+  assert.equal(completed, false);
+
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader("req-invoke-before-terminal", 23, 0, true),
+  });
+  transport.onChannelMessage(makePayload(0));
+  transport.onChannelMessage({
+    messageType: "complete",
+    ...makeCompletion("req-invoke-before-terminal", 23),
+    chunksSent: 1,
+  });
+
+  assert.equal(transportError, null);
+  assert.equal(completed, true);
+}
+
+{
+  let completed = false;
+  let transportError: string | null = null;
+  const request = makeRequest("req-terminal-incomplete", 24);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {},
+    onPayload: () => {},
+    onComplete: () => {
+      completed = true;
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader("req-terminal-incomplete", 24, 0, true),
+  });
+  transport.onChannelMessage(makePayload(0));
+  transport.onChannelMessage({
+    messageType: "complete",
+    ...makeCompletion("req-terminal-incomplete", 24),
+    chunksSent: 2,
+  });
+
+  assert.equal(completed, false);
+  assert.match(transportError ?? "", /inconsistent chunksSent/i);
 }
 
 {
@@ -461,6 +576,72 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
     }),
   );
   assert.deepEqual(roleColumns(groupZFallback, "group"), ["gz"]);
+}
+
+{
+  const activeMultiX = deriveFields(
+    makeGraphBuilderItem({
+      encoding: {
+        x: { name: "x_stale", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+      },
+      multiX: [
+        { name: "mx0", type: "continuous" },
+        { name: "mx1", type: "continuous" },
+        { name: "mx2", type: "continuous" },
+      ],
+    }),
+  );
+
+  assert.deepEqual(roleColumns(activeMultiX, "x"), ["x_stale"]);
+  assert.deepEqual(roleColumns(activeMultiX, "multiX0"), ["mx0"]);
+  assert.deepEqual(roleColumns(activeMultiX, "multiX1"), ["mx1"]);
+  assert.deepEqual(roleColumns(activeMultiX, "multiX2"), ["mx2"]);
+
+  const activeMultiY = deriveFields(
+    makeGraphBuilderItem({
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y_stale", type: "continuous" },
+      },
+      multiY: [
+        { name: "my0", type: "continuous" },
+        { name: "my1", type: "continuous" },
+      ],
+    }),
+  );
+
+  assert.deepEqual(roleColumns(activeMultiY, "y"), ["y_stale"]);
+  assert.deepEqual(roleColumns(activeMultiY, "multiY0"), ["my0"]);
+  assert.deepEqual(roleColumns(activeMultiY, "multiY1"), ["my1"]);
+
+  const staleInactiveMulti = deriveFields(
+    makeGraphBuilderItem({
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+      },
+      multiX: [{ name: "only_one", type: "continuous" }],
+      multiY: [{ name: "also_one", type: "continuous" }],
+    }),
+  );
+
+  assert.deepEqual(roleColumns(staleInactiveMulti, "multiX0"), []);
+  assert.deepEqual(roleColumns(staleInactiveMulti, "multiY0"), []);
+}
+
+{
+  const hiddenWrapFacet = deriveFields(
+    makeGraphBuilderItem({
+      encoding: {
+        x: { name: "x", type: "continuous" },
+        y: { name: "y", type: "continuous" },
+        wrap: { name: "facet_col", type: "nominal" },
+      },
+      hiddenGroups: ["facet-a"],
+    }),
+  );
+  assert.deepEqual(roleColumns(hiddenWrapFacet, "group"), ["facet_col"]);
 }
 
 {

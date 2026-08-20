@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, OnceLock};
 
 use duckdb::types::Value;
+use serde::Serialize;
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 use crate::engine::duckdb_engine::GraphProjectionStats;
@@ -42,15 +43,37 @@ trait GraphChunkSink {
     fn send_header(&mut self, header: &GraphChunkHeader) -> Result<(), GraphSinkError>;
 
     fn send_payload(&mut self, payload: Vec<u8>) -> Result<(), GraphSinkError>;
+
+    fn send_terminal(&mut self, completion: &GraphDataCompletion) -> Result<(), GraphSinkError>;
 }
 
 struct ChannelChunkSink<'a> {
     on_chunk: &'a Channel<InvokeResponseBody>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphStreamHeaderMessage<'a> {
+    message_type: &'static str,
+    #[serde(flatten)]
+    header: &'a GraphChunkHeader,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphStreamCompletionMessage<'a> {
+    message_type: &'static str,
+    #[serde(flatten)]
+    completion: &'a GraphDataCompletion,
+}
+
 impl GraphChunkSink for ChannelChunkSink<'_> {
     fn send_header(&mut self, header: &GraphChunkHeader) -> Result<(), GraphSinkError> {
-        let serialized = serde_json::to_string(header)
+        let message = GraphStreamHeaderMessage {
+            message_type: "header",
+            header,
+        };
+        let serialized = serde_json::to_string(&message)
             .map_err(|error| GraphSinkError::Invalid(error.to_string()))?;
         if self
             .on_chunk
@@ -64,6 +87,23 @@ impl GraphChunkSink for ChannelChunkSink<'_> {
 
     fn send_payload(&mut self, payload: Vec<u8>) -> Result<(), GraphSinkError> {
         if self.on_chunk.send(InvokeResponseBody::from(payload)).is_err() {
+            return Err(GraphSinkError::Closed);
+        }
+        Ok(())
+    }
+
+    fn send_terminal(&mut self, completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
+        let message = GraphStreamCompletionMessage {
+            message_type: "complete",
+            completion,
+        };
+        let serialized = serde_json::to_string(&message)
+            .map_err(|error| GraphSinkError::Invalid(error.to_string()))?;
+        if self
+            .on_chunk
+            .send(InvokeResponseBody::from(serialized))
+            .is_err()
+        {
             return Err(GraphSinkError::Closed);
         }
         Ok(())
@@ -108,6 +148,15 @@ impl GraphChunkSink for CollectingChunkSink {
             ));
         };
         self.chunks.push(GraphDataChunk { header, payload });
+        Ok(())
+    }
+
+    fn send_terminal(&mut self, _completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
+        if self.pending_header.is_some() {
+            return Err(GraphSinkError::Invalid(
+                "graph sink received terminal marker before payload".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -199,8 +248,7 @@ impl<'a> GraphDataService<'a> {
 
         let run = self.begin_request_run(&request.request_id)?;
         if run.pre_cancelled {
-            self.finish_request_run(&request.request_id, run.nonce, true)?;
-            return Ok(GraphDataCompletion {
+            let completion = GraphDataCompletion {
                 request_id: request.request_id.clone(),
                 dataset_id: request.dataset_id.clone(),
                 generation: request.generation,
@@ -208,7 +256,11 @@ impl<'a> GraphDataService<'a> {
                 processed_rows: 0,
                 chunks_sent: 0,
                 cancelled: true,
-            });
+            };
+            sink.send_terminal(&completion)
+                .map_err(Self::map_sink_error_to_app_error)?;
+            self.finish_request_run(&request.request_id, run.nonce, true)?;
+            return Ok(completion);
         }
 
         let result = (|| -> Result<GraphDataCompletion, AppError> {
@@ -330,7 +382,7 @@ impl<'a> GraphDataService<'a> {
                 }
             }
 
-            Ok(GraphDataCompletion {
+            let completion = GraphDataCompletion {
                 request_id: request.request_id.clone(),
                 dataset_id: request.dataset_id.clone(),
                 generation: request.generation,
@@ -338,7 +390,12 @@ impl<'a> GraphDataService<'a> {
                 processed_rows,
                 chunks_sent,
                 cancelled,
-            })
+            };
+
+            sink.send_terminal(&completion)
+                .map_err(Self::map_sink_error_to_app_error)?;
+
+            Ok(completion)
         })();
 
         let observed_cancelled = matches!(&result, Ok(completion) if completion.cancelled);
@@ -1133,6 +1190,10 @@ mod tests {
             self.pending_chunks = self.pending_chunks.saturating_sub(1);
             Ok(())
         }
+
+        fn send_terminal(&mut self, _completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
+            Ok(())
+        }
     }
 
     #[derive(Default)]
@@ -1150,6 +1211,11 @@ mod tests {
             self.events.push("payload");
             Ok(())
         }
+
+        fn send_terminal(&mut self, _completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
+            self.events.push("complete");
+            Ok(())
+        }
     }
 
     struct ClosedSink;
@@ -1160,6 +1226,10 @@ mod tests {
         }
 
         fn send_payload(&mut self, _payload: Vec<u8>) -> Result<(), GraphSinkError> {
+            Err(GraphSinkError::Closed)
+        }
+
+        fn send_terminal(&mut self, _completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
             Err(GraphSinkError::Closed)
         }
     }
@@ -1209,11 +1279,11 @@ mod tests {
         assert!(completion.cancelled);
         assert_eq!(completion.processed_rows, 0);
         assert_eq!(completion.chunks_sent, 0);
-        assert!(sink.events.is_empty());
+        assert_eq!(sink.events, vec!["complete"]);
     }
 
     #[test]
-    fn stream_with_sink_orders_header_then_payload() {
+    fn stream_with_sink_orders_header_payload_then_terminal() {
         let state = AppState::new().expect("state");
         seed_dataset(&state, "ordered-events", 32);
 
@@ -1226,8 +1296,9 @@ mod tests {
             .expect("stream completion");
         assert!(!completion.cancelled);
         assert!(!sink.events.is_empty());
-        assert_eq!(sink.events.len() % 2, 0);
-        for pair in sink.events.chunks(2) {
+        assert_eq!(sink.events.last().copied(), Some("complete"));
+        assert_eq!((sink.events.len() - 1) % 2, 0);
+        for pair in sink.events[..sink.events.len() - 1].chunks(2) {
             assert_eq!(pair[0], "header");
             assert_eq!(pair[1], "payload");
         }

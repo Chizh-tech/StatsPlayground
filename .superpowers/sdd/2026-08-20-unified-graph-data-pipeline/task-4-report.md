@@ -165,3 +165,88 @@ From reducer tests in `tests/graphDataPipeline.test.ts`:
 - `src/components/graphBuilder/useGraphDataPipeline.ts`
 - `src/services/graphDataService.ts`
 - `tests/graphDataPipeline.test.ts`
+
+## Fix Round 2
+
+### Scope
+
+- Closed both open round-2 findings in `feature/unified-graph-pipeline`:
+  - Required-field completeness for active multi-axis bindings (`multiX`, `multiY`) while preserving stale-inactive behavior.
+  - Transport-complete sequencing using an ordered terminal marker on the same Tauri channel as header/raw payload messages.
+- Kept `GraphDataFrame` + `reduceGraphStream` as the only frame lifecycle authority; no second state machine was introduced.
+
+### RED Evidence
+
+- Command: `node --experimental-strip-types tests/graphDataPipeline.test.ts`
+  - Initial result (before transport implementation):
+    - `Error [ERR_MODULE_NOT_FOUND]: Cannot find module ... src/services/graphDataTransport.ts`
+  - After transport skeleton creation, targeted failing assertion:
+    - `AssertionError [ERR_ASSERTION] ... actual 'graph terminal marker does not match invoke completion' expected null`
+  - Meaning: new round-2 protocol/multi-axis tests were active and caught the intended behavior gaps.
+
+### GREEN Evidence
+
+- Command: `node --experimental-strip-types tests/graphDataPipeline.test.ts`
+  - Result: `graph-data fixture + decoder passed`
+
+### Findings Closed
+
+1. Required field completeness (`multiX`, `multiY`, facet/group)
+- `deriveFields` now appends active multi-axis columns when and only when multi-mode is active (`length >= 2`).
+- Added stable per-index roles that do not collide with primary `x`/`y` roles:
+  - `multiX0`, `multiX1`, ...
+  - `multiY0`, `multiY1`, ...
+- Preserved stale-inactive behavior:
+  - single-entry `multiX` / `multiY` lists are ignored as inactive stale state.
+- Added focused tests covering:
+  - active `multiX` inclusion,
+  - active `multiY` inclusion,
+  - stale inactive omission,
+  - hidden-group facet fallback (`wrap` -> `group`).
+
+2. Terminal marker protocol and indefinite-pending fix
+- Added channel-transport parser module `src/services/graphDataTransport.ts` that enforces ordered transport semantics.
+- Backend now emits explicit same-channel terminal completion marker after all chunk payload messages:
+  - Header messages: JSON with `messageType: "header"` + `GraphChunkHeader` fields.
+  - Completion messages: JSON with `messageType: "complete"` + `GraphDataCompletion` fields.
+- Frontend service completion dispatch is now channel-terminal driven:
+  - invoke resolution alone no longer calls `onComplete`.
+  - invoke rejection still emits error.
+  - terminal marker mismatch/pending-header/inconsistent `chunksSent` emits transport error and clears pending via reducer error path.
+- Reducer completion handling updated to strict terminal behavior:
+  - completion with pending header -> error,
+  - completion with inconsistent chunk coherence -> error,
+  - completion with coherent chunks -> atomic pending->committed swap.
+- Added deterministic transport/reducer tests for:
+  - invoke resolves before final channel event (must not complete early),
+  - incomplete terminal rejection,
+  - ordered `header` -> `payload` -> `complete`,
+  - terminal arriving with pending header (error),
+  - inconsistent `chunksSent` (error).
+
+3. Backend ordering proof tests
+- Updated/expanded Rust sink tests in `graph_data_service.rs`:
+  - `stream_with_sink_orders_header_payload_then_terminal`
+  - `stream_with_sink_respects_pre_start_cancellation` now expects terminal completion marker emission.
+
+### Files Added/Updated In Round 2
+
+- Added `src/services/graphDataTransport.ts`
+- Updated `src/services/graphDataService.ts`
+- Updated `src/components/graphBuilder/useGraphDataPipeline.ts`
+- Updated `src-tauri/src/services/graph_data_service.rs`
+- Updated `tests/graphDataPipeline.test.ts`
+
+### Verification Run (Round 2)
+
+- `node --experimental-strip-types tests/graphDataPipeline.test.ts` -> pass (`graph-data fixture + decoder passed`)
+- `cargo test --manifest-path src-tauri/Cargo.toml services::graph_data_service::tests -- --nocapture` -> pass (`9 passed; 0 failed`)
+- `cargo test --manifest-path src-tauri/Cargo.toml commands::graph_data_commands::tests -- --nocapture` -> pass (`1 passed; 0 failed`)
+- `cargo check --manifest-path src-tauri/Cargo.toml` -> pass (`Finished 'dev' profile ... in 3.39s`)
+- `npx vite build` -> pass (`✓ built in 13.72s`)
+
+### Cleanup
+
+- Restored generated schema artifacts to avoid unrelated diffs:
+  - `src-tauri/gen/schemas/desktop-schema.json`
+  - `src-tauri/gen/schemas/windows-schema.json`

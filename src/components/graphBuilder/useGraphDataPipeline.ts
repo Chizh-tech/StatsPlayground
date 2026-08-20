@@ -31,7 +31,6 @@ export interface GraphStreamState {
   committed: GraphDataFrame | null;
   pending: PendingGraphState | null;
   pendingHeader: GraphChunkHeader | null;
-  pendingCompletion: GraphDataCompletion | null;
   error: string | null;
   status: "idle" | "pending" | "ready" | "error";
 }
@@ -62,7 +61,6 @@ export function createInitialGraphStreamState(
     committed,
     pending: null,
     pendingHeader: null,
-    pendingCompletion: null,
     error: null,
     status: idleStatus(committed),
   };
@@ -83,47 +81,8 @@ function failPending(state: GraphStreamState, error: string): GraphStreamState {
     ...state,
     pending: null,
     pendingHeader: null,
-    pendingCompletion: null,
     error,
     status: "error",
-  };
-}
-
-function tryCommitWithPendingCompletion(state: GraphStreamState): GraphStreamState {
-  if (!state.pending || !state.pendingCompletion) {
-    return state;
-  }
-  if (state.pendingHeader) {
-    return state;
-  }
-  if (!hasCoherentCompletion(state.pending, state.pendingCompletion.chunksSent)) {
-    return state;
-  }
-
-  const rawChunks = [...state.pending.chunks].sort(
-    (left, right) => left.chunkIndex - right.chunkIndex,
-  );
-
-  const committed: GraphDataFrame = {
-    requestId: state.pending.request.requestId,
-    datasetId: state.pendingCompletion.datasetId,
-    generation: state.pendingCompletion.generation,
-    sourceRows: state.pendingCompletion.sourceRows,
-    processedRows: state.pendingCompletion.processedRows,
-    sampling: state.pending.request.sampling,
-    dictionaries: state.pending.dictionaries,
-    extents: state.pending.extents,
-    rawChunks,
-    aggregates: [],
-  };
-
-  return {
-    committed,
-    pending: null,
-    pendingHeader: null,
-    pendingCompletion: null,
-    error: null,
-    status: "ready",
   };
 }
 
@@ -239,7 +198,6 @@ function ingestDecodedChunk(state: GraphStreamState, chunk: DecodedGraphChunk): 
       extents,
     },
     pendingHeader: null,
-    pendingCompletion: state.pendingCompletion,
     error: null,
     status: "pending",
   };
@@ -277,7 +235,6 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
           extents: {},
         },
         pendingHeader: null,
-        pendingCompletion: null,
         error: null,
         status: "pending",
       };
@@ -314,13 +271,13 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
       }
       try {
         const decoded = decodeGraphPayload(header, message.payload);
-        return tryCommitWithPendingCompletion(ingestDecodedChunk(state, decoded));
+        return ingestDecodedChunk(state, decoded);
       } catch (error) {
         return failPending(state, `invalid graph payload: ${String(error)}`);
       }
     }
     case "chunk": {
-      return tryCommitWithPendingCompletion(ingestDecodedChunk(state, message.chunk));
+      return ingestDecodedChunk(state, message.chunk);
     }
     case "complete": {
       const completion = message.completion;
@@ -332,7 +289,6 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
           ...state,
           pending: null,
           pendingHeader: null,
-          pendingCompletion: null,
           error: null,
           status: idleStatus(state.committed),
         };
@@ -340,12 +296,37 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
       if (!state.pending) {
         return state;
       }
-      const withPendingCompletion: GraphStreamState = {
-        ...state,
-        pendingCompletion: completion,
-        error: null,
+      if (state.pendingHeader) {
+        return failPending(state, "graph terminal marker arrived with a pending header");
+      }
+      if (!hasCoherentCompletion(state.pending, completion.chunksSent)) {
+        return failPending(state, "graph terminal marker has inconsistent chunksSent");
+      }
+
+      const rawChunks = [...state.pending.chunks].sort(
+        (left, right) => left.chunkIndex - right.chunkIndex,
+      );
+
+      const committed: GraphDataFrame = {
+        requestId: state.pending.request.requestId,
+        datasetId: completion.datasetId,
+        generation: completion.generation,
+        sourceRows: completion.sourceRows,
+        processedRows: completion.processedRows,
+        sampling: state.pending.request.sampling,
+        dictionaries: state.pending.dictionaries,
+        extents: state.pending.extents,
+        rawChunks,
+        aggregates: [],
       };
-      return tryCommitWithPendingCompletion(withPendingCompletion);
+
+      return {
+        committed,
+        pending: null,
+        pendingHeader: null,
+        error: null,
+        status: "ready",
+      };
     }
     case "error": {
       if (!isMatchingPending(state, message.requestId, message.generation)) {
@@ -429,6 +410,24 @@ function deriveGroupingColumn(item: GraphBuilderItem): string | undefined {
   );
 }
 
+function deriveActiveMultiFields(item: GraphBuilderItem): GraphFieldBinding[] {
+  const multiX = item.multiX ?? [];
+  const multiY = item.multiY ?? [];
+  const xActive = multiX.length >= 2;
+  const yActive = multiY.length >= 2;
+
+  if (!xActive && !yActive) {
+    return [];
+  }
+
+  const activeRole = xActive ? "multiX" : "multiY";
+  const activeFields = xActive ? multiX : multiY;
+  return activeFields.map((field, index) => ({
+    role: `${activeRole}${index}`,
+    column: field.name,
+  }));
+}
+
 export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
   const fields: GraphFieldBinding[] = [];
   const seen = new Set<string>();
@@ -462,6 +461,10 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
 
   for (const filter of item.filters ?? []) {
     addField("filter", filter.rule.field.name);
+  }
+
+  for (const multiField of deriveActiveMultiFields(item)) {
+    addField(multiField.role, multiField.column);
   }
 
   return fields;
