@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const TEST_FILE_DIR = dirname(fileURLToPath(import.meta.url));
 import type { GraphTheme } from "../src/graphCore/theme.ts";
 import type { GraphData, GraphSpec } from "../src/graphCore/types.ts";
 import type { GraphDataFrame } from "../src/types/graphData.ts";
@@ -25,6 +30,20 @@ Object.defineProperty(globalThis, "localStorage", {
 
 const { buildGraph } = await import("../src/graphCore/transform.ts");
 const { drawRawPoints } = await import("../src/graphCore/rawPoints.ts");
+
+{
+  const transformSource = readFileSync(resolve(TEST_FILE_DIR, "../src/graphCore/transform.ts"), "utf8");
+  assert.match(
+    transformSource,
+    /function\s+buildBandRefLinesCarrier\([\s\S]*?aggregateMode[\s\S]*?\)/,
+    "buildBandRefLinesCarrier must accept explicit aggregate mode context instead of free-variable references",
+  );
+  assert.match(
+    transformSource,
+    /function\s+buildAxisOverrides\([\s\S]*?aggregateMode[\s\S]*?\)/,
+    "buildAxisOverrides must accept explicit aggregate mode context instead of free-variable references",
+  );
+}
 
 const theme: GraphTheme = {
   fgPrimary: "#111111",
@@ -98,6 +117,71 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
     const built = buildGraph(spec, data, theme, undefined, frame);
     const series = panelSeries(built.panels[0].option as Record<string, unknown>);
     assert.ok(series.length > 0, `histogram style ${histStyle} should be emitted from packet data even when rows are empty`);
+  }
+}
+
+{
+  const throwingRows = new Proxy([] as unknown[][], {
+    get(target, prop, receiver) {
+      if (prop === "length") return 0;
+      if (
+        prop === "map" ||
+        prop === "forEach" ||
+        prop === "filter" ||
+        prop === "some" ||
+        prop === Symbol.iterator
+      ) {
+        return () => {
+          throw new Error("legacy rows access is forbidden for packet-backed histogram");
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+
+  const data = baseData(["cat", "v"], throwingRows);
+  const frame = baseFrame([
+    {
+      kind: "histogram",
+      xColumn: "cat",
+      yColumn: "v",
+      groupColumn: null,
+      sourceColumn: null,
+      binCount: 2,
+      minValue: 0,
+      maxValue: 2,
+      missingCount: 0,
+      binWidth: 1,
+      totalCount: 3,
+      bins: [
+        { category: "A", binStart: 0, binEnd: 1, count: 2 },
+        { category: "B", binStart: 1, binEnd: 2, count: 1 },
+      ],
+    },
+  ]);
+
+  for (const histStyle of ["bar", "polygon", "kde", "shadowgram"]) {
+    const spec: GraphSpec = {
+      encoding: {
+        x: { name: "cat", type: "nominal" },
+        y: { name: "v", type: "continuous" },
+      },
+      elements: [{ kind: "histogram", enabled: true, options: { histStyle } }],
+    };
+
+    const built = buildGraph(spec, data, theme, undefined, frame);
+    const series = panelSeries(built.panels[0].option as Record<string, unknown>);
+    assert.ok(series.length > 0, `packet-backed histogram style ${histStyle} should render with unavailable legacy rows`);
+    const fallbackSeries = series.filter((entry) => String(entry.id ?? "").startsWith("__hist_packet_fallback_"));
+    assert.equal(
+      fallbackSeries.length,
+      0,
+      `packet-backed histogram style ${histStyle} must emit its native style series instead of fallback bars`,
+    );
+    assert.ok(
+      series.some((entry) => String(entry.id ?? "").startsWith("__hist_cat_")),
+      `packet-backed histogram style ${histStyle} should emit category histogram series ids`,
+    );
   }
 }
 

@@ -71,6 +71,7 @@ const LAYER_DIM: Record<ElementKind, LayerDim> = {
   points: "2d",
   line: "2d",
   bar: "2d",
+  heatmap: "2d",
   histogram: "2d",
   boxplot: "2d",
   smoother: "2d",

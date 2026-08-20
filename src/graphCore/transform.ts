@@ -2066,6 +2066,7 @@ function buildBandRefLinesCarrier(
   bandLines: BandRefLine[] | undefined,
   cats: string[],
   valueAxisFilter: "x" | "y",
+  aggregateMode: "legacyRows" | "frameBacked",
   _theme: GraphTheme,
 ): any | null {
   if (!bandLines || bandLines.length === 0) return null;
@@ -2083,7 +2084,7 @@ function buildBandRefLinesCarrier(
       // knows to draw a horizontal line and pull band width from
       // api.size([1, 0])[0].
       rows.push([ln.category, ln.value, ln.color, ln.width, dash, "h"]);
-    } else if (!frameBackedAggregateMode) {
+    } else if (aggregateMode === "legacyRows") {
       // Vertical segment, cat axis is Y. Dim 0 = value (→ X),
       // dim 1 = catName (→ Y). Orientation flag "v".
       rows.push([ln.value, ln.category, ln.color, ln.width, dash, "v"]);
@@ -2374,7 +2375,10 @@ function buildXAxisRefLineExpand(refXs: number[]): EChartsOption {
  *  `scale: true` because it's incompatible with explicit bounds (ECharts
  *  would expand them outward). Leaving `scale` to the caller means our
  *  fragment only adds behavior, never silently removes it. */
-function buildAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
+function buildAxisOverrides(
+  cfg: YAxisConfig | undefined,
+  aggregateMode: "legacyRows" | "frameBacked",
+): EChartsOption {
   if (!cfg) return {};
   const out: EChartsOption = {};
   if (Number.isFinite(cfg.min as number)) out.min = cfg.min;
@@ -2453,7 +2457,7 @@ function buildAxisOverrides(cfg: YAxisConfig | undefined): EChartsOption {
         show: true,
         splitNumber: visible + 1,
       };
-    } else if (!frameBackedAggregateMode) {
+    } else if (aggregateMode === "legacyRows") {
       // Explicit 0 → suppress minor ticks (and minor gridlines via
       // the `hasMinorTicks` gate below).
       out.minorTick = { show: false };
@@ -2955,15 +2959,48 @@ function buildSingleOption(
   const axis = buildAxisCommon(theme);
 
   const series: any[] = [];
+  const enabledElements = elements.filter((e) => e.enabled !== false);
+  const frameBackedAggregateMode = aggregatePackets !== undefined;
+  const aggregateMode: "legacyRows" | "frameBacked" = frameBackedAggregateMode
+    ? "frameBacked"
+    : "legacyRows";
+  const summaryPacket = findSummaryPacket(aggregatePackets);
+  const boxPlotPacket = findBoxPlotPacket(aggregatePackets);
+  const histogramPacket = findHistogramPacket(aggregatePackets);
+  const heatmapPacket = findHeatmapPacket(aggregatePackets);
+  const histogramElementCount = enabledElements.filter((e) => e.kind === "histogram").length;
+  const histogramOnlyPacketMode =
+    frameBackedAggregateMode &&
+    !!histogramPacket &&
+    enabledElements.length === 1 &&
+    histogramElementCount === 1;
 
   // 按 color/overlay 分组
   const grouping = colorField || overlayField;
-  const rawGroups = groupBy(data, grouping);
-  // Respect Value Order on the grouping column so the legend and color
-  // assignment follow the user-defined order. With no grouping field this
-  // is a no-op (the map has a single "__all__" key).
   const groupingOrder = grouping ? valueOrders?.[grouping.name] : undefined;
-  let groups = reorderMapByValueOrder(rawGroups, groupingOrder);
+  const packetGroupKeys = histogramPacket
+    ? Array.from(new Set(histogramPacket.bins.map((bin) => String(bin.group ?? DEFAULT_GROUP_KEY))))
+    : [];
+  let groups: Map<string, number[]>;
+  if (histogramOnlyPacketMode) {
+    groups = new Map<string, number[]>();
+    if (grouping) {
+      const orderedPacketGroups = groupingOrder
+        ? applyValueOrder(packetGroupKeys, groupingOrder)
+        : packetGroupKeys;
+      for (const key of orderedPacketGroups) {
+        groups.set(key, []);
+      }
+    } else {
+      groups.set(DEFAULT_GROUP_KEY, []);
+    }
+  } else {
+    const rawGroups = groupBy(data, grouping);
+    // Respect Value Order on the grouping column so the legend and color
+    // assignment follow the user-defined order. With no grouping field this
+    // is a no-op (the map has a single "__all__" key).
+    groups = reorderMapByValueOrder(rawGroups, groupingOrder);
+  }
 
   // Drop groups with no plottable rows under the bound encodings — i.e.
   // every row of the group has a missing value in some encoded channel
@@ -2973,7 +3010,7 @@ function buildSingleOption(
   // produces a dead legend swatch with nothing on the canvas.
   // We skip this prune when there is no grouping field (the lone
   // "__all__" bucket must survive even if rows are missing some channel).
-  if (grouping) {
+  if (grouping && !histogramOnlyPacketMode) {
     const xIdxCheck = colIndex(data, xField?.name);
     const yIdxCheck = colIndex(data, yField?.name);
     const pruned = new Map<string, number[]>();
@@ -2999,13 +3036,6 @@ function buildSingleOption(
     }
     return Math.max(0, groupKeys.indexOf(gKey));
   };
-
-  const enabledElements = elements.filter((e) => e.enabled !== false);
-  const frameBackedAggregateMode = aggregatePackets !== undefined;
-  const summaryPacket = findSummaryPacket(aggregatePackets);
-  const boxPlotPacket = findBoxPlotPacket(aggregatePackets);
-  const histogramPacket = findHistogramPacket(aggregatePackets);
-  const heatmapPacket = findHeatmapPacket(aggregatePackets);
 
   /** Set of group values the user has hidden via the legend show/hide
    *  toggle. Only meaningful when there's a grouping field; ignored
@@ -3046,7 +3076,22 @@ function buildSingleOption(
   //     slots" intent from earlier rounds is now handled one level
   //     up at the facet expansion in `buildGraph`, which drops the
   //     whole panel when there's no data to show at all.
-  const rawXCats = useRowIdxX ? [""] : xIsCategory ? collectCategories(data, xIdx, yIdx) : [];
+  const histogramPacketCats =
+    frameBackedAggregateMode && histogramPacket && xIsCategory
+      ? Array.from(
+        new Set(
+          histogramPacket.bins
+            .map((bin) => (bin.category == null ? "" : String(bin.category)))
+            .filter((value) => value.length > 0),
+        ),
+      )
+      : [];
+  const rawXCats =
+    useRowIdxX
+      ? [""]
+      : xIsCategory
+        ? (histogramOnlyPacketMode ? histogramPacketCats : collectCategories(data, xIdx, yIdx))
+        : [];
   const localXCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
   let xCats: string[] = xIsCategory && sharedRanges?.xCats
     ? sharedRanges.xCats
@@ -3132,7 +3177,7 @@ function buildSingleOption(
             ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
             ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
           },
-          buildAxisOverrides(spec.xAxis),
+          buildAxisOverrides(spec.xAxis, aggregateMode),
         ),
         yAxis: mergeAxis(
           {
@@ -3141,7 +3186,7 @@ function buildSingleOption(
             ...(sharedRanges?.yMin != null ? { min: sharedRanges.yMin } : {}),
             ...(sharedRanges?.yMax != null ? { max: sharedRanges.yMax } : {}),
           },
-          buildAxisOverrides(spec.yAxis),
+          buildAxisOverrides(spec.yAxis, aggregateMode),
         ),
         visualMap: {
           min: 0,
@@ -3161,8 +3206,8 @@ function buildSingleOption(
         backgroundColor: "transparent",
         textStyle: { color: theme.fgPrimary },
         grid: { left: 56, right: 24, top: 32, bottom: 48, show: true, borderColor: theme.axisLine, borderWidth: 0.5 },
-        xAxis: mergeAxis({ type: "value", ...axis }, buildAxisOverrides(spec.xAxis)),
-        yAxis: mergeAxis({ type: "value", ...axis }, buildAxisOverrides(spec.yAxis)),
+        xAxis: mergeAxis({ type: "value", ...axis }, buildAxisOverrides(spec.xAxis, aggregateMode)),
+        yAxis: mergeAxis({ type: "value", ...axis }, buildAxisOverrides(spec.yAxis, aggregateMode)),
         series,
       } as EChartsOption;
     }
@@ -3214,11 +3259,11 @@ function buildSingleOption(
       const iterGroups = groupKeys.length > 0
         ? groupKeys
         : (frameBackedAggregateMode && histogramPacket
-          ? Array.from(new Set(histogramPacket.bins.map((bin) => String(bin.group ?? ""))))
+          ? packetGroupKeys
           : []);
       for (const gKey of iterGroups) {
         if (isHidden(gKey)) continue;
-        const rowIdxs = groups.get(gKey) ?? [];
+        const rowIdxs = frameBackedAggregateMode ? [] : (groups.get(gKey) ?? []);
         if (rowIdxs.length === 0 && !(frameBackedAggregateMode && histogramPacket)) continue;
         histGroupSlots.push({
           key: gKey,
@@ -3226,10 +3271,10 @@ function buildSingleOption(
           baseColor: theme.categorical[colorIndexOf(gKey) % theme.categorical.length],
         });
       }
-    } else if (!frameBackedAggregateMode) {
+    } else {
       histGroupSlots.push({
         key: DEFAULT_GROUP_KEY,
-        rowIdxs: data.rows.map((_, i) => i),
+        rowIdxs: frameBackedAggregateMode ? [] : data.rows.map((_, i) => i),
         baseColor: theme.categorical[0],
       });
     }
@@ -3293,6 +3338,18 @@ function buildSingleOption(
           const pHi = histogramPacket.maxValue;
           if (Number.isFinite(pLo as number)) lo = pLo as number;
           if (Number.isFinite(pHi as number)) hi = pHi as number;
+        }
+        if ((!Number.isFinite(lo) || !Number.isFinite(hi)) && frameBackedAggregateMode && histogramPacket) {
+          for (const bin of histogramPacket.bins) {
+            if (Number.isFinite(bin.binStart)) {
+              if (bin.binStart < lo) lo = bin.binStart;
+              if (bin.binStart > hi) hi = bin.binStart;
+            }
+            if (Number.isFinite(bin.binEnd)) {
+              if (bin.binEnd < lo) lo = bin.binEnd;
+              if (bin.binEnd > hi) hi = bin.binEnd;
+            }
+          }
         }
         if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
           for (let i = 0; i < data.rows.length; i++) {
@@ -4003,6 +4060,40 @@ function buildSingleOption(
       // value axis was zoomed away from 0.
       perCategoryHistogramOn = true;
 
+      if (histogramOnlyPacketMode) {
+        return {
+          backgroundColor: "transparent",
+          textStyle: { color: theme.fgPrimary },
+          grid: { left: 52, right: 16, top: 16, bottom: 56, show: true, borderColor: theme.axisLine, borderWidth: 0.5 },
+          tooltip: { trigger: "item", confine: true, appendToBody: true },
+          legend: undefined,
+          xAxis: mergeAxis(
+            {
+              type: "category",
+              data: xCats,
+              ...axis,
+              axisLabel: {
+                ...(axis.axisLabel as object),
+                interval: 0,
+                hideOverlap: false,
+              },
+            },
+            buildAxisOverrides(spec.xAxis, aggregateMode),
+          ),
+          yAxis: mergeAxis(
+            {
+              type: "value",
+              ...axis,
+              ...(Number.isFinite(yLo) ? { min: yLo } : {}),
+              ...(Number.isFinite(yHi) ? { max: yHi } : {}),
+            },
+            buildAxisOverrides(spec.yAxis, aggregateMode),
+          ),
+          series,
+          animationDuration: 250,
+        } as EChartsOption;
+      }
+
       // Fall through — boxplot / scatter / line layers below render
       // alongside the per-category histogram.
     } else if (xIdx >= 0) {
@@ -4037,6 +4128,18 @@ function buildSingleOption(
       if (packetModeA) {
         if (Number.isFinite(histogramPacket.minValue as number)) xDataLo = histogramPacket.minValue as number;
         if (Number.isFinite(histogramPacket.maxValue as number)) xDataHi = histogramPacket.maxValue as number;
+      }
+      if ((!Number.isFinite(xDataLo) || !Number.isFinite(xDataHi)) && packetModeA) {
+        for (const bin of histogramPacket.bins) {
+          if (Number.isFinite(bin.binStart)) {
+            if (bin.binStart < xDataLo) xDataLo = bin.binStart;
+            if (bin.binStart > xDataHi) xDataHi = bin.binStart;
+          }
+          if (Number.isFinite(bin.binEnd)) {
+            if (bin.binEnd < xDataLo) xDataLo = bin.binEnd;
+            if (bin.binEnd > xDataHi) xDataHi = bin.binEnd;
+          }
+        }
       }
       if (!Number.isFinite(xDataLo) || !Number.isFinite(xDataHi)) {
         for (const v of allXs) {
@@ -4184,7 +4287,7 @@ function buildSingleOption(
           theme,
           spec.styles,
         );
-        const gxs = slot.rowIdxs.map((i) => toNum(data.rows[i][xIdx]));
+        const gxs = packetModeA ? [] : slot.rowIdxs.map((i) => toNum(data.rows[i][xIdx]));
         const groupCounts = binOntoGrid(gxs, slot.key);
 
         // Resolve the visible fill color for bars. `resolveGroupStyle`
@@ -4353,7 +4456,7 @@ function buildSingleOption(
               ? buildXAxisRefLineExpand(collectRefLineXs(spec))
               : {}),
           },
-          buildAxisOverrides(spec.xAxis),
+          buildAxisOverrides(spec.xAxis, aggregateMode),
         ),
         yAxis: mergeAxis(
           {
@@ -4370,7 +4473,7 @@ function buildSingleOption(
             // `buildAxisOverrides` still wins via the merge spread.
             ...buildYAxisRefLineExpand(collectRefLineYs(spec)),
           },
-          buildAxisOverrides(spec.yAxis),
+          buildAxisOverrides(spec.yAxis, aggregateMode),
         ),
         series,
         animationDuration: 250,
@@ -4381,7 +4484,12 @@ function buildSingleOption(
     // Safety net for packet-backed mode: if style-specific histogram logic
     // emitted no series, synthesize a packet-derived fallback so frame-backed
     // transforms never regress to an empty histogram layer.
-    if (frameBackedAggregateMode && histogramPacket && series.length === histogramSeriesStart) {
+    if (
+      frameBackedAggregateMode &&
+      histogramPacket &&
+      histogramPacket.totalCount === 0 &&
+      series.length === histogramSeriesStart
+    ) {
       if (xIsCategory) {
         const totalsByCategory = new Map<string, number>();
         for (const bin of histogramPacket.bins) {
@@ -4944,7 +5052,7 @@ function buildSingleOption(
   // survive instead of being clobbered by the user's `axisLine.show`.
   // The deep merge order is base → user, so user-pinned scalars (min,
   // max, interval) win over the auto-fit values baked into the base.
-  const xAxis = mergeAxis(xAxisBase, buildAxisOverrides(spec.xAxis));
+  const xAxis = mergeAxis(xAxisBase, buildAxisOverrides(spec.xAxis, aggregateMode));
 
   // Append user-defined reference line carriers. Two separate carriers
   // (one per axis) so each can be silently skipped when its axis isn't
@@ -4996,6 +5104,7 @@ function buildSingleOption(
         spec.bandRefLines,
         xCats,
         "y",
+        aggregateMode,
         theme,
       );
       if (bandCarrierY) series.push(bandCarrierY);
@@ -5152,7 +5261,7 @@ function buildSingleOption(
         // via the merge spread below.
         ...yFinalBounds,
       },
-      buildAxisOverrides(spec.yAxis),
+      buildAxisOverrides(spec.yAxis, aggregateMode),
     ),
     series,
     animationDuration: 250,

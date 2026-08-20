@@ -1190,6 +1190,14 @@ mod tests {
             db.conn().query_row(&sql, [], |row| row.get(0)).expect("count")
         }
 
+        fn assert_close(actual: f64, expected: f64, tol: f64, label: &str) {
+            let delta = (actual - expected).abs();
+            assert!(
+                delta <= tol,
+                "{label} mismatch: actual={actual}, expected={expected}, |delta|={delta}, tol={tol}"
+            );
+        }
+
         #[test]
         fn aggregate_packets_match_full_data_sql_counts_across_scales() {
             for row_count in [0usize, 1, 10, 5_000, 300_000] {
@@ -1242,6 +1250,164 @@ mod tests {
         }
 
         #[test]
+        fn heatmap_packet_matches_direct_sql_cells_edges_and_missing_count() {
+            let state = AppState::new().expect("state");
+            let dataset_id = "agg-heatmap-equality";
+            {
+                let db = state.db.lock().expect("db lock");
+                db.create_empty_table(
+                    dataset_id,
+                    "Heatmap Equality",
+                    &["region".into(), "cost".into(), "score".into()],
+                    &["VARCHAR".into(), "DOUBLE".into(), "DOUBLE".into()],
+                )
+                .expect("create table");
+                let table = "dataset_agg_heatmap_equality";
+                db.conn()
+                    .execute(
+                        &format!(
+                            "INSERT INTO \"{table}\" (_row_id, region, cost, score) VALUES
+                             (1, 'North', 0.0, 0.0),
+                             (2, 'North', 0.5, 0.5),
+                             (3, 'South', 1.0, 1.0),
+                             (4, 'South', 1.0, NULL),
+                             (5, 'South', NULL, 1.0),
+                             (6, 'East', 0.25, 0.75)"
+                        ),
+                        [],
+                    )
+                    .expect("insert rows");
+                db.conn()
+                    .execute(
+                        "UPDATE _meta_datasets SET row_count = 6 WHERE id = $1",
+                        params![dataset_id],
+                    )
+                    .expect("update row count");
+            }
+
+            let service = GraphDataService::new(&state);
+            let request = GraphDataRequest {
+                request_id: format!("request-{dataset_id}"),
+                dataset_id: dataset_id.to_string(),
+                generation: 0,
+                fields: vec![
+                    GraphFieldBinding {
+                        role: "x".to_string(),
+                        column: "cost".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "y".to_string(),
+                        column: "score".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "group".to_string(),
+                        column: "region".to_string(),
+                    },
+                ],
+                filters: vec![TableWindowFilter {
+                    op: "AND".to_string(),
+                    rule: TableWindowFilterRule::Categorical {
+                        field: "region".to_string(),
+                        selected: vec!["North".to_string(), "South".to_string()],
+                        exclude: false,
+                    },
+                }],
+                elements: vec![GraphElementRequest {
+                    kind: "heatmap".to_string(),
+                    summary_stat: "none".to_string(),
+                }],
+                sampling: GraphSampling::Full,
+                viewport: GraphViewport {
+                    width: 1200,
+                    height: 700,
+                },
+            };
+
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("aggregate packets");
+            let heatmap = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::Heatmap(value) => Some(value),
+                    _ => None,
+                })
+                .expect("heatmap packet");
+
+            assert_eq!(heatmap.total_count, 3);
+            assert_eq!(heatmap.missing_count, 2);
+
+            let db = state.db.lock().expect("db lock");
+            let expected_sql = "
+                WITH valid AS (
+                    SELECT
+                        CAST(region AS VARCHAR) AS grp,
+                        CAST(cost AS DOUBLE) AS x,
+                        CAST(score AS DOUBLE) AS y
+                    FROM dataset_agg_heatmap_equality
+                    WHERE region IN ('North', 'South')
+                      AND cost IS NOT NULL
+                      AND score IS NOT NULL
+                      AND isfinite(cost)
+                      AND isfinite(score)
+                )
+                SELECT
+                    grp,
+                    CASE
+                        WHEN ? <= 0 THEN 0
+                        WHEN x = ? THEN ? - 1
+                        ELSE CAST(FLOOR((x - ?) / ?) AS BIGINT)
+                    END AS x_idx,
+                    CASE
+                        WHEN ? <= 0 THEN 0
+                        WHEN y = ? THEN ? - 1
+                        ELSE CAST(FLOOR((y - ?) / ?) AS BIGINT)
+                    END AS y_idx,
+                    COUNT(*) AS cnt
+                FROM valid
+                GROUP BY grp, x_idx, y_idx
+                ORDER BY grp, x_idx, y_idx
+            ";
+            let mut stmt = db.conn().prepare(expected_sql).expect("prepare expected heatmap sql");
+            let mut rows = stmt
+                .query(params![
+                    heatmap.x_bin_width.max(1e-12),
+                    heatmap.x_max.unwrap_or(0.0),
+                    i64::from(heatmap.x_bin_count),
+                    heatmap.x_min.unwrap_or(0.0),
+                    heatmap.x_bin_width.max(1e-12),
+                    heatmap.y_bin_width.max(1e-12),
+                    heatmap.y_max.unwrap_or(0.0),
+                    i64::from(heatmap.y_bin_count),
+                    heatmap.y_min.unwrap_or(0.0),
+                    heatmap.y_bin_width.max(1e-12),
+                ])
+                .expect("query expected heatmap sql");
+
+            let mut expected = std::collections::HashMap::<(Option<String>, i64, i64), u64>::new();
+            while let Some(row) = rows.next().expect("next expected heatmap row") {
+                let grp: Option<String> = row.get(0).expect("grp");
+                let x_idx: i64 = row.get(1).expect("x idx");
+                let y_idx: i64 = row.get(2).expect("y idx");
+                let cnt: i64 = row.get(3).expect("cnt");
+                let x_idx = x_idx.clamp(0, i64::from(heatmap.x_bin_count) - 1);
+                let y_idx = y_idx.clamp(0, i64::from(heatmap.y_bin_count) - 1);
+                expected.insert((grp, x_idx, y_idx), u64::try_from(cnt).expect("non-negative count"));
+            }
+
+            let mut actual = std::collections::HashMap::<(Option<String>, i64, i64), u64>::new();
+            for cell in &heatmap.cells {
+                actual.insert((cell.group.clone(), cell.x_bin_index, cell.y_bin_index), cell.count);
+                let expected_x_start = heatmap.x_min.unwrap_or(0.0) + (cell.x_bin_index as f64) * heatmap.x_bin_width;
+                let expected_y_start = heatmap.y_min.unwrap_or(0.0) + (cell.y_bin_index as f64) * heatmap.y_bin_width;
+                assert_close(cell.x_bin_start, expected_x_start, 1e-9, "heatmap x_bin_start");
+                assert_close(cell.y_bin_start, expected_y_start, 1e-9, "heatmap y_bin_start");
+            }
+
+            assert_eq!(actual, expected);
+        }
+
+        #[test]
         fn summary_packet_reports_exact_median() {
             let state = AppState::new().expect("state");
             seed_dataset(&state, "agg-summary", 101);
@@ -1269,6 +1435,120 @@ mod tests {
                 .iter()
                 .any(|entry| entry.median.is_finite());
             assert!(has_finite_median, "summary packet must include median");
+        }
+
+        #[test]
+        fn summary_packet_matches_direct_sql_median_and_intervals_for_grouped_melt() {
+            let state = AppState::new().expect("state");
+            let dataset_id = "agg-summary-equality";
+            {
+                let db = state.db.lock().expect("db lock");
+                db.create_empty_table(
+                    dataset_id,
+                    "Summary Equality",
+                    &["region".into(), "batch".into(), "m1".into(), "m2".into()],
+                    &["VARCHAR".into(), "VARCHAR".into(), "DOUBLE".into(), "DOUBLE".into()],
+                )
+                .expect("create table");
+                let table = "dataset_agg_summary_equality";
+                db.conn()
+                    .execute(
+                        &format!(
+                            "INSERT INTO \"{table}\" (_row_id, region, batch, m1, m2) VALUES
+                             (1, 'North', 'B0', 10.0, 100.0),
+                             (2, 'North', 'B1', 20.0, NULL),
+                             (3, 'South', 'B0', NULL, 300.0),
+                             (4, 'South', 'B1', 40.0, 400.0),
+                             (5, 'South', 'B2', 50.0, 500.0)"
+                        ),
+                        [],
+                    )
+                    .expect("insert rows");
+                db.conn()
+                    .execute(
+                        "UPDATE _meta_datasets SET row_count = 5 WHERE id = $1",
+                        params![dataset_id],
+                    )
+                    .expect("update row count");
+            }
+
+            let service = GraphDataService::new(&state);
+            let request = aggregate_melt_request(dataset_id, 0);
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("aggregate packets");
+            let summary = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::Summary(value) => Some(value),
+                    _ => None,
+                })
+                .expect("summary packet");
+
+            let db = state.db.lock().expect("db lock");
+            let expected_sql = "
+                WITH melted AS (
+                    SELECT CAST(region AS VARCHAR) AS grp, CAST(region AS VARCHAR) AS cat, CAST('m1' AS VARCHAR) AS src, CAST(m1 AS DOUBLE) AS y, batch
+                    FROM dataset_agg_summary_equality
+                    UNION ALL
+                    SELECT CAST(region AS VARCHAR) AS grp, CAST(region AS VARCHAR) AS cat, CAST('m2' AS VARCHAR) AS src, CAST(m2 AS DOUBLE) AS y, batch
+                    FROM dataset_agg_summary_equality
+                ),
+                valid AS (
+                    SELECT grp, cat, src, y
+                    FROM melted
+                    WHERE batch IN ('B0', 'B1') AND y IS NOT NULL AND isfinite(y)
+                )
+                SELECT
+                    grp,
+                    cat,
+                    src,
+                    COUNT(*) AS n,
+                    AVG(y) AS mean_y,
+                    quantile_cont(y, 0.50) AS median_y,
+                    COALESCE(stddev_samp(y), 0.0) AS std_y,
+                    MIN(y) AS min_y,
+                    MAX(y) AS max_y
+                FROM valid
+                GROUP BY grp, cat, src
+                ORDER BY grp, cat, src
+            ";
+            let mut stmt = db.conn().prepare(expected_sql).expect("prepare expected summary sql");
+            let mut rows = stmt.query([]).expect("query expected summary sql");
+            let mut expected = std::collections::HashMap::<(Option<String>, Option<String>, Option<String>), (u64, f64, f64, f64, f64, f64)>::new();
+            while let Some(row) = rows.next().expect("next expected summary row") {
+                let grp: Option<String> = row.get(0).expect("grp");
+                let cat: Option<String> = row.get(1).expect("cat");
+                let src: Option<String> = row.get(2).expect("src");
+                let n: i64 = row.get(3).expect("n");
+                let mean: f64 = row.get(4).expect("mean");
+                let median: f64 = row.get(5).expect("median");
+                let std: f64 = row.get(6).expect("std");
+                let min: f64 = row.get(7).expect("min");
+                let max: f64 = row.get(8).expect("max");
+                expected.insert((grp, cat, src), (u64::try_from(n).expect("n >= 0"), mean, median, std, min, max));
+            }
+
+            assert_eq!(summary.summaries.len(), expected.len());
+            for entry in &summary.summaries {
+                let key = (entry.group.clone(), entry.category.clone(), entry.source_column.clone());
+                let Some((n, mean, median, std, min, max)) = expected.get(&key) else {
+                    panic!("missing expected summary entry for key: {:?}", key);
+                };
+                assert_eq!(entry.count, *n);
+                assert_close(entry.mean, *mean, 1e-9, "summary mean");
+                assert_close(entry.median, *median, 1e-9, "summary median");
+                assert_close(entry.stddev, *std, 1e-9, "summary stddev");
+                assert_close(entry.min, *min, 1e-9, "summary min");
+                assert_close(entry.max, *max, 1e-9, "summary max");
+                let margin = if *n > 1 {
+                    1.96 * *std / (*n as f64).sqrt()
+                } else {
+                    0.0
+                };
+                assert_close(entry.interval_low.unwrap_or(entry.mean), entry.mean - margin, 1e-9, "summary interval_low");
+                assert_close(entry.interval_high.unwrap_or(entry.mean), entry.mean + margin, 1e-9, "summary interval_high");
+            }
         }
 
         #[test]
@@ -1423,6 +1703,225 @@ mod tests {
                 .next();
             assert!(any_outlier.is_some(), "boxplot outliers should be emitted");
             assert!(any_outlier.and_then(|item| item.row_id).is_some(), "outlier row id should be present");
+        }
+
+        #[test]
+        fn boxplot_packet_matches_direct_sql_quantiles_whiskers_and_outlier_ids() {
+            let state = AppState::new().expect("state");
+            let dataset_id = "agg-box-equality";
+            {
+                let db = state.db.lock().expect("db lock");
+                db.create_empty_table(
+                    dataset_id,
+                    "Box Equality",
+                    &["region".into(), "cost".into()],
+                    &["VARCHAR".into(), "DOUBLE".into()],
+                )
+                .expect("create table");
+                let table = "dataset_agg_box_equality";
+                db.conn()
+                    .execute(
+                        &format!(
+                            "INSERT INTO \"{table}\" (_row_id, region, cost) VALUES
+                             (11, 'North', 1.0),
+                             (12, 'North', 2.0),
+                             (13, 'North', 3.0),
+                             (14, 'North', 4.0),
+                             (15, 'North', 100.0),
+                             (21, 'South', 10.0),
+                             (22, 'South', 11.0),
+                             (23, 'South', 12.0),
+                             (24, 'South', 13.0),
+                             (25, 'South', 200.0)"
+                        ),
+                        [],
+                    )
+                    .expect("insert rows");
+                db.conn()
+                    .execute(
+                        "UPDATE _meta_datasets SET row_count = 10 WHERE id = $1",
+                        params![dataset_id],
+                    )
+                    .expect("update row count");
+            }
+
+            let service = GraphDataService::new(&state);
+            let mut request = aggregate_request(dataset_id, 0);
+            request.elements = vec![GraphElementRequest {
+                kind: "boxplot".to_string(),
+                summary_stat: "none".to_string(),
+            }];
+
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("aggregate packets");
+            let boxplot = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::BoxPlot(value) => Some(value),
+                    _ => None,
+                })
+                .expect("boxplot packet");
+
+            let db = state.db.lock().expect("db lock");
+            let stats_sql = "
+                WITH valid AS (
+                    SELECT
+                        CAST(region AS VARCHAR) AS grp,
+                        CAST(region AS VARCHAR) AS cat,
+                        CAST('cost' AS VARCHAR) AS src,
+                        CAST(cost AS DOUBLE) AS y
+                    FROM dataset_agg_box_equality
+                    WHERE region IN ('North', 'South') AND cost IS NOT NULL AND isfinite(cost)
+                ),
+                stats AS (
+                    SELECT
+                        grp,
+                        cat,
+                        src,
+                        COUNT(*) AS n,
+                        MIN(y) AS min_y,
+                        quantile_cont(y, 0.25) AS q1,
+                        quantile_cont(y, 0.50) AS median,
+                        quantile_cont(y, 0.75) AS q3,
+                        MAX(y) AS max_y
+                    FROM valid
+                    GROUP BY grp, cat, src
+                ),
+                whiskers AS (
+                    SELECT
+                        s.grp,
+                        s.cat,
+                        s.src,
+                        MIN(v.y) FILTER (WHERE v.y >= (s.q1 - 1.5 * (s.q3 - s.q1)) AND v.y <= (s.q3 + 1.5 * (s.q3 - s.q1))) AS whisker_low,
+                        MAX(v.y) FILTER (WHERE v.y >= (s.q1 - 1.5 * (s.q3 - s.q1)) AND v.y <= (s.q3 + 1.5 * (s.q3 - s.q1))) AS whisker_high
+                    FROM stats s
+                    JOIN valid v
+                      ON v.grp IS NOT DISTINCT FROM s.grp
+                     AND v.cat IS NOT DISTINCT FROM s.cat
+                     AND v.src IS NOT DISTINCT FROM s.src
+                    GROUP BY s.grp, s.cat, s.src
+                )
+                SELECT
+                    s.grp,
+                    s.cat,
+                    s.src,
+                    s.n,
+                    s.min_y,
+                    s.q1,
+                    s.median,
+                    s.q3,
+                    s.max_y,
+                    COALESCE(w.whisker_low, s.min_y) AS whisker_low,
+                    COALESCE(w.whisker_high, s.max_y) AS whisker_high
+                FROM stats s
+                LEFT JOIN whiskers w
+                  ON w.grp IS NOT DISTINCT FROM s.grp
+                 AND w.cat IS NOT DISTINCT FROM s.cat
+                 AND w.src IS NOT DISTINCT FROM s.src
+                ORDER BY s.grp, s.cat, s.src
+            ";
+            let mut stmt = db.conn().prepare(stats_sql).expect("prepare box stats sql");
+            let mut rows = stmt.query([]).expect("query box stats sql");
+            let mut expected_stats = std::collections::HashMap::<(Option<String>, Option<String>, Option<String>), (u64, f64, f64, f64, f64, f64, f64, f64)>::new();
+            while let Some(row) = rows.next().expect("next box stats row") {
+                let grp: Option<String> = row.get(0).expect("grp");
+                let cat: Option<String> = row.get(1).expect("cat");
+                let src: Option<String> = row.get(2).expect("src");
+                let n: i64 = row.get(3).expect("n");
+                let min: f64 = row.get(4).expect("min");
+                let q1: f64 = row.get(5).expect("q1");
+                let median: f64 = row.get(6).expect("median");
+                let q3: f64 = row.get(7).expect("q3");
+                let max: f64 = row.get(8).expect("max");
+                let whisker_low: f64 = row.get(9).expect("whisker low");
+                let whisker_high: f64 = row.get(10).expect("whisker high");
+                expected_stats.insert(
+                    (grp, cat, src),
+                    (
+                        u64::try_from(n).expect("n >= 0"),
+                        min,
+                        q1,
+                        median,
+                        q3,
+                        max,
+                        whisker_low,
+                        whisker_high,
+                    ),
+                );
+            }
+
+            let outlier_sql = "
+                WITH valid AS (
+                    SELECT
+                        CAST(_row_id AS BIGINT) AS row_id,
+                        CAST(region AS VARCHAR) AS grp,
+                        CAST(region AS VARCHAR) AS cat,
+                        CAST('cost' AS VARCHAR) AS src,
+                        CAST(cost AS DOUBLE) AS y
+                    FROM dataset_agg_box_equality
+                    WHERE region IN ('North', 'South') AND cost IS NOT NULL AND isfinite(cost)
+                ),
+                bounds AS (
+                    SELECT
+                        grp,
+                        cat,
+                        src,
+                        quantile_cont(y, 0.25) - 1.5 * (quantile_cont(y, 0.75) - quantile_cont(y, 0.25)) AS lo,
+                        quantile_cont(y, 0.75) + 1.5 * (quantile_cont(y, 0.75) - quantile_cont(y, 0.25)) AS hi
+                    FROM valid
+                    GROUP BY grp, cat, src
+                )
+                SELECT v.grp, v.cat, v.src, v.row_id
+                FROM valid v
+                JOIN bounds b
+                  ON v.grp IS NOT DISTINCT FROM b.grp
+                 AND v.cat IS NOT DISTINCT FROM b.cat
+                 AND v.src IS NOT DISTINCT FROM b.src
+                WHERE v.y < b.lo OR v.y > b.hi
+                ORDER BY v.grp, v.cat, v.src, v.row_id
+            ";
+            let mut outlier_stmt = db.conn().prepare(outlier_sql).expect("prepare outlier sql");
+            let mut outlier_rows = outlier_stmt.query([]).expect("query outlier sql");
+            let mut expected_outliers = std::collections::HashMap::<(Option<String>, Option<String>, Option<String>), std::collections::BTreeSet<i64>>::new();
+            while let Some(row) = outlier_rows.next().expect("next outlier row") {
+                let grp: Option<String> = row.get(0).expect("grp");
+                let cat: Option<String> = row.get(1).expect("cat");
+                let src: Option<String> = row.get(2).expect("src");
+                let row_id: i64 = row.get(3).expect("row id");
+                expected_outliers
+                    .entry((grp, cat, src))
+                    .or_default()
+                    .insert(row_id);
+            }
+
+            assert_eq!(boxplot.entries.len(), expected_stats.len());
+            for entry in &boxplot.entries {
+                let key = (
+                    entry.group.clone(),
+                    entry.category.clone(),
+                    entry.source_column.clone(),
+                );
+                let Some((n, min, q1, median, q3, max, whisker_low, whisker_high)) = expected_stats.get(&key) else {
+                    panic!("missing expected box stats for key: {:?}", key);
+                };
+                assert_eq!(entry.count, *n);
+                assert_close(entry.min, *min, 1e-9, "box min");
+                assert_close(entry.q1, *q1, 1e-9, "box q1");
+                assert_close(entry.median, *median, 1e-9, "box median");
+                assert_close(entry.q3, *q3, 1e-9, "box q3");
+                assert_close(entry.max, *max, 1e-9, "box max");
+                assert_close(entry.whisker_low, *whisker_low, 1e-9, "box whisker_low");
+                assert_close(entry.whisker_high, *whisker_high, 1e-9, "box whisker_high");
+
+                let actual_outlier_ids = entry
+                    .outliers
+                    .iter()
+                    .filter_map(|outlier| outlier.row_id)
+                    .collect::<std::collections::BTreeSet<_>>();
+                let expected_ids = expected_outliers.get(&key).cloned().unwrap_or_default();
+                assert_eq!(actual_outlier_ids, expected_ids);
+            }
         }
 
         #[test]

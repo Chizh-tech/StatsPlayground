@@ -617,3 +617,51 @@ Commit:
 git add src-tauri/src/perf_harness.rs src-tauri/examples/performance_baseline.rs tests/rawPoints.test.ts docs/performance.md
 git commit -m "perf(graph): enforce full-data graph targets"
 ```
+
+---
+
+## Fix Round 2 Report (2026-08-20)
+
+Scope: Task 6 follow-up fixes in the unified worktree.
+
+### Finding 1 (CRITICAL) — Helper scope leak closed
+
+- `buildBandRefLinesCarrier` no longer references a free `frameBackedAggregateMode`; it now accepts explicit context via `aggregateMode`.
+- `buildAxisOverrides` no longer references a free `frameBackedAggregateMode`; it now accepts explicit context via `aggregateMode`.
+- Added source guard in `tests/transformAggregatePackets.test.ts` to assert both helper signatures carry explicit aggregate context.
+
+### Finding 2 (IMPORTANT) — Frame-backed histogram row-scan isolation
+
+- Added packet-first grouping/category derivation for histogram-only frame-backed mode.
+- Added explicit packet-only early return for per-category histogram-only mode so downstream generic row scans are skipped.
+- Removed frame-backed fallback to raw-row extent scans by deriving missing extents from packet bins before any legacy-row fallback.
+- Ensured frame-backed group slot generation and mode-A binning avoid row-index maps and row observation loops.
+
+### Finding 3 (TEST GAP) — Direct SQL equality coverage added
+
+Added exact packet-vs-SQL tests in `src-tauri/src/services/graph_data_service.rs`:
+
+- `heatmap_packet_matches_direct_sql_cells_edges_and_missing_count`
+    - verifies exact grouped cell counts and exact bin indices against SQL `CASE`/`FLOOR` grouping;
+    - verifies missing exclusion and edge-bin handling.
+- `boxplot_packet_matches_direct_sql_quantiles_whiskers_and_outlier_ids`
+    - verifies exact `q1`/`median`/`q3`, whiskers, and outlier row-id identity sets against direct SQL.
+- `summary_packet_matches_direct_sql_median_and_intervals_for_grouped_melt`
+    - verifies grouped+melt summary count/mean/median/stddev/min/max and interval low/high against direct SQL.
+
+Existing scale gates (`0/1/10/5000/300000`) remain intact.
+
+### Finding 4 — Histogram fallback masking closed
+
+- Non-empty packet style generation now has explicit coverage in `tests/transformAggregatePackets.test.ts` for `bar`/`polygon`/`kde`/`shadowgram`.
+- Test asserts no `__hist_packet_fallback_*` series appears for non-empty packet bins.
+- Runtime fallback is now restricted to empty-data continuity (`totalCount === 0`) so it no longer hides style-generation regressions.
+
+### Verification run
+
+- `cargo test --manifest-path src-tauri/Cargo.toml services::graph_data_service::tests -- --nocapture` ✅
+- `node --experimental-strip-types tests/transformAggregatePackets.test.ts` ✅
+- `node --experimental-strip-types tests/graphDataPipeline.test.ts` ✅
+- `node --experimental-strip-types tests/rawPoints.test.ts` ✅
+- `npx tsc -b --pretty false` ✅
+- `npx vite build` ✅
