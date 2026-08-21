@@ -3,6 +3,9 @@ use duckdb::appender_params_from_iter;
 use duckdb::types::Value as DuckValue;
 use crate::models::project::{DatasetNameMigration, ProjectInfo};
 use crate::models::table::{ColumnDisplayProps, ColumnFormatInfo};
+use crate::services::archive_cell::{
+    archive_cell_to_json, archive_export_expression, is_archive_scalar_type,
+};
 use crate::services::spprj_archive::{
     self, GraphDoc, ProjectBundle, TableColumn, TableColumnFormat, TableDoc,
 };
@@ -407,18 +410,10 @@ impl<'a> ProjectService<'a> {
         while let Some(row) = result_rows.next()? {
             let mut row_values = Vec::with_capacity(total_cols);
             let row_id: DuckValue = row.get(0)?;
-            row_values.push(duckdb_to_json(row_id));
+            row_values.push(archive_cell_to_json(&row_id, "BIGINT")?);
             for (column_index, column) in columns.iter().enumerate() {
-                if is_archive_scalar_type(&column.col_type) {
-                    let value: DuckValue = row.get(column_index + 1)?;
-                    row_values.push(duckdb_to_json(value));
-                } else {
-                    let value: Option<String> = row.get(column_index + 1)?;
-                    row_values.push(match value {
-                        Some(value) => serde_json::json!({ "$duckdbValue": value }),
-                        None => serde_json::Value::Null,
-                    });
-                }
+                let value: DuckValue = row.get(column_index + 1)?;
+                row_values.push(archive_cell_to_json(&value, &column.col_type)?);
             }
             rows.push(row_values);
         }
@@ -656,32 +651,6 @@ fn quote_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-fn is_archive_scalar_type(column_type: &str) -> bool {
-    matches!(
-        column_type.trim().to_ascii_uppercase().as_str(),
-        "BOOLEAN"
-            | "TINYINT"
-            | "SMALLINT"
-            | "INTEGER"
-            | "BIGINT"
-            | "FLOAT"
-            | "REAL"
-            | "DOUBLE"
-            | "VARCHAR"
-    )
-}
-
-fn archive_export_expression(column_name: &str, column_type: &str) -> String {
-    let identifier = quote_identifier(column_name);
-    if is_archive_scalar_type(column_type) {
-        identifier
-    } else if column_type.trim().eq_ignore_ascii_case("BLOB") {
-        format!("hex({identifier})")
-    } else {
-        format!("CAST({identifier} AS VARCHAR)")
-    }
-}
-
 fn json_to_duckdb_param(
     value: &serde_json::Value,
     decode_v2_tag: bool,
@@ -731,21 +700,6 @@ fn archive_string_param(value: &str, column_type: Option<&str>) -> Result<DuckVa
         Ok(DuckValue::Blob(bytes))
     } else {
         Ok(DuckValue::Text(value.to_string()))
-    }
-}
-
-fn duckdb_to_json(value: duckdb::types::Value) -> serde_json::Value {
-    match value {
-        duckdb::types::Value::Null => serde_json::Value::Null,
-        duckdb::types::Value::Boolean(b) => serde_json::Value::Bool(b),
-        duckdb::types::Value::TinyInt(n) => serde_json::json!(n),
-        duckdb::types::Value::SmallInt(n) => serde_json::json!(n),
-        duckdb::types::Value::Int(n) => serde_json::json!(n),
-        duckdb::types::Value::BigInt(n) => serde_json::json!(n),
-        duckdb::types::Value::Float(f) => serde_json::json!(f),
-        duckdb::types::Value::Double(f) => serde_json::json!(f),
-        duckdb::types::Value::Text(s) => serde_json::Value::String(s),
-        other => serde_json::Value::String(format!("{:?}", other)),
     }
 }
 
