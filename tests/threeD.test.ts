@@ -106,6 +106,44 @@ assert.ok(frameResult.option);
 const frameSeries = frameResult.option.series as Array<Record<string, unknown>>;
 assert.equal(frameSeries.some((item) => item.type === "scatter3D"), true);
 
+const crossByteFrame: GraphDataFrame = {
+  requestId: "req-3d-cross-byte",
+  datasetId: "ds-3d-cross-byte",
+  generation: 1,
+  sourceRows: 10,
+  processedRows: 10,
+  sampling: { mode: "full" },
+  dictionaries: { group: ["G0", "G1"] },
+  extents: {},
+  aggregates: [],
+  rawChunks: [
+    {
+      chunkIndex: 0,
+      rowOffset: 0,
+      rowCount: 10,
+      xValues: new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+      yValues: new Float64Array([11, 12, 13, 14, 15, 16, 17, 18, 19, 20]),
+      zValues: new Float64Array([21, 22, 23, 24, 25, 26, 27, 28, 29, 30]),
+      groupCodes: new Uint32Array([0, 1, 0, 1, 0, 1, 0, 1, 0, 1]),
+      rowIds: new BigInt64Array([1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n]),
+      validity: {
+        x: new Uint8Array([0b00000001, 0b00000001]),
+        y: new Uint8Array([0b00000001, 0b00000010]),
+        z: new Uint8Array([0b00000001, 0b00000011]),
+        group: new Uint8Array([0b00000001, 0b00000011]),
+      },
+    },
+  ],
+};
+
+const crossByteResult = build3DOption(spec, frame3dData, theme, crossByteFrame);
+const crossByteSeries = (crossByteResult.option.series as Array<Record<string, unknown>>)
+  .find((item) => item.type === "scatter3D");
+assert.ok(crossByteSeries);
+const crossBytePoints = crossByteSeries.data as number[][];
+assert.equal(crossBytePoints.length, 1);
+assert.deepEqual(crossBytePoints[0], [1, 11, 21]);
+
 const surfaceData: GraphData = {
   columns: ["x", "y", "z"],
   rows: [

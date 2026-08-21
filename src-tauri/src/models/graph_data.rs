@@ -122,11 +122,8 @@ pub struct GraphChunkHeader {
 
 impl GraphChunkHeader {
     pub fn validate_layout(&self, payload_len: usize) -> Result<(), String> {
-        let mut slices: Vec<&GraphTypedSliceDescriptor> = vec![
-            &self.x_values,
-            &self.y_values,
-            &self.row_ids,
-        ];
+        let mut slices: Vec<&GraphTypedSliceDescriptor> =
+            vec![&self.x_values, &self.y_values, &self.row_ids];
 
         if let Some(group_codes) = &self.group_codes {
             slices.push(group_codes);
@@ -159,6 +156,19 @@ impl GraphChunkHeader {
 
         for descriptor in self.validity_ranges.values() {
             slices.push(descriptor);
+        }
+
+        let expected_validity_bytes = self.row_count.div_ceil(8);
+        for (key, descriptor) in &self.validity_ranges {
+            if descriptor.payload_type != GraphPayloadType::U8 {
+                return Err(format!("validity range {key} must use u8 payload type"));
+            }
+            if descriptor.byte_length != expected_validity_bytes {
+                return Err(format!(
+                    "validity range {key} byte length {} must equal {} for row_count {}",
+                    descriptor.byte_length, expected_validity_bytes, self.row_count
+                ));
+            }
         }
 
         for descriptor in &slices {
@@ -198,7 +208,12 @@ impl GraphChunkHeader {
 
         let mut ranges: Vec<(usize, usize)> = slices
             .iter()
-            .map(|descriptor| (descriptor.offset, descriptor.offset + descriptor.byte_length))
+            .map(|descriptor| {
+                (
+                    descriptor.offset,
+                    descriptor.offset + descriptor.byte_length,
+                )
+            })
             .collect();
         ranges.sort_unstable_by_key(|range| range.0);
 
@@ -269,18 +284,20 @@ mod tests {
             processed_rows: 2,
             projected_columns: vec!["_row_id".into(), "x".into(), "y".into()],
             dictionaries: std::collections::BTreeMap::new(),
-            validity_ranges: std::collections::BTreeMap::from([
-                (
-                    "x".into(),
-                    GraphTypedSliceDescriptor::new(GraphPayloadType::U8, 72, 2),
-                ),
-            ]),
+            validity_ranges: std::collections::BTreeMap::from([(
+                "x".into(),
+                GraphTypedSliceDescriptor::new(GraphPayloadType::U8, 72, 1),
+            )]),
             x_values: GraphTypedSliceDescriptor::new(GraphPayloadType::F64, 0, 16),
             y_values: GraphTypedSliceDescriptor::new(GraphPayloadType::F64, 16, 16),
             row_ids: GraphTypedSliceDescriptor::new(GraphPayloadType::I64, 32, 16),
             z_values: None,
             group_codes: Some(GraphTypedSliceDescriptor::new(GraphPayloadType::U32, 48, 8)),
-            size_values: Some(GraphTypedSliceDescriptor::new(GraphPayloadType::F64, 56, 16)),
+            size_values: Some(GraphTypedSliceDescriptor::new(
+                GraphPayloadType::F64,
+                56,
+                16,
+            )),
             source_codes: None,
             facet_x_codes: None,
             facet_y_codes: None,

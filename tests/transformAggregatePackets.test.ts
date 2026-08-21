@@ -150,6 +150,72 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
 }
 
 {
+  const throwingRows = new Proxy([] as unknown[][], {
+    get(_target, prop) {
+      if (prop === "length") return 10;
+      throw new Error("frame-backed descriptor must not read legacy rows in cross-byte test");
+    },
+  });
+
+  const data = baseData(["x", "y", "wrapCol"], throwingRows);
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "x", type: "continuous" },
+      y: { name: "y", type: "continuous" },
+      wrap: { name: "wrapCol", type: "nominal" },
+    },
+    elements: [{ kind: "points", enabled: true, options: { summaryStat: "none" } }],
+  };
+
+  const frame: GraphDataFrame = {
+    requestId: "req-wrap-cross-byte",
+    datasetId: "ds-wrap-cross-byte",
+    generation: 1,
+    sourceRows: 10,
+    processedRows: 10,
+    sampling: { mode: "full" },
+    dictionaries: {
+      source: ["m1", "m2"],
+      wrap: ["W1", "W2"],
+    },
+    extents: {},
+    aggregates: [],
+    rawChunks: [
+      {
+        chunkIndex: 0,
+        rowOffset: 0,
+        rowCount: 10,
+        xValues: new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+        yValues: new Float64Array([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]),
+        rowIds: new BigInt64Array([1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n]),
+        roleVectors: {
+          source: new Uint32Array([0, 1, 0, 1, 0, 1, 0, 1, 1, 0]),
+          wrap: new Uint32Array([0, 1, 0, 1, 0, 1, 0, 1, 1, 0]),
+        },
+        validity: {
+          x: new Uint8Array([0b00000011, 0b00000011]),
+          y: new Uint8Array([0b00000011, 0b00000011]),
+          source: new Uint8Array([0b00000001, 0b00000001]),
+          wrap: new Uint8Array([0b00000001, 0b00000001]),
+        },
+      },
+    ],
+  };
+
+  const built = buildGraph(spec, data, theme, undefined, frame);
+  const wrapPanel = built.panels.find((panel) => panel.title.includes("W2"));
+  assert.ok(wrapPanel, "expected wrapped panel for cross-byte wrap value");
+
+  const sourceByRowId = wrapPanel?.rawPoints?.sourceByRowId;
+  assert.equal(sourceByRowId?.get(9n), "m2");
+  assert.equal(sourceByRowId?.get(10n), undefined);
+
+  const facetMask = wrapPanel?.rawPoints?.chunks[0]?.facetMask;
+  assert.ok(facetMask);
+  assert.equal(facetMask?.[1] & 0b00000001, 0b00000001);
+}
+
+{
   const data = baseData(["cat", "v"], []);
   const frame = baseFrame([
     {

@@ -106,6 +106,7 @@ export function createGraphStreamTransport(
   let nextChunkIndex = 0;
   let pendingHeader: GraphChunkHeader | null = null;
   let invokeCompletion: GraphDataCompletion | null = null;
+  let sawFinalChunkPayload = false;
   let closed = false;
   let failed = false;
 
@@ -136,6 +137,9 @@ export function createGraphStreamTransport(
         pendingHeader = null;
         handlers.onHeader(header);
         handlers.onPayload(message);
+        if (header.finalChunk) {
+          sawFinalChunkPayload = true;
+        }
         return;
       }
 
@@ -196,6 +200,10 @@ export function createGraphStreamTransport(
 
       if (isGraphAggregatePacket(structured)) {
         if (!pendingHeader) {
+          if (!sawFinalChunkPayload) {
+            fail("graph aggregate packet arrived before all raw chunks were delivered");
+            return;
+          }
           handlers.onAggregate(structured);
           return;
         }

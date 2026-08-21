@@ -14,7 +14,7 @@ cargo run --release --example performance_baseline --features perf-harness -- --
 The last stdout line is machine-readable JSON:
 
 ```json
-{"rows":300000,"columns":20,"operation":"graph","setupMs":56,"operationMs":180,"totalMs":342,"resultRows":300000,"selectedColumns":3,"queryMs":104,"encodeMs":76,"decodeMs":"desktop_only","drawMs":"desktop_only","processedRows":300000,"transferredBytes":6601831}
+{"rows":300000,"columns":20,"operation":"graph","setupMs":231,"operationMs":562,"totalMs":795,"resultRows":300000,"selectedColumns":3,"queryMs":552,"encodeMs":10,"decodeMs":"desktop_only","drawMs":"desktop_only","processedRows":300000,"transferredBytes":6078360}
 ```
 
 Fields:
@@ -93,7 +93,7 @@ Environment facts:
 Recorded JSON:
 
 ```json
-{"rows":300000,"columns":20,"operation":"graph","setupMs":56,"operationMs":180,"totalMs":342,"resultRows":300000,"selectedColumns":3,"queryMs":104,"encodeMs":76,"decodeMs":"desktop_only","drawMs":"desktop_only","processedRows":300000,"transferredBytes":6601831}
+{"rows":300000,"columns":20,"operation":"graph","setupMs":231,"operationMs":562,"totalMs":795,"resultRows":300000,"selectedColumns":3,"queryMs":552,"encodeMs":10,"decodeMs":"desktop_only","drawMs":"desktop_only","processedRows":300000,"transferredBytes":6078360}
 ```
 
 Desktop gate status:

@@ -661,13 +661,11 @@ export function decodeGraphPayload(
     assertRowVectorCardinality(wrapDescriptor, header.rowCount, "wrapCodes");
   }
 
-  // Validity bitmaps may include trailing bytes for alignment or future metadata,
-  // so we enforce a minimum length rather than exact equality.
-  const minValidityBytes = Math.ceil(header.rowCount / 8);
+  const expectedValidityBytes = Math.ceil(header.rowCount / 8);
   for (const [key, descriptor] of Object.entries(header.validityRanges)) {
-    if (descriptor.byteLength < minValidityBytes) {
+    if (descriptor.byteLength !== expectedValidityBytes) {
       throw new GraphPayloadError(
-        `validityRanges.${key} byteLength ${descriptor.byteLength} is smaller than required minimum ${minValidityBytes} for rowCount ${header.rowCount}`,
+        `validityRanges.${key} byteLength ${descriptor.byteLength} must equal ${expectedValidityBytes} for rowCount ${header.rowCount}`,
       );
     }
   }

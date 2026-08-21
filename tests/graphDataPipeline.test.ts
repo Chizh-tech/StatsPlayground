@@ -64,8 +64,8 @@ new Float64Array(payload, 0, 2).set([1.5, 2.5]);
 new Float64Array(payload, 16, 2).set([10.25, 20.5]);
 new BigInt64Array(payload, 32, 2).set([101n, 102n]);
 new Uint32Array(payload, 48, 2).set([0, 1]);
-new Uint8Array(payload, 56, 2).set([1, 0]);
-new Uint8Array(payload, 64, 2).set([1, 1]);
+new Uint8Array(payload, 56, 1).set([0b00000001]);
+new Uint8Array(payload, 64, 1).set([0b00000011]);
 
 const decoded = decodeGraphPayload(
   {
@@ -80,8 +80,8 @@ const decoded = decodeGraphPayload(
       x: ["Central", "East"],
     },
     validityRanges: {
-      x: { type: "u8", offset: 56, byteLength: 2 },
-      y: { type: "u8", offset: 64, byteLength: 2 },
+      x: { type: "u8", offset: 56, byteLength: 1 },
+      y: { type: "u8", offset: 64, byteLength: 1 },
     },
     xValues: { type: "u32", offset: 48, byteLength: 8 },
     yValues: { type: "f64", offset: 16, byteLength: 16 },
@@ -99,8 +99,8 @@ assert.deepEqual(Array.from(decoded.yValues), [10.25, 20.5]);
 assert.deepEqual(Array.from(decoded.rowIds), [101n, 102n]);
 assert.deepEqual(Array.from(decoded.sizeValues ?? []), [1.5, 2.5]);
 assert.deepEqual(decoded.dictionaries.x, ["Central", "East"]);
-assert.deepEqual(Array.from(decoded.validity.x), [1, 0]);
-assert.deepEqual(Array.from(decoded.validity.y), [1, 1]);
+assert.deepEqual(Array.from(decoded.validity.x), [0b00000001]);
+assert.deepEqual(Array.from(decoded.validity.y), [0b00000011]);
 
 const dynamicPayload = new ArrayBuffer(184);
 new Uint32Array(dynamicPayload, 0, 2).set([0, 1]);
@@ -113,15 +113,15 @@ new Uint32Array(dynamicPayload, 72, 2).set([1, 0]);
 new Uint32Array(dynamicPayload, 80, 2).set([0, 1]);
 new Uint32Array(dynamicPayload, 88, 2).set([1, 1]);
 new Uint32Array(dynamicPayload, 96, 2).set([1, 0]);
-new Uint8Array(dynamicPayload, 104, 2).set([1, 1]);
-new Uint8Array(dynamicPayload, 112, 2).set([1, 1]);
-new Uint8Array(dynamicPayload, 120, 2).set([1, 1]);
-new Uint8Array(dynamicPayload, 128, 2).set([1, 1]);
-new Uint8Array(dynamicPayload, 136, 2).set([1, 1]);
-new Uint8Array(dynamicPayload, 144, 2).set([1, 1]);
-new Uint8Array(dynamicPayload, 152, 2).set([1, 1]);
-new Uint8Array(dynamicPayload, 160, 2).set([1, 1]);
-new Uint8Array(dynamicPayload, 168, 2).set([1, 1]);
+new Uint8Array(dynamicPayload, 104, 1).set([0b00000011]);
+new Uint8Array(dynamicPayload, 112, 1).set([0b00000011]);
+new Uint8Array(dynamicPayload, 120, 1).set([0b00000011]);
+new Uint8Array(dynamicPayload, 128, 1).set([0b00000011]);
+new Uint8Array(dynamicPayload, 136, 1).set([0b00000011]);
+new Uint8Array(dynamicPayload, 144, 1).set([0b00000011]);
+new Uint8Array(dynamicPayload, 152, 1).set([0b00000011]);
+new Uint8Array(dynamicPayload, 160, 1).set([0b00000011]);
+new Uint8Array(dynamicPayload, 168, 1).set([0b00000011]);
 
 const dynamicDecoded = decodeGraphPayload(
   {
@@ -142,15 +142,15 @@ const dynamicDecoded = decodeGraphPayload(
       wrap: ["W1", "W2"],
     },
     validityRanges: {
-      x: { type: "u8", offset: 104, byteLength: 2 },
-      y: { type: "u8", offset: 112, byteLength: 2 },
-      z: { type: "u8", offset: 120, byteLength: 2 },
-      source: { type: "u8", offset: 128, byteLength: 2 },
-      group: { type: "u8", offset: 136, byteLength: 2 },
-      facetX: { type: "u8", offset: 144, byteLength: 2 },
-      facetY: { type: "u8", offset: 152, byteLength: 2 },
-      facetZ: { type: "u8", offset: 160, byteLength: 2 },
-      wrap: { type: "u8", offset: 168, byteLength: 2 },
+      x: { type: "u8", offset: 104, byteLength: 1 },
+      y: { type: "u8", offset: 112, byteLength: 1 },
+      z: { type: "u8", offset: 120, byteLength: 1 },
+      source: { type: "u8", offset: 128, byteLength: 1 },
+      group: { type: "u8", offset: 136, byteLength: 1 },
+      facetX: { type: "u8", offset: 144, byteLength: 1 },
+      facetY: { type: "u8", offset: 152, byteLength: 1 },
+      facetZ: { type: "u8", offset: 160, byteLength: 1 },
+      wrap: { type: "u8", offset: 168, byteLength: 1 },
     },
     xValues: { type: "u32", offset: 0, byteLength: 8 },
     yValues: { type: "f64", offset: 8, byteLength: 16 },
@@ -246,7 +246,7 @@ assert.throws(
         processedRows: 2,
         dictionaries: {},
         validityRanges: {
-          x: { type: "u8", offset: 56, byteLength: 2 },
+          x: { type: "u8", offset: 56, byteLength: 1 },
         },
         xValues: { type: "u32", offset: 48, byteLength: 8 },
         yValues: { type: "f64", offset: 16, byteLength: 8 },
@@ -272,7 +272,7 @@ assert.throws(
         processedRows: 2,
         dictionaries: {},
         validityRanges: {
-          x: { type: "u8", offset: 56, byteLength: 2 },
+          x: { type: "u8", offset: 56, byteLength: 1 },
         },
         xValues: { type: "u32", offset: 48, byteLength: 8 },
         yValues: { type: "f64", offset: 16, byteLength: 16 },
@@ -312,6 +312,32 @@ assert.throws(
   /validity/i,
 );
 
+  assert.throws(
+    () =>
+      decodeGraphPayload(
+        {
+          requestId: "req-validity-oversized",
+          generation: 7,
+          chunkIndex: 0,
+          rowOffset: 0,
+          rowCount: 2,
+          sourceRows: 2,
+          processedRows: 2,
+          dictionaries: {},
+          validityRanges: {
+            x: { type: "u8", offset: 56, byteLength: 2 },
+          },
+          xValues: { type: "u32", offset: 48, byteLength: 8 },
+          yValues: { type: "f64", offset: 16, byteLength: 16 },
+          rowIds: { type: "i64", offset: 32, byteLength: 16 },
+          xEncoding: "categorical",
+          finalChunk: false,
+        },
+        payload,
+      ),
+    /validity/i,
+  );
+
 function makeRequest(requestId: string, generation: number): GraphDataRequest {
   return {
     requestId,
@@ -344,8 +370,8 @@ function makeHeader(
     processedRows: (chunkIndex + 1) * 2,
     dictionaries: { x: ["Central", "East"] },
     validityRanges: {
-      x: { type: "u8", offset: 56, byteLength: 2 },
-      y: { type: "u8", offset: 64, byteLength: 2 },
+      x: { type: "u8", offset: 56, byteLength: 1 },
+      y: { type: "u8", offset: 64, byteLength: 1 },
     },
     xValues: { type: "u32", offset: 48, byteLength: 8 },
     yValues: { type: "f64", offset: 16, byteLength: 16 },
@@ -362,8 +388,8 @@ function makePayload(seed: number): ArrayBuffer {
   new Float64Array(out, 16, 2).set([10.25 + seed, 20.5 + seed]);
   new BigInt64Array(out, 32, 2).set([BigInt(101 + seed), BigInt(102 + seed)]);
   new Uint32Array(out, 48, 2).set([0, 1]);
-  new Uint8Array(out, 56, 2).set([1, 1]);
-  new Uint8Array(out, 64, 2).set([1, 1]);
+  new Uint8Array(out, 56, 1).set([0b00000011]);
+  new Uint8Array(out, 64, 1).set([0b00000011]);
   return out;
 }
 
@@ -617,6 +643,90 @@ function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): str
   assert.equal(transportError, null);
   assert.deepEqual(events, ["header", "payload", "complete"]);
   assert.equal(completionCalls, 1);
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
+  const request = makeRequest("req-aggregate-before-raw", 25);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {
+      events.push("header");
+    },
+    onPayload: () => {
+      events.push("payload");
+    },
+    onAggregate: () => {
+      events.push("aggregate");
+    },
+    onComplete: () => {
+      events.push("complete");
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "aggregate",
+    kind: "summary",
+    yColumn: "cost",
+    summaries: [],
+  });
+
+  assert.deepEqual(events, []);
+  assert.match(transportError ?? "", /aggregate/i);
+}
+
+{
+  const request = makeRequest("req-cross-byte-extents", 26);
+  const payload = new ArrayBuffer(216);
+  new Uint32Array(payload, 0, 10).set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  new Float64Array(payload, 40, 10).set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+  new BigInt64Array(payload, 120, 10).set([1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n]);
+  new Uint8Array(payload, 200, 2).set([0b00000001, 0b00000001]);
+  new Uint8Array(payload, 208, 2).set([0b00000001, 0b00000010]);
+
+  const header: GraphChunkHeader = {
+    requestId: "req-cross-byte-extents",
+    generation: 26,
+    chunkIndex: 0,
+    rowOffset: 0,
+    rowCount: 10,
+    sourceRows: 10,
+    processedRows: 10,
+    dictionaries: {},
+    validityRanges: {
+      x: { type: "u8", offset: 200, byteLength: 2 },
+      y: { type: "u8", offset: 208, byteLength: 2 },
+    },
+    xValues: { type: "u32", offset: 0, byteLength: 40 },
+    yValues: { type: "f64", offset: 40, byteLength: 80 },
+    rowIds: { type: "i64", offset: 120, byteLength: 80 },
+    xEncoding: "categorical",
+    finalChunk: true,
+  };
+
+  const state = run(
+    createInitialGraphStreamState(null),
+    { type: "start", request },
+    { type: "header", header },
+    { type: "payload", payload },
+    { type: "complete", completion: {
+      requestId: "req-cross-byte-extents",
+      datasetId: "dataset-1",
+      generation: 26,
+      sourceRows: 10,
+      processedRows: 10,
+      chunksSent: 1,
+      cancelled: false,
+    } },
+  );
+
+  assert.equal(state.status, "ready");
+  assert.equal(state.error, null);
+  assert.deepEqual(state.committed?.extents.x, { min: 0, max: 8 });
+  assert.deepEqual(state.committed?.extents.y, { min: 10, max: 19 });
 }
 
 {

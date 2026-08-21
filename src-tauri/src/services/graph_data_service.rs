@@ -488,18 +488,6 @@ impl<'a> GraphDataService<'a> {
                 .map_err(|error| AppError::Database(error.to_string()))?;
 
             let aggregate_packets = db.collect_graph_aggregate_packets(request)?;
-            for packet in &aggregate_packets {
-                let encode_started = if observed {
-                    Some(begin_timing_observation())
-                } else {
-                    None
-                };
-                sink.send_aggregate(packet)
-                    .map_err(Self::map_sink_error_to_app_error)?;
-                if let Some(encode_started) = encode_started {
-                    record_encode(encode_started);
-                }
-            }
 
             let metadata: RefCell<Option<ProjectionMetadata>> = RefCell::new(None);
             let accumulator: RefCell<Option<ChunkAccumulator>> = RefCell::new(None);
@@ -625,6 +613,21 @@ impl<'a> GraphDataService<'a> {
                 }
                 if let Some(encode_started) = encode_started {
                     record_encode(encode_started);
+                }
+            }
+
+            if !cancelled {
+                for packet in &aggregate_packets {
+                    let encode_started = if observed {
+                        Some(begin_timing_observation())
+                    } else {
+                        None
+                    };
+                    sink.send_aggregate(packet)
+                        .map_err(Self::map_sink_error_to_app_error)?;
+                    if let Some(encode_started) = encode_started {
+                        record_encode(encode_started);
+                    }
                 }
             }
 
@@ -1365,61 +1368,72 @@ impl ChunkAccumulator {
             None
         };
 
+        let x_validity_bitmap = pack_validity_bitmap(&self.x_validity);
+        let y_validity_bitmap = pack_validity_bitmap(&self.y_validity);
+        let z_validity_bitmap = pack_validity_bitmap(&self.z_validity);
+        let group_validity_bitmap = pack_validity_bitmap(&self.group_validity);
+        let size_validity_bitmap = pack_validity_bitmap(&self.size_validity);
+        let source_validity_bitmap = pack_validity_bitmap(&self.source_validity);
+        let facet_x_validity_bitmap = pack_validity_bitmap(&self.facet_x_validity);
+        let facet_y_validity_bitmap = pack_validity_bitmap(&self.facet_y_validity);
+        let facet_z_validity_bitmap = pack_validity_bitmap(&self.facet_z_validity);
+        let wrap_validity_bitmap = pack_validity_bitmap(&self.wrap_validity);
+
         let mut validity_ranges = BTreeMap::new();
         validity_ranges.insert(
             "x".to_string(),
-            descriptor_from_u8(&mut payload, &self.x_validity, GraphPayloadType::U8),
+            descriptor_from_u8(&mut payload, &x_validity_bitmap, GraphPayloadType::U8),
         );
         validity_ranges.insert(
             "y".to_string(),
-            descriptor_from_u8(&mut payload, &self.y_validity, GraphPayloadType::U8),
+            descriptor_from_u8(&mut payload, &y_validity_bitmap, GraphPayloadType::U8),
         );
         if metadata.group_index.is_some() {
             validity_ranges.insert(
                 "group".to_string(),
-                descriptor_from_u8(&mut payload, &self.group_validity, GraphPayloadType::U8),
+                descriptor_from_u8(&mut payload, &group_validity_bitmap, GraphPayloadType::U8),
             );
         }
         if metadata.size_index.is_some() {
             validity_ranges.insert(
                 "size".to_string(),
-                descriptor_from_u8(&mut payload, &self.size_validity, GraphPayloadType::U8),
+                descriptor_from_u8(&mut payload, &size_validity_bitmap, GraphPayloadType::U8),
             );
         }
         if metadata.z_index.is_some() {
             validity_ranges.insert(
                 "z".to_string(),
-                descriptor_from_u8(&mut payload, &self.z_validity, GraphPayloadType::U8),
+                descriptor_from_u8(&mut payload, &z_validity_bitmap, GraphPayloadType::U8),
             );
         }
         if metadata.source_index.is_some() {
             validity_ranges.insert(
                 "source".to_string(),
-                descriptor_from_u8(&mut payload, &self.source_validity, GraphPayloadType::U8),
+                descriptor_from_u8(&mut payload, &source_validity_bitmap, GraphPayloadType::U8),
             );
         }
         if metadata.group_x_index.is_some() {
             validity_ranges.insert(
                 "facetX".to_string(),
-                descriptor_from_u8(&mut payload, &self.facet_x_validity, GraphPayloadType::U8),
+                descriptor_from_u8(&mut payload, &facet_x_validity_bitmap, GraphPayloadType::U8),
             );
         }
         if metadata.group_y_index.is_some() {
             validity_ranges.insert(
                 "facetY".to_string(),
-                descriptor_from_u8(&mut payload, &self.facet_y_validity, GraphPayloadType::U8),
+                descriptor_from_u8(&mut payload, &facet_y_validity_bitmap, GraphPayloadType::U8),
             );
         }
         if metadata.group_z_index.is_some() {
             validity_ranges.insert(
                 "facetZ".to_string(),
-                descriptor_from_u8(&mut payload, &self.facet_z_validity, GraphPayloadType::U8),
+                descriptor_from_u8(&mut payload, &facet_z_validity_bitmap, GraphPayloadType::U8),
             );
         }
         if metadata.wrap_index.is_some() {
             validity_ranges.insert(
                 "wrap".to_string(),
-                descriptor_from_u8(&mut payload, &self.wrap_validity, GraphPayloadType::U8),
+                descriptor_from_u8(&mut payload, &wrap_validity_bitmap, GraphPayloadType::U8),
             );
         }
 
@@ -1560,6 +1574,20 @@ fn upsert_code(
     dictionary.push(value.to_string());
     index.insert(value.to_string(), code);
     Ok(code)
+}
+
+fn pack_validity_bitmap(flags: &[u8]) -> Vec<u8> {
+    if flags.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![0u8; flags.len().div_ceil(8)];
+    for (row_index, flag) in flags.iter().enumerate() {
+        if *flag == 0 {
+            continue;
+        }
+        out[row_index >> 3] |= 1u8 << (row_index & 7);
+    }
+    out
 }
 
 fn is_numeric_type(column_type: &str) -> bool {
@@ -3211,6 +3239,223 @@ mod tests {
         assert_eq!(total_rows, 4);
     }
 
+    #[test]
+    fn collect_for_test_emits_bitpacked_validity_for_all_roles() {
+        let state = AppState::new().expect("state");
+        let db = state.db.lock().expect("db lock");
+        db.create_empty_table(
+            "validity-packed",
+            "Validity Packed",
+            &[
+                "xv".into(),
+                "yv".into(),
+                "zv".into(),
+                "grp".into(),
+                "sizev".into(),
+                "src".into(),
+                "fx".into(),
+                "fy".into(),
+                "fz".into(),
+                "wrapv".into(),
+            ],
+            &[
+                "DOUBLE".into(),
+                "DOUBLE".into(),
+                "DOUBLE".into(),
+                "VARCHAR".into(),
+                "DOUBLE".into(),
+                "VARCHAR".into(),
+                "VARCHAR".into(),
+                "VARCHAR".into(),
+                "VARCHAR".into(),
+                "VARCHAR".into(),
+            ],
+        )
+        .expect("create table");
+
+        let table_name = "dataset_validity_packed";
+        let x_flags = [1, 0, 1, 1, 0, 1, 0, 1, 1, 0];
+        let y_flags = [1, 1, 0, 1, 1, 0, 1, 0, 0, 1];
+        let z_flags = [0, 1, 1, 0, 1, 0, 1, 1, 0, 1];
+        let group_flags = [1, 1, 1, 0, 0, 1, 0, 1, 1, 0];
+        let size_flags = [1, 0, 1, 0, 1, 0, 1, 0, 1, 1];
+        let source_flags = [0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
+        let facet_x_flags = [1, 0, 0, 1, 1, 0, 0, 1, 1, 0];
+        let facet_y_flags = [0, 0, 1, 1, 0, 0, 1, 1, 0, 1];
+        let facet_z_flags = [1, 1, 0, 0, 1, 1, 0, 0, 1, 0];
+        let wrap_flags = [0, 1, 1, 1, 0, 1, 1, 0, 1, 1];
+
+        for row in 0..10usize {
+            let row_id = i64::try_from(row + 1).expect("row id");
+            let x = if x_flags[row] == 1 {
+                Some(row as f64 + 0.25)
+            } else {
+                None
+            };
+            let y = if y_flags[row] == 1 {
+                Some(row as f64 + 10.0)
+            } else {
+                None
+            };
+            let z = if z_flags[row] == 1 {
+                Some(row as f64 + 100.0)
+            } else {
+                None
+            };
+            let group_value = if group_flags[row] == 1 {
+                Some(format!("G{}", row % 3))
+            } else {
+                None
+            };
+            let size = if size_flags[row] == 1 {
+                Some(row as f64 + 1.0)
+            } else {
+                None
+            };
+            let source_value = if source_flags[row] == 1 {
+                Some(format!("S{}", row % 2))
+            } else {
+                None
+            };
+            let facet_x_value = if facet_x_flags[row] == 1 {
+                Some(format!("FX{}", row % 2))
+            } else {
+                None
+            };
+            let facet_y_value = if facet_y_flags[row] == 1 {
+                Some(format!("FY{}", row % 2))
+            } else {
+                None
+            };
+            let facet_z_value = if facet_z_flags[row] == 1 {
+                Some(format!("FZ{}", row % 2))
+            } else {
+                None
+            };
+            let wrap_value = if wrap_flags[row] == 1 {
+                Some(format!("W{}", row % 2))
+            } else {
+                None
+            };
+
+            let insert_sql = format!(
+                "INSERT INTO \"{table_name}\" (_row_id, xv, yv, zv, grp, sizev, src, fx, fy, fz, wrapv)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+            );
+            db.conn()
+                .execute(
+                    &insert_sql,
+                    params![
+                        row_id,
+                        x,
+                        y,
+                        z,
+                        group_value,
+                        size,
+                        source_value,
+                        facet_x_value,
+                        facet_y_value,
+                        facet_z_value,
+                        wrap_value,
+                    ],
+                )
+                .expect("insert row");
+        }
+        db.conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
+                params![10i64, "validity-packed"],
+            )
+            .expect("update row count");
+        drop(db);
+
+        let service = GraphDataService::new(&state);
+        let request = GraphDataRequest {
+            request_id: "request-validity-packed".to_string(),
+            dataset_id: "validity-packed".to_string(),
+            generation: 0,
+            fields: vec![
+                GraphFieldBinding {
+                    role: "x".to_string(),
+                    column: "xv".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "y".to_string(),
+                    column: "yv".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "z".to_string(),
+                    column: "zv".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "group".to_string(),
+                    column: "grp".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "size".to_string(),
+                    column: "sizev".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "groupX".to_string(),
+                    column: "fx".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "groupY".to_string(),
+                    column: "fy".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "groupZ".to_string(),
+                    column: "fz".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "wrap".to_string(),
+                    column: "wrapv".to_string(),
+                },
+            ],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "points".to_string(),
+                summary_stat: "none".to_string(),
+            }],
+            sampling: GraphSampling::Full,
+            viewport: GraphViewport {
+                width: 1200,
+                height: 700,
+            },
+        };
+
+        let chunks = service.collect_for_test(&request).expect("chunks");
+        assert_eq!(chunks.len(), 1);
+        let chunk = &chunks[0];
+        assert_eq!(chunk.header.row_count, 10);
+
+        let expected_bytes: [(&str, [u8; 2]); 9] = [
+            ("x", [0xAD, 0x01]),
+            ("y", [0x5B, 0x02]),
+            ("z", [0xD6, 0x02]),
+            ("group", [0xA7, 0x01]),
+            ("size", [0x55, 0x03]),
+            ("facetX", [0x99, 0x01]),
+            ("facetY", [0xCC, 0x02]),
+            ("facetZ", [0x33, 0x01]),
+            ("wrap", [0x6E, 0x03]),
+        ];
+
+        for (key, expected) in expected_bytes {
+            let descriptor = chunk
+                .header
+                .validity_ranges
+                .get(key)
+                .unwrap_or_else(|| panic!("missing validity descriptor for {key}"));
+            assert_eq!(
+                descriptor.byte_length, 2,
+                "unexpected byte length for {key}"
+            );
+            let encoded = extract_u8_slice(chunk, descriptor);
+            assert_eq!(encoded, expected, "unexpected validity bitmap for {key}");
+        }
+    }
+
     fn extract_i64_slice(
         chunk: &GraphDataChunk,
         descriptor: &crate::models::graph_data::GraphTypedSliceDescriptor,
@@ -3257,6 +3502,14 @@ mod tests {
             offset += 8;
         }
         result
+    }
+
+    fn extract_u8_slice(
+        chunk: &GraphDataChunk,
+        descriptor: &crate::models::graph_data::GraphTypedSliceDescriptor,
+    ) -> Vec<u8> {
+        let end = descriptor.offset + descriptor.byte_length;
+        chunk.payload[descriptor.offset..end].to_vec()
     }
 
     #[derive(Default)]
@@ -3404,12 +3657,16 @@ mod tests {
     }
 
     #[test]
-    fn stream_with_sink_orders_header_payload_then_terminal() {
+    fn stream_with_sink_orders_all_raw_chunks_before_aggregate_then_terminal() {
         let state = AppState::new().expect("state");
-        seed_dataset(&state, "ordered-events", 32);
+        seed_dataset(&state, "ordered-events", 300_000);
 
         let service = GraphDataService::new(&state);
-        let request = build_request("ordered-events", 0);
+        let mut request = build_request("ordered-events", 0);
+        request.elements.push(GraphElementRequest {
+            kind: "histogram".to_string(),
+            summary_stat: "none".to_string(),
+        });
         let mut sink = OrderingSink::default();
 
         let completion = service
@@ -3418,16 +3675,24 @@ mod tests {
         assert!(!completion.cancelled);
         assert!(!sink.events.is_empty());
         assert_eq!(sink.events.last().copied(), Some("complete"));
-        let ordered_events = sink.events[..sink.events.len() - 1]
+        let terminal_index = sink.events.len() - 1;
+        let first_aggregate = sink
+            .events
             .iter()
-            .copied()
-            .filter(|event| *event != "aggregate")
-            .collect::<Vec<_>>();
-        assert_eq!(ordered_events.len() % 2, 0);
-        for pair in ordered_events.chunks(2) {
+            .position(|event| *event == "aggregate")
+            .expect("expected at least one aggregate event");
+
+        let raw_events = &sink.events[..first_aggregate];
+        assert!(raw_events.len() >= 4);
+        assert_eq!(raw_events.len() % 2, 0);
+        for pair in raw_events.chunks(2) {
             assert_eq!(pair[0], "header");
             assert_eq!(pair[1], "payload");
         }
+
+        let aggregate_events = &sink.events[first_aggregate..terminal_index];
+        assert!(!aggregate_events.is_empty());
+        assert!(aggregate_events.iter().all(|event| *event == "aggregate"));
     }
 
     #[test]
