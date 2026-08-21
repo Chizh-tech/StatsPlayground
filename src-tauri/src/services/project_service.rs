@@ -1455,8 +1455,18 @@ mod tests {
             .unwrap();
 
         let before = std::fs::read(&project_path).unwrap();
-        let tmp_dir = std::path::PathBuf::from(format!("{}.tmp", project_path.to_string_lossy()));
-        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let tmp_path = format!("{}.tmp", project_path.to_string_lossy());
+        let expected_tmp_path = tmp_path.clone();
+
+        spprj_archive::install_test_before_destination_mutation_hook(Some(Box::new(
+            move |_dest, tmp| {
+                assert_eq!(tmp, expected_tmp_path);
+                assert!(std::path::Path::new(tmp).is_file());
+                Err(crate::error::AppError::FileIO(
+                    "injected placement-boundary failure".to_string(),
+                ))
+            },
+        )));
 
         let error = service
             .save_project(
@@ -1471,12 +1481,13 @@ mod tests {
                 Some(HashMap::new()),
             )
             .unwrap_err();
-        assert!(matches!(error, crate::error::AppError::FileIO(_)));
+        spprj_archive::install_test_before_destination_mutation_hook(None);
+        assert!(matches!(&error, crate::error::AppError::FileIO(message) if message.contains("placement-boundary")));
 
         let after = std::fs::read(&project_path).unwrap();
         assert_eq!(after, before);
+        assert!(!std::path::Path::new(&tmp_path).exists());
 
-        let _ = std::fs::remove_dir_all(tmp_dir);
         let _ = std::fs::remove_file(project_path);
     }
 

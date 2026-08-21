@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::engine::duckdb_engine::DuckDbEngine;
 use crate::error::AppError;
 use crate::services::project_service::{seed_save_project, ProjectService};
+use crate::services::spprj_archive;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -163,30 +164,72 @@ fn execute_save_current(options: Options) -> Result<PerformanceReport, AppError>
     let archive_path = seed_save_project(&state, options.rows, options.columns)?;
     let setup_ms = setup_started.elapsed().as_millis();
 
+    let history = vec![serde_json::json!({
+        "kind": "benchmark",
+        "label": "save_current",
+    })];
+    let snapshots = vec![serde_json::json!({
+        "id": "snapshot-bench-1",
+        "datasetId": "save-current-baseline",
+        "rows": [1],
+    })];
+    let graph_builders = vec![serde_json::json!({
+        "id": "graph-bench-1",
+        "name": "Benchmark Graph",
+        "graphType": "line",
+        "xField": "col_1",
+        "yField": "col_2",
+    })];
+    let tabulates = vec![serde_json::json!({
+        "id": "tab-bench-1",
+        "name": "Benchmark Tabulate",
+        "sourceDatasetId": "save-current-baseline",
+        "rowFields": ["col_1"],
+        "columnFields": [],
+        "statistics": ["count"]
+    })];
+    let folders = vec!["Bench".to_string(), "Bench/Sub".to_string()];
+    let table_folders = std::collections::HashMap::from([(
+        "save-current-baseline".to_string(),
+        "Bench/Sub".to_string(),
+    )]);
+    let graph_folders = std::collections::HashMap::from([(
+        "graph-bench-1".to_string(),
+        "Bench".to_string(),
+    )]);
+    let tabulate_folders = std::collections::HashMap::from([(
+        "tab-bench-1".to_string(),
+        "Bench/Sub".to_string(),
+    )]);
+
     let operation_started = Instant::now();
     let save_result = ProjectService::new(&state).save_project(
         None,
-        Some(Vec::new()),
-        Some(Vec::new()),
-        Some(Vec::new()),
-        Some(Vec::new()),
-        Some(Vec::new()),
-        Some(std::collections::HashMap::new()),
-        Some(std::collections::HashMap::new()),
-        Some(std::collections::HashMap::new()),
+        Some(history),
+        Some(snapshots),
+        Some(graph_builders),
+        Some(tabulates),
+        Some(folders),
+        Some(table_folders),
+        Some(graph_folders),
+        Some(tabulate_folders),
     );
     let operation_ms = operation_started.elapsed().as_millis();
 
-    let archive_bytes_result = match save_result {
-        Ok(()) => std::fs::metadata(&archive_path)
-            .map(|metadata| metadata.len())
-            .map_err(AppError::from),
+    let save_metrics_result = match save_result {
+        Ok(()) => {
+            let archive_bytes = std::fs::metadata(&archive_path)
+                .map(|metadata| metadata.len())
+                .map_err(AppError::from)?;
+            let reopened = spprj_archive::read_project_file(&archive_path)?;
+            let result_rows = reopened.tables.iter().map(|table| table.rows.len()).sum();
+            Ok((archive_bytes, result_rows))
+        }
         Err(error) => Err(error),
     };
 
-    let _ = std::fs::remove_file(&archive_path);
-    let _ = std::fs::remove_file(format!("{}.tmp", archive_path));
-    let archive_bytes = archive_bytes_result?;
+    remove_benchmark_artifacts(&archive_path);
+    let (archive_bytes, result_rows) = save_metrics_result?;
 
     Ok(PerformanceReport {
         rows: options.rows,
@@ -195,9 +238,36 @@ fn execute_save_current(options: Options) -> Result<PerformanceReport, AppError>
         setup_ms,
         operation_ms,
         total_ms: total_started.elapsed().as_millis(),
-        result_rows: options.rows,
+        result_rows,
         archive_bytes,
     })
+}
+
+fn remove_benchmark_artifacts(archive_path: &str) {
+    let path = std::path::Path::new(archive_path);
+    let temp_dir = std::env::temp_dir();
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    if parent != temp_dir {
+        return;
+    }
+    if !file_name.starts_with("stats_playground_save_current_") || !file_name.ends_with(".spprj") {
+        return;
+    }
+
+    let _ = std::fs::remove_file(path);
+
+    let tmp_candidate = format!("{}.tmp", archive_path);
+    let tmp_path = std::path::Path::new(&tmp_candidate);
+    if tmp_path.is_dir() {
+        let _ = std::fs::remove_dir_all(tmp_path);
+    } else {
+        let _ = std::fs::remove_file(tmp_path);
+    }
 }
 
 pub fn run_cli() -> Result<(), String> {
@@ -211,6 +281,13 @@ pub fn run_cli() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn owned_archive_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "stats_playground_save_current_{}.spprj",
+            uuid::Uuid::new_v4()
+        ))
+    }
 
     #[test]
     fn performance_cli_uses_reference_defaults() {
@@ -270,5 +347,35 @@ mod tests {
 
         assert_eq!(report.result_rows, 300_000);
         assert!(report.archive_bytes > 0);
+    }
+
+    #[test]
+    fn cleanup_removes_owned_archive_and_tmp_directory() {
+        let archive_path = owned_archive_path();
+        std::fs::write(&archive_path, b"archive").unwrap();
+        let tmp_path = std::path::PathBuf::from(format!("{}.tmp", archive_path.to_string_lossy()));
+        std::fs::create_dir_all(&tmp_path).unwrap();
+
+        remove_benchmark_artifacts(archive_path.to_str().unwrap());
+
+        assert!(!archive_path.exists());
+        assert!(!tmp_path.exists());
+    }
+
+    #[test]
+    fn cleanup_does_not_touch_non_owned_paths() {
+        let temp_dir = std::env::temp_dir();
+        let non_owned = temp_dir.join(format!("do_not_touch_{}.spprj", uuid::Uuid::new_v4()));
+        std::fs::write(&non_owned, b"keep").unwrap();
+        let non_owned_tmp = std::path::PathBuf::from(format!("{}.tmp", non_owned.to_string_lossy()));
+        std::fs::write(&non_owned_tmp, b"keep-tmp").unwrap();
+
+        remove_benchmark_artifacts(non_owned.to_str().unwrap());
+
+        assert!(non_owned.exists());
+        assert!(non_owned_tmp.exists());
+
+        let _ = std::fs::remove_file(non_owned);
+        let _ = std::fs::remove_file(non_owned_tmp);
     }
 }

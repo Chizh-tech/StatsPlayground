@@ -38,6 +38,39 @@ use serde_json::Value;
 
 use crate::error::AppError;
 
+#[cfg(test)]
+type BeforeDestinationMutationHook = Box<dyn Fn(&str, &str) -> Result<(), AppError>>;
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_DESTINATION_MUTATION_HOOK: std::cell::RefCell<Option<BeforeDestinationMutationHook>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) fn install_test_before_destination_mutation_hook(
+    hook: Option<BeforeDestinationMutationHook>,
+) {
+    BEFORE_DESTINATION_MUTATION_HOOK.with(|slot| {
+        *slot.borrow_mut() = hook;
+    });
+}
+
+#[cfg(test)]
+fn run_before_destination_mutation_hook(path: &str, tmp_path: &str) -> Result<(), AppError> {
+    BEFORE_DESTINATION_MUTATION_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow().as_ref() {
+            hook(path, tmp_path)?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(not(test))]
+fn run_before_destination_mutation_hook(_path: &str, _tmp_path: &str) -> Result<(), AppError> {
+    Ok(())
+}
+
 // ----------------------------------------------------------------------------
 // Public document types — these are the in-memory representation. The on-disk
 // JSON shape mirrors the field names exactly (camelCase via serde rename).
@@ -544,6 +577,12 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
         }
         zip.finish().map_err(|e| AppError::FileIO(e.to_string()))?;
     }
+
+    if let Err(error) = run_before_destination_mutation_hook(path, &tmp_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(error);
+    }
+
     if std::path::Path::new(path).exists() {
         let _ = std::fs::remove_file(path);
     }
