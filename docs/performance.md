@@ -8,6 +8,7 @@ Run baselines from `src-tauri` with a release build:
 cargo run --release --example performance_baseline --features perf-harness -- --rows 100000 --columns 20 --operation query
 cargo run --release --example performance_baseline --features perf-harness -- --rows 100000 --columns 20 --operation paste
 cargo run --release --example performance_baseline --features perf-harness -- --rows 100000 --columns 20 --operation restore
+cargo run --release --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation save_current
 ```
 
 The last stdout line is machine-readable JSON:
@@ -23,6 +24,8 @@ Fields:
 - `operationMs`: time spent in the selected application operation.
 - `totalMs`: setup and operation wall-clock time.
 - `resultRows`: rows returned or affected by the operation.
+- `archiveBytes`: output archive size in bytes for `save_current` (`0` for
+  non-save operations).
 
 The current `paste` baseline deliberately includes construction of the nested
 string payload consumed by `paste_at_position`. This represents part of the
@@ -42,6 +45,29 @@ is excluded from the JSON operation timings.
 |---:|---:|---|---:|---:|---:|---:|
 | 100,000 | 20 | query | 108 ms | 7 ms | 116 ms | 500 |
 | 100,000 | 20 | query (Phase 1 exit, 2026-08-19) | 150 ms | 9 ms | 159 ms | 500 |
+
+## Save Current Baseline (Task 1)
+
+Date: 2026-08-21
+
+Machine facts:
+
+- HP ZBook Power G7 Mobile Workstation
+- Intel(R) Core(TM) i7-10850H CPU @ 2.70GHz (6 cores / 12 logical processors)
+- 34,129,793,024 bytes RAM (~31.8 GiB)
+
+Required command:
+
+```powershell
+cargo run --release --manifest-path src-tauri/Cargo.toml --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation save_current
+```
+
+Status: blocked during this run window. The release build repeatedly stalled at
+`libduckdb-sys` (`Building [=======================> ] 580/585`) and did not
+emit the final benchmark JSON line before timeout/termination.
+
+Peak working set: not recorded. No completed benchmark process existed from
+which to read a trustworthy peak memory value.
 
 This baseline demonstrates that set-based DuckDB generation and bounded reads
 are already fast. It does not measure the current WebView full-table JSON IPC,

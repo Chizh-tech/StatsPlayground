@@ -45,6 +45,33 @@ pub struct OpenProjectResult {
 
 const SPPRJ_VERSION: &str = "3.0.0";
 
+#[cfg(any(test, feature = "perf-harness"))]
+pub(crate) fn seed_save_project(
+    state: &AppState,
+    rows: usize,
+    columns: usize,
+) -> Result<String, AppError> {
+    let archive_path = std::env::temp_dir().join(format!(
+        "stats_playground_save_current_{}.spprj",
+        uuid::Uuid::new_v4()
+    ));
+    let archive_path_string = archive_path.to_string_lossy().to_string();
+
+    ProjectService::new(state).create_project("Save Current Baseline", &archive_path_string)?;
+    state
+        .db
+        .lock()
+        .map_err(|e| AppError::Database(e.to_string()))?
+        .seed_benchmark_table(
+            "save-current-baseline",
+            "Save Current Baseline",
+            rows,
+            columns,
+        )?;
+
+    Ok(archive_path_string)
+}
+
 impl<'a> ProjectService<'a> {
     pub fn new(state: &'a AppState) -> Self {
         Self { state }
@@ -902,11 +929,12 @@ fn normalize_duplicate_dataset_names(docs: &mut [TableDoc]) -> Vec<DatasetNameMi
 #[cfg(test)]
 mod tests {
     use super::{folder_from_entry_path, normalize_duplicate_dataset_names, ProjectService};
+    use crate::models::table::{ColumnDisplayProps, ColumnFormatInfo};
     use crate::models::project::ProjectInfo;
     use crate::services::spprj_archive::{self, TableColumn, TableDoc};
     use crate::state::AppState;
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
 
     fn table_doc(id: &str, name: &str) -> TableDoc {
         TableDoc {
@@ -1209,6 +1237,247 @@ mod tests {
         assert!(matches!(service.restore_table_doc(&doc), Err(crate::error::AppError::InvalidParam(_))));
         let db = state.db.lock().unwrap();
         assert!(db.get_dataset_meta("future-id").is_err());
+    }
+
+    #[test]
+    fn save_project_round_trips_complex_values_and_project_metadata() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.create_table_from_sql_query(
+                "preserve-id",
+                "Preserve Fixture",
+                "SELECT 1 AS row_num, NULL::BLOB AS payload, NULL::DECIMAL(12,2) AS amount, NULL::TIMESTAMP AS created_at, NULL::INTEGER[] AS numbers, NULL::STRUCT(label VARCHAR, score INTEGER) AS info \
+                 UNION ALL \
+                 SELECT 2 AS row_num, from_hex('DEADBEEF') AS payload, 1234.56::DECIMAL(12,2) AS amount, TIMESTAMP '2026-08-21 01:02:03' AS created_at, [3, 4, 5]::INTEGER[] AS numbers, struct_pack(label := 'beta', score := 9) AS info",
+            )
+            .unwrap();
+        }
+
+        let mut extras = BTreeMap::new();
+        extras.insert("unit".to_string(), serde_json::json!("USD"));
+        extras.insert("notes".to_string(), serde_json::json!({"precision": "cents"}));
+        state
+            .column_display
+            .lock()
+            .unwrap()
+            .insert(
+                "preserve-id".to_string(),
+                vec![
+                    ColumnDisplayProps {
+                        col_index: 2,
+                        width: Some(180.0),
+                        format: Some(ColumnFormatInfo {
+                            kind: "currency".into(),
+                            decimals: Some(2),
+                            currency: Some("USD".into()),
+                        }),
+                        extras: Some(extras),
+                    },
+                    ColumnDisplayProps {
+                        col_index: 3,
+                        width: Some(220.0),
+                        format: Some(ColumnFormatInfo {
+                            kind: "datetime".into(),
+                            decimals: None,
+                            currency: None,
+                        }),
+                        extras: None,
+                    },
+                ],
+            );
+
+        let project_path = std::env::temp_dir().join(format!(
+            "stats_playground_save_preserve_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        *state.project.write().unwrap() = Some(ProjectInfo {
+            name: "Save Preserve".into(),
+            file_path: project_path.to_string_lossy().to_string(),
+            created_at: "2026-08-21T00:00:00Z".into(),
+        });
+
+        let history = vec![serde_json::json!({
+            "kind": "edit",
+            "datasetId": "preserve-id",
+            "description": "Updated amount",
+        })];
+        let snapshots = vec![serde_json::json!({
+            "id": "snapshot-1",
+            "datasetId": "preserve-id",
+            "rows": [1, 2],
+        })];
+        let graph_builders = vec![serde_json::json!({
+            "id": "graph-1",
+            "name": "Amount Trend",
+            "graphType": "line",
+            "xField": "row_num",
+            "yField": "amount",
+            "meta": { "owner": "qa" }
+        })];
+        let tabulates = vec![serde_json::json!({
+            "id": "tab-1",
+            "name": "Summary",
+            "sourceDatasetId": "preserve-id",
+            "rowFields": ["row_num"],
+            "columnFields": [],
+            "statistics": ["sum"]
+        })];
+        let folders = vec!["Analysis".to_string(), "Analysis/Yearly".to_string()];
+        let table_folders = HashMap::from([("preserve-id".to_string(), "Analysis/Yearly".to_string())]);
+        let graph_folders = HashMap::from([("graph-1".to_string(), "Analysis".to_string())]);
+        let tabulate_folders = HashMap::from([("tab-1".to_string(), "Analysis/Yearly".to_string())]);
+
+        let service = ProjectService::new(&state);
+        service
+            .save_project(
+                None,
+                Some(history.clone()),
+                Some(snapshots.clone()),
+                Some(graph_builders.clone()),
+                Some(tabulates.clone()),
+                Some(folders.clone()),
+                Some(table_folders.clone()),
+                Some(graph_folders.clone()),
+                Some(tabulate_folders.clone()),
+            )
+            .unwrap();
+
+        let reopened_state = AppState::new().unwrap();
+        let reopened = ProjectService::new(&reopened_state)
+            .open_project(project_path.to_str().unwrap(), None)
+            .unwrap();
+
+        assert_eq!(reopened.history, history);
+        assert_eq!(reopened.snapshots, snapshots);
+        assert_eq!(reopened.graph_builders, graph_builders);
+        assert_eq!(reopened.tabulates, tabulates);
+        assert_eq!(reopened.folders, folders);
+        assert_eq!(reopened.table_folders, table_folders);
+        assert_eq!(reopened.graph_folders, graph_folders);
+        assert_eq!(reopened.tabulate_folders, tabulate_folders);
+
+        let restored_display = reopened_state.column_display.lock().unwrap();
+        let restored_props = restored_display.get("preserve-id").unwrap();
+        assert_eq!(restored_props.len(), 2);
+        assert_eq!(restored_props[0].col_index, 2);
+        assert_eq!(restored_props[0].width, Some(180.0));
+        assert_eq!(restored_props[0].format.as_ref().unwrap().kind, "currency");
+        assert_eq!(
+            restored_props[0]
+                .extras
+                .as_ref()
+                .and_then(|extras| extras.get("unit")),
+            Some(&serde_json::json!("USD"))
+        );
+
+        let db = reopened_state.db.lock().unwrap();
+        let restored: Vec<(i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = {
+            let mut stmt = db
+                .conn()
+                .prepare(
+                    "SELECT _row_id, hex(payload), CAST(amount AS VARCHAR), CAST(created_at AS VARCHAR), CAST(numbers AS VARCHAR), CAST(info AS VARCHAR) FROM dataset_preserve_id ORDER BY _row_id",
+                )
+                .unwrap();
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                })
+                .unwrap();
+            rows.collect::<Result<Vec<_>, _>>().unwrap()
+        };
+
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0], (1, None, None, None, None, None));
+        assert_eq!(restored[1].0, 2);
+        assert_eq!(restored[1].1.as_deref(), Some("DEADBEEF"));
+        assert_eq!(restored[1].2.as_deref(), Some("1234.56"));
+        assert_eq!(restored[1].3.as_deref(), Some("2026-08-21 01:02:03"));
+        assert_eq!(restored[1].4.as_deref(), Some("[3, 4, 5]"));
+        assert_eq!(restored[1].5.as_deref(), Some("{'label': beta, 'score': 9}"));
+
+        let preview = db
+            .execute_sql_query(
+                "SELECT payload, amount, created_at, numbers, info FROM \"Preserve Fixture\" ORDER BY row_num",
+                1,
+                2,
+            )
+            .unwrap();
+        assert_eq!(preview.total_rows, 2);
+        assert_eq!(preview.rows[0][0], serde_json::Value::Null);
+        assert_eq!(preview.rows[1][0], serde_json::json!("0xdeadbeef"));
+        assert_eq!(preview.rows[1][1], serde_json::json!("1234.56"));
+        assert_eq!(preview.rows[1][3], serde_json::json!([3, 4, 5]));
+        assert_eq!(preview.rows[1][4], serde_json::json!({"label": "beta", "score": 9}));
+
+        let _ = std::fs::remove_file(project_path);
+    }
+
+    #[test]
+    fn save_project_failure_preserves_existing_archive_bytes() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.seed_benchmark_table("failure-id", "Failure Fixture", 10, 4)
+                .unwrap();
+        }
+
+        let project_path = std::env::temp_dir().join(format!(
+            "stats_playground_save_failure_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        *state.project.write().unwrap() = Some(ProjectInfo {
+            name: "Failure Fixture".into(),
+            file_path: project_path.to_string_lossy().to_string(),
+            created_at: "2026-08-21T00:00:00Z".into(),
+        });
+
+        let service = ProjectService::new(&state);
+        service
+            .save_project(
+                None,
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(HashMap::new()),
+                Some(HashMap::new()),
+                Some(HashMap::new()),
+            )
+            .unwrap();
+
+        let before = std::fs::read(&project_path).unwrap();
+        let tmp_dir = std::path::PathBuf::from(format!("{}.tmp", project_path.to_string_lossy()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let error = service
+            .save_project(
+                None,
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(HashMap::new()),
+                Some(HashMap::new()),
+                Some(HashMap::new()),
+            )
+            .unwrap_err();
+        assert!(matches!(error, crate::error::AppError::FileIO(_)));
+
+        let after = std::fs::read(&project_path).unwrap();
+        assert_eq!(after, before);
+
+        let _ = std::fs::remove_dir_all(tmp_dir);
+        let _ = std::fs::remove_file(project_path);
     }
 
     #[test]
