@@ -138,26 +138,30 @@ impl GraphChunkSink for ChannelChunkSink<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "perf-harness"))]
 #[derive(Default)]
 struct CollectingChunkSink {
     chunks: Vec<GraphDataChunk>,
     pending_header: Option<GraphChunkHeader>,
+    terminal_completion: Option<GraphDataCompletion>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "perf-harness"))]
 impl CollectingChunkSink {
-    fn into_chunks(self) -> Result<Vec<GraphDataChunk>, AppError> {
+    fn into_result(self) -> Result<(Vec<GraphDataChunk>, GraphDataCompletion), AppError> {
         if self.pending_header.is_some() {
             return Err(AppError::Database(
                 "graph chunk header was not followed by payload".to_string(),
             ));
         }
-        Ok(self.chunks)
+        let completion = self.terminal_completion.ok_or_else(|| {
+            AppError::Database("graph sink did not receive terminal completion".to_string())
+        })?;
+        Ok((self.chunks, completion))
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "perf-harness"))]
 impl GraphChunkSink for CollectingChunkSink {
     fn send_header(&mut self, header: &GraphChunkHeader) -> Result<(), GraphSinkError> {
         if self.pending_header.is_some() {
@@ -183,12 +187,13 @@ impl GraphChunkSink for CollectingChunkSink {
         Ok(())
     }
 
-    fn send_terminal(&mut self, _completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
+    fn send_terminal(&mut self, completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
         if self.pending_header.is_some() {
             return Err(GraphSinkError::Invalid(
                 "graph sink received terminal marker before payload".to_string(),
             ));
         }
+        self.terminal_completion = Some(completion.clone());
         Ok(())
     }
 }
@@ -237,11 +242,11 @@ impl<'a> GraphDataService<'a> {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub fn collect_for_test(
+    #[cfg(any(test, feature = "perf-harness"))]
+    pub fn collect_for_harness(
         &self,
         request: &GraphDataRequest,
-    ) -> Result<Vec<GraphDataChunk>, AppError> {
+    ) -> Result<(Vec<GraphDataChunk>, GraphDataCompletion), AppError> {
         let mut sink = CollectingChunkSink::default();
         let completion = self.stream_with_sink(request, &mut sink)?;
         if completion.cancelled {
@@ -249,7 +254,15 @@ impl<'a> GraphDataService<'a> {
                 "request was cancelled during graph projection".to_string(),
             ));
         }
-        sink.into_chunks()
+        sink.into_result()
+    }
+
+    #[cfg(test)]
+    pub fn collect_for_test(
+        &self,
+        request: &GraphDataRequest,
+    ) -> Result<Vec<GraphDataChunk>, AppError> {
+        self.collect_for_harness(request).map(|(chunks, _)| chunks)
     }
 
     #[cfg(test)]

@@ -8,13 +8,13 @@ Run baselines from `src-tauri` with a release build:
 cargo run --release --example performance_baseline --features perf-harness -- --rows 100000 --columns 20 --operation query
 cargo run --release --example performance_baseline --features perf-harness -- --rows 100000 --columns 20 --operation paste
 cargo run --release --example performance_baseline --features perf-harness -- --rows 100000 --columns 20 --operation restore
-cargo run --release --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation graph_projection
+cargo run --release --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation graph
 ```
 
 The last stdout line is machine-readable JSON:
 
 ```json
-{"rows":300000,"columns":20,"operation":"graphprojection","setupMs":108,"operationMs":7,"totalMs":116,"resultRows":300000,"selectedColumns":3}
+{"rows":300000,"columns":20,"operation":"graph","setupMs":56,"operationMs":180,"totalMs":342,"resultRows":300000,"selectedColumns":3,"queryMs":104,"encodeMs":76,"decodeMs":"desktop_only","drawMs":"desktop_only","processedRows":300000,"transferredBytes":6601831}
 ```
 
 Fields:
@@ -24,7 +24,14 @@ Fields:
 - `operationMs`: time spent in the selected application operation.
 - `totalMs`: setup and operation wall-clock time.
 - `resultRows`: rows returned or affected by the operation.
-- `selectedColumns`: projected column count reported by `graph_projection`.
+- `selectedColumns`: projected column count reported by `graph`.
+- `queryMs`: backend projection/query pass time for the graph request.
+- `encodeMs`: backend graph chunk encoding overhead.
+- `decodeMs` / `drawMs`: `desktop_only` placeholders in CLI runs because Node
+  benchmarks do not run repository Canvas/WebView rendering.
+- `processedRows`: graph service completion row count.
+- `transferredBytes`: header + payload + terminal bytes emitted by the graph
+  stream.
 
 The current `paste` baseline deliberately includes construction of the nested
 string payload consumed by `paste_at_position`. This represents part of the
@@ -64,7 +71,81 @@ measurement without the interactive UI session.
 Use this release command to keep the data shape aligned with the baseline run:
 
 ```powershell
-cargo run --release --manifest-path src-tauri/Cargo.toml --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation graph_projection
+cargo run --release --manifest-path src-tauri/Cargo.toml --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation graph
+```
+
+## Task 8 Unified Graph Gate (2026-08-21)
+
+Command:
+
+```powershell
+cargo run --release --manifest-path src-tauri/Cargo.toml --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation graph
+```
+
+Environment facts:
+
+- OS: Windows
+- Build profile: Rust `release` with `--features perf-harness`
+- Operation mode: Full Data (no sampling fallback)
+- Graph request: `x=region`, `y=cost`, `elements=[points]`
+- Processed rows: `300000`
+
+Recorded JSON:
+
+```json
+{"rows":300000,"columns":20,"operation":"graph","setupMs":56,"operationMs":180,"totalMs":342,"resultRows":300000,"selectedColumns":3,"queryMs":104,"encodeMs":76,"decodeMs":"desktop_only","drawMs":"desktop_only","processedRows":300000,"transferredBytes":6601831}
+```
+
+Desktop gate status:
+
+- Cold complete-frame: `PENDING_DESKTOP_CAPTURE`
+- Warm complete-frame: `PENDING_DESKTOP_CAPTURE`
+- WebView tasks >200 ms: `PENDING_DESKTOP_CAPTURE`
+- Desktop transferred bytes (WebView-observed): `PENDING_DESKTOP_CAPTURE`
+- Peak working set: `PENDING_DESKTOP_CAPTURE`
+
+Reason pending: this non-interactive CLI harness can verify backend graph
+streaming and byte counts, but it cannot objectively drive and measure a full
+desktop WebView frame lifecycle for the existing 300,000-row project.
+
+Executable desktop capture instructions:
+
+1. Start the desktop app and open a project containing one table with exactly
+  `300000` rows.
+2. Open Graph Builder, ensure sampling mode is Full Data, and bind `region` to
+  X and `cost` to Y.
+3. Use DevTools Performance panel to capture cold and warm complete-frame runs.
+4. Record long tasks over 200 ms and transferred bytes from the stream events.
+5. In a second PowerShell shell, run the working-set capture script below while
+  triggering the graph render.
+
+```powershell
+$proc = Get-Process -Name StatsPlayground -ErrorAction Stop
+$baseline = [pscustomobject]@{
+  WorkingSet64 = $proc.WorkingSet64
+  PeakWorkingSet64 = $proc.PeakWorkingSet64
+}
+
+"READY: put focus on the desktop UI action that triggers graph render."
+"Press Enter here at the exact moment you click render in the UI."
+Read-Host | Out-Null
+$start = Get-Date
+"START marker: $($start.ToString('o'))"
+
+"Press Enter here when the graph is fully painted and interactive."
+Read-Host | Out-Null
+$stop = Get-Date
+"STOP marker:  $($stop.ToString('o'))"
+
+$proc = Get-Process -Id $proc.Id -ErrorAction Stop
+$capture = [pscustomobject]@{
+  WallMs = [math]::Round(($stop - $start).TotalMilliseconds, 3)
+  WorkingSet64 = $proc.WorkingSet64
+  PeakWorkingSet64 = $proc.PeakWorkingSet64
+  DeltaWorkingSet64 = $proc.WorkingSet64 - $baseline.WorkingSet64
+  DeltaPeakWorkingSet64 = $proc.PeakWorkingSet64 - $baseline.PeakWorkingSet64
+}
+$capture | Format-List
 ```
 
 Manual UI actions (old `GraphBuilderView` path, desktop app):
