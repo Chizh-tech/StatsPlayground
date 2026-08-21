@@ -1,7 +1,9 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
-use std::time::Instant;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use duckdb::types::Value;
 use serde::Serialize;
@@ -11,8 +13,7 @@ use crate::engine::duckdb_engine::GraphProjectionStats;
 use crate::error::AppError;
 use crate::models::graph_data::{
     GraphAggregatePacket, GraphAxisEncoding, GraphChunkHeader, GraphDataCompletion,
-    GraphDataRequest, GraphPayloadType, GraphTypedSliceDescriptor,
-    GRAPH_VIRTUAL_SOURCE_COLUMN,
+    GraphDataRequest, GraphPayloadType, GraphTypedSliceDescriptor, GRAPH_VIRTUAL_SOURCE_COLUMN,
 };
 use crate::state::AppState;
 
@@ -25,7 +26,8 @@ struct CancellationEntry {
 }
 
 fn cancelled_requests() -> &'static Mutex<HashMap<String, CancellationEntry>> {
-    static CANCELLED_REQUESTS: OnceLock<Mutex<HashMap<String, CancellationEntry>>> = OnceLock::new();
+    static CANCELLED_REQUESTS: OnceLock<Mutex<HashMap<String, CancellationEntry>>> =
+        OnceLock::new();
     CANCELLED_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -98,7 +100,11 @@ impl GraphChunkSink for ChannelChunkSink<'_> {
     }
 
     fn send_payload(&mut self, payload: Vec<u8>) -> Result<(), GraphSinkError> {
-        if self.on_chunk.send(InvokeResponseBody::from(payload)).is_err() {
+        if self
+            .on_chunk
+            .send(InvokeResponseBody::from(payload))
+            .is_err()
+        {
             return Err(GraphSinkError::Closed);
         }
         Ok(())
@@ -225,6 +231,27 @@ pub(crate) struct GraphBenchmarkResult {
 struct StreamMetrics {
     encode_ms: u128,
     projection_passes: u32,
+}
+
+#[cfg(test)]
+static TIMING_OBSERVATION_STARTS: AtomicU64 = AtomicU64::new(0);
+
+fn begin_timing_observation() -> Instant {
+    #[cfg(test)]
+    {
+        TIMING_OBSERVATION_STARTS.fetch_add(1, Ordering::Relaxed);
+    }
+    Instant::now()
+}
+
+#[cfg(test)]
+fn reset_timing_observation_starts() {
+    TIMING_OBSERVATION_STARTS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+fn timing_observation_starts() -> u64 {
+    TIMING_OBSERVATION_STARTS.load(Ordering::Relaxed)
 }
 
 pub struct GraphDataService<'a> {
@@ -401,7 +428,7 @@ impl<'a> GraphDataService<'a> {
         &self,
         request: &GraphDataRequest,
         sink: &mut S,
-        mut metrics: Option<&mut StreamMetrics>,
+        metrics: Option<&mut StreamMetrics>,
     ) -> Result<GraphDataCompletion, AppError> {
         let observed = metrics.is_some();
         let encode_ms_cell = Cell::new(0u128);
@@ -462,10 +489,16 @@ impl<'a> GraphDataService<'a> {
 
             let aggregate_packets = db.collect_graph_aggregate_packets(request)?;
             for packet in &aggregate_packets {
-                let encode_started = Instant::now();
+                let encode_started = if observed {
+                    Some(begin_timing_observation())
+                } else {
+                    None
+                };
                 sink.send_aggregate(packet)
                     .map_err(Self::map_sink_error_to_app_error)?;
-                record_encode(encode_started);
+                if let Some(encode_started) = encode_started {
+                    record_encode(encode_started);
+                }
             }
 
             let metadata: RefCell<Option<ProjectionMetadata>> = RefCell::new(None);
@@ -497,7 +530,11 @@ impl<'a> GraphDataService<'a> {
                     Ok(())
                 },
                 |row_id, values, row_source_rows| {
-                    let encode_started = Instant::now();
+                    let encode_started = if observed {
+                        Some(begin_timing_observation())
+                    } else {
+                        None
+                    };
                     source_rows = row_source_rows;
                     if self.is_cancelled(&request.request_id, run.nonce)? {
                         cancelled = true;
@@ -539,7 +576,9 @@ impl<'a> GraphDataService<'a> {
                         chunk_index = chunk_index.saturating_add(1);
                         row_offset = processed_rows;
                     }
-                    record_encode(encode_started);
+                    if let Some(encode_started) = encode_started {
+                        record_encode(encode_started);
+                    }
                     Ok(true)
                 },
             )?;
@@ -570,7 +609,11 @@ impl<'a> GraphDataService<'a> {
                     processed_rows,
                     true,
                 )?;
-                let encode_started = Instant::now();
+                let encode_started = if observed {
+                    Some(begin_timing_observation())
+                } else {
+                    None
+                };
                 if let Err(error) = self.send_chunk(sink, chunk) {
                     if self.is_cancelled(&request.request_id, run.nonce)? {
                         cancelled = true;
@@ -580,7 +623,9 @@ impl<'a> GraphDataService<'a> {
                 } else {
                     chunks_sent = chunks_sent.saturating_add(1);
                 }
-                record_encode(encode_started);
+                if let Some(encode_started) = encode_started {
+                    record_encode(encode_started);
+                }
             }
 
             let completion = GraphDataCompletion {
@@ -593,17 +638,23 @@ impl<'a> GraphDataService<'a> {
                 cancelled,
             };
 
-            let encode_started = Instant::now();
+            let encode_started = if observed {
+                Some(begin_timing_observation())
+            } else {
+                None
+            };
             sink.send_terminal(&completion)
                 .map_err(Self::map_sink_error_to_app_error)?;
-            record_encode(encode_started);
+            if let Some(encode_started) = encode_started {
+                record_encode(encode_started);
+            }
 
             Ok(completion)
         })();
 
         let observed_cancelled = matches!(&result, Ok(completion) if completion.cancelled);
         self.finish_request_run(&request.request_id, run.nonce, observed_cancelled)?;
-        if let Some(value) = metrics.as_deref_mut() {
+        if let Some(value) = metrics {
             value.encode_ms = encode_ms_cell.get();
             value.projection_passes = projection_passes_cell.get();
         }
@@ -624,7 +675,9 @@ impl<'a> GraphDataService<'a> {
 
     fn map_sink_error_to_app_error(error: GraphSinkError) -> AppError {
         match error {
-            GraphSinkError::Closed => AppError::InvalidParam("graph data channel closed".to_string()),
+            GraphSinkError::Closed => {
+                AppError::InvalidParam("graph data channel closed".to_string())
+            }
             GraphSinkError::Invalid(message) => AppError::InvalidParam(message),
         }
     }
@@ -673,9 +726,7 @@ impl<'a> GraphDataService<'a> {
             if entry.nonce == run_nonce {
                 true
             } else {
-                observed_cancelled
-                    && entry.cancelled
-                    && entry.nonce == run_nonce.saturating_add(1)
+                observed_cancelled && entry.cancelled && entry.nonce == run_nonce.saturating_add(1)
             }
         } else {
             false
@@ -750,7 +801,9 @@ impl ProjectionMetadata {
                 .projected_columns
                 .first()
                 .map(String::as_str)
-                .ok_or_else(|| AppError::InvalidParam("graph request has no projected x column".to_string()))?
+                .ok_or_else(|| {
+                    AppError::InvalidParam("graph request has no projected x column".to_string())
+                })?
         };
         let resolved_y_column = if has_backend_projection_aliases {
             "__sp_y"
@@ -778,9 +831,12 @@ impl ProjectionMetadata {
                     .iter()
                     .position(|name| name == alias)
             } else {
-                role_columns
-                    .get(role)
-                    .and_then(|column| stats.projected_columns.iter().position(|name| name == column))
+                role_columns.get(role).and_then(|column| {
+                    stats
+                        .projected_columns
+                        .iter()
+                        .position(|name| name == column)
+                })
             }
         };
 
@@ -790,9 +846,12 @@ impl ProjectionMetadata {
                 .iter()
                 .position(|name| name == "__sp_group")
         } else {
-            role_columns
-                .get("group")
-                .and_then(|column| stats.projected_columns.iter().position(|name| name == column))
+            role_columns.get("group").and_then(|column| {
+                stats
+                    .projected_columns
+                    .iter()
+                    .position(|name| name == column)
+            })
         };
         let size_index = if has_backend_projection_aliases {
             stats
@@ -800,9 +859,12 @@ impl ProjectionMetadata {
                 .iter()
                 .position(|name| name == "__sp_size")
         } else {
-            role_columns
-                .get("size")
-                .and_then(|column| stats.projected_columns.iter().position(|name| name == column))
+            role_columns.get("size").and_then(|column| {
+                stats
+                    .projected_columns
+                    .iter()
+                    .position(|name| name == column)
+            })
         };
         let z_index = resolve_role_index("z", "__sp_z");
         let group_x_index = resolve_role_index("groupx", "__sp_groupx");
@@ -1002,9 +1064,9 @@ impl ChunkAccumulator {
         row_id: Option<i64>,
         values: &[Value],
     ) -> Result<(), AppError> {
-        let x = values
-            .get(metadata.x_index)
-            .ok_or_else(|| AppError::Database("x value missing from graph projection".to_string()))?;
+        let x = values.get(metadata.x_index).ok_or_else(|| {
+            AppError::Database("x value missing from graph projection".to_string())
+        })?;
         match metadata.x_payload_type {
             GraphPayloadType::F64 => {
                 if let Some(value) = value_to_f64(x) {
@@ -1017,11 +1079,8 @@ impl ChunkAccumulator {
             }
             GraphPayloadType::U32 => {
                 if let Some(label) = value_to_category(x) {
-                    let code = upsert_code(
-                        &mut self.x_dictionary,
-                        &mut self.x_dictionary_index,
-                        &label,
-                    )?;
+                    let code =
+                        upsert_code(&mut self.x_dictionary, &mut self.x_dictionary_index, &label)?;
                     self.x_categorical_values.push(code);
                     self.x_validity.push(1);
                 } else {
@@ -1036,9 +1095,9 @@ impl ChunkAccumulator {
             }
         }
 
-        let y = values
-            .get(metadata.y_index)
-            .ok_or_else(|| AppError::Database("y value missing from graph projection".to_string()))?;
+        let y = values.get(metadata.y_index).ok_or_else(|| {
+            AppError::Database("y value missing from graph projection".to_string())
+        })?;
         if let Some(value) = value_to_f64(y) {
             self.y_values.push(value);
             self.y_validity.push(1);
@@ -1867,10 +1926,11 @@ mod tests {
         fn direct_filtered_rows(state: &AppState, dataset_id: &str) -> i64 {
             let db = state.db.lock().expect("db lock");
             let table = format!("dataset_{}", dataset_id.replace('-', "_"));
-            let sql = format!(
-                "SELECT COUNT(*) FROM \"{table}\" WHERE region IN ('North', 'South')"
-            );
-            db.conn().query_row(&sql, [], |row| row.get(0)).expect("count")
+            let sql =
+                format!("SELECT COUNT(*) FROM \"{table}\" WHERE region IN ('North', 'South')");
+            db.conn()
+                .query_row(&sql, [], |row| row.get(0))
+                .expect("count")
         }
 
         fn assert_close(actual: f64, expected: f64, tol: f64, label: &str) {
@@ -2051,7 +2111,10 @@ mod tests {
                 GROUP BY grp, x_idx, y_idx
                 ORDER BY grp, x_idx, y_idx
             ";
-            let mut stmt = db.conn().prepare(expected_sql).expect("prepare expected heatmap sql");
+            let mut stmt = db
+                .conn()
+                .prepare(expected_sql)
+                .expect("prepare expected heatmap sql");
             let mut rows = stmt
                 .query(params![
                     heatmap.x_bin_width.max(1e-12),
@@ -2075,16 +2138,34 @@ mod tests {
                 let cnt: i64 = row.get(3).expect("cnt");
                 let x_idx = x_idx.clamp(0, i64::from(heatmap.x_bin_count) - 1);
                 let y_idx = y_idx.clamp(0, i64::from(heatmap.y_bin_count) - 1);
-                expected.insert((grp, x_idx, y_idx), u64::try_from(cnt).expect("non-negative count"));
+                expected.insert(
+                    (grp, x_idx, y_idx),
+                    u64::try_from(cnt).expect("non-negative count"),
+                );
             }
 
             let mut actual = std::collections::HashMap::<(Option<String>, i64, i64), u64>::new();
             for cell in &heatmap.cells {
-                actual.insert((cell.group.clone(), cell.x_bin_index, cell.y_bin_index), cell.count);
-                let expected_x_start = heatmap.x_min.unwrap_or(0.0) + (cell.x_bin_index as f64) * heatmap.x_bin_width;
-                let expected_y_start = heatmap.y_min.unwrap_or(0.0) + (cell.y_bin_index as f64) * heatmap.y_bin_width;
-                assert_close(cell.x_bin_start, expected_x_start, 1e-9, "heatmap x_bin_start");
-                assert_close(cell.y_bin_start, expected_y_start, 1e-9, "heatmap y_bin_start");
+                actual.insert(
+                    (cell.group.clone(), cell.x_bin_index, cell.y_bin_index),
+                    cell.count,
+                );
+                let expected_x_start =
+                    heatmap.x_min.unwrap_or(0.0) + (cell.x_bin_index as f64) * heatmap.x_bin_width;
+                let expected_y_start =
+                    heatmap.y_min.unwrap_or(0.0) + (cell.y_bin_index as f64) * heatmap.y_bin_width;
+                assert_close(
+                    cell.x_bin_start,
+                    expected_x_start,
+                    1e-9,
+                    "heatmap x_bin_start",
+                );
+                assert_close(
+                    cell.y_bin_start,
+                    expected_y_start,
+                    1e-9,
+                    "heatmap y_bin_start",
+                );
             }
 
             assert_eq!(actual, expected);
@@ -2130,7 +2211,12 @@ mod tests {
                     dataset_id,
                     "Summary Equality",
                     &["region".into(), "batch".into(), "m1".into(), "m2".into()],
-                    &["VARCHAR".into(), "VARCHAR".into(), "DOUBLE".into(), "DOUBLE".into()],
+                    &[
+                        "VARCHAR".into(),
+                        "VARCHAR".into(),
+                        "DOUBLE".into(),
+                        "DOUBLE".into(),
+                    ],
                 )
                 .expect("create table");
                 let table = "dataset_agg_summary_equality";
@@ -2196,9 +2282,15 @@ mod tests {
                 GROUP BY grp, cat, src
                 ORDER BY grp, cat, src
             ";
-            let mut stmt = db.conn().prepare(expected_sql).expect("prepare expected summary sql");
+            let mut stmt = db
+                .conn()
+                .prepare(expected_sql)
+                .expect("prepare expected summary sql");
             let mut rows = stmt.query([]).expect("query expected summary sql");
-            let mut expected = std::collections::HashMap::<(Option<String>, Option<String>, Option<String>), (u64, f64, f64, f64, f64, f64)>::new();
+            let mut expected = std::collections::HashMap::<
+                (Option<String>, Option<String>, Option<String>),
+                (u64, f64, f64, f64, f64, f64),
+            >::new();
             while let Some(row) = rows.next().expect("next expected summary row") {
                 let grp: Option<String> = row.get(0).expect("grp");
                 let cat: Option<String> = row.get(1).expect("cat");
@@ -2209,12 +2301,26 @@ mod tests {
                 let std: f64 = row.get(6).expect("std");
                 let min: f64 = row.get(7).expect("min");
                 let max: f64 = row.get(8).expect("max");
-                expected.insert((grp, cat, src), (u64::try_from(n).expect("n >= 0"), mean, median, std, min, max));
+                expected.insert(
+                    (grp, cat, src),
+                    (
+                        u64::try_from(n).expect("n >= 0"),
+                        mean,
+                        median,
+                        std,
+                        min,
+                        max,
+                    ),
+                );
             }
 
             assert_eq!(summary.summaries.len(), expected.len());
             for entry in &summary.summaries {
-                let key = (entry.group.clone(), entry.category.clone(), entry.source_column.clone());
+                let key = (
+                    entry.group.clone(),
+                    entry.category.clone(),
+                    entry.source_column.clone(),
+                );
                 let Some((n, mean, median, std, min, max)) = expected.get(&key) else {
                     panic!("missing expected summary entry for key: {:?}", key);
                 };
@@ -2229,8 +2335,18 @@ mod tests {
                 } else {
                     0.0
                 };
-                assert_close(entry.interval_low.unwrap_or(entry.mean), entry.mean - margin, 1e-9, "summary interval_low");
-                assert_close(entry.interval_high.unwrap_or(entry.mean), entry.mean + margin, 1e-9, "summary interval_high");
+                assert_close(
+                    entry.interval_low.unwrap_or(entry.mean),
+                    entry.mean - margin,
+                    1e-9,
+                    "summary interval_low",
+                );
+                assert_close(
+                    entry.interval_high.unwrap_or(entry.mean),
+                    entry.mean + margin,
+                    1e-9,
+                    "summary interval_high",
+                );
             }
         }
 
@@ -2244,7 +2360,12 @@ mod tests {
                     dataset_id,
                     "Aggregate Melt Source",
                     &["region".into(), "batch".into(), "m1".into(), "m2".into()],
-                    &["VARCHAR".into(), "VARCHAR".into(), "DOUBLE".into(), "DOUBLE".into()],
+                    &[
+                        "VARCHAR".into(),
+                        "VARCHAR".into(),
+                        "DOUBLE".into(),
+                        "DOUBLE".into(),
+                    ],
                 )
                 .expect("create table");
                 let table = "dataset_agg_melt_source";
@@ -2515,15 +2636,24 @@ mod tests {
                 })
                 .expect("summary packet");
             assert!(
-                summary.summaries.iter().all(|entry| entry.facet_x.is_some()),
+                summary
+                    .summaries
+                    .iter()
+                    .all(|entry| entry.facet_x.is_some()),
                 "summary entries must carry facet_x"
             );
             assert!(
-                summary.summaries.iter().all(|entry| entry.facet_y.is_some()),
+                summary
+                    .summaries
+                    .iter()
+                    .all(|entry| entry.facet_y.is_some()),
                 "summary entries must carry facet_y"
             );
             assert!(
-                summary.summaries.iter().all(|entry| entry.facet_z.is_some()),
+                summary
+                    .summaries
+                    .iter()
+                    .all(|entry| entry.facet_z.is_some()),
                 "summary entries must carry facet_z"
             );
             assert!(
@@ -2579,7 +2709,10 @@ mod tests {
                 .flat_map(|entry| entry.outliers.iter())
                 .next();
             assert!(any_outlier.is_some(), "boxplot outliers should be emitted");
-            assert!(any_outlier.and_then(|item| item.row_id).is_some(), "outlier row id should be present");
+            assert!(
+                any_outlier.and_then(|item| item.row_id).is_some(),
+                "outlier row id should be present"
+            );
         }
 
         #[test]
@@ -2700,7 +2833,10 @@ mod tests {
             ";
             let mut stmt = db.conn().prepare(stats_sql).expect("prepare box stats sql");
             let mut rows = stmt.query([]).expect("query box stats sql");
-            let mut expected_stats = std::collections::HashMap::<(Option<String>, Option<String>, Option<String>), (u64, f64, f64, f64, f64, f64, f64, f64)>::new();
+            let mut expected_stats = std::collections::HashMap::<
+                (Option<String>, Option<String>, Option<String>),
+                (u64, f64, f64, f64, f64, f64, f64, f64),
+            >::new();
             while let Some(row) = rows.next().expect("next box stats row") {
                 let grp: Option<String> = row.get(0).expect("grp");
                 let cat: Option<String> = row.get(1).expect("cat");
@@ -2760,7 +2896,10 @@ mod tests {
             ";
             let mut outlier_stmt = db.conn().prepare(outlier_sql).expect("prepare outlier sql");
             let mut outlier_rows = outlier_stmt.query([]).expect("query outlier sql");
-            let mut expected_outliers = std::collections::HashMap::<(Option<String>, Option<String>, Option<String>), std::collections::BTreeSet<i64>>::new();
+            let mut expected_outliers = std::collections::HashMap::<
+                (Option<String>, Option<String>, Option<String>),
+                std::collections::BTreeSet<i64>,
+            >::new();
             while let Some(row) = outlier_rows.next().expect("next outlier row") {
                 let grp: Option<String> = row.get(0).expect("grp");
                 let cat: Option<String> = row.get(1).expect("cat");
@@ -2779,7 +2918,9 @@ mod tests {
                     entry.category.clone(),
                     entry.source_column.clone(),
                 );
-                let Some((n, min, q1, median, q3, max, whisker_low, whisker_high)) = expected_stats.get(&key) else {
+                let Some((n, min, q1, median, q3, max, whisker_low, whisker_high)) =
+                    expected_stats.get(&key)
+                else {
                     panic!("missing expected box stats for key: {:?}", key);
                 };
                 assert_eq!(entry.count, *n);
@@ -2830,7 +2971,10 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(first_ids, second_ids);
 
-            assert!(!first_ids.is_empty(), "sample should include at least one row");
+            assert!(
+                !first_ids.is_empty(),
+                "sample should include at least one row"
+            );
         }
 
         #[test]
@@ -3000,8 +3144,12 @@ mod tests {
 
         let service = GraphDataService::new(&state);
         let request = build_request("stale-gen", 0);
-        let error = service.collect_for_test(&request).expect_err("stale generation must fail");
-        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("stale dataset generation")));
+        let error = service
+            .collect_for_test(&request)
+            .expect_err("stale generation must fail");
+        assert!(
+            matches!(error, AppError::InvalidParam(message) if message.contains("stale dataset generation"))
+        );
     }
 
     #[test]
@@ -3013,8 +3161,12 @@ mod tests {
         let mut request = build_request("unknown-column", 0);
         request.fields[0].column = "missing".to_string();
 
-        let error = service.collect_for_test(&request).expect_err("unknown column must fail");
-        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("unknown graph column")));
+        let error = service
+            .collect_for_test(&request)
+            .expect_err("unknown column must fail");
+        assert!(
+            matches!(error, AppError::InvalidParam(message) if message.contains("unknown graph column"))
+        );
     }
 
     #[test]
@@ -3052,11 +3204,17 @@ mod tests {
         }];
 
         let chunks = service.collect_for_test(&request).expect("chunks");
-        let total_rows = chunks.iter().map(|chunk| chunk.header.row_count).sum::<usize>();
+        let total_rows = chunks
+            .iter()
+            .map(|chunk| chunk.header.row_count)
+            .sum::<usize>();
         assert_eq!(total_rows, 4);
     }
 
-    fn extract_i64_slice(chunk: &GraphDataChunk, descriptor: &crate::models::graph_data::GraphTypedSliceDescriptor) -> Vec<i64> {
+    fn extract_i64_slice(
+        chunk: &GraphDataChunk,
+        descriptor: &crate::models::graph_data::GraphTypedSliceDescriptor,
+    ) -> Vec<i64> {
         let mut result = Vec::new();
         let mut offset = descriptor.offset;
         let end = descriptor.offset + descriptor.byte_length;
@@ -3069,7 +3227,10 @@ mod tests {
         result
     }
 
-    fn extract_u32_slice(chunk: &GraphDataChunk, descriptor: &crate::models::graph_data::GraphTypedSliceDescriptor) -> Vec<u32> {
+    fn extract_u32_slice(
+        chunk: &GraphDataChunk,
+        descriptor: &crate::models::graph_data::GraphTypedSliceDescriptor,
+    ) -> Vec<u32> {
         let mut result = Vec::new();
         let mut offset = descriptor.offset;
         let end = descriptor.offset + descriptor.byte_length;
@@ -3082,7 +3243,10 @@ mod tests {
         result
     }
 
-    fn extract_f64_slice(chunk: &GraphDataChunk, descriptor: &crate::models::graph_data::GraphTypedSliceDescriptor) -> Vec<f64> {
+    fn extract_f64_slice(
+        chunk: &GraphDataChunk,
+        descriptor: &crate::models::graph_data::GraphTypedSliceDescriptor,
+    ) -> Vec<f64> {
         let mut result = Vec::new();
         let mut offset = descriptor.offset;
         let end = descriptor.offset + descriptor.byte_length;
@@ -3118,8 +3282,9 @@ mod tests {
 
         fn send_payload(&mut self, payload: Vec<u8>) -> Result<(), GraphSinkError> {
             self.pending_payload_bytes = self.pending_payload_bytes.saturating_add(payload.len());
-            self.max_pending_payload_bytes =
-                self.max_pending_payload_bytes.max(self.pending_payload_bytes);
+            self.max_pending_payload_bytes = self
+                .max_pending_payload_bytes
+                .max(self.pending_payload_bytes);
             self.pending_payload_bytes = self.pending_payload_bytes.saturating_sub(payload.len());
             self.pending_chunks = self.pending_chunks.saturating_sub(1);
             Ok(())
@@ -3129,7 +3294,10 @@ mod tests {
             Ok(())
         }
 
-        fn send_terminal(&mut self, _completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
+        fn send_terminal(
+            &mut self,
+            _completion: &GraphDataCompletion,
+        ) -> Result<(), GraphSinkError> {
             Ok(())
         }
     }
@@ -3155,7 +3323,10 @@ mod tests {
             Ok(())
         }
 
-        fn send_terminal(&mut self, _completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
+        fn send_terminal(
+            &mut self,
+            _completion: &GraphDataCompletion,
+        ) -> Result<(), GraphSinkError> {
             self.events.push("complete");
             Ok(())
         }
@@ -3176,7 +3347,10 @@ mod tests {
             Err(GraphSinkError::Closed)
         }
 
-        fn send_terminal(&mut self, _completion: &GraphDataCompletion) -> Result<(), GraphSinkError> {
+        fn send_terminal(
+            &mut self,
+            _completion: &GraphDataCompletion,
+        ) -> Result<(), GraphSinkError> {
             Err(GraphSinkError::Closed)
         }
     }
@@ -3268,7 +3442,28 @@ mod tests {
         let error = service
             .stream_with_sink(&request, &mut sink)
             .expect_err("closed sink should fail");
-        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("graph data channel closed")));
+        assert!(
+            matches!(error, AppError::InvalidParam(message) if message.contains("graph data channel closed"))
+        );
+    }
+
+    #[test]
+    fn stream_with_sink_without_metrics_does_not_start_timing_observation() {
+        reset_timing_observation_starts();
+
+        let state = AppState::new().expect("state");
+        seed_dataset(&state, "no-observe-clock", 64);
+
+        let service = GraphDataService::new(&state);
+        let request = build_request("no-observe-clock", 0);
+        let mut sink = OrderingSink::default();
+
+        let completion = service
+            .stream_with_sink_observed(&request, &mut sink, None)
+            .expect("stream completion");
+
+        assert!(!completion.cancelled);
+        assert_eq!(completion.processed_rows, 64);
+        assert_eq!(timing_observation_starts(), 0);
     }
 }
-
