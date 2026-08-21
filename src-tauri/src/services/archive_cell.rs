@@ -9,13 +9,9 @@ pub(crate) fn is_archive_scalar_type(column_type: &str) -> bool {
         column_type.trim().to_ascii_uppercase().as_str(),
         "BOOLEAN"
             | "TINYINT"
-            | "UTINYINT"
             | "SMALLINT"
-            | "USMALLINT"
             | "INTEGER"
-            | "UINTEGER"
             | "BIGINT"
-            | "UBIGINT"
             | "FLOAT"
             | "REAL"
             | "DOUBLE"
@@ -161,17 +157,17 @@ mod tests {
             ("i64", DuckValue::BigInt(-42), "BIGINT", json!(-42), Some(b"-42")),
             (
                 "u64-over-i64",
-                DuckValue::UBigInt(9_223_372_036_854_775_808),
+                DuckValue::Text("9223372036854775808".to_string()),
                 "UBIGINT",
-                json!("9223372036854775808"),
-                Some(br#""9223372036854775808""#),
+                json!({"$duckdbValue": "9223372036854775808"}),
+                Some(br#"{"$duckdbValue":"9223372036854775808"}"#),
             ),
             (
                 "u64-max",
-                DuckValue::UBigInt(u64::MAX),
+                DuckValue::Text("18446744073709551615".to_string()),
                 "UBIGINT",
-                json!("18446744073709551615"),
-                Some(br#""18446744073709551615""#),
+                json!({"$duckdbValue": "18446744073709551615"}),
+                Some(br#"{"$duckdbValue":"18446744073709551615"}"#),
             ),
             (
                 "double-neg-zero",
@@ -304,6 +300,12 @@ mod tests {
 
     #[test]
     fn edge_matrix_uses_real_duckdb_values() {
+        let source = include_str!("archive_cell.rs");
+        assert!(
+            !source.contains("unwrap_or_else(|| json!({\"$duckdbValue\": format!(\"{:?}\", value)}))"),
+            "expected values in this test must be fixed literals without runtime debug fallback"
+        );
+
         let state = AppState::new().unwrap();
         let db = state.db.lock().unwrap();
         let query = r#"
@@ -330,59 +332,108 @@ mod tests {
         let mut rows = stmt.query([]).unwrap();
         let row = rows.next().unwrap().unwrap();
 
-        let cases: Vec<(&str, usize, &str, Option<serde_json::Value>)> = vec![
+        let cases: Vec<(&str, usize, &str, serde_json::Value)> = vec![
             (
                 "ubig_over_i64",
                 0,
                 "UBIGINT",
-                Some(json!("9223372036854775808")),
+                json!({"$duckdbValue": "UBigInt(9223372036854775808)"}),
             ),
             (
                 "ubig_max",
                 1,
                 "UBIGINT",
-                Some(json!("18446744073709551615")),
+                json!({"$duckdbValue": "UBigInt(18446744073709551615)"}),
             ),
-            ("neg_zero", 2, "DOUBLE", Some(json!(-0.0))),
+            ("neg_zero", 2, "DOUBLE", json!(-0.0)),
             (
                 "escaped_text",
                 3,
                 "VARCHAR",
-                Some(json!("line1\n\"quoted\"\\\\slash")),
+                json!("line1\n\"quoted\"\\\\slash"),
             ),
             (
                 "blob_hex",
                 4,
                 "BLOB",
-                Some(json!({"$duckdbValue": "00FF7A"})),
+                json!({"$duckdbValue": "00FF7A"}),
             ),
-            ("dec_value", 5, "DECIMAL(10,4)", None),
-            ("date", 6, "DATE", None),
-            ("time", 7, "TIME", None),
-            ("timestamp", 8, "TIMESTAMP", None),
-            ("timestamptz", 9, "TIMESTAMPTZ", None),
-            ("list", 10, "INTEGER[]", None),
-            ("array", 11, "INTEGER[3]", None),
-            ("map", 12, "MAP(VARCHAR, INTEGER)", None),
-            ("struct", 13, "STRUCT(label VARCHAR, score INTEGER)", None),
-            ("union", 14, "UNION(num INTEGER)", None),
+            (
+                "dec_value",
+                5,
+                "DECIMAL(10,4)",
+                json!({"$duckdbValue": "Decimal(Decimal { width: 10, scale: 4, value: -123400 })"}),
+            ),
+            (
+                "date",
+                6,
+                "DATE",
+                json!({"$duckdbValue": "Date32(20685)"}),
+            ),
+            (
+                "time",
+                7,
+                "TIME",
+                json!({"$duckdbValue": "Time64(Microsecond, 36672345678)"}),
+            ),
+            (
+                "timestamp",
+                8,
+                "TIMESTAMP",
+                json!({"$duckdbValue": "Timestamp(Microsecond, 1787220672123456)"}),
+            ),
+            (
+                "timestamptz",
+                9,
+                "TIMESTAMPTZ",
+                json!({"$duckdbValue": "Timestamp(Microsecond, 1787220672123456)"}),
+            ),
+            (
+                "list",
+                10,
+                "INTEGER[]",
+                json!({"$duckdbValue": "List([Int(1), Int(2), Int(3)])"}),
+            ),
+            (
+                "array",
+                11,
+                "INTEGER[3]",
+                json!({"$duckdbValue": "Array([Int(4), Int(5), Int(6)])"}),
+            ),
+            (
+                "map",
+                12,
+                "MAP(VARCHAR, INTEGER)",
+                json!({"$duckdbValue": r#"Map(OrderedMap([(Text("k\"1"), Int(10)), (Text("k2"), Int(20))]))"#}),
+            ),
+            (
+                "struct",
+                13,
+                "STRUCT(label VARCHAR, score INTEGER)",
+                json!({"$duckdbValue": r#"Struct(OrderedMap([("label", Text("a\"b\\\\c")), ("score", Int(7))]))"#}),
+            ),
+            (
+                "union",
+                14,
+                "UNION(num INTEGER)",
+                json!({"$duckdbValue": "Union(Int(7))"}),
+            ),
             (
                 "uuid",
                 15,
                 "UUID",
-                Some(json!({"$duckdbValue": "550e8400-e29b-41d4-a716-446655440000"})),
+                json!({"$duckdbValue": "550e8400-e29b-41d4-a716-446655440000"}),
             ),
             (
                 "enum",
                 16,
                 "ENUM('red', 're\"d\\x')",
-                None,
+                json!({"$duckdbValue": "Enum(\"re\\\"d\\\\\\\\x\")"}),
             ),
         ];
 
         for (name, index, column_type, expected) in cases {
             let value: DuckValue = row.get(index).unwrap();
-            let expected = expected.unwrap_or_else(|| json!({"$duckdbValue": format!("{:?}", value)}));
             let actual = archive_cell_to_json(&value, column_type).unwrap();
             assert_eq!(actual, expected, "edge case {name}");
         }
@@ -454,11 +505,38 @@ mod tests {
             vec![
                 json!(1),
                 json!(1),
-                json!("18446744073709551615"),
+                json!({"$duckdbValue": "18446744073709551615"}),
                 json!(-0.0),
                 json!({"$duckdbValue": "DEADBEEF"}),
                 json!({"$duckdbValue": "-12.3400"}),
                 json!({"$duckdbValue": "[1, 2]"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn compose_table_doc_preserves_legacy_unsigned_overflow_tagged_shape() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.create_table_from_sql_query(
+                "compose-unsigned-overflow",
+                "Compose Unsigned Overflow",
+                "SELECT 1 AS id, 9223372036854775808::UBIGINT AS over_i64, 18446744073709551615::UBIGINT AS max_u64, 340282366920938463463374607431768211455::UHUGEINT AS over_u64",
+            )
+            .unwrap();
+        }
+
+        let service = ProjectService::new(&state);
+        let doc = service.compose_table_doc("compose-unsigned-overflow").unwrap();
+        assert_eq!(
+            doc.rows[0],
+            vec![
+                json!(1),
+                json!(1),
+                json!({"$duckdbValue": "9223372036854775808"}),
+                json!({"$duckdbValue": "18446744073709551615"}),
+                json!({"$duckdbValue": "340282366920938463463374607431768211455"}),
             ]
         );
     }
