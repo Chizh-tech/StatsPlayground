@@ -6,10 +6,13 @@ use serde::Serialize;
 use crate::engine::duckdb_engine::DuckDbEngine;
 use crate::error::AppError;
 use crate::models::graph_data::{
-    GraphChunkHeader, GraphDataCompletion, GraphDataRequest, GraphElementRequest, GraphFieldBinding,
-    GraphSampling, GraphViewport,
+    GraphDataRequest, GraphElementRequest, GraphFieldBinding, GraphSampling, GraphViewport,
 };
-use crate::services::graph_data_service::{GraphDataChunk, GraphDataService};
+use crate::services::graph_data_service::GraphDataService;
+#[cfg(test)]
+use crate::models::graph_data::{GraphAggregatePacket, GraphChunkHeader, GraphDataCompletion};
+#[cfg(test)]
+use crate::services::graph_data_service::GraphDataChunk;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -53,6 +56,7 @@ enum DesktopOnlyMetric {
     DesktopOnly,
 }
 
+#[cfg(test)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GraphStreamHeaderMessage<'a> {
@@ -61,12 +65,22 @@ struct GraphStreamHeaderMessage<'a> {
     header: &'a GraphChunkHeader,
 }
 
+#[cfg(test)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GraphStreamCompletionMessage<'a> {
     message_type: &'static str,
     #[serde(flatten)]
     completion: &'a GraphDataCompletion,
+}
+
+#[cfg(test)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphStreamAggregateMessage<'a> {
+    message_type: &'static str,
+    #[serde(flatten)]
+    packet: &'a GraphAggregatePacket,
 }
 
 fn parse_positive_usize(flag: &str, value: Option<String>) -> Result<usize, AppError> {
@@ -185,7 +199,12 @@ fn seed_graph_benchmark_dataset(state: &AppState, dataset_id: &str, rows: usize)
     Ok(())
 }
 
-fn measure_transferred_bytes(chunks: &[GraphDataChunk], completion: &GraphDataCompletion) -> Result<u64, AppError> {
+#[cfg(test)]
+fn measure_transferred_bytes(
+    chunks: &[GraphDataChunk],
+    aggregates: &[GraphAggregatePacket],
+    completion: &GraphDataCompletion,
+) -> Result<u64, AppError> {
     let mut transferred = 0u64;
     for chunk in chunks {
         let header_message = GraphStreamHeaderMessage {
@@ -202,6 +221,20 @@ fn measure_transferred_bytes(chunks: &[GraphDataChunk], completion: &GraphDataCo
         transferred = transferred
             .checked_add(u64::try_from(chunk.payload.len()).map_err(|_| {
                 AppError::InvalidParam("graph payload length overflow".to_string())
+            })?)
+            .ok_or_else(|| AppError::InvalidParam("transferred bytes overflow".to_string()))?;
+    }
+
+    for packet in aggregates {
+        let aggregate_message = GraphStreamAggregateMessage {
+            message_type: "aggregate",
+            packet,
+        };
+        let aggregate_bytes = serde_json::to_vec(&aggregate_message)
+            .map_err(|error| AppError::InvalidParam(error.to_string()))?;
+        transferred = transferred
+            .checked_add(u64::try_from(aggregate_bytes.len()).map_err(|_| {
+                AppError::InvalidParam("aggregate payload length overflow".to_string())
             })?)
             .ok_or_else(|| AppError::InvalidParam("transferred bytes overflow".to_string()))?;
     }
@@ -242,49 +275,12 @@ fn execute_graph(options: Options, total_started: Instant) -> Result<Performance
     let request = build_graph_request(dataset_id, generation);
     let setup_ms = setup_started.elapsed().as_millis();
 
-    let query_started = Instant::now();
-    let mut query_processed_rows = 0u64;
-    let mut query_selected_columns = 0usize;
-    {
-        let db = state
-            .db
-            .lock()
-            .map_err(|error| AppError::Database(error.to_string()))?;
-        let stats = db.stream_graph_projection_rows(
-            &request,
-            true,
-            |stats| {
-                query_selected_columns = stats.projected_columns.len().saturating_add(1);
-                Ok(())
-            },
-            |_row_id, _values, _row_source_rows| {
-                query_processed_rows = query_processed_rows.saturating_add(1);
-                Ok(true)
-            },
-        )?;
-        if query_selected_columns == 0 {
-            query_selected_columns = stats.projected_columns.len().saturating_add(1);
-        }
-    }
-    let query_ms = query_started.elapsed().as_millis();
-
     let expected_rows = u64::try_from(options.rows)
         .map_err(|_| AppError::InvalidParam("benchmark row count is too large".into()))?;
-    if query_processed_rows != expected_rows {
-        return Err(AppError::InvalidParam(format!(
-            "graph query processed_rows mismatch: expected {expected_rows}, got {query_processed_rows}"
-        )));
-    }
-    if query_selected_columns != 3 {
-        return Err(AppError::InvalidParam(format!(
-            "graph projection selected column mismatch: expected 3, got {query_selected_columns}"
-        )));
-    }
-
-    let operation_started = Instant::now();
     let service = GraphDataService::new(&state);
-    let (chunks, completion) = service.collect_for_harness(&request)?;
-    let operation_ms = operation_started.elapsed().as_millis();
+    let capture = service.collect_benchmark_result(&request)?;
+    let completion = capture.completion;
+    let operation_ms = capture.operation_ms;
 
     if completion.processed_rows != expected_rows {
         return Err(AppError::InvalidParam(format!(
@@ -292,18 +288,30 @@ fn execute_graph(options: Options, total_started: Instant) -> Result<Performance
             completion.processed_rows
         )));
     }
-    let selected_columns = chunks
-        .first()
-        .map(|chunk| chunk.header.projected_columns.len())
-        .unwrap_or(0);
+    if capture.projection_passes != 1 {
+        return Err(AppError::InvalidParam(format!(
+            "graph projection pass mismatch: expected 1, got {}",
+            capture.projection_passes
+        )));
+    }
+    let selected_columns = capture.selected_columns;
     if selected_columns != 3 {
         return Err(AppError::InvalidParam(format!(
             "graph service selected column mismatch: expected 3, got {selected_columns}"
         )));
     }
+    if capture.projected_columns
+        != vec!["_row_id".to_string(), "region".to_string(), "cost".to_string()]
+    {
+        return Err(AppError::InvalidParam(format!(
+            "graph projected columns mismatch: expected [_row_id, region, cost], got {:?}",
+            capture.projected_columns
+        )));
+    }
 
-    let transferred_bytes = measure_transferred_bytes(&chunks, &completion)?;
-    let encode_ms = operation_ms.saturating_sub(query_ms);
+    let query_ms = capture.query_ms;
+    let encode_ms = capture.encode_ms;
+    let transferred_bytes = capture.transferred_bytes;
 
     Ok(PerformanceReport {
         rows: options.rows,
@@ -417,6 +425,9 @@ pub fn run_cli() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::graph_data::{
+        GraphAggregatePacket, GraphAxisEncoding, HistogramBin, HistogramPacket,
+    };
 
     #[test]
     fn performance_cli_uses_reference_defaults() {
@@ -504,6 +515,139 @@ mod tests {
                 .and_then(|value| value.as_u64())
                 .is_some_and(|value| value > 0)
         );
+    }
+
+    #[test]
+    fn performance_cli_graph_projection_timings_are_single_pass_partition() {
+        let state = AppState::new().expect("state");
+        let dataset_id = "perf-single-pass";
+        seed_graph_benchmark_dataset(&state, dataset_id, 1024).expect("seed");
+        let generation = {
+            let db = state.db.lock().expect("db lock");
+            db.get_dataset_generation(dataset_id).expect("generation")
+        };
+        let request = build_graph_request(dataset_id, generation);
+        let service = GraphDataService::new(&state);
+
+        let capture = service
+            .collect_benchmark_result(&request)
+            .expect("benchmark capture");
+
+        assert_eq!(capture.projection_passes, 1);
+        assert_eq!(capture.selected_columns, 3);
+        assert_eq!(
+            capture.projected_columns,
+            vec!["_row_id".to_string(), "region".to_string(), "cost".to_string()]
+        );
+        assert!(capture.query_ms > 0 || capture.encode_ms > 0);
+    }
+
+    #[test]
+    fn measure_transferred_bytes_counts_aggregate_events() {
+        let chunk = GraphDataChunk {
+            header: GraphChunkHeader {
+                request_id: "req-agg".to_string(),
+                generation: 1,
+                chunk_index: 0,
+                row_offset: 0,
+                row_count: 1,
+                source_rows: 1,
+                processed_rows: 1,
+                projected_columns: vec!["_row_id".to_string(), "region".to_string(), "cost".to_string()],
+                dictionaries: Default::default(),
+                validity_ranges: Default::default(),
+                x_values: crate::models::graph_data::GraphTypedSliceDescriptor::new(
+                    crate::models::graph_data::GraphPayloadType::U32,
+                    0,
+                    4,
+                ),
+                y_values: crate::models::graph_data::GraphTypedSliceDescriptor::new(
+                    crate::models::graph_data::GraphPayloadType::F64,
+                    8,
+                    8,
+                ),
+                row_ids: crate::models::graph_data::GraphTypedSliceDescriptor::new(
+                    crate::models::graph_data::GraphPayloadType::I64,
+                    16,
+                    8,
+                ),
+                z_values: None,
+                group_codes: None,
+                size_values: None,
+                source_codes: None,
+                facet_x_codes: None,
+                facet_y_codes: None,
+                facet_z_codes: None,
+                wrap_codes: None,
+                role_vectors: Default::default(),
+                x_encoding: GraphAxisEncoding::Categorical,
+                final_chunk: true,
+            },
+            payload: vec![1, 2, 3, 4, 5],
+        };
+        let aggregate = GraphAggregatePacket::Histogram(HistogramPacket {
+            x_column: Some("region".to_string()),
+            y_column: "cost".to_string(),
+            group_column: Some("region".to_string()),
+            source_column: None,
+            bin_count: 1,
+            min_value: Some(0.0),
+            max_value: Some(1.0),
+            missing_count: 0,
+            bin_width: 1.0,
+            total_count: 1,
+            bins: vec![HistogramBin {
+                group: Some("North".to_string()),
+                category: Some("North".to_string()),
+                source_column: None,
+                facet_x: None,
+                facet_y: None,
+                facet_z: None,
+                wrap: None,
+                bin_start: 0.0,
+                bin_end: 1.0,
+                count: 1,
+            }],
+        });
+        let completion = GraphDataCompletion {
+            request_id: "req-agg".to_string(),
+            dataset_id: "dataset-agg".to_string(),
+            generation: 1,
+            source_rows: 1,
+            processed_rows: 1,
+            chunks_sent: 1,
+            cancelled: false,
+        };
+
+        let actual = measure_transferred_bytes(
+            &[chunk.clone()],
+            &[aggregate.clone()],
+            &completion,
+        )
+        .expect("transferred bytes");
+
+        let header_bytes = serde_json::to_vec(&GraphStreamHeaderMessage {
+            message_type: "header",
+            header: &chunk.header,
+        })
+        .expect("header bytes")
+        .len() as u64;
+        let payload_bytes = chunk.payload.len() as u64;
+        let aggregate_bytes = serde_json::to_vec(&GraphStreamAggregateMessage {
+            message_type: "aggregate",
+            packet: &aggregate,
+        })
+        .expect("aggregate bytes")
+        .len() as u64;
+        let terminal_bytes = serde_json::to_vec(&GraphStreamCompletionMessage {
+            message_type: "complete",
+            completion: &completion,
+        })
+        .expect("terminal bytes")
+        .len() as u64;
+        let expected = header_bytes + payload_bytes + aggregate_bytes + terminal_bytes;
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

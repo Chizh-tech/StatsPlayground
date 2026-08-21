@@ -1,5 +1,6 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
+use std::time::Instant;
 use std::sync::{Mutex, OnceLock};
 
 use duckdb::types::Value;
@@ -10,7 +11,7 @@ use crate::engine::duckdb_engine::GraphProjectionStats;
 use crate::error::AppError;
 use crate::models::graph_data::{
     GraphAggregatePacket, GraphAxisEncoding, GraphChunkHeader, GraphDataCompletion,
-    GraphDataRequest, GraphPayloadType, GraphSampling, GraphTypedSliceDescriptor,
+    GraphDataRequest, GraphPayloadType, GraphTypedSliceDescriptor,
     GRAPH_VIRTUAL_SOURCE_COLUMN,
 };
 use crate::state::AppState;
@@ -143,11 +144,13 @@ impl GraphChunkSink for ChannelChunkSink<'_> {
 struct CollectingChunkSink {
     chunks: Vec<GraphDataChunk>,
     pending_header: Option<GraphChunkHeader>,
+    aggregate_packets: Vec<GraphAggregatePacket>,
     terminal_completion: Option<GraphDataCompletion>,
 }
 
 #[cfg(any(test, feature = "perf-harness"))]
 impl CollectingChunkSink {
+    #[cfg(test)]
     fn into_result(self) -> Result<(Vec<GraphDataChunk>, GraphDataCompletion), AppError> {
         if self.pending_header.is_some() {
             return Err(AppError::Database(
@@ -183,7 +186,8 @@ impl GraphChunkSink for CollectingChunkSink {
         Ok(())
     }
 
-    fn send_aggregate(&mut self, _packet: &GraphAggregatePacket) -> Result<(), GraphSinkError> {
+    fn send_aggregate(&mut self, packet: &GraphAggregatePacket) -> Result<(), GraphSinkError> {
+        self.aggregate_packets.push(packet.clone());
         Ok(())
     }
 
@@ -199,9 +203,28 @@ impl GraphChunkSink for CollectingChunkSink {
 }
 
 #[derive(Debug, Clone)]
-pub struct GraphDataChunk {
+pub(crate) struct GraphDataChunk {
     pub header: GraphChunkHeader,
     pub payload: Vec<u8>,
+}
+
+#[cfg(any(test, feature = "perf-harness"))]
+#[derive(Debug, Clone)]
+pub(crate) struct GraphBenchmarkResult {
+    pub completion: GraphDataCompletion,
+    pub selected_columns: usize,
+    pub projected_columns: Vec<String>,
+    pub operation_ms: u128,
+    pub query_ms: u128,
+    pub encode_ms: u128,
+    pub transferred_bytes: u64,
+    pub projection_passes: u32,
+}
+
+#[derive(Default)]
+struct StreamMetrics {
+    encode_ms: u128,
+    projection_passes: u32,
 }
 
 pub struct GraphDataService<'a> {
@@ -242,8 +265,8 @@ impl<'a> GraphDataService<'a> {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "perf-harness"))]
-    pub fn collect_for_harness(
+    #[cfg(test)]
+    pub(crate) fn collect_for_harness(
         &self,
         request: &GraphDataRequest,
     ) -> Result<(Vec<GraphDataChunk>, GraphDataCompletion), AppError> {
@@ -255,6 +278,94 @@ impl<'a> GraphDataService<'a> {
             ));
         }
         sink.into_result()
+    }
+
+    #[cfg(any(test, feature = "perf-harness"))]
+    pub(crate) fn collect_benchmark_result(
+        &self,
+        request: &GraphDataRequest,
+    ) -> Result<GraphBenchmarkResult, AppError> {
+        let mut sink = CollectingChunkSink::default();
+        let started = Instant::now();
+        let mut metrics = StreamMetrics::default();
+        let completion = self.stream_with_sink_observed(request, &mut sink, Some(&mut metrics))?;
+        if completion.cancelled {
+            return Err(AppError::InvalidParam(
+                "request was cancelled during graph projection".to_string(),
+            ));
+        }
+
+        let selected_columns = sink
+            .chunks
+            .first()
+            .map(|chunk| chunk.header.projected_columns.len())
+            .unwrap_or(0);
+        let projected_columns = sink
+            .chunks
+            .first()
+            .map(|chunk| chunk.header.projected_columns.clone())
+            .unwrap_or_default();
+
+        let mut transferred = 0u64;
+        for chunk in &sink.chunks {
+            let header_message = GraphStreamHeaderMessage {
+                message_type: "header",
+                header: &chunk.header,
+            };
+            let header_bytes = serde_json::to_vec(&header_message)
+                .map_err(|error| AppError::InvalidParam(error.to_string()))?;
+            transferred = transferred
+                .checked_add(u64::try_from(header_bytes.len()).map_err(|_| {
+                    AppError::InvalidParam("header payload length overflow".to_string())
+                })?)
+                .ok_or_else(|| AppError::InvalidParam("transferred bytes overflow".to_string()))?;
+            transferred = transferred
+                .checked_add(u64::try_from(chunk.payload.len()).map_err(|_| {
+                    AppError::InvalidParam("graph payload length overflow".to_string())
+                })?)
+                .ok_or_else(|| AppError::InvalidParam("transferred bytes overflow".to_string()))?;
+        }
+
+        for packet in &sink.aggregate_packets {
+            let aggregate_message = GraphStreamAggregateMessage {
+                message_type: "aggregate",
+                packet,
+            };
+            let aggregate_bytes = serde_json::to_vec(&aggregate_message)
+                .map_err(|error| AppError::InvalidParam(error.to_string()))?;
+            transferred = transferred
+                .checked_add(u64::try_from(aggregate_bytes.len()).map_err(|_| {
+                    AppError::InvalidParam("aggregate payload length overflow".to_string())
+                })?)
+                .ok_or_else(|| AppError::InvalidParam("transferred bytes overflow".to_string()))?;
+        }
+
+        let terminal_message = GraphStreamCompletionMessage {
+            message_type: "complete",
+            completion: &completion,
+        };
+        let terminal_bytes = serde_json::to_vec(&terminal_message)
+            .map_err(|error| AppError::InvalidParam(error.to_string()))?;
+        transferred = transferred
+            .checked_add(u64::try_from(terminal_bytes.len()).map_err(|_| {
+                AppError::InvalidParam("terminal payload length overflow".to_string())
+            })?)
+            .ok_or_else(|| AppError::InvalidParam("transferred bytes overflow".to_string()))?;
+
+        let operation_ms = started.elapsed().as_millis();
+        let encode_ms = metrics.encode_ms;
+        let query_ms = operation_ms.saturating_sub(encode_ms);
+
+        Ok(GraphBenchmarkResult {
+            completion,
+            selected_columns,
+            projected_columns,
+            operation_ms,
+            query_ms,
+            encode_ms,
+            transferred_bytes: transferred,
+            projection_passes: metrics.projection_passes,
+        })
     }
 
     #[cfg(test)]
@@ -283,6 +394,29 @@ impl<'a> GraphDataService<'a> {
         request: &GraphDataRequest,
         sink: &mut S,
     ) -> Result<GraphDataCompletion, AppError> {
+        self.stream_with_sink_observed(request, sink, None)
+    }
+
+    fn stream_with_sink_observed<S: GraphChunkSink>(
+        &self,
+        request: &GraphDataRequest,
+        sink: &mut S,
+        mut metrics: Option<&mut StreamMetrics>,
+    ) -> Result<GraphDataCompletion, AppError> {
+        let observed = metrics.is_some();
+        let encode_ms_cell = Cell::new(0u128);
+        let projection_passes_cell = Cell::new(0u32);
+
+        let record_encode = |started: Instant| {
+            if observed {
+                encode_ms_cell.set(
+                    encode_ms_cell
+                        .get()
+                        .saturating_add(started.elapsed().as_millis()),
+                );
+            }
+        };
+
         if request.request_id.trim().is_empty() {
             return Err(AppError::InvalidParam(
                 "request_id must not be blank".to_string(),
@@ -328,8 +462,10 @@ impl<'a> GraphDataService<'a> {
 
             let aggregate_packets = db.collect_graph_aggregate_packets(request)?;
             for packet in &aggregate_packets {
+                let encode_started = Instant::now();
                 sink.send_aggregate(packet)
                     .map_err(Self::map_sink_error_to_app_error)?;
+                record_encode(encode_started);
             }
 
             let metadata: RefCell<Option<ProjectionMetadata>> = RefCell::new(None);
@@ -347,6 +483,9 @@ impl<'a> GraphDataService<'a> {
                 include_row_id,
                 |stats| {
                     projection_callbacks = projection_callbacks.saturating_add(1);
+                    if observed {
+                        projection_passes_cell.set(projection_callbacks);
+                    }
                     if projection_callbacks > 1 {
                         return Err(AppError::Database(
                             "graph projection callback invoked multiple times".to_string(),
@@ -358,6 +497,7 @@ impl<'a> GraphDataService<'a> {
                     Ok(())
                 },
                 |row_id, values, row_source_rows| {
+                    let encode_started = Instant::now();
                     source_rows = row_source_rows;
                     if self.is_cancelled(&request.request_id, run.nonce)? {
                         cancelled = true;
@@ -399,6 +539,7 @@ impl<'a> GraphDataService<'a> {
                         chunk_index = chunk_index.saturating_add(1);
                         row_offset = processed_rows;
                     }
+                    record_encode(encode_started);
                     Ok(true)
                 },
             )?;
@@ -429,6 +570,7 @@ impl<'a> GraphDataService<'a> {
                     processed_rows,
                     true,
                 )?;
+                let encode_started = Instant::now();
                 if let Err(error) = self.send_chunk(sink, chunk) {
                     if self.is_cancelled(&request.request_id, run.nonce)? {
                         cancelled = true;
@@ -438,6 +580,7 @@ impl<'a> GraphDataService<'a> {
                 } else {
                     chunks_sent = chunks_sent.saturating_add(1);
                 }
+                record_encode(encode_started);
             }
 
             let completion = GraphDataCompletion {
@@ -450,14 +593,20 @@ impl<'a> GraphDataService<'a> {
                 cancelled,
             };
 
+            let encode_started = Instant::now();
             sink.send_terminal(&completion)
                 .map_err(Self::map_sink_error_to_app_error)?;
+            record_encode(encode_started);
 
             Ok(completion)
         })();
 
         let observed_cancelled = matches!(&result, Ok(completion) if completion.cancelled);
         self.finish_request_run(&request.request_id, run.nonce, observed_cancelled)?;
+        if let Some(value) = metrics.as_deref_mut() {
+            value.encode_ms = encode_ms_cell.get();
+            value.projection_passes = projection_passes_cell.get();
+        }
         result
     }
 

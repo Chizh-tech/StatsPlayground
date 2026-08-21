@@ -155,40 +155,8 @@ Manual UI actions (old `GraphBuilderView` path, desktop app):
    columns.
 3. Open graph builder and choose a graph type that renders immediately from the
    selected table (no additional filters/transforms).
-4. Ensure the table is selected as graph input, then prepare to click the final
-   action that triggers chart render.
-
-Executable PowerShell sampling commands (run in parallel shell):
-
-```powershell
-# START MARKER: run before you trigger render in the UI
-$proc = Get-Process -Name StatsPlayground -ErrorAction Stop
-$baseline = [pscustomobject]@{
-  WorkingSet64 = $proc.WorkingSet64
-  PeakWorkingSet64 = $proc.PeakWorkingSet64
-}
-
-"READY: put focus on the desktop UI action that triggers graph render."
-"Press Enter here at the exact moment you click render in the UI."
-Read-Host | Out-Null
-$start = Get-Date
-"START marker: $($start.ToString('o'))"
-
-"Press Enter here when the graph is fully painted and interactive."
-Read-Host | Out-Null
-$stop = Get-Date
-"STOP marker:  $($stop.ToString('o'))"
-
-$proc = Get-Process -Id $proc.Id -ErrorAction Stop
-$capture = [pscustomobject]@{
-  WallMs = [math]::Round(($stop - $start).TotalMilliseconds, 3)
-  WorkingSet64 = $proc.WorkingSet64
-  PeakWorkingSet64 = $proc.PeakWorkingSet64
-  DeltaWorkingSet64 = $proc.WorkingSet64 - $baseline.WorkingSet64
-  DeltaPeakWorkingSet64 = $proc.PeakWorkingSet64 - $baseline.PeakWorkingSet64
-}
-$capture | Format-List
-```
+4. Ensure the table is selected as graph input, then trigger the final action
+  that renders the chart while running the canonical capture script above.
 
 Timing note:
 

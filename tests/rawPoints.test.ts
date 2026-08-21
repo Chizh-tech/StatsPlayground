@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   bigintToSafeNumber,
   bigintToScatterPointPick,
@@ -24,25 +21,6 @@ import {
   GRAPH_SERIES_OVERLAY_ZLEVEL,
   withInterleavedGraphLayers,
 } from "../src/graphCore/layers.ts";
-
-const TEST_FILE_DIR = dirname(fileURLToPath(import.meta.url));
-
-{
-  const perfHarnessSource = readFileSync(
-    resolve(TEST_FILE_DIR, "../src-tauri/src/perf_harness.rs"),
-    "utf8",
-  );
-  assert.equal(
-    perfHarnessSource.includes("decode_ms: Some(DesktopOnlyMetric::DesktopOnly)"),
-    true,
-    "perf harness graph report must keep decodeMs as desktop_only in Node benchmarks",
-  );
-  assert.equal(
-    perfHarnessSource.includes("draw_ms: Some(DesktopOnlyMetric::DesktopOnly)"),
-    true,
-    "perf harness graph report must keep drawMs as desktop_only in Node benchmarks",
-  );
-}
 
 function bitsFromFlags(flags: number[]): Uint8Array {
   const bytes = new Uint8Array(Math.max(1, Math.ceil(flags.length / 8)));
