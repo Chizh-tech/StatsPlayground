@@ -87,6 +87,18 @@ fn tagged_value_to_json(value: &DuckValue, column_type: &str) -> Result<serde_js
     match value {
         DuckValue::Null => Ok(serde_json::Value::Null),
         DuckValue::Text(text) => Ok(serde_json::json!({ "$duckdbValue": text })),
+        DuckValue::UTinyInt(value) => {
+            Ok(serde_json::json!({ "$duckdbValue": value.to_string() }))
+        }
+        DuckValue::USmallInt(value) => {
+            Ok(serde_json::json!({ "$duckdbValue": value.to_string() }))
+        }
+        DuckValue::UInt(value) => {
+            Ok(serde_json::json!({ "$duckdbValue": value.to_string() }))
+        }
+        DuckValue::UBigInt(value) => {
+            Ok(serde_json::json!({ "$duckdbValue": value.to_string() }))
+        }
         DuckValue::Blob(bytes) if column_type.trim().eq_ignore_ascii_case("BLOB") => {
             Ok(serde_json::json!({ "$duckdbValue": bytes_to_upper_hex(bytes) }))
         }
@@ -299,6 +311,56 @@ mod tests {
     }
 
     #[test]
+    fn direct_writer_unsigned_duckvalues_use_plain_decimal_tagged_strings() {
+        let cases: Vec<(&str, DuckValue, &str, &str)> = vec![
+            (
+                "utinyint-max",
+                DuckValue::UTinyInt(u8::MAX),
+                "UTINYINT",
+                "255",
+            ),
+            (
+                "usmallint-max",
+                DuckValue::USmallInt(u16::MAX),
+                "USMALLINT",
+                "65535",
+            ),
+            (
+                "uinteger-max",
+                DuckValue::UInt(u32::MAX),
+                "UINTEGER",
+                "4294967295",
+            ),
+            (
+                "ubigint-over-i64-max",
+                DuckValue::UBigInt(i64::MAX as u64 + 1),
+                "UBIGINT",
+                "9223372036854775808",
+            ),
+            (
+                "ubigint-u64-max",
+                DuckValue::UBigInt(u64::MAX),
+                "UBIGINT",
+                "18446744073709551615",
+            ),
+        ];
+
+        for (name, value, column_type, expected_decimal) in cases {
+            let expected = json!({"$duckdbValue": expected_decimal});
+            let actual = archive_cell_to_json(&value, column_type).unwrap();
+            assert_eq!(actual, expected, "case {name} json");
+
+            let mut bytes = Vec::new();
+            write_archive_cell(&mut bytes, &value, column_type).unwrap();
+            assert_eq!(
+                bytes,
+                format!("{{\"$duckdbValue\":\"{expected_decimal}\"}}").into_bytes(),
+                "case {name} writer bytes"
+            );
+        }
+    }
+
+    #[test]
     fn edge_matrix_uses_real_duckdb_values() {
         let source = include_str!("archive_cell.rs");
         assert!(
@@ -337,13 +399,13 @@ mod tests {
                 "ubig_over_i64",
                 0,
                 "UBIGINT",
-                json!({"$duckdbValue": "UBigInt(9223372036854775808)"}),
+                json!({"$duckdbValue": "9223372036854775808"}),
             ),
             (
                 "ubig_max",
                 1,
                 "UBIGINT",
-                json!({"$duckdbValue": "UBigInt(18446744073709551615)"}),
+                json!({"$duckdbValue": "18446744073709551615"}),
             ),
             ("neg_zero", 2, "DOUBLE", json!(-0.0)),
             (

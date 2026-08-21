@@ -113,3 +113,38 @@ Tested by comparing `compose_table_doc` output vs direct `write_archive_cell` by
 
 ### Ignored findings
 - None.
+
+## Round 3 Fix (review head 0beaf463)
+
+### Load-bearing finding addressed
+- Kept unsigned SQL types excluded from archive scalar gate (`is_archive_scalar_type` unchanged), but fixed direct tagged conversion path so raw unsigned `duckdb::types::Value` variants no longer fall back to Debug wrappers.
+- `tagged_value_to_json` now converts these raw variants to plain decimal strings inside `{ "$duckdbValue": "..." }`:
+  - `UTinyInt`
+  - `USmallInt`
+  - `UInt`
+  - `UBigInt`
+
+### TDD coverage added
+- Added independent direct-writer golden cases in `direct_writer_unsigned_duckvalues_use_plain_decimal_tagged_strings` for:
+  - `UTINYINT` max (`255`)
+  - `USMALLINT` max (`65535`)
+  - `UINTEGER` max (`4294967295`)
+  - `UBIGINT` just over `i64::MAX` (`9223372036854775808`)
+  - `UBIGINT` `u64::MAX` (`18446744073709551615`)
+- Asserts exact writer bytes and JSON shape, explicitly disallowing Debug payloads like `UTinyInt(...)` / `UBigInt(...)`.
+
+### Matrix update
+- Updated real-value edge matrix expectations for UBIGINT cells to the same historical tagged decimal string shape used by legacy SQL-cast compose/export paths.
+- Signed scalar behavior and existing compatibility matrix remain unchanged.
+
+### Verification (round 3)
+- `cargo test --manifest-path src-tauri/Cargo.toml services::archive_cell::tests -- --nocapture` -> pass (8 passed)
+- `cargo test --manifest-path src-tauri/Cargo.toml services::project_service::tests -- --nocapture` -> pass (14 passed)
+- `cargo test --manifest-path src-tauri/Cargo.toml services::spprj_archive::tests -- --nocapture` -> pass (4 passed)
+- `cargo check --manifest-path src-tauri/Cargo.toml` -> pass
+
+### Schema restore
+- No generated schema files changed during verification; no restore action required.
+
+### Ignored findings (round 3)
+- None.
