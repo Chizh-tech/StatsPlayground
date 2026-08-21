@@ -146,8 +146,15 @@ impl SaveCoordinator {
     }
 
     #[cfg(test)]
-    fn test_notify_spurious_wakeup(&self) {
+    fn test_notify_spurious_wakeup_after_wait_parked(&self) {
+        // Concurrency proof: acquiring the same mutex used by condvar.wait proves the
+        // waiter has released it as part of parking in Condvar::wait. Notifying while
+        // holding this lock prevents pre-wait lost notifications.
+        let state = self.state.lock().expect("coordinator lock");
+        assert!(state.save_waiting, "save intent must remain registered");
+        assert!(state.active_mutations > 0, "active mutation must keep wait loop active");
         self.condvar.notify_all();
+        drop(state);
     }
 
     #[cfg(test)]
@@ -235,6 +242,40 @@ mod tests {
     use crate::error::AppError;
 
     use super::{MutationPermit, SaveCoordinator, SaveGuard};
+
+    fn run_spurious_wakeup_iteration() {
+        let coordinator = Arc::new(SaveCoordinator::new());
+        let permit = coordinator
+            .mutation_permit()
+            .expect("initial permit should be acquired");
+
+        let thread_coordinator = Arc::clone(&coordinator);
+        let (save_started_tx, save_started_rx) = mpsc::channel();
+        let (release_save_tx, release_save_rx) = mpsc::channel();
+
+        let handle = thread::spawn(move || {
+            let guard = thread_coordinator.begin_save().expect("save should start");
+            save_started_tx.send(()).expect("signal save started");
+            release_save_rx.recv().expect("wait to release save");
+            drop(guard);
+        });
+
+        coordinator.test_wait_until_save_waiting_and_waiting_for_mutations();
+        coordinator.test_wait_until_begin_save_wait_entries_at_least(1);
+        coordinator.test_notify_spurious_wakeup_after_wait_parked();
+        coordinator.test_wait_until_begin_save_wait_entries_at_least(2);
+
+        let while_still_waiting = coordinator
+            .mutation_permit()
+            .expect_err("permit should remain blocked after spurious wakeup");
+        assert!(matches!(while_still_waiting, AppError::ReadOnly(_)));
+
+        drop(permit);
+        save_started_rx.recv().expect("save should eventually start");
+
+        release_save_tx.send(()).expect("release save");
+        handle.join().expect("join save thread");
+    }
 
     #[test]
     fn begin_save_waits_until_active_mutation_permit_drops_with_deterministic_handshake() {
@@ -325,38 +366,14 @@ mod tests {
 
     #[test]
     fn begin_save_rechecks_condition_after_spurious_wakeup() {
-        let coordinator = Arc::new(SaveCoordinator::new());
-        let permit = coordinator
-            .mutation_permit()
-            .expect("initial permit should be acquired");
+        run_spurious_wakeup_iteration();
+    }
 
-        let thread_coordinator = Arc::clone(&coordinator);
-        let (save_started_tx, save_started_rx) = mpsc::channel();
-        let (release_save_tx, release_save_rx) = mpsc::channel();
-
-        let handle = thread::spawn(move || {
-            let guard = thread_coordinator.begin_save().expect("save should start");
-            save_started_tx.send(()).expect("signal save started");
-            release_save_rx.recv().expect("wait to release save");
-            drop(guard);
-        });
-
-        coordinator.test_wait_until_save_waiting_and_waiting_for_mutations();
-        coordinator.test_wait_until_begin_save_wait_entries_at_least(1);
-
-        coordinator.test_notify_spurious_wakeup();
-        coordinator.test_wait_until_begin_save_wait_entries_at_least(2);
-
-        let while_still_waiting = coordinator
-            .mutation_permit()
-            .expect_err("permit should remain blocked after spurious wakeup");
-        assert!(matches!(while_still_waiting, AppError::ReadOnly(_)));
-
-        drop(permit);
-        save_started_rx.recv().expect("save should eventually start");
-
-        release_save_tx.send(()).expect("release save");
-        handle.join().expect("join save thread");
+    #[test]
+    fn begin_save_rechecks_condition_after_spurious_wakeup_over_many_iterations() {
+        for _ in 0..100 {
+            run_spurious_wakeup_iteration();
+        }
     }
 
     #[test]
