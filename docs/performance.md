@@ -62,12 +62,31 @@ Required command:
 cargo run --release --manifest-path src-tauri/Cargo.toml --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation save_current
 ```
 
-Status: blocked during this run window. The release build repeatedly stalled at
-`libduckdb-sys` (`Building [=======================> ] 580/585`) and did not
-emit the final benchmark JSON line before timeout/termination.
+Profile and project shape:
 
-Peak working set: not recorded. No completed benchmark process existed from
-which to read a trustworthy peak memory value.
+- Rust `release` profile (`performance_baseline` example, `perf-harness` feature)
+- Deterministic managed table seed: 300,000 rows x 20 columns
+- Representative non-empty project metadata included in the save payload
+
+Observed output JSON:
+
+```json
+{"rows":300000,"columns":20,"operation":"savecurrent","setupMs":277,"operationMs":3674,"totalMs":4708,"resultRows":300000,"archiveBytes":15830873}
+```
+
+Measured operation summary:
+
+- `operationMs`: 3674 ms
+- `archiveBytes`: 15830873
+- `resultRows`: 300000
+
+Peak working set: pending. The required benchmark run completed and produced
+timing/archive JSON, but an objective peak working set capture was not recorded
+for this baseline run.
+
+Known baseline risk (not addressed by Task 1): destination replacement still
+uses remove-before-rename semantics, so a crash between those steps remains a
+post-remove/pre-rename risk window.
 
 This baseline demonstrates that set-based DuckDB generation and bounded reads
 are already fast. It does not measure the current WebView full-table JSON IPC,
