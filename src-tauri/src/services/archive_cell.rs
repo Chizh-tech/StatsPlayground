@@ -9,9 +9,13 @@ pub(crate) fn is_archive_scalar_type(column_type: &str) -> bool {
         column_type.trim().to_ascii_uppercase().as_str(),
         "BOOLEAN"
             | "TINYINT"
+            | "UTINYINT"
             | "SMALLINT"
+            | "USMALLINT"
             | "INTEGER"
+            | "UINTEGER"
             | "BIGINT"
+            | "UBIGINT"
             | "FLOAT"
             | "REAL"
             | "DOUBLE"
@@ -37,7 +41,7 @@ pub(crate) fn write_archive_cell<W: Write>(
 ) -> Result<(), AppError> {
     let json = archive_cell_to_json(value, column_type)?;
     serde_json::to_writer(writer, &json)
-        .map_err(|e| AppError::InvalidParam(format!("failed to serialize archive cell: {e}")))
+    .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
 }
 
 pub(crate) fn archive_cell_to_json(
@@ -104,129 +108,381 @@ fn bytes_to_upper_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use duckdb::types::Value as DuckValue;
+    use std::io::{Error, ErrorKind, Write};
 
+    use duckdb::types::Value as DuckValue;
+    use serde_json::json;
+
+    use crate::error::AppError;
     use crate::services::project_service::ProjectService;
+    use crate::services::spprj_archive;
     use crate::state::AppState;
 
-    use super::{archive_export_expression, write_archive_cell};
+    use super::{archive_cell_to_json, write_archive_cell};
 
-    #[test]
-    fn writer_matches_compose_table_doc_for_supported_archive_types() {
-        let state = AppState::new().unwrap();
-        {
-            let db = state.db.lock().unwrap();
-            let col_names = vec![
-                "c_null".to_string(),
-                "c_bool".to_string(),
-                "c_i64".to_string(),
-                "c_u64".to_string(),
-                "c_float".to_string(),
-                "c_text".to_string(),
-                "c_blob".to_string(),
-                "c_decimal".to_string(),
-                "c_date".to_string(),
-                "c_time".to_string(),
-                "c_timestamp".to_string(),
-                "c_list".to_string(),
-                "c_array".to_string(),
-                "c_map".to_string(),
-                "c_struct".to_string(),
-                "c_union".to_string(),
-                "c_uuid".to_string(),
-                "c_enum".to_string(),
-            ];
-            let col_types = vec![
-                "INTEGER".to_string(),
-                "BOOLEAN".to_string(),
-                "BIGINT".to_string(),
-                "UBIGINT".to_string(),
-                "DOUBLE".to_string(),
-                "VARCHAR".to_string(),
-                "BLOB".to_string(),
-                "DECIMAL(12,2)".to_string(),
-                "DATE".to_string(),
-                "TIME".to_string(),
-                "TIMESTAMP".to_string(),
-                "INTEGER[]".to_string(),
-                "INTEGER[3]".to_string(),
-                "MAP(VARCHAR, INTEGER)".to_string(),
-                "STRUCT(label VARCHAR, score INTEGER)".to_string(),
-                "UNION(num INTEGER)".to_string(),
-                "UUID".to_string(),
-                "ENUM('red', 'green')".to_string(),
-            ];
-            db.create_empty_table(
-                "archive-cell-fixture",
-                "Archive Cell Fixture",
-                &col_names,
-                &col_types,
-            )
-            .unwrap();
+    struct FailingSink {
+        bytes: Vec<u8>,
+        fail_after: usize,
+    }
 
-            db.conn()
-                .execute(
-                    r#"INSERT INTO "dataset_archive_cell_fixture" (
-                        "_row_id", "c_null", "c_bool", "c_i64", "c_u64", "c_float", "c_text", "c_blob", "c_decimal", "c_date", "c_time", "c_timestamp", "c_list", "c_array", "c_map", "c_struct", "c_union", "c_uuid", "c_enum"
-                    )
-                    SELECT
-                        1,
-                        NULL::INTEGER,
-                        true,
-                        -42::BIGINT,
-                        42::UBIGINT,
-                        3.25::DOUBLE,
-                        concat('line1', chr(10), '"quoted"', '\\slash'),
-                        from_hex('deadbeef'),
-                        12.34::DECIMAL(12,2),
-                        DATE '2026-08-20',
-                        TIME '10:11:12',
-                        TIMESTAMP '2026-08-20 10:11:12',
-                        [1, 2, 3]::INTEGER[],
-                        [4, 5, 6]::INTEGER[3],
-                        MAP(['k1', 'k2'], [10, 20]),
-                        struct_pack(label := 'alpha', score := 7),
-                        union_value(num := 7),
-                        '550e8400-e29b-41d4-a716-446655440000'::UUID,
-                        'red'::ENUM('red', 'green')"#,
-                    [],
-                )
-                .unwrap();
-            db.conn()
-                .execute(
-                    "UPDATE _meta_datasets SET row_count = 1 WHERE id = $1",
-                    duckdb::params!["archive-cell-fixture"],
-                )
-                .unwrap();
+    impl FailingSink {
+        fn new(fail_after: usize) -> Self {
+            Self {
+                bytes: Vec::new(),
+                fail_after,
+            }
+        }
+    }
+
+    impl Write for FailingSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.bytes.len() >= self.fail_after {
+                return Err(Error::new(ErrorKind::BrokenPipe, "sink-fail"));
+            }
+            let remaining = self.fail_after - self.bytes.len();
+            let take = remaining.min(buf.len());
+            self.bytes.extend_from_slice(&buf[..take]);
+            if take < buf.len() {
+                return Err(Error::new(ErrorKind::BrokenPipe, "sink-fail"));
+            }
+            Ok(take)
         }
 
-        let service = ProjectService::new(&state);
-        let doc = service.compose_table_doc("archive-cell-fixture").unwrap();
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
+    #[test]
+    fn golden_scalar_and_tagged_cases_are_independent_of_compose() {
+        let cases: Vec<(&str, DuckValue, &str, serde_json::Value, Option<&[u8]>)> = vec![
+            ("null", DuckValue::Null, "INTEGER", serde_json::Value::Null, Some(b"null")),
+            ("bool", DuckValue::Boolean(true), "BOOLEAN", json!(true), Some(b"true")),
+            ("i64", DuckValue::BigInt(-42), "BIGINT", json!(-42), Some(b"-42")),
+            (
+                "u64-over-i64",
+                DuckValue::UBigInt(9_223_372_036_854_775_808),
+                "UBIGINT",
+                json!("9223372036854775808"),
+                Some(br#""9223372036854775808""#),
+            ),
+            (
+                "u64-max",
+                DuckValue::UBigInt(u64::MAX),
+                "UBIGINT",
+                json!("18446744073709551615"),
+                Some(br#""18446744073709551615""#),
+            ),
+            (
+                "double-neg-zero",
+                DuckValue::Double(-0.0),
+                "DOUBLE",
+                json!(-0.0),
+                Some(b"-0.0"),
+            ),
+            (
+                "text-escaping",
+                DuckValue::Text("line1\n\"quoted\"\\slash".to_string()),
+                "VARCHAR",
+                json!("line1\n\"quoted\"\\slash"),
+                Some(br#""line1\n\"quoted\"\\slash""#),
+            ),
+            (
+                "blob-hex-uppercase",
+                DuckValue::Blob(vec![0x00, 0xff, 0x7a]),
+                "BLOB",
+                json!({"$duckdbValue": "00FF7A"}),
+                Some(br#"{"$duckdbValue":"00FF7A"}"#),
+            ),
+            (
+                "decimal-tag",
+                DuckValue::Text("-12.3400".to_string()),
+                "DECIMAL(10,4)",
+                json!({"$duckdbValue": "-12.3400"}),
+                Some(br#"{"$duckdbValue":"-12.3400"}"#),
+            ),
+            (
+                "date-tag",
+                DuckValue::Text("2026-08-20".to_string()),
+                "DATE",
+                json!({"$duckdbValue": "2026-08-20"}),
+                Some(br#"{"$duckdbValue":"2026-08-20"}"#),
+            ),
+            (
+                "time-tag",
+                DuckValue::Text("10:11:12.345678".to_string()),
+                "TIME",
+                json!({"$duckdbValue": "10:11:12.345678"}),
+                Some(br#"{"$duckdbValue":"10:11:12.345678"}"#),
+            ),
+            (
+                "timestamp-tag",
+                DuckValue::Text("2026-08-20 10:11:12.123456".to_string()),
+                "TIMESTAMP",
+                json!({"$duckdbValue": "2026-08-20 10:11:12.123456"}),
+                Some(br#"{"$duckdbValue":"2026-08-20 10:11:12.123456"}"#),
+            ),
+            (
+                "timestamptz-tag",
+                DuckValue::Text("2026-08-20 10:11:12.123456+00".to_string()),
+                "TIMESTAMPTZ",
+                json!({"$duckdbValue": "2026-08-20 10:11:12.123456+00"}),
+                None,
+            ),
+            (
+                "list-tag",
+                DuckValue::Text("[1, 2, 3]".to_string()),
+                "INTEGER[]",
+                json!({"$duckdbValue": "[1, 2, 3]"}),
+                Some(br#"{"$duckdbValue":"[1, 2, 3]"}"#),
+            ),
+            (
+                "array-tag",
+                DuckValue::Text("[4, 5, 6]".to_string()),
+                "INTEGER[3]",
+                json!({"$duckdbValue": "[4, 5, 6]"}),
+                Some(br#"{"$duckdbValue":"[4, 5, 6]"}"#),
+            ),
+            (
+                "map-tag",
+                DuckValue::Text("{\"k\\\"1\": 10, \"k2\": 20}".to_string()),
+                "MAP(VARCHAR, INTEGER)",
+                json!({"$duckdbValue": "{\"k\\\"1\": 10, \"k2\": 20}"}),
+                None,
+            ),
+            (
+                "struct-tag",
+                DuckValue::Text("{'label': a\"b\\c, 'score': 7}".to_string()),
+                "STRUCT(label VARCHAR, score INTEGER)",
+                json!({"$duckdbValue": "{'label': a\"b\\c, 'score': 7}"}),
+                None,
+            ),
+            (
+                "nested-struct-tag",
+                DuckValue::Text("{'outer': {'inner': [1, 2], 'label': x\"y\\z}}".to_string()),
+                "STRUCT(outer STRUCT(inner INTEGER[], label VARCHAR))",
+                json!({"$duckdbValue": "{'outer': {'inner': [1, 2], 'label': x\"y\\z}}"}),
+                None,
+            ),
+            (
+                "union-tag",
+                DuckValue::Text("union_value(num := 7)".to_string()),
+                "UNION(num INTEGER)",
+                json!({"$duckdbValue": "union_value(num := 7)"}),
+                Some(br#"{"$duckdbValue":"union_value(num := 7)"}"#),
+            ),
+            (
+                "uuid-tag",
+                DuckValue::Text("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                "UUID",
+                json!({"$duckdbValue": "550e8400-e29b-41d4-a716-446655440000"}),
+                Some(br#"{"$duckdbValue":"550e8400-e29b-41d4-a716-446655440000"}"#),
+            ),
+            (
+                "enum-tag",
+                DuckValue::Text("re\"d\\x".to_string()),
+                "ENUM('red', 're\"d\\x')",
+                json!({"$duckdbValue": "re\"d\\x"}),
+                Some(br#"{"$duckdbValue":"re\"d\\x"}"#),
+            ),
+        ];
+
+        for (name, value, column_type, expected, expected_bytes) in cases {
+            let actual = archive_cell_to_json(&value, column_type).unwrap();
+            assert_eq!(actual, expected, "case {name}");
+
+            let mut bytes = Vec::new();
+            write_archive_cell(&mut bytes, &value, column_type).unwrap();
+            let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(parsed, expected, "case {name} writer parse");
+
+            if let Some(expected_bytes) = expected_bytes {
+                assert_eq!(bytes.as_slice(), expected_bytes, "case {name} writer bytes");
+            }
+        }
+    }
+
+    #[test]
+    fn edge_matrix_uses_real_duckdb_values() {
+        let state = AppState::new().unwrap();
         let db = state.db.lock().unwrap();
-        let table_name = "dataset_archive_cell_fixture";
-        let select_cols = std::iter::once("\"_row_id\"".to_string())
-            .chain(
-                doc.columns
-                    .iter()
-                    .map(|column| archive_export_expression(&column.name, &column.col_type)),
-            )
-            .collect::<Vec<_>>()
-            .join(", ");
-        let query = format!(
-            "SELECT {} FROM \"{}\" ORDER BY \"_row_id\"",
-            select_cols, table_name
-        );
-        let mut stmt = db.conn().prepare(&query).unwrap();
+        let query = r#"
+            SELECT
+                9223372036854775808::UBIGINT AS ubig_over_i64,
+                18446744073709551615::UBIGINT AS ubig_max,
+                CAST('-0.0' AS DOUBLE) AS neg_zero,
+                concat('line1', chr(10), '"quoted"', '\\slash') AS escaped_text,
+                hex(from_hex('00ff7a')) AS blob_hex,
+                -12.3400::DECIMAL(10,4) AS dec_value,
+                DATE '2026-08-20' AS d,
+                TIME '10:11:12.345678' AS t,
+                TIMESTAMP '2026-08-20 10:11:12.123456' AS ts,
+                TIMESTAMPTZ '2026-08-20 10:11:12.123456+00' AS tstz,
+                [1, 2, 3]::INTEGER[] AS l,
+                [4, 5, 6]::INTEGER[3] AS a,
+                MAP(['k"1', 'k2'], [10, 20]) AS m,
+                struct_pack(label := 'a"b\\c', score := 7) AS s,
+                union_value(num := 7) AS u,
+                '550e8400-e29b-41d4-a716-446655440000'::UUID AS uid,
+                're"d\\x'::ENUM('red', 're"d\\x') AS e
+        "#;
+        let mut stmt = db.conn().prepare(query).unwrap();
         let mut rows = stmt.query([]).unwrap();
         let row = rows.next().unwrap().unwrap();
 
-        for (column_index, column) in doc.columns.iter().enumerate() {
-            let value: DuckValue = row.get(column_index + 1).unwrap();
-            let mut json_bytes = Vec::new();
-            write_archive_cell(&mut json_bytes, &value, &column.col_type).unwrap();
-            let encoded: serde_json::Value = serde_json::from_slice(&json_bytes).unwrap();
-            assert_eq!(encoded, doc.rows[0][column_index + 1], "column {}", column.name);
+        let cases: Vec<(&str, usize, &str, Option<serde_json::Value>)> = vec![
+            (
+                "ubig_over_i64",
+                0,
+                "UBIGINT",
+                Some(json!("9223372036854775808")),
+            ),
+            (
+                "ubig_max",
+                1,
+                "UBIGINT",
+                Some(json!("18446744073709551615")),
+            ),
+            ("neg_zero", 2, "DOUBLE", Some(json!(-0.0))),
+            (
+                "escaped_text",
+                3,
+                "VARCHAR",
+                Some(json!("line1\n\"quoted\"\\\\slash")),
+            ),
+            (
+                "blob_hex",
+                4,
+                "BLOB",
+                Some(json!({"$duckdbValue": "00FF7A"})),
+            ),
+            ("dec_value", 5, "DECIMAL(10,4)", None),
+            ("date", 6, "DATE", None),
+            ("time", 7, "TIME", None),
+            ("timestamp", 8, "TIMESTAMP", None),
+            ("timestamptz", 9, "TIMESTAMPTZ", None),
+            ("list", 10, "INTEGER[]", None),
+            ("array", 11, "INTEGER[3]", None),
+            ("map", 12, "MAP(VARCHAR, INTEGER)", None),
+            ("struct", 13, "STRUCT(label VARCHAR, score INTEGER)", None),
+            ("union", 14, "UNION(num INTEGER)", None),
+            (
+                "uuid",
+                15,
+                "UUID",
+                Some(json!({"$duckdbValue": "550e8400-e29b-41d4-a716-446655440000"})),
+            ),
+            (
+                "enum",
+                16,
+                "ENUM('red', 're\"d\\x')",
+                None,
+            ),
+        ];
+
+        for (name, index, column_type, expected) in cases {
+            let value: DuckValue = row.get(index).unwrap();
+            let expected = expected.unwrap_or_else(|| json!({"$duckdbValue": format!("{:?}", value)}));
+            let actual = archive_cell_to_json(&value, column_type).unwrap();
+            assert_eq!(actual, expected, "edge case {name}");
         }
+    }
+
+    #[test]
+    fn non_finite_floats_are_invalid_param() {
+        for (name, value) in [
+            ("nan", DuckValue::Double(f64::NAN)),
+            ("inf", DuckValue::Double(f64::INFINITY)),
+            ("neg_inf", DuckValue::Double(f64::NEG_INFINITY)),
+        ] {
+            let error = archive_cell_to_json(&value, "DOUBLE").unwrap_err();
+            assert!(
+                matches!(&error, AppError::InvalidParam(message) if message.contains("non-finite float")),
+                "expected InvalidParam for {name}, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn writer_sink_failures_map_to_fileio_and_allow_partial_bytes() {
+        let mut sink = FailingSink::new(3);
+        let error = write_archive_cell(
+            &mut sink,
+            &DuckValue::Text("hello".to_string()),
+            "VARCHAR",
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, AppError::FileIO(message) if message.contains("failed to serialize archive cell")),
+            "expected FileIO sink error, got {error:?}"
+        );
+        assert!(!sink.bytes.is_empty(), "sink should receive partial bytes before failure");
+        assert!(sink.bytes.len() < br#""hello""#.len());
+    }
+
+    #[test]
+    fn standalone_export_table_route_matches_shared_cell_encoding_behavior() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.create_table_from_sql_query(
+                "standalone-archive",
+                "Standalone Archive",
+                "SELECT 1 AS id, 18446744073709551615::UBIGINT AS u64v, CAST('-0.0' AS DOUBLE) AS negz, from_hex('deadbeef') AS blobv, -12.3400::DECIMAL(10,4) AS decv, [1, 2]::INTEGER[] AS listv",
+            )
+            .unwrap();
+        }
+
+        let service = ProjectService::new(&state);
+        let expected_doc = service.compose_table_doc("standalone-archive").unwrap();
+        let output = std::env::temp_dir().join(format!(
+            "stats_playground_export_table_route_{}.sptb",
+            uuid::Uuid::new_v4()
+        ));
+
+        service
+            .export_table("standalone-archive", output.to_str().unwrap())
+            .unwrap();
+        let written_doc = spprj_archive::read_table_file(output.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(output);
+
+        assert_eq!(written_doc.rows, expected_doc.rows);
+
+        assert_eq!(
+            written_doc.rows[0],
+            vec![
+                json!(1),
+                json!(1),
+                json!("18446744073709551615"),
+                json!(-0.0),
+                json!({"$duckdbValue": "DEADBEEF"}),
+                json!({"$duckdbValue": "-12.3400"}),
+                json!({"$duckdbValue": "[1, 2]"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn compose_table_doc_and_writer_share_the_same_compatibility_path() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.create_table_from_sql_query(
+                "compose-shared-path",
+                "Compose Shared Path",
+                "SELECT 1 AS id, true AS b, from_hex('00ff') AS blobv, [1, 2, 3]::INTEGER[] AS listv",
+            )
+            .unwrap();
+        }
+
+        let service = ProjectService::new(&state);
+        let doc = service.compose_table_doc("compose-shared-path").unwrap();
+        let row = &doc.rows[0];
+
+        assert_eq!(row[1], json!(1));
+        assert_eq!(row[2], json!(true));
+        assert_eq!(row[3], json!({"$duckdbValue": "00FF"}));
+        assert_eq!(row[4], json!({"$duckdbValue": "[1, 2, 3]"}));
     }
 }
