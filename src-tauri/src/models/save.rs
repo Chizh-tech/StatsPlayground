@@ -1,0 +1,62 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use crate::models::project::ProjectInfo;
+use crate::models::table::{ColumnDisplayProps, DatasetMeta};
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectRequest {
+    pub file_path: Option<String>,
+    pub history: Vec<serde_json::Value>,
+    pub snapshots: Vec<serde_json::Value>,
+    pub graph_builders: Vec<serde_json::Value>,
+    pub tabulates: Vec<serde_json::Value>,
+    pub folders: Vec<String>,
+    pub table_folders: HashMap<String, String>,
+    pub graph_folders: HashMap<String, String>,
+    pub tabulate_folders: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SaveSnapshot {
+    pub current_project: ProjectInfo,
+    pub destination_path: PathBuf,
+    pub destination_name: String,
+    pub datasets: Vec<DatasetMeta>,
+    pub column_display: HashMap<String, Vec<ColumnDisplayProps>>,
+    pub request: SaveProjectRequest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SaveWriteResult {
+    pub archive_bytes: u64,
+    pub tables_written: usize,
+    pub rows_written: usize,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SavePhase {
+    Preparing,
+    Table,
+    Metadata,
+    Compressing,
+    Finalizing,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProgress {
+    pub phase: SavePhase,
+    pub table_index: usize,
+    pub table_total: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_name: Option<String>,
+    pub rows_done: usize,
+    pub rows_total: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overall_progress: Option<f64>,
+}
+
+pub type SaveProgressCallback<'a> = dyn Fn(SaveProgress) + Send + Sync + 'a;

@@ -11,6 +11,7 @@ use crate::models::table::{
     TableWindowRequest, TableWindowResult,
 };
 use crate::models::tabulate::{StatisticKind, TabulateRequest, TabulateResult, TabulateStatistic};
+use crate::services::archive_cell::{archive_cell_to_json, archive_export_expression};
 
 /// DuckDB engine wrapper
 pub struct DuckDbEngine {
@@ -23,6 +24,21 @@ struct MaterializedQuery {
     rows: Vec<Vec<Value>>,
 }
 type GroupedStatisticValues = std::collections::HashMap<(String, String), Vec<Option<f64>>>;
+
+pub(crate) struct ArchiveKeysetReadPlan {
+    select_sql: String,
+    pub columns: Vec<(String, String)>,
+}
+
+pub(crate) struct ArchiveBatchRow {
+    pub row_id: i64,
+    pub values: Vec<Value>,
+}
+
+pub(crate) struct ArchiveBatch {
+    pub rows: Vec<ArchiveBatchRow>,
+    pub retained_bytes_estimate: usize,
+}
 
 impl DuckDbEngine {
     /// Get a reference to the underlying connection
@@ -5255,6 +5271,95 @@ impl DuckDbEngine {
         Ok(cols)
     }
 
+    pub(crate) fn prepare_archive_keyset_read(
+        &self,
+        dataset_id: &str,
+    ) -> Result<ArchiveKeysetReadPlan, AppError> {
+        self.get_dataset_meta(dataset_id)?;
+        let columns = self.get_user_columns(dataset_id)?;
+        let table_name = Self::quote_identifier(&Self::internal_table_name(dataset_id));
+
+        let select_projection = if columns.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", {}",
+                columns
+                    .iter()
+                    .map(|(name, column_type)| archive_export_expression(name, column_type))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+
+        let select_sql = format!(
+            "SELECT \"_row_id\"{select_projection} FROM {table_name} WHERE \"_row_id\" > ? ORDER BY \"_row_id\" ASC LIMIT ?"
+        );
+
+        Ok(ArchiveKeysetReadPlan {
+            select_sql,
+            columns,
+        })
+    }
+
+    pub(crate) fn read_archive_keyset_batch(
+        &self,
+        plan: &ArchiveKeysetReadPlan,
+        after_row_id: i64,
+        row_limit: usize,
+        target_batch_bytes: usize,
+        hard_batch_bytes: usize,
+    ) -> Result<ArchiveBatch, AppError> {
+        if row_limit == 0 {
+            return Err(AppError::InvalidParam("row limit must be positive".into()));
+        }
+
+        let mut stmt = self.conn.prepare(&plan.select_sql)?;
+        let mut query_rows = stmt.query(params![after_row_id, row_limit as i64])?;
+
+        let mut rows = Vec::new();
+        let mut retained_bytes_estimate = 0usize;
+
+        while let Some(row) = query_rows.next()? {
+            let row_id: i64 = row.get(0)?;
+            let mut values = Vec::with_capacity(plan.columns.len());
+            let mut row_bytes = 4usize;
+
+            row_bytes = row_bytes.saturating_add(estimate_archive_value_bytes(
+                &Value::BigInt(row_id),
+                "BIGINT",
+            )?);
+
+            for (index, (_, column_type)) in plan.columns.iter().enumerate() {
+                let value: Value = row.get(index + 1)?;
+                row_bytes = row_bytes.saturating_add(estimate_archive_value_bytes(&value, column_type)?);
+                values.push(value);
+            }
+
+            if row_bytes > hard_batch_bytes {
+                return Err(AppError::InvalidParam(format!(
+                    "single archive row exceeds hard batch cap: {row_bytes} > {hard_batch_bytes}"
+                )));
+            }
+
+            if !rows.is_empty() && retained_bytes_estimate.saturating_add(row_bytes) > hard_batch_bytes {
+                break;
+            }
+
+            retained_bytes_estimate = retained_bytes_estimate.saturating_add(row_bytes);
+            rows.push(ArchiveBatchRow { row_id, values });
+
+            if retained_bytes_estimate >= target_batch_bytes {
+                break;
+            }
+        }
+
+        Ok(ArchiveBatch {
+            rows,
+            retained_bytes_estimate,
+        })
+    }
+
     /// Helper: convert DuckDB value to string for transpose
     fn value_to_string(&self, v: &duckdb::types::Value) -> String {
         match v {
@@ -5274,6 +5379,13 @@ impl DuckDbEngine {
 
 fn quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn estimate_archive_value_bytes(value: &Value, column_type: &str) -> Result<usize, AppError> {
+    let json = archive_cell_to_json(value, column_type)?;
+    let encoded = serde_json::to_vec(&json)
+        .map_err(|e| AppError::FileIO(format!("failed to estimate archive row bytes: {e}")))?;
+    Ok(encoded.len())
 }
 
 struct PercentageTransformContext<'a> {

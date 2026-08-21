@@ -5,4 +5,5 @@ pub mod project_service;
 pub mod save_coordinator;
 pub mod spprj_archive;
 pub mod stats_service;
+pub mod streaming_project_writer;
 pub mod tabulate_service;

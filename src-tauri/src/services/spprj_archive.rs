@@ -32,6 +32,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Seek, Write};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -264,6 +265,69 @@ pub fn read_project_file(path: &str) -> Result<ProjectBundle, AppError> {
     } else {
         read_legacy_json(&bytes)
     }
+}
+
+pub fn build_graph_docs(raw_graph_builders: Vec<Value>) -> Vec<GraphDoc> {
+    raw_graph_builders
+        .into_iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            let (id, name, body) = lift_id_name(raw, index);
+            GraphDoc {
+                id,
+                name,
+                version: default_doc_version(),
+                body,
+            }
+        })
+        .collect()
+}
+
+pub fn validate_archive_manifest_and_entries(
+    archive_path: &Path,
+    expected_manifest: &ProjectManifest,
+    expected_extra_entries: &[&str],
+) -> Result<(), AppError> {
+    let file = std::fs::File::open(archive_path)?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|e| AppError::FileIO(format!("Invalid project archive during validation: {e}")))?;
+
+    let mut manifest_entry = zip
+        .by_name("manifest.json")
+        .map_err(|e| AppError::FileIO(format!("Project archive missing manifest.json: {e}")))?;
+    let mut manifest_bytes = Vec::new();
+    manifest_entry
+        .read_to_end(&mut manifest_bytes)
+        .map_err(|e| AppError::FileIO(format!("Failed reading manifest.json: {e}")))?;
+    drop(manifest_entry);
+
+    let actual_manifest: ProjectManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| AppError::FileIO(format!("Invalid manifest.json during validation: {e}")))?;
+
+    let expected_json = serde_json::to_value(expected_manifest)
+        .map_err(|e| AppError::FileIO(format!("Failed to encode expected manifest: {e}")))?;
+    let actual_json = serde_json::to_value(&actual_manifest)
+        .map_err(|e| AppError::FileIO(format!("Failed to encode actual manifest: {e}")))?;
+    if expected_json != actual_json {
+        return Err(AppError::FileIO(
+            "Validated archive manifest differs from expected snapshot".to_string(),
+        ));
+    }
+
+    for table in &expected_manifest.tables {
+        zip.by_name(&table.file)
+            .map_err(|e| AppError::FileIO(format!("Archive missing table entry {}: {e}", table.file)))?;
+    }
+    for graph in &expected_manifest.graphs {
+        zip.by_name(&graph.file)
+            .map_err(|e| AppError::FileIO(format!("Archive missing graph entry {}: {e}", graph.file)))?;
+    }
+    for entry in expected_extra_entries {
+        zip.by_name(entry)
+            .map_err(|e| AppError::FileIO(format!("Archive missing entry {}: {e}", entry)))?;
+    }
+
+    Ok(())
 }
 
 fn is_zip(bytes: &[u8]) -> bool {
