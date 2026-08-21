@@ -6330,6 +6330,7 @@ function buildFrameBackedRawDescriptor(
       if (!sourceCodes) continue;
       const n = Math.min(chunk.rowIds.length, sourceCodes.length);
       for (let row = 0; row < n; row += 1) {
+        if (!bitIsSet(chunk.validity.source, row)) continue;
         const sourceCode = sourceCodes[row] >>> 0;
         const source = sourceDict[sourceCode] ?? "";
         if (!source) continue;

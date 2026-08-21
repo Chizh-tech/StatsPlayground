@@ -129,7 +129,7 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
         validity: {
           x: new Uint8Array([0b00000011]),
           y: new Uint8Array([0b00000011]),
-          source: new Uint8Array([0b00000011]),
+          source: new Uint8Array([0b00000001]),
           wrap: new Uint8Array([0b00000011]),
         },
       },
@@ -142,7 +142,7 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
 
   const sourceByRowId = wrapPanel?.rawPoints?.sourceByRowId;
   assert.equal(sourceByRowId?.get(101n), "m1");
-  assert.equal(sourceByRowId?.get(102n), "m2");
+  assert.equal(sourceByRowId?.get(102n), undefined, "invalid source rows must not receive melt provenance");
 
   const facetMask = wrapPanel?.rawPoints?.chunks[0]?.facetMask;
   assert.ok(facetMask, "facet mask must be emitted for wrapped panel");
