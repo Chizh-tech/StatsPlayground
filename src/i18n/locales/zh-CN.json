@@ -159,6 +159,15 @@
     "importProgressTable": "表 {{i}}/{{total}}: {{name}}",
     "importProgressRows": "行",
     "createSnapshotTitle": "创建快照",
+    "savingProject": "正在保存项目…",
+    "readOnlyWhileSaving": "保存期间为只读",
+    "savePhase": {
+      "preparing": "正在准备",
+      "table": "正在保存数据表",
+      "metadata": "正在保存元数据",
+      "compressing": "正在压缩",
+      "finalizing": "正在完成"
+    },
     "zoomIn": "放大表格",
     "zoomOut": "缩小表格",
     "zoomReset": "重置为 100%",

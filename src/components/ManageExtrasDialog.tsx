@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { EXTRA_DEFS, EXTRA_KINDS, extraKindLabel, extraFieldLabel, type ExtraKind } from "@/types/columnExtras";
 import { useDataStore } from "@/stores/useDataStore";
+import { useProjectStore } from "@/stores/useProjectStore";
 import { dataService } from "@/services/dataService";
 
 /**
@@ -96,6 +97,7 @@ export function ManageExtrasDialog({
   cols, colExtras, sourceDatasetName, onApply, onClose,
 }: ManageExtrasDialogProps) {
   const { t } = useTranslation();
+  const readOnly = useProjectStore((s) => s.readOnly);
   // Datasets list — used by export (avoid name collision) and by import (picker).
   const datasets = useDataStore((s) => s.datasets);
   const refreshDatasets = useDataStore((s) => s.refreshDatasets);
@@ -168,6 +170,7 @@ export function ManageExtrasDialog({
   };
 
   const setCellValue = (ci: number, f: FlatField, raw: string) => {
+    if (readOnly) return;
     setStaged((prev) => {
       const next = new Map(prev);
       const colE = { ...(next.get(ci) ?? {}) };
@@ -190,6 +193,7 @@ export function ManageExtrasDialog({
    *  brand-new普通数据表. The user can then edit it like any other table and
    *  reimport via "从属性表导入". */
   const handleExport = async () => {
+    if (readOnly) return;
     if (selectedColIndices.length === 0 || flatFields.length === 0) return;
     const baseName = sourceDatasetName
       ? t("extras.exportBaseName", { name: sourceDatasetName })
@@ -226,6 +230,7 @@ export function ManageExtrasDialog({
    *  must match the standard naming scheme ("kindLabel" or "kindLabel / fieldLabel").
    *  Unmatched columns / rows are summarized in statusMsg. */
   const handleImport = async () => {
+    if (readOnly) return;
     if (!importPickId) {
       setStatusMsg({ text: t("extras.importPickFirst"), tone: "warn" });
       return;
@@ -329,6 +334,7 @@ export function ManageExtrasDialog({
    *  the user's selected-kinds set are also preserved as-is (we only edit
    *  the kinds the user explicitly chose). */
   const apply = () => {
+    if (readOnly) return;
     const result: Array<Record<string, unknown> | null> = cols.map((_, i) => {
       const cur = colExtras[i];
       return cur ? { ...cur } : null;
@@ -383,6 +389,7 @@ export function ManageExtrasDialog({
               flatFields={flatFields}
               getCellValue={getCellValue}
               setCellValue={setCellValue}
+              readOnly={readOnly}
               datasets={datasets}
               importPickId={importPickId}
               setImportPickId={setImportPickId}
@@ -398,13 +405,13 @@ export function ManageExtrasDialog({
             <button
               className="sp-dialog-btn sp-dialog-btn-primary"
               onClick={enterStep2}
-              disabled={selectedColIndices.length === 0 || selectedKinds.length === 0}
+              disabled={readOnly || selectedColIndices.length === 0 || selectedKinds.length === 0}
             >{t("extras.next")}</button>
           ) : (
             <>
               <button className="sp-dialog-btn" onClick={() => setStep(1)}>{t("common.back")}</button>
-              <button className="sp-dialog-btn" onClick={reload}>{t("extras.reload")}</button>
-              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={apply}>{t("extras.applyToCols")}</button>
+              <button className="sp-dialog-btn" onClick={reload} disabled={readOnly}>{t("extras.reload")}</button>
+              <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={apply} disabled={readOnly}>{t("extras.applyToCols")}</button>
             </>
           )}
         </div>
@@ -532,6 +539,7 @@ interface Step2Props {
   flatFields: FlatField[];
   getCellValue: (ci: number, f: FlatField) => string;
   setCellValue: (ci: number, f: FlatField, raw: string) => void;
+  readOnly: boolean;
   datasets: ReadonlyArray<{ id: string; name: string }>;
   importPickId: string;
   setImportPickId: (id: string) => void;
@@ -542,7 +550,7 @@ interface Step2Props {
 
 function Step2({
   cols, selectedColIndices, flatFields, getCellValue, setCellValue,
-  datasets, importPickId, setImportPickId, onExport, onImport, statusMsg,
+  readOnly, datasets, importPickId, setImportPickId, onExport, onImport, statusMsg,
 }: Step2Props) {
   const { t } = useTranslation();
   return (
@@ -553,6 +561,7 @@ function Step2({
             className="sp-extras-batch-select"
             value={importPickId}
             onChange={(e) => setImportPickId(e.target.value)}
+            disabled={readOnly}
           >
             <option value="">{t("extras.selectPropTable")}</option>
             {datasets.map((d) => (
@@ -562,7 +571,7 @@ function Step2({
           <button
             className="sp-dialog-btn"
             onClick={onImport}
-            disabled={!importPickId}
+            disabled={readOnly || !importPickId}
             title={t("extras.importTitleHint")}
           >{t("extras.importFrom")}</button>
         </div>
@@ -570,6 +579,7 @@ function Step2({
           <button
             className="sp-dialog-btn"
             onClick={onExport}
+            disabled={readOnly}
             title={t("extras.exportTitleHint")}
           >{t("extras.exportTo")}</button>
         </div>
@@ -603,6 +613,7 @@ function Step2({
                       type={f.type === "number" ? "number" : "text"}
                       value={getCellValue(ci, f)}
                       onChange={(e) => setCellValue(ci, f, e.target.value)}
+                      disabled={readOnly}
                     />
                   </td>
                 ))}

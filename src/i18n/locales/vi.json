@@ -159,6 +159,15 @@
     "importProgressTable": "Bảng {{i}}/{{total}}: {{name}}",
     "importProgressRows": "hàng",
     "createSnapshotTitle": "Tạo ảnh chụp",
+    "savingProject": "Đang lưu dự án…",
+    "readOnlyWhileSaving": "Chỉ đọc trong khi lưu",
+    "savePhase": {
+      "preparing": "Đang chuẩn bị",
+      "table": "Đang lưu bảng",
+      "metadata": "Đang lưu siêu dữ liệu",
+      "compressing": "Đang nén",
+      "finalizing": "Đang hoàn tất"
+    },
     "zoomIn": "Phóng to bảng",
     "zoomOut": "Thu nhỏ bảng",
     "zoomReset": "Đặt lại về 100%",

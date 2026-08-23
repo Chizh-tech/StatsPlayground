@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useMemo } from "reac
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { dataService } from "@/services/dataService";
+import { useProjectStore } from "@/stores/useProjectStore";
 import { DualListPicker } from "@/components/DualListPicker";
 import type { DatasetMeta } from "@/types/data";
 
@@ -68,6 +69,7 @@ function DatasetSelect({
 
 export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreated, onUpdated }: Props) {
   const { t } = useTranslation();
+  const readOnly = useProjectStore((s) => s.readOnly);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [primary, setPrimary] = useState<PrimaryAction | null>(null);
@@ -116,7 +118,7 @@ export function TableOpsDialog({ op, datasets, activeDatasetId, onClose, onCreat
     concatenate: t("tableOp.concatenate"),
   };
 
-  const confirmDisabled = busy || !primary || primary.disabled;
+  const confirmDisabled = busy || readOnly || !primary || primary.disabled;
 
   return (
     <div className="sp-dialog-overlay" onMouseDown={onClose}>

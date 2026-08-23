@@ -83,8 +83,17 @@ const DRAG_MIME = "text/plain";
 
 export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const { t } = useTranslation();
-  const updateItem = useGraphBuilderStore((s) => s.updateItem);
-  const markDirty = useProjectStore((s) => s.markDirty);
+  const updateItemRaw = useGraphBuilderStore((s) => s.updateItem);
+  const markDirtyRaw = useProjectStore((s) => s.markDirty);
+  const readOnly = useProjectStore((s) => s.readOnly);
+  const markDirty = useCallback(() => {
+    if (readOnly) return;
+    markDirtyRaw();
+  }, [readOnly, markDirtyRaw]);
+  const updateItem = useCallback((id: string, patch: Partial<GraphBuilderItem>) => {
+    if (readOnly) return;
+    updateItemRaw(id, patch);
+  }, [readOnly, updateItemRaw]);
   // Cross-view bridge: click a scatter point → highlight the matching
   // cell in the DataTableView for `dataset.id` next time it mounts.
   const pickCell = useTableSelectionStore((s) => s.pick);

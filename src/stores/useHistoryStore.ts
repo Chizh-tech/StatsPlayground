@@ -13,6 +13,8 @@ import {
   redoIncrementalEntry,
   undoIncrementalEntry,
 } from "@/utils/historyTimeline";
+import { useProjectStore } from "@/stores/useProjectStore";
+import { assertProjectMutable } from "@/utils/saveReadOnly";
 
 const MAX_HISTORY = 100;
 let historyEpoch = 0;
@@ -96,6 +98,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   tableMutationDepth: 0,
 
   record: (description: string, afterState?: unknown) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const entry: HistoryEntry = {
       id: nextId(),
       timestamp: nowISO(),
@@ -118,6 +121,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   recordTable: (description: string, action: TableHistoryAction) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const entry: HistoryEntry = {
       id: nextId(),
       timestamp: nowISO(),
@@ -133,6 +137,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   tryBeginTableMutation: () => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     if (get().pendingAction) return false;
     set((state) => state.pendingAction
       ? state
@@ -145,6 +150,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   undo: async () => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const { history, currentIdx, pendingAction, tableMutationDepth } = get();
     if (pendingAction || tableMutationDepth > 0) return;
     const transition = undoIncrementalEntry({ history, currentIdx });
@@ -213,6 +219,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   redo: async () => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const { history, currentIdx, pendingAction, tableMutationDepth } = get();
     if (pendingAction || tableMutationDepth > 0) return;
     const transition = redoIncrementalEntry({ history, currentIdx });
@@ -281,6 +288,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   jumpTo: (id: string) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const { history, currentIdx } = get();
     const targetIdx = history.findIndex((e) => e.id === id);
     if (targetIdx < 0 || targetIdx === currentIdx) return;
@@ -294,6 +302,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   createSnapshot: async (name?: string) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     try {
       const snapshot = await historyService.captureProjectSnapshot();
       const ts = nowISO();
@@ -315,6 +324,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   restoreSnapshot: async (id: string) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const { snapshots } = get();
     const snap = snapshots.find((s) => s.id === id);
     if (!snap) return;
@@ -322,12 +332,14 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   deleteSnapshot: (id: string) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     set((state) => ({
       snapshots: state.snapshots.filter((s) => s.id !== id),
     }));
   },
 
   renameSnapshot: (id: string, name: string) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     set((state) => ({
       snapshots: state.snapshots.map((s) =>
         s.id === id ? { ...s, name } : s

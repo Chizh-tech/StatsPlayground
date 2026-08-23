@@ -17,6 +17,8 @@
  */
 
 import { create } from "zustand";
+import { useProjectStore } from "@/stores/useProjectStore";
+import { assertProjectMutable } from "@/utils/saveReadOnly";
 
 const STORAGE_KEY_COLLAPSED = "sp.folderTree.collapsed";
 
@@ -219,6 +221,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   },
 
   createFolder: (parent, baseName) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const cleaned = baseName.trim();
     const parentNorm = normalizeFolderPath(parent ?? null);
     const existing = new Set(get().folders);
@@ -229,6 +232,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   },
 
   renameFolder: (oldPath, newBaseName) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const cleaned = newBaseName.trim();
     if (!cleaned) return null;
     const parent = folderParent(oldPath);
@@ -259,6 +263,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   },
 
   deleteFolder: (path) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const { folders, tableFolders, graphFolders, tabulateFolders } = get();
     const parent = folderParent(path); // may be null (move to root)
     const movePrefix = (p: string): string => {
@@ -300,6 +305,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   },
 
   moveFolder: (path, newParent) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     if (path === newParent) return null;
     if (newParent && (newParent === path || newParent.startsWith(`${path}/`))) {
       // Cannot move a folder into itself or its own subtree.
@@ -339,6 +345,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   },
 
   setTableFolder: (datasetId, folder) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const norm = normalizeFolderPath(folder);
     set((s) => {
       const next: Record<string, string> = { ...s.tableFolders };
@@ -352,6 +359,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   },
 
   setGraphFolder: (graphId, folder) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const norm = normalizeFolderPath(folder);
     set((s) => {
       const next: Record<string, string> = { ...s.graphFolders };
@@ -365,6 +373,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   },
 
   setTabulateFolder: (tabulateId, folder) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const norm = normalizeFolderPath(folder);
     set((s) => {
       const next: Record<string, string> = { ...s.tabulateFolders };

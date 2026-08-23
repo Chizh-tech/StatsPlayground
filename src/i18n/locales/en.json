@@ -159,6 +159,15 @@
     "importProgressTable": "Table {{i}}/{{total}}: {{name}}",
     "importProgressRows": "rows",
     "createSnapshotTitle": "Create snapshot",
+    "savingProject": "Saving project…",
+    "readOnlyWhileSaving": "Read-only while saving",
+    "savePhase": {
+      "preparing": "Preparing",
+      "table": "Saving tables",
+      "metadata": "Saving metadata",
+      "compressing": "Compressing",
+      "finalizing": "Finalizing"
+    },
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
     "zoomReset": "Reset to 100%",
