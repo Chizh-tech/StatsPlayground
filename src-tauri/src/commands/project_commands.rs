@@ -1,5 +1,5 @@
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::models::project::ProjectInfo;
@@ -47,28 +47,33 @@ pub fn open_project(
     )
 }
 
+async fn run_save_on_blocking_pool<T, F>(work: F) -> Result<T, AppError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, AppError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| AppError::FileIO(format!("save worker join failure: {error}")))?
+}
+
 #[tauri::command(async)]
 pub async fn save_project(
-    state: State<'_, AppState>,
+    app: AppHandle,
     request: SaveProjectRequest,
     on_progress: Channel<SaveProgress>,
 ) -> Result<ProjectInfo, AppError> {
-    let state_ref: &AppState = &state;
-    std::thread::scope(|scope| {
-        let handle = scope.spawn(move || {
-            let service = ProjectService::new(state_ref);
-            service.save_project(
-                request,
-                Some(&|progress| {
-                    let _ = on_progress.send(progress);
-                }),
-            )
-        });
-
-        handle
-            .join()
-            .map_err(|_| AppError::Busy("Save worker thread panicked".to_string()))?
+    run_save_on_blocking_pool(move || {
+        let state = Manager::state::<AppState>(&app);
+        let service = ProjectService::new(&state);
+        service.save_project(
+            request,
+            Some(&|progress| {
+                let _ = on_progress.send(progress);
+            }),
+        )
     })
+    .await
 }
 
 #[tauri::command]
@@ -150,6 +155,11 @@ pub fn import_graph(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use crate::error::AppError;
+
     fn function_signature(source: &str, function_name: &str) -> String {
         let start = source
             .find(function_name)
@@ -170,7 +180,9 @@ mod tests {
         let command_attribute = &source[..open_start];
 
         assert!(
-            command_attribute.trim_end().ends_with("#[tauri::command(async)]"),
+            command_attribute
+                .trim_end()
+                .ends_with("#[tauri::command(async)]"),
             "open_project must not run archive and database work on Tauri's main command thread"
         );
     }
@@ -219,6 +231,14 @@ mod tests {
             "save_project must accept a progress channel"
         );
         assert!(
+            signature.contains("app: AppHandle"),
+            "save_project must accept framework-injected AppHandle"
+        );
+        assert!(
+            !signature.contains("state: State<'_, AppState>"),
+            "save_project must not borrow State<'_> across blocking worker boundaries"
+        );
+        assert!(
             !signature.contains("file_path:"),
             "legacy loose save arguments must be removed from save_project"
         );
@@ -253,8 +273,45 @@ mod tests {
             .expect("save_project command must exist");
 
         assert!(
-            body.contains("let _ = on_progress.send(progress);") ,
+            body.contains("let _ = on_progress.send(progress);"),
             "save_project progress callback must ignore channel send failures"
         );
+    }
+
+    #[test]
+    fn save_blocking_helper_yields_while_blocking_work_waits() {
+        let (started_tx, started_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let (probe_tx, probe_rx) = mpsc::channel::<()>();
+
+        tauri::async_runtime::block_on(async move {
+            let blocking: tauri::async_runtime::JoinHandle<Result<(), AppError>> =
+                tauri::async_runtime::spawn(async move {
+                    super::run_save_on_blocking_pool(move || {
+                        let _ = started_tx.send(());
+                        let _ = release_rx.recv();
+                        Ok::<(), AppError>(())
+                    })
+                    .await
+                });
+
+            started_rx
+                .recv_timeout(Duration::from_millis(500))
+                .expect("blocking save closure should start on worker pool");
+
+            tauri::async_runtime::spawn(async move {
+                let _ = probe_tx.send(());
+            });
+
+            probe_rx
+                .recv_timeout(Duration::from_millis(200))
+                .expect("async caller should continue scheduling while blocking save is paused");
+
+            let _ = release_tx.send(());
+            blocking
+                .await
+                .expect("spawned save task should join")
+                .expect("blocking save closure should complete");
+        });
     }
 }

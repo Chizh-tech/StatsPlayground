@@ -24,6 +24,7 @@ pub struct SaveSnapshot {
     pub destination_path: PathBuf,
     pub destination_name: String,
     pub datasets: Vec<DatasetMeta>,
+    pub dataset_generations: HashMap<String, u64>,
     pub column_display: HashMap<String, Vec<ColumnDisplayProps>>,
     pub request: SaveProjectRequest,
 }

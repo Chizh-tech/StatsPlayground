@@ -318,8 +318,10 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
         }
 
-        let graph_by_id: HashMap<&str, &GraphDoc> =
-            graph_docs.iter().map(|doc| (doc.id.as_str(), doc)).collect();
+        let graph_by_id: HashMap<&str, &GraphDoc> = graph_docs
+            .iter()
+            .map(|doc| (doc.id.as_str(), doc))
+            .collect();
         let mut rows_written = 0usize;
 
         for (table_index, dataset) in snapshot.datasets.iter().enumerate() {
@@ -333,7 +335,8 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 overall_progress: Some(progress_fraction(rows_written, total_rows)),
             });
 
-            let Some(table_ref) = manifest.tables.iter().find(|entry| entry.id == dataset.id) else {
+            let Some(table_ref) = manifest.tables.iter().find(|entry| entry.id == dataset.id)
+            else {
                 return Err(AppError::FileIO(format!(
                     "missing manifest table reference for dataset {}",
                     dataset.id
@@ -349,16 +352,16 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 db.prepare_archive_keyset_read(&dataset.id)?
             };
 
-            let columns = table_columns_from_plan(
-                &dataset.id,
-                &plan,
-                &snapshot.column_display,
-            );
+            let columns = table_columns_from_plan(&dataset.id, &plan, &snapshot.column_display);
 
             zip.start_file(&table_ref.file, file_opts)
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
             write_table_header(&mut zip, dataset, &columns)?;
-            run_save_test_hook!(SaveFailurePoint::AfterHeader, Some(dataset.id.clone()), None);
+            run_save_test_hook!(
+                SaveFailurePoint::AfterHeader,
+                Some(dataset.id.clone()),
+                None
+            );
 
             let mut next_row_id = 0i64;
             let mut first_row = true;
@@ -484,7 +487,11 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         if !snapshot.request.snapshots.is_empty() {
             expected_entries.push(".snapshots.json");
         }
-        spprj_archive::validate_archive_manifest_and_entries(temp_path, manifest, &expected_entries)?;
+        spprj_archive::validate_archive_manifest_and_entries(
+            temp_path,
+            manifest,
+            &expected_entries,
+        )?;
 
         Ok(())
     }
@@ -579,7 +586,10 @@ fn progress_fraction(rows_done: usize, rows_total: usize) -> f64 {
     }
 }
 
-fn replace_archive_atomically_os(temp_path: &Path, destination_path: &Path) -> Result<(), AppError> {
+fn replace_archive_atomically_os(
+    temp_path: &Path,
+    destination_path: &Path,
+) -> Result<(), AppError> {
     #[cfg(windows)]
     {
         return replace_existing_windows(temp_path, destination_path);
@@ -655,7 +665,9 @@ fn replace_existing_windows(temp_path: &Path, destination_path: &Path) -> Result
                 )
             };
             if moved == 0 {
-                return Err(AppError::FileIO(std::io::Error::last_os_error().to_string()));
+                return Err(AppError::FileIO(
+                    std::io::Error::last_os_error().to_string(),
+                ));
             }
             return Ok(());
         }
@@ -726,7 +738,10 @@ mod tests {
     use crate::services::spprj_archive;
     use crate::state::AppState;
 
-    use super::{install_save_test_hook, ArchiveReplacer, SaveFailurePoint, StreamingProjectWriter, HARD_BATCH_BYTES};
+    use super::{
+        install_save_test_hook, ArchiveReplacer, SaveFailurePoint, StreamingProjectWriter,
+        HARD_BATCH_BYTES,
+    };
 
     #[derive(Default)]
     struct TestReplacerState {
@@ -739,10 +754,16 @@ mod tests {
     }
 
     impl ArchiveReplacer for TestReplacer {
-        fn replace_archive(&self, temp_path: &std::path::Path, destination_path: &std::path::Path) -> Result<(), AppError> {
+        fn replace_archive(
+            &self,
+            temp_path: &std::path::Path,
+            destination_path: &std::path::Path,
+        ) -> Result<(), AppError> {
             self.state.calls.fetch_add(1, Ordering::SeqCst);
             if self.state.fail.load(Ordering::SeqCst) != 0 {
-                return Err(AppError::FileIO("simulated replacement failure".to_string()));
+                return Err(AppError::FileIO(
+                    "simulated replacement failure".to_string(),
+                ));
             }
             place_temp_for_test(temp_path, destination_path)?;
             Ok(())
@@ -761,7 +782,11 @@ mod tests {
     }
 
     impl ArchiveReplacer for RaceReplacer {
-        fn replace_archive(&self, temp_path: &std::path::Path, destination_path: &std::path::Path) -> Result<(), AppError> {
+        fn replace_archive(
+            &self,
+            temp_path: &std::path::Path,
+            destination_path: &std::path::Path,
+        ) -> Result<(), AppError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             match self.mode {
                 ReplacementRaceMode::DestinationAppears => {
@@ -780,7 +805,10 @@ mod tests {
         }
     }
 
-    fn place_temp_for_test(temp_path: &std::path::Path, destination_path: &std::path::Path) -> Result<(), AppError> {
+    fn place_temp_for_test(
+        temp_path: &std::path::Path,
+        destination_path: &std::path::Path,
+    ) -> Result<(), AppError> {
         // Test seam: model "replace existing" behavior without deleting the
         // destination first. This is intentionally not an atomic guarantee.
         if destination_path.exists() {
@@ -816,7 +844,7 @@ mod tests {
             &["value".to_string()],
             &["BIGINT".to_string()],
         )
-            .unwrap();
+        .unwrap();
 
         for row_id in [1_i64, 2, 8, 1001] {
             db.conn()
@@ -839,6 +867,10 @@ mod tests {
         destination_path: &std::path::Path,
         datasets: Vec<crate::models::table::DatasetMeta>,
     ) -> SaveSnapshot {
+        let dataset_generations = datasets
+            .iter()
+            .map(|dataset| (dataset.id.clone(), 0_u64))
+            .collect();
         SaveSnapshot {
             current_project: ProjectInfo {
                 name: "Streaming Project".to_string(),
@@ -848,6 +880,7 @@ mod tests {
             destination_path: destination_path.to_path_buf(),
             destination_name: "Streaming Project".to_string(),
             datasets,
+            dataset_generations,
             column_display: HashMap::new(),
             request: SaveProjectRequest {
                 file_path: None,
@@ -964,7 +997,7 @@ mod tests {
                 &["payload".to_string()],
                 &["VARCHAR".to_string()],
             )
-                .unwrap();
+            .unwrap();
             let payload = "x".repeat(220_000);
             for row_id in 1..=60_i64 {
                 db.conn()
@@ -1013,9 +1046,9 @@ mod tests {
                 if point == SaveFailurePoint::BetweenBatches {
                     let seen = hook_seen_clone.fetch_add(1, Ordering::SeqCst);
                     if seen == 0 {
-                        reader_start_tx
-                            .send(())
-                            .map_err(|e| AppError::FileIO(format!("failed to start reader: {e}")))?;
+                        reader_start_tx.send(()).map_err(|e| {
+                            AppError::FileIO(format!("failed to start reader: {e}"))
+                        })?;
                         if reader_done_rx.recv_timeout(Duration::from_secs(5)).is_err() {
                             return Err(AppError::FileIO(
                                 "reader did not complete while writer paused between batches"
@@ -1103,11 +1136,26 @@ mod tests {
         assert!(phases.contains(&SavePhase::Compressing));
         assert!(phases.contains(&SavePhase::Finalizing));
 
-        let preparing_idx = phases.iter().position(|phase| *phase == SavePhase::Preparing).unwrap();
-        let first_table_idx = phases.iter().position(|phase| *phase == SavePhase::Table).unwrap();
-        let metadata_idx = phases.iter().position(|phase| *phase == SavePhase::Metadata).unwrap();
-        let compressing_idx = phases.iter().position(|phase| *phase == SavePhase::Compressing).unwrap();
-        let finalizing_idx = phases.iter().rposition(|phase| *phase == SavePhase::Finalizing).unwrap();
+        let preparing_idx = phases
+            .iter()
+            .position(|phase| *phase == SavePhase::Preparing)
+            .unwrap();
+        let first_table_idx = phases
+            .iter()
+            .position(|phase| *phase == SavePhase::Table)
+            .unwrap();
+        let metadata_idx = phases
+            .iter()
+            .position(|phase| *phase == SavePhase::Metadata)
+            .unwrap();
+        let compressing_idx = phases
+            .iter()
+            .position(|phase| *phase == SavePhase::Compressing)
+            .unwrap();
+        let finalizing_idx = phases
+            .iter()
+            .rposition(|phase| *phase == SavePhase::Finalizing)
+            .unwrap();
         assert!(preparing_idx < first_table_idx);
         assert!(first_table_idx < metadata_idx);
         assert!(metadata_idx < compressing_idx);
@@ -1273,10 +1321,7 @@ mod tests {
             .find(|(_, event)| event.phase == SavePhase::Table)
             .expect("expected table progress event");
 
-        let first_delta_ms = first_advancing
-            .0
-            .duration_since(first_table.0)
-            .as_millis();
+        let first_delta_ms = first_advancing.0.duration_since(first_table.0).as_millis();
         assert!(first_delta_ms >= 80);
         assert!(first_delta_ms <= 320);
 
@@ -1335,7 +1380,10 @@ mod tests {
 
         // Scheduler tolerance: prove at least one regular progress callback gap
         // remains within the required cadence while table work is active.
-        assert!(max_gap_ms <= 320, "max table progress gap was {max_gap_ms}ms");
+        assert!(
+            max_gap_ms <= 320,
+            "max table progress gap was {max_gap_ms}ms"
+        );
 
         let _ = std::fs::remove_file(&destination);
     }
@@ -1362,7 +1410,9 @@ mod tests {
 
             install_save_test_hook(Some(Box::new(move |hook_point, _| {
                 if hook_point == point {
-                    return Err(AppError::FileIO(format!("injected failure at {hook_point:?}")));
+                    return Err(AppError::FileIO(format!(
+                        "injected failure at {hook_point:?}"
+                    )));
                 }
                 Ok(())
             })));
@@ -1438,11 +1488,7 @@ mod tests {
             });
 
             let guard = state.save_coordinator.begin_save().unwrap();
-            let writer = StreamingProjectWriter::with_clock_and_replacer(
-                &state,
-                &guard,
-                replacer,
-            );
+            let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, replacer);
             writer.write(&snapshot, &destination, None).unwrap();
 
             let reopened = spprj_archive::read_project_file(destination.to_str().unwrap()).unwrap();

@@ -1,8 +1,8 @@
 use crate::error::AppError;
-use crate::models::save::{SaveProgressCallback, SaveProjectRequest, SaveSnapshot};
-use duckdb::appender_params_from_iter;
-use duckdb::types::Value as DuckValue;
 use crate::models::project::{DatasetNameMigration, ProjectInfo};
+use crate::models::save::{
+    SaveProgressCallback, SaveProjectRequest, SaveSnapshot, SaveWriteResult,
+};
 use crate::models::table::{ColumnDisplayProps, ColumnFormatInfo};
 use crate::services::archive_cell::{
     archive_cell_to_json, archive_export_expression, is_archive_scalar_type,
@@ -12,6 +12,8 @@ use crate::services::spprj_archive::{
 };
 use crate::services::streaming_project_writer::StreamingProjectWriter;
 use crate::state::AppState;
+use duckdb::appender_params_from_iter;
+use duckdb::types::Value as DuckValue;
 
 pub struct ProjectService<'a> {
     state: &'a AppState,
@@ -208,20 +210,35 @@ impl<'a> ProjectService<'a> {
             })
             .collect();
 
-        let staged_db = staged_state.db.into_inner()
+        let staged_db = staged_state
+            .db
+            .into_inner()
             .map_err(|e| AppError::Database(e.to_string()))?;
-        let staged_display = staged_state.column_display.into_inner()
+        let staged_display = staged_state
+            .column_display
+            .into_inner()
             .map_err(|e| AppError::Database(e.to_string()))?;
-        let mut live_db = self.state.db.lock()
+        let mut live_db = self
+            .state
+            .db
+            .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
-        let mut live_display = self.state.column_display.lock()
+        let mut live_display = self
+            .state
+            .column_display
+            .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
-        let mut live_project = self.state.project.write()
+        let mut live_project = self
+            .state
+            .project
+            .write()
             .map_err(|e| AppError::Database(e.to_string()))?;
         *live_db = staged_db;
         *live_display = staged_display;
         *live_project = Some(project.clone());
-        if let Some(cb) = &progress_cb { cb(total, total, "完成", 0, 0); }
+        if let Some(cb) = &progress_cb {
+            cb(total, total, "完成", 0, 0);
+        }
 
         Ok(OpenProjectResult {
             project,
@@ -244,6 +261,30 @@ impl<'a> ProjectService<'a> {
         request: SaveProjectRequest,
         progress_cb: Option<&SaveProgressCallback<'_>>,
     ) -> Result<ProjectInfo, AppError> {
+        self.save_project_with_write_impl(
+            request,
+            progress_cb,
+            |snapshot, destination_path, progress_cb, save_guard| {
+                let writer = StreamingProjectWriter::new(self.state, save_guard);
+                writer.write(snapshot, destination_path, progress_cb)
+            },
+        )
+    }
+
+    fn save_project_with_write_impl<F>(
+        &self,
+        request: SaveProjectRequest,
+        progress_cb: Option<&SaveProgressCallback<'_>>,
+        write_impl: F,
+    ) -> Result<ProjectInfo, AppError>
+    where
+        F: FnOnce(
+            &SaveSnapshot,
+            &std::path::Path,
+            Option<&SaveProgressCallback<'_>>,
+            &crate::services::save_coordinator::SaveGuard<'_>,
+        ) -> Result<SaveWriteResult, AppError>,
+    {
         let save_guard = self.state.save_coordinator.begin_save()?;
 
         let current_project = self
@@ -262,44 +303,13 @@ impl<'a> ProjectService<'a> {
             return Err(AppError::InvalidParam("Project has no file path".into()));
         }
 
-        let destination_path = std::path::PathBuf::from(destination_path_string);
-        let destination_name = destination_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(|stem| stem.to_string())
-            .unwrap_or_else(|| current_project.name.clone());
-
-        let datasets = {
-            let db = self
-                .state
-                .db
-                .lock()
-                .map_err(|e| AppError::Database(e.to_string()))?;
-            db.list_datasets()?
-        };
-        let column_display = self
-            .state
-            .column_display
-            .lock()
-            .map_err(|e| AppError::Database(e.to_string()))?
-            .clone();
-
-        let snapshot = SaveSnapshot {
-            current_project: current_project.clone(),
-            destination_path: destination_path.clone(),
-            destination_name: destination_name.clone(),
-            datasets,
-            column_display,
-            request: request.clone(),
-        };
-
-        let writer = StreamingProjectWriter::new(self.state, &save_guard);
-        writer.write(&snapshot, &destination_path, progress_cb)?;
-
-        let destination_utf8 = destination_path
-            .to_str()
-            .ok_or_else(|| AppError::InvalidParam("Project path must be valid UTF-8".into()))?;
-        let _ = spprj_archive::read_project_file(destination_utf8)?;
+        let snapshot = self.capture_save_snapshot(current_project.clone(), request.clone())?;
+        write_impl(
+            &snapshot,
+            &snapshot.destination_path,
+            progress_cb,
+            &save_guard,
+        )?;
 
         let mut project_guard = self
             .state
@@ -311,11 +321,59 @@ impl<'a> ProjectService<'a> {
             .ok_or_else(|| AppError::InvalidParam("No project is open".into()))?;
 
         if request.file_path.is_some() {
-            project.file_path = destination_path.to_string_lossy().to_string();
-            project.name = destination_name;
+            project.file_path = snapshot.destination_path.to_string_lossy().to_string();
+            project.name = snapshot.destination_name;
         }
 
         Ok(project.clone())
+    }
+
+    fn capture_save_snapshot(
+        &self,
+        current_project: ProjectInfo,
+        request: SaveProjectRequest,
+    ) -> Result<SaveSnapshot, AppError> {
+        let destination_path_string = request
+            .file_path
+            .clone()
+            .unwrap_or_else(|| current_project.file_path.clone());
+        let destination_path = std::path::PathBuf::from(destination_path_string);
+        let destination_name = destination_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| stem.to_string())
+            .unwrap_or_else(|| current_project.name.clone());
+
+        let (datasets, dataset_generations) = {
+            let db = self
+                .state
+                .db
+                .lock()
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            let datasets = db.list_datasets()?;
+            let mut dataset_generations = std::collections::HashMap::with_capacity(datasets.len());
+            for dataset in &datasets {
+                dataset_generations
+                    .insert(dataset.id.clone(), db.get_dataset_generation(&dataset.id)?);
+            }
+            (datasets, dataset_generations)
+        };
+        let column_display = self
+            .state
+            .column_display
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .clone();
+
+        Ok(SaveSnapshot {
+            current_project,
+            destination_path,
+            destination_name,
+            datasets,
+            dataset_generations,
+            column_display,
+            request,
+        })
     }
 
     /// Get current project info
@@ -388,9 +446,11 @@ impl<'a> ProjectService<'a> {
         // SELECT _row_id + every visible column. _row_id stays at index 0 in
         // the saved row arrays so restore can write it back verbatim.
         let select_cols = std::iter::once("\"_row_id\"".to_string())
-            .chain(columns.iter().map(|column| {
-                archive_export_expression(&column.name, &column.col_type)
-            }))
+            .chain(
+                columns
+                    .iter()
+                    .map(|column| archive_export_expression(&column.name, &column.col_type)),
+            )
             .collect::<Vec<_>>()
             .join(", ");
         let query = format!(
@@ -449,7 +509,11 @@ impl<'a> ProjectService<'a> {
             )));
         }
 
-        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
 
         let col_names: Vec<String> = doc.columns.iter().map(|c| c.name.clone()).collect();
         let col_types: Vec<String> = doc.columns.iter().map(|c| c.col_type.clone()).collect();
@@ -489,11 +553,11 @@ impl<'a> ProjectService<'a> {
             }
 
             let table_ident = quote_identifier(&format!("dataset_{}", doc.id.replace('-', "_")));
-            let row_count: i64 = db.conn().query_row(
-                &format!("SELECT COUNT(*) FROM {table_ident}"),
-                [],
-                |row| row.get(0),
-            )?;
+            let row_count: i64 =
+                db.conn()
+                    .query_row(&format!("SELECT COUNT(*) FROM {table_ident}"), [], |row| {
+                        row.get(0)
+                    })?;
             db.conn().execute(
                 "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
                 duckdb::params![row_count, doc.id],
@@ -683,13 +747,16 @@ fn json_to_duckdb_param(
 fn archive_string_param(value: &str, column_type: Option<&str>) -> Result<DuckValue, AppError> {
     if column_type.is_some_and(|column_type| column_type.trim().eq_ignore_ascii_case("BLOB")) {
         if !value.len().is_multiple_of(2) {
-            return Err(AppError::InvalidParam("archived BLOB hex has odd length".into()));
+            return Err(AppError::InvalidParam(
+                "archived BLOB hex has odd length".into(),
+            ));
         }
         let bytes = (0..value.len())
             .step_by(2)
             .map(|index| {
-                u8::from_str_radix(&value[index..index + 2], 16)
-                    .map_err(|_| AppError::InvalidParam("archived BLOB contains invalid hex".into()))
+                u8::from_str_radix(&value[index..index + 2], 16).map_err(|_| {
+                    AppError::InvalidParam("archived BLOB contains invalid hex".into())
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(DuckValue::Blob(bytes))
@@ -775,7 +842,11 @@ fn folder_from_entry_path(file: &str, container_prefix: &str) -> Option<String> 
         None
     } else if parent.starts_with(&format!("{}/", container_prefix)) {
         let stripped = &parent[container_prefix.len() + 1..];
-        if stripped.is_empty() { None } else { Some(stripped.to_string()) }
+        if stripped.is_empty() {
+            None
+        } else {
+            Some(stripped.to_string())
+        }
     } else if parent.is_empty() {
         None
     } else {
@@ -789,13 +860,21 @@ trait EntryFolderRef {
 }
 
 impl EntryFolderRef for spprj_archive::TableEntryRef {
-    fn id(&self) -> &str { &self.id }
-    fn file(&self) -> &str { &self.file }
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn file(&self) -> &str {
+        &self.file
+    }
 }
 
 impl EntryFolderRef for spprj_archive::GraphEntryRef {
-    fn id(&self) -> &str { &self.id }
-    fn file(&self) -> &str { &self.file }
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn file(&self) -> &str {
+        &self.file
+    }
 }
 
 fn chrono_now() -> String {
@@ -878,9 +957,10 @@ fn normalize_duplicate_dataset_names(docs: &mut [TableDoc]) -> Vec<DatasetNameMi
 #[cfg(test)]
 mod tests {
     use super::{folder_from_entry_path, normalize_duplicate_dataset_names, ProjectService};
+    use crate::error::AppError;
+    use crate::models::project::ProjectInfo;
     use crate::models::save::SaveProjectRequest;
     use crate::models::table::{ColumnDisplayProps, ColumnFormatInfo};
-    use crate::models::project::ProjectInfo;
     use crate::services::spprj_archive::{self, TableColumn, TableDoc};
     use crate::state::AppState;
     use std::cell::RefCell;
@@ -954,20 +1034,38 @@ mod tests {
 
     #[test]
     fn direct_v2_folder_names_do_not_match_legacy_container_prefixes() {
-        assert_eq!(folder_from_entry_path("tablesBackup/123.sptb", "tables"), Some("tablesBackup".to_string()));
-        assert_eq!(folder_from_entry_path("graphsArchive/456.spgh", "graphs"), Some("graphsArchive".to_string()));
+        assert_eq!(
+            folder_from_entry_path("tablesBackup/123.sptb", "tables"),
+            Some("tablesBackup".to_string())
+        );
+        assert_eq!(
+            folder_from_entry_path("graphsArchive/456.spgh", "graphs"),
+            Some("graphsArchive".to_string())
+        );
     }
 
     #[test]
     fn nested_legacy_paths_still_derive_user_folders() {
-        assert_eq!(folder_from_entry_path("tables/Raw/123.sptb", "tables"), Some("Raw".to_string()));
-        assert_eq!(folder_from_entry_path("graphs/Reports/456.spgh", "graphs"), Some("Reports".to_string()));
+        assert_eq!(
+            folder_from_entry_path("tables/Raw/123.sptb", "tables"),
+            Some("Raw".to_string())
+        );
+        assert_eq!(
+            folder_from_entry_path("graphs/Reports/456.spgh", "graphs"),
+            Some("Reports".to_string())
+        );
     }
 
     #[test]
     fn v2_paths_keep_direct_parent_folders() {
-        assert_eq!(folder_from_entry_path("Raw/123.sptb", "tables"), Some("Raw".to_string()));
-        assert_eq!(folder_from_entry_path("Reports/456.spgh", "graphs"), Some("Reports".to_string()));
+        assert_eq!(
+            folder_from_entry_path("Raw/123.sptb", "tables"),
+            Some("Raw".to_string())
+        );
+        assert_eq!(
+            folder_from_entry_path("Reports/456.spgh", "graphs"),
+            Some("Reports".to_string())
+        );
     }
 
     #[test]
@@ -1036,7 +1134,10 @@ mod tests {
         assert_eq!(preview.total_rows, 1);
         assert_eq!(preview.rows[0][0], serde_json::json!("12.34"));
         assert_eq!(preview.rows[0][2], serde_json::json!([1, 2]));
-        assert_eq!(preview.rows[0][3], serde_json::json!({"label": "alpha", "score": 7}));
+        assert_eq!(
+            preview.rows[0][3],
+            serde_json::json!({"label": "alpha", "score": 7})
+        );
         assert_eq!(preview.rows[0][4], serde_json::json!("0xdead"));
     }
 
@@ -1054,12 +1155,8 @@ mod tests {
         std::fs::write(&file_path, "name,amount\nalpha,10\nbeta,20\n").unwrap();
         {
             let db = state.db.lock().unwrap();
-            db.import_csv(
-                "csv-project-id",
-                "CSV Project",
-                file_path.to_str().unwrap(),
-            )
-            .unwrap();
+            db.import_csv("csv-project-id", "CSV Project", file_path.to_str().unwrap())
+                .unwrap();
         }
         *state.project.write().unwrap() = Some(ProjectInfo {
             name: "CSV Project".into(),
@@ -1122,12 +1219,7 @@ mod tests {
                 extras: None,
             }],
             rows: (1..=row_count)
-                .map(|value| {
-                    vec![
-                        serde_json::json!(value),
-                        serde_json::json!(value * 10),
-                    ]
-                })
+                .map(|value| vec![serde_json::json!(value), serde_json::json!(value * 10)])
                 .collect(),
         };
         let progress = RefCell::new(Vec::new());
@@ -1143,7 +1235,11 @@ mod tests {
 
         assert_eq!(
             progress.into_inner(),
-            vec![(5_000, row_count), (10_000, row_count), (row_count, row_count)]
+            vec![
+                (5_000, row_count),
+                (10_000, row_count),
+                (row_count, row_count)
+            ]
         );
         let db = state.db.lock().unwrap();
         let first: (i64, i64) = db
@@ -1182,7 +1278,10 @@ mod tests {
                 format: None,
                 extras: None,
             }],
-            rows: vec![vec![serde_json::json!(1), serde_json::json!({"$duckdbValue": "original"})]],
+            rows: vec![vec![
+                serde_json::json!(1),
+                serde_json::json!({"$duckdbValue": "original"}),
+            ]],
         };
 
         service.restore_table_doc(&doc).unwrap();
@@ -1226,7 +1325,10 @@ mod tests {
         let mut doc = table_doc("future-id", "Future");
         doc.version = "3".into();
 
-        assert!(matches!(service.restore_table_doc(&doc), Err(crate::error::AppError::InvalidParam(_))));
+        assert!(matches!(
+            service.restore_table_doc(&doc),
+            Err(crate::error::AppError::InvalidParam(_))
+        ));
         let db = state.db.lock().unwrap();
         assert!(db.get_dataset_meta("future-id").is_err());
     }
@@ -1248,36 +1350,35 @@ mod tests {
 
         let mut extras = BTreeMap::new();
         extras.insert("unit".to_string(), serde_json::json!("USD"));
-        extras.insert("notes".to_string(), serde_json::json!({"precision": "cents"}));
-        state
-            .column_display
-            .lock()
-            .unwrap()
-            .insert(
-                "preserve-id".to_string(),
-                vec![
-                    ColumnDisplayProps {
-                        col_index: 2,
-                        width: Some(180.0),
-                        format: Some(ColumnFormatInfo {
-                            kind: "currency".into(),
-                            decimals: Some(2),
-                            currency: Some("USD".into()),
-                        }),
-                        extras: Some(extras),
-                    },
-                    ColumnDisplayProps {
-                        col_index: 3,
-                        width: Some(220.0),
-                        format: Some(ColumnFormatInfo {
-                            kind: "datetime".into(),
-                            decimals: None,
-                            currency: None,
-                        }),
-                        extras: None,
-                    },
-                ],
-            );
+        extras.insert(
+            "notes".to_string(),
+            serde_json::json!({"precision": "cents"}),
+        );
+        state.column_display.lock().unwrap().insert(
+            "preserve-id".to_string(),
+            vec![
+                ColumnDisplayProps {
+                    col_index: 2,
+                    width: Some(180.0),
+                    format: Some(ColumnFormatInfo {
+                        kind: "currency".into(),
+                        decimals: Some(2),
+                        currency: Some("USD".into()),
+                    }),
+                    extras: Some(extras),
+                },
+                ColumnDisplayProps {
+                    col_index: 3,
+                    width: Some(220.0),
+                    format: Some(ColumnFormatInfo {
+                        kind: "datetime".into(),
+                        decimals: None,
+                        currency: None,
+                    }),
+                    extras: None,
+                },
+            ],
+        );
 
         let project_path = std::env::temp_dir().join(format!(
             "stats_playground_save_preserve_{}.spprj",
@@ -1316,9 +1417,11 @@ mod tests {
             "statistics": ["sum"]
         })];
         let folders = vec!["Analysis".to_string(), "Analysis/Yearly".to_string()];
-        let table_folders = HashMap::from([("preserve-id".to_string(), "Analysis/Yearly".to_string())]);
+        let table_folders =
+            HashMap::from([("preserve-id".to_string(), "Analysis/Yearly".to_string())]);
         let graph_folders = HashMap::from([("graph-1".to_string(), "Analysis".to_string())]);
-        let tabulate_folders = HashMap::from([("tab-1".to_string(), "Analysis/Yearly".to_string())]);
+        let tabulate_folders =
+            HashMap::from([("tab-1".to_string(), "Analysis/Yearly".to_string())]);
 
         let service = ProjectService::new(&state);
         service
@@ -1367,7 +1470,14 @@ mod tests {
         );
 
         let db = reopened_state.db.lock().unwrap();
-        let restored: Vec<(i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = {
+        let restored: Vec<(
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = {
             let mut stmt = db
                 .conn()
                 .prepare(
@@ -1396,7 +1506,10 @@ mod tests {
         assert_eq!(restored[1].2.as_deref(), Some("1234.56"));
         assert_eq!(restored[1].3.as_deref(), Some("2026-08-21 01:02:03"));
         assert_eq!(restored[1].4.as_deref(), Some("[3, 4, 5]"));
-        assert_eq!(restored[1].5.as_deref(), Some("{'label': beta, 'score': 9}"));
+        assert_eq!(
+            restored[1].5.as_deref(),
+            Some("{'label': beta, 'score': 9}")
+        );
 
         let preview = db
             .execute_sql_query(
@@ -1410,7 +1523,10 @@ mod tests {
         assert_eq!(preview.rows[1][0], serde_json::json!("0xdeadbeef"));
         assert_eq!(preview.rows[1][1], serde_json::json!("1234.56"));
         assert_eq!(preview.rows[1][3], serde_json::json!([3, 4, 5]));
-        assert_eq!(preview.rows[1][4], serde_json::json!({"label": "beta", "score": 9}));
+        assert_eq!(
+            preview.rows[1][4],
+            serde_json::json!({"label": "beta", "score": 9})
+        );
 
         let _ = std::fs::remove_file(project_path);
     }
@@ -1441,7 +1557,10 @@ mod tests {
 
         let before = std::fs::read(&project_path).unwrap();
         let invalid_save_as_path = std::env::temp_dir()
-            .join(format!("stats_playground_missing_parent_{}", uuid::Uuid::new_v4()))
+            .join(format!(
+                "stats_playground_missing_parent_{}",
+                uuid::Uuid::new_v4()
+            ))
             .join("save_failure.spprj");
 
         let error = service
@@ -1450,7 +1569,9 @@ mod tests {
                 None,
             )
             .unwrap_err();
-        assert!(matches!(&error, crate::error::AppError::InvalidParam(message) if message.contains("destination parent does not exist")));
+        assert!(
+            matches!(&error, crate::error::AppError::InvalidParam(message) if message.contains("destination parent does not exist"))
+        );
 
         let after = std::fs::read(&project_path).unwrap();
         assert_eq!(after, before);
@@ -1472,7 +1593,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let new_path = std::env::temp_dir()
-            .join(format!("stats_playground_missing_parent_{}", uuid::Uuid::new_v4()))
+            .join(format!(
+                "stats_playground_missing_parent_{}",
+                uuid::Uuid::new_v4()
+            ))
             .join("save_as_new.spprj");
 
         *state.project.write().unwrap() = Some(ProjectInfo {
@@ -1547,7 +1671,10 @@ mod tests {
             .clone()
             .expect("project should remain set");
         assert_eq!(current.file_path, new_path.to_string_lossy());
-        assert_eq!(current.name, new_path.file_stem().unwrap().to_string_lossy());
+        assert_eq!(
+            current.name,
+            new_path.file_stem().unwrap().to_string_lossy()
+        );
         assert!(spprj_archive::read_project_file(new_path.to_str().unwrap()).is_ok());
 
         let _ = std::fs::remove_file(original_path);
@@ -1555,9 +1682,123 @@ mod tests {
     }
 
     #[test]
-    fn save_pipeline_begins_save_guard_before_metadata_snapshot_and_delegates_to_streaming_writer() {
+    fn save_snapshot_captures_all_dataset_generations_while_listing_datasets() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.seed_benchmark_table("save-gen-one", "Save Gen One", 2, 2)
+                .unwrap();
+            db.seed_benchmark_table("save-gen-two", "Save Gen Two", 2, 2)
+                .unwrap();
+            db.conn()
+                .execute(
+                    "UPDATE _meta_datasets SET generation = 11 WHERE id = 'save-gen-one'",
+                    [],
+                )
+                .unwrap();
+            db.conn()
+                .execute(
+                    "UPDATE _meta_datasets SET generation = 42 WHERE id = 'save-gen-two'",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let destination = std::env::temp_dir().join(format!(
+            "stats_playground_save_generations_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        let current_project = ProjectInfo {
+            name: "Save Generations".to_string(),
+            file_path: destination.to_string_lossy().to_string(),
+            created_at: "2026-08-23T00:00:00Z".to_string(),
+        };
+        *state.project.write().unwrap() = Some(current_project.clone());
+
+        let service = ProjectService::new(&state);
+        let snapshot = service
+            .capture_save_snapshot(current_project, empty_save_request(None))
+            .unwrap();
+
+        assert_eq!(snapshot.datasets.len(), 2);
+        assert_eq!(snapshot.dataset_generations.len(), 2);
+        assert_eq!(
+            snapshot.dataset_generations.get("save-gen-one"),
+            Some(&11_u64)
+        );
+        assert_eq!(
+            snapshot.dataset_generations.get("save-gen-two"),
+            Some(&42_u64)
+        );
+
+        let _ = std::fs::remove_file(destination);
+    }
+
+    #[test]
+    fn save_as_writer_failure_preserves_existing_project_identity_and_destination() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.seed_benchmark_table("save-as-writer-failure", "Save As Writer Failure", 3, 2)
+                .unwrap();
+        }
+
+        let original_path = std::env::temp_dir().join(format!(
+            "stats_playground_save_as_writer_fail_original_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        let new_path = std::env::temp_dir().join(format!(
+            "stats_playground_save_as_writer_fail_new_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+
+        *state.project.write().unwrap() = Some(ProjectInfo {
+            name: "Before Writer Failure".to_string(),
+            file_path: original_path.to_string_lossy().to_string(),
+            created_at: "2026-08-23T00:00:00Z".to_string(),
+        });
+
+        let service = ProjectService::new(&state);
+        service
+            .save_project(empty_save_request(None), None)
+            .unwrap();
+
+        let failure = service.save_project_with_write_impl(
+            empty_save_request(Some(new_path.to_string_lossy().to_string())),
+            None,
+            |_snapshot, _destination_path, _progress_cb, _save_guard| {
+                Err(AppError::FileIO(
+                    "injected writer validation/placement failure".to_string(),
+                ))
+            },
+        );
+        assert!(
+            matches!(failure, Err(AppError::FileIO(message)) if message.contains("injected writer validation/placement failure"))
+        );
+
+        let current = state
+            .project
+            .read()
+            .unwrap()
+            .clone()
+            .expect("project should remain set");
+        assert_eq!(current.file_path, original_path.to_string_lossy());
+        assert_eq!(current.name, "Before Writer Failure");
+        assert!(spprj_archive::read_project_file(original_path.to_str().unwrap()).is_ok());
+
+        let _ = std::fs::remove_file(original_path);
+        let _ = std::fs::remove_file(new_path);
+    }
+
+    #[test]
+    fn save_pipeline_begins_save_guard_before_metadata_snapshot_and_delegates_to_streaming_writer()
+    {
         let source = include_str!("project_service.rs");
-        let body = source_between(source, "pub fn save_project(", "/// Get current project info");
+        let body = source_between(
+            source,
+            "pub fn save_project(",
+            "/// Get current project info",
+        );
 
         assert!(
             body.contains("self.state.save_coordinator.begin_save()"),
@@ -1572,19 +1813,24 @@ mod tests {
             "save_project must delegate archive writing to StreamingProjectWriter"
         );
         assert!(
-            body.contains("read_project_file"),
-            "save_project must validate the saved archive can be reopened before committing Save As identity"
+            !body.contains("read_project_file"),
+            "save_project must not introduce post-placement read_project_file failure paths"
         );
     }
 
     #[test]
     fn save_pipeline_snapshot_captures_required_state_fields() {
         let source = include_str!("project_service.rs");
-        let body = source_between(source, "pub fn save_project(", "/// Get current project info");
+        let body = source_between(
+            source,
+            "pub fn save_project(",
+            "/// Get current project info",
+        );
 
         assert!(body.contains("datasets"));
+        assert!(body.contains("dataset_generations"));
         assert!(body.contains("column_display"));
-        assert!(body.contains("request: request.clone()"));
+        assert!(body.contains("request"));
     }
 
     #[test]
@@ -1592,7 +1838,8 @@ mod tests {
         let state = AppState::new().unwrap();
         {
             let db = state.db.lock().unwrap();
-            db.create_empty_table("original-id", "Original", &[], &[]).unwrap();
+            db.create_empty_table("original-id", "Original", &[], &[])
+                .unwrap();
         }
         *state.project.write().unwrap() = Some(ProjectInfo {
             name: "Original Project".into(),
@@ -1625,10 +1872,8 @@ mod tests {
             vec![],
             vec![],
         );
-        let file_path = std::env::temp_dir().join(format!(
-            "sp_failed_open_{}.spprj",
-            uuid::Uuid::new_v4()
-        ));
+        let file_path =
+            std::env::temp_dir().join(format!("sp_failed_open_{}.spprj", uuid::Uuid::new_v4()));
         spprj_archive::write_project_archive(&bundle, file_path.to_str().unwrap()).unwrap();
 
         let service = ProjectService::new(&state);
@@ -1640,6 +1885,9 @@ mod tests {
         assert!(db.get_dataset_meta("original-id").is_ok());
         assert!(db.get_dataset_meta("valid-id").is_err());
         drop(db);
-        assert_eq!(state.project.read().unwrap().as_ref().unwrap().name, "Original Project");
+        assert_eq!(
+            state.project.read().unwrap().as_ref().unwrap().name,
+            "Original Project"
+        );
     }
 }
