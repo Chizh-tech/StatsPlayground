@@ -7,6 +7,7 @@ use crate::error::AppError;
 use crate::models::save::SaveProjectRequest;
 use crate::services::project_service::{seed_save_project, ProjectService};
 use crate::services::spprj_archive;
+use crate::services::streaming_project_writer;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -15,7 +16,7 @@ enum Operation {
     Query,
     Paste,
     Restore,
-    SaveCurrent,
+    Save,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -36,6 +37,8 @@ struct PerformanceReport {
     total_ms: u128,
     result_rows: usize,
     archive_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_retained_batch_bytes: Option<u64>,
 }
 
 fn parse_positive_usize(flag: &str, value: Option<String>) -> Result<usize, AppError> {
@@ -71,7 +74,7 @@ where
                     "query" => Operation::Query,
                     "paste" => Operation::Paste,
                     "restore" => Operation::Restore,
-                    "save_current" => Operation::SaveCurrent,
+                    "save" | "save_current" => Operation::Save,
                     _ => {
                         return Err(AppError::InvalidParam(format!(
                             "unknown operation: {value}"
@@ -86,8 +89,8 @@ where
 }
 
 fn execute(options: Options) -> Result<PerformanceReport, AppError> {
-    if options.operation == Operation::SaveCurrent {
-        return execute_save_current(options);
+    if options.operation == Operation::Save {
+        return execute_save(options);
     }
 
     let total_started = Instant::now();
@@ -142,7 +145,7 @@ fn execute(options: Options) -> Result<PerformanceReport, AppError> {
             )?;
             snapshot.rows.len()
         }
-        Operation::SaveCurrent => unreachable!("save_current is handled before this branch"),
+        Operation::Save => unreachable!("save is handled before this branch"),
     };
     let operation_ms = operation_started.elapsed().as_millis();
 
@@ -155,10 +158,11 @@ fn execute(options: Options) -> Result<PerformanceReport, AppError> {
         total_ms: total_started.elapsed().as_millis(),
         result_rows,
         archive_bytes: 0,
+        max_retained_batch_bytes: None,
     })
 }
 
-fn execute_save_current(options: Options) -> Result<PerformanceReport, AppError> {
+fn execute_save(options: Options) -> Result<PerformanceReport, AppError> {
     let total_started = Instant::now();
     let setup_started = Instant::now();
     let state = AppState::new()?;
@@ -167,7 +171,7 @@ fn execute_save_current(options: Options) -> Result<PerformanceReport, AppError>
 
     let history = vec![serde_json::json!({
         "kind": "benchmark",
-        "label": "save_current",
+        "label": "save",
     })];
     let snapshots = vec![serde_json::json!({
         "id": "snapshot-bench-1",
@@ -203,6 +207,8 @@ fn execute_save_current(options: Options) -> Result<PerformanceReport, AppError>
         "Bench/Sub".to_string(),
     )]);
 
+    streaming_project_writer::reset_perf_metrics();
+
     let operation_started = Instant::now();
     let save_result = ProjectService::new(&state).save_project(
         SaveProjectRequest {
@@ -219,6 +225,7 @@ fn execute_save_current(options: Options) -> Result<PerformanceReport, AppError>
         None,
     );
     let operation_ms = operation_started.elapsed().as_millis();
+    let save_perf_metrics = streaming_project_writer::current_perf_metrics();
 
     let save_metrics_result = match save_result {
         Ok(_) => {
@@ -244,6 +251,7 @@ fn execute_save_current(options: Options) -> Result<PerformanceReport, AppError>
         total_ms: total_started.elapsed().as_millis(),
         result_rows,
         archive_bytes,
+        max_retained_batch_bytes: Some(save_perf_metrics.max_retained_batch_bytes as u64),
     })
 }
 
@@ -315,7 +323,7 @@ mod tests {
             Operation::Query,
             Operation::Paste,
             Operation::Restore,
-            Operation::SaveCurrent,
+            Operation::Save,
         ] {
             let report = execute(Options {
                 rows: 25,
@@ -334,10 +342,31 @@ mod tests {
             assert!(json.get("operationMs").is_some());
             assert!(json.get("totalMs").is_some());
             assert!(json.get("archiveBytes").is_some());
-            if operation == Operation::SaveCurrent {
+            if operation == Operation::Save {
                 assert!(report.archive_bytes > 0);
+                assert!(report.max_retained_batch_bytes.is_some());
+                assert!(json.get("maxRetainedBatchBytes").is_some());
+            } else {
+                assert!(report.max_retained_batch_bytes.is_none());
+                assert!(json.get("maxRetainedBatchBytes").is_none());
             }
         }
+    }
+
+    #[test]
+    fn performance_cli_accepts_legacy_save_current_alias() {
+        let options = parse_args([
+            "--rows",
+            "100",
+            "--columns",
+            "4",
+            "--operation",
+            "save_current",
+        ]
+        .map(String::from))
+        .unwrap();
+
+        assert_eq!(options.operation, Operation::Save);
     }
 
     #[test]
@@ -345,7 +374,7 @@ mod tests {
         let report = execute(Options {
             rows: 300_000,
             columns: 20,
-            operation: Operation::SaveCurrent,
+            operation: Operation::Save,
         })
         .unwrap();
 

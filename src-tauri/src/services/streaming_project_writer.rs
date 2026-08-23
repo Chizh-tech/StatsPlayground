@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+#[cfg(any(test, feature = "perf-harness"))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -22,9 +24,49 @@ const STREAM_VERSION: &str = "3.0.0";
 const TABLE_DOC_VERSION: &str = "2";
 const TARGET_BATCH_BYTES: usize = 4 * 1024 * 1024;
 const HARD_BATCH_BYTES: usize = 8 * 1024 * 1024;
-const ROW_LIMIT_PER_BATCH: usize = 2048;
+const ROW_LIMIT_PER_BATCH: usize = 4096;
 const PROGRESS_MIN_INTERVAL_MS: u64 = 100;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(PROGRESS_MIN_INTERVAL_MS);
+
+#[cfg(any(test, feature = "perf-harness"))]
+static PERF_MAX_RETAINED_BATCH_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(any(test, feature = "perf-harness"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SavePerfMetrics {
+    pub max_retained_batch_bytes: usize,
+}
+
+#[cfg(any(test, feature = "perf-harness"))]
+pub(crate) fn reset_perf_metrics() {
+    PERF_MAX_RETAINED_BATCH_BYTES.store(0, Ordering::SeqCst);
+}
+
+#[cfg(any(test, feature = "perf-harness"))]
+pub(crate) fn current_perf_metrics() -> SavePerfMetrics {
+    SavePerfMetrics {
+        max_retained_batch_bytes: PERF_MAX_RETAINED_BATCH_BYTES.load(Ordering::SeqCst),
+    }
+}
+
+#[cfg(any(test, feature = "perf-harness"))]
+fn observe_retained_batch_bytes(bytes: usize) {
+    let mut current = PERF_MAX_RETAINED_BATCH_BYTES.load(Ordering::SeqCst);
+    while bytes > current {
+        match PERF_MAX_RETAINED_BATCH_BYTES.compare_exchange(
+            current,
+            bytes,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+}
+
+#[cfg(not(any(test, feature = "perf-harness")))]
+fn observe_retained_batch_bytes(_bytes: usize) {}
 
 #[cfg(test)]
 macro_rules! run_save_test_hook {
@@ -387,6 +429,8 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                     break;
                 }
 
+                observe_retained_batch_bytes(batch.retained_bytes_estimate);
+
                 run_save_test_hook!(
                     SaveFailurePoint::BetweenBatches,
                     Some(dataset.id.clone()),
@@ -593,7 +637,7 @@ fn replace_archive_atomically_os(
 ) -> Result<(), AppError> {
     #[cfg(windows)]
     {
-        return replace_existing_windows(temp_path, destination_path);
+        replace_existing_windows(temp_path, destination_path)
     }
 
     #[cfg(not(windows))]
@@ -946,6 +990,33 @@ mod tests {
                 tabulate_folders: HashMap::new(),
             },
         }
+    }
+
+    #[test]
+    fn save_path_is_streaming() {
+        let project_source = include_str!("project_service.rs");
+        let save_project_body = project_source
+            .split("pub fn save_project(")
+            .nth(1)
+            .and_then(|tail| tail.split("/// Get current project info").next())
+            .expect("save_project body should be present");
+
+        assert!(
+            !save_project_body.contains("compose_table_doc("),
+            "save_project must not compose full table docs per dataset"
+        );
+
+        let archive_source = include_str!("spprj_archive.rs");
+        let write_archive_body = archive_source
+            .split("pub fn write_project_archive(")
+            .nth(1)
+            .and_then(|tail| tail.split("fn write_zip_entry<").next())
+            .expect("write_project_archive body should be present");
+
+        assert!(
+            !write_archive_body.contains("serde_json::to_vec(doc)"),
+            "write_project_archive must not duplicate full table/graph JSON buffers"
+        );
     }
 
     #[test]

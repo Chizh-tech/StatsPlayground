@@ -593,9 +593,7 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
         let dir_opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
 
-        let manifest_bytes = serde_json::to_vec_pretty(&bundle.manifest)
-            .map_err(|e| AppError::FileIO(e.to_string()))?;
-        write_zip_entry(&mut zip, "manifest.json", &manifest_bytes, opts)?;
+        write_zip_json_entry_pretty(&mut zip, "manifest.json", &bundle.manifest, opts)?;
 
         // Emit explicit directory entries for every folder so extraction
         // produces the full tree (including empty folders the user created).
@@ -637,25 +635,19 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
 
         for entry in &bundle.manifest.tables {
             if let Some(doc) = table_by_id.get(entry.id.as_str()) {
-                let bytes = serde_json::to_vec(doc).map_err(|e| AppError::FileIO(e.to_string()))?;
-                write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
+                write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
             }
         }
         for entry in &bundle.manifest.graphs {
             if let Some(doc) = graph_by_id.get(entry.id.as_str()) {
-                let bytes = serde_json::to_vec(doc).map_err(|e| AppError::FileIO(e.to_string()))?;
-                write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
+                write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
             }
         }
         if !bundle.history.is_empty() {
-            let bytes =
-                serde_json::to_vec(&bundle.history).map_err(|e| AppError::FileIO(e.to_string()))?;
-            write_zip_entry(&mut zip, ".history.json", &bytes, opts)?;
+            write_zip_json_entry(&mut zip, ".history.json", &bundle.history, opts)?;
         }
         if !bundle.snapshots.is_empty() {
-            let bytes = serde_json::to_vec(&bundle.snapshots)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
-            write_zip_entry(&mut zip, ".snapshots.json", &bytes, opts)?;
+            write_zip_json_entry(&mut zip, ".snapshots.json", &bundle.snapshots, opts)?;
         }
         zip.finish().map_err(|e| AppError::FileIO(e.to_string()))?;
     }
@@ -681,6 +673,31 @@ fn write_zip_entry<W: Write + Seek>(
     zip.start_file(name, opts)
         .map_err(|e| AppError::FileIO(e.to_string()))?;
     zip.write_all(data)
+        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    Ok(())
+}
+
+fn write_zip_json_entry<W: Write + Seek, T: Serialize>(
+    zip: &mut zip::ZipWriter<W>,
+    name: &str,
+    value: &T,
+    opts: zip::write::SimpleFileOptions,
+) -> Result<(), AppError> {
+    zip.start_file(name, opts)
+        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    serde_json::to_writer(&mut *zip, value).map_err(|e| AppError::FileIO(e.to_string()))?;
+    Ok(())
+}
+
+fn write_zip_json_entry_pretty<W: Write + Seek, T: Serialize>(
+    zip: &mut zip::ZipWriter<W>,
+    name: &str,
+    value: &T,
+    opts: zip::write::SimpleFileOptions,
+) -> Result<(), AppError> {
+    zip.start_file(name, opts)
+        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    serde_json::to_writer_pretty(&mut *zip, value)
         .map_err(|e| AppError::FileIO(e.to_string()))?;
     Ok(())
 }

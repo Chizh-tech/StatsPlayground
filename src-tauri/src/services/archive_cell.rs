@@ -51,9 +51,62 @@ pub(crate) fn write_archive_cell<W: Write>(
     value: &DuckValue,
     column_type: &str,
 ) -> Result<(), AppError> {
-    let json = archive_cell_to_json(value, column_type)?;
+    if is_archive_scalar_type(column_type) {
+        return write_scalar_archive_cell(writer, value);
+    }
+
+    let json = tagged_value_to_json(value, column_type)?;
     serde_json::to_writer(writer, &json)
-    .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
+        .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
+}
+
+fn write_scalar_archive_cell<W: Write>(writer: &mut W, value: &DuckValue) -> Result<(), AppError> {
+    match value {
+        DuckValue::Null => writer
+            .write_all(b"null")
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::Boolean(value) => serde_json::to_writer(writer, value)
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::TinyInt(value) => serde_json::to_writer(writer, value)
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::SmallInt(value) => serde_json::to_writer(writer, value)
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::Int(value) => serde_json::to_writer(writer, value)
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::BigInt(value) => serde_json::to_writer(writer, value)
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::UTinyInt(value) => serde_json::to_writer(writer, value)
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::USmallInt(value) => serde_json::to_writer(writer, value)
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::UInt(value) => serde_json::to_writer(writer, value)
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::UBigInt(value) => serde_json::to_writer(writer, &value.to_string())
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::Float(value) => {
+            let finite = f64::from(*value);
+            if !finite.is_finite() {
+                return Err(AppError::InvalidParam(format!(
+                    "non-finite float cannot be archived as JSON number: {finite}"
+                )));
+            }
+            serde_json::to_writer(writer, value)
+                .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
+        }
+        DuckValue::Double(value) => {
+            if !value.is_finite() {
+                return Err(AppError::InvalidParam(format!(
+                    "non-finite float cannot be archived as JSON number: {value}"
+                )));
+            }
+            serde_json::to_writer(writer, value)
+                .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
+        }
+        DuckValue::Text(value) => serde_json::to_writer(writer, value)
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        other => serde_json::to_writer(writer, &format!("{:?}", other))
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+    }
 }
 
 pub(crate) fn archive_cell_to_json(
