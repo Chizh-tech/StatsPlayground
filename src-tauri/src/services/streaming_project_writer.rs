@@ -264,6 +264,8 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 return Err(error);
             }
 
+            let archive_bytes = std::fs::metadata(&temp_path)?.len();
+
             if let Err(error) = self
                 .replacer
                 .replace_archive(&temp_path, &snapshot.destination_path)
@@ -271,7 +273,6 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 let _ = std::fs::remove_file(&temp_path);
                 return Err(error);
             }
-            let archive_bytes = std::fs::metadata(&snapshot.destination_path)?.len();
 
             dispatcher.emit(SaveProgress {
                 phase: SavePhase::Finalizing,
@@ -723,6 +724,7 @@ fn run_test_hook(point: SaveFailurePoint, context: SaveHookContext) -> Result<()
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io::Write;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
@@ -801,6 +803,52 @@ mod tests {
                 }
             }
             place_temp_for_test(temp_path, destination_path)?;
+            Ok(())
+        }
+    }
+
+    struct TempSizeCaptureAndAppendReplacer {
+        calls: AtomicUsize,
+        observed_temp_len: Arc<Mutex<Option<u64>>>,
+        append_bytes: Vec<u8>,
+    }
+
+    impl ArchiveReplacer for TempSizeCaptureAndAppendReplacer {
+        fn replace_archive(
+            &self,
+            temp_path: &std::path::Path,
+            destination_path: &std::path::Path,
+        ) -> Result<(), AppError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let temp_len = std::fs::metadata(temp_path)?.len();
+            *self.observed_temp_len.lock().unwrap() = Some(temp_len);
+
+            place_temp_for_test(temp_path, destination_path)?;
+
+            if !self.append_bytes.is_empty() {
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(destination_path)?;
+                file.write_all(&self.append_bytes)?;
+                file.sync_all()?;
+            }
+            Ok(())
+        }
+    }
+
+    struct DeleteAfterReplaceReplacer {
+        calls: AtomicUsize,
+    }
+
+    impl ArchiveReplacer for DeleteAfterReplaceReplacer {
+        fn replace_archive(
+            &self,
+            temp_path: &std::path::Path,
+            destination_path: &std::path::Path,
+        ) -> Result<(), AppError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            place_temp_for_test(temp_path, destination_path)?;
+            std::fs::remove_file(destination_path)?;
             Ok(())
         }
     }
@@ -1534,6 +1582,57 @@ mod tests {
 
             let _ = std::fs::remove_file(&destination);
         }
+    }
+
+    #[test]
+    fn stream_writer_reports_archive_bytes_from_synced_temp_before_replacement() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 64);
+        let destination = temp_path("replace-bytes-source");
+        let snapshot = save_snapshot(&destination, vec![dataset]);
+
+        let observed_temp_len = Arc::new(Mutex::new(None));
+        let replacer: Arc<dyn ArchiveReplacer> = Arc::new(TempSizeCaptureAndAppendReplacer {
+            calls: AtomicUsize::new(0),
+            observed_temp_len: Arc::clone(&observed_temp_len),
+            append_bytes: b"post-replace-mutation".to_vec(),
+        });
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, replacer);
+        let result = writer.write(&snapshot, &destination, None).unwrap();
+
+        let temp_len = observed_temp_len
+            .lock()
+            .unwrap()
+            .expect("replacer should capture temp archive size before replacement");
+        let destination_len = std::fs::metadata(&destination).unwrap().len();
+
+        assert_eq!(result.archive_bytes, temp_len);
+        assert!(destination_len > result.archive_bytes);
+
+        let _ = std::fs::remove_file(&destination);
+    }
+
+    #[test]
+    fn stream_writer_returns_without_post_replace_filesystem_reads() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 8);
+        let destination = temp_path("replace-no-post-fs");
+        let snapshot = save_snapshot(&destination, vec![dataset]);
+
+        let replacer: Arc<dyn ArchiveReplacer> = Arc::new(DeleteAfterReplaceReplacer {
+            calls: AtomicUsize::new(0),
+        });
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, replacer);
+        let result = writer.write(&snapshot, &destination, None).unwrap();
+
+        assert_eq!(result.tables_written, 1);
+        assert_eq!(result.rows_written, 8);
+        assert!(result.archive_bytes > 0);
+        assert!(!destination.exists());
     }
 
     #[test]
