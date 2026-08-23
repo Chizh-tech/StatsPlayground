@@ -4,6 +4,12 @@ use tauri::{AppHandle, Emitter, State};
 use crate::error::AppError;
 use crate::state::AppState;
 
+pub(crate) fn acquire_mutation_permit(
+    state: &AppState,
+) -> Result<crate::services::save_coordinator::MutationPermit<'_>, AppError> {
+    state.save_coordinator.mutation_permit()
+}
+
 /// A full project data snapshot (all datasets + display props)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -173,6 +179,7 @@ pub fn restore_project_snapshot(
     app: AppHandle,
     snapshot: ProjectDataSnapshot,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     // Reset DuckDB and column display
     state.reset_db()?;
 

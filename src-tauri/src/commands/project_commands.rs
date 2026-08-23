@@ -7,8 +7,15 @@ use crate::models::save::{SaveProgress, SaveProjectRequest};
 use crate::services::project_service::{OpenProjectResult, ProjectService};
 use crate::state::AppState;
 
+pub(crate) fn acquire_mutation_permit(
+    state: &AppState,
+) -> Result<crate::services::save_coordinator::MutationPermit<'_>, AppError> {
+    state.save_coordinator.mutation_permit()
+}
+
 #[tauri::command]
 pub fn init_project(state: State<'_, AppState>) -> Result<ProjectInfo, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = ProjectService::new(&state);
     service.init_project()
 }
@@ -19,6 +26,7 @@ pub fn create_project(
     name: String,
     file_path: String,
 ) -> Result<ProjectInfo, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = ProjectService::new(&state);
     service.create_project(&name, &file_path)
 }
@@ -29,6 +37,7 @@ pub fn open_project(
     app: AppHandle,
     file_path: String,
 ) -> Result<OpenProjectResult, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = ProjectService::new(&state);
     service.open_project(
         &file_path,
@@ -128,6 +137,7 @@ pub fn import_table(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<ImportTableResult, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = ProjectService::new(&state);
     let id = service.import_table(&file_path)?;
     Ok(ImportTableResult { id })

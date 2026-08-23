@@ -8,8 +8,15 @@ use crate::models::table::{
 use crate::services::data_service::DataService;
 use crate::state::AppState;
 
+pub(crate) fn acquire_mutation_permit(
+    state: &AppState,
+) -> Result<crate::services::save_coordinator::MutationPermit<'_>, AppError> {
+    state.save_coordinator.mutation_permit()
+}
+
 #[tauri::command]
 pub fn import_file(state: State<'_, AppState>, file_path: String) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.import_csv(&file_path)
 }
@@ -22,6 +29,7 @@ pub fn list_datasets(state: State<'_, AppState>) -> Result<Vec<DatasetMeta>, App
 
 #[tauri::command]
 pub fn delete_dataset(state: State<'_, AppState>, dataset_id: String) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.delete_dataset(&dataset_id)
 }
@@ -105,6 +113,7 @@ pub fn create_table_from_sql_query(
     sql: String,
     name: String,
 ) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.create_table_from_sql_query(&sql, &name)
 }
@@ -116,12 +125,14 @@ pub fn create_table(
     column_names: Vec<String>,
     column_types: Vec<String>,
 ) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.create_table(&name, &column_names, &column_types)
 }
 
 #[tauri::command]
 pub fn add_row(state: State<'_, AppState>, dataset_id: String) -> Result<i64, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.add_row(&dataset_id)
 }
@@ -132,6 +143,7 @@ pub fn add_rows(
     dataset_id: String,
     count: usize,
 ) -> Result<crate::models::table::AddedRowsResult, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.add_rows(&dataset_id, count)
 }
@@ -144,6 +156,7 @@ pub fn apply_added_rows(
     undo: bool,
     expected_generation: u64,
 ) -> Result<u64, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.apply_added_rows(&dataset_id, &row_ids, undo, expected_generation)
 }
@@ -156,6 +169,7 @@ pub fn update_cell(
     column_name: String,
     value: String,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.update_cell(&dataset_id, row_id, &column_name, &value)
 }
@@ -166,6 +180,7 @@ pub fn clear_cells(
     dataset_id: String,
     cells: Vec<CellPosition>,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.clear_cells(&dataset_id, &cells)
 }
@@ -177,6 +192,7 @@ pub fn update_cells(
     updates: Vec<CellUpdate>,
     expected_generation: Option<u64>,
 ) -> Result<u64, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.update_cells(&dataset_id, &updates, expected_generation)
 }
@@ -187,6 +203,7 @@ pub fn delete_row(
     dataset_id: String,
     row_id: i64,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.delete_row(&dataset_id, row_id)
 }
@@ -197,6 +214,7 @@ pub fn delete_rows(
     dataset_id: String,
     row_ids: Vec<i64>,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.delete_rows(&dataset_id, &row_ids)
 }
@@ -208,6 +226,7 @@ pub fn delete_rows_with_change_set(
     row_ids: Vec<i64>,
     expected_generation: Option<u64>,
 ) -> Result<String, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.delete_rows_with_change_set(&dataset_id, &row_ids, expected_generation)
 }
@@ -219,6 +238,7 @@ pub fn delete_columns_with_change_set(
     column_names: Vec<String>,
     expected_generation: Option<u64>,
 ) -> Result<String, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.delete_columns_with_change_set(&dataset_id, &column_names, expected_generation)
 }
@@ -232,6 +252,7 @@ pub fn alter_column_with_change_set(
     new_type: String,
     expected_generation: Option<u64>,
 ) -> Result<String, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.alter_column_with_change_set(
         &dataset_id,
@@ -250,6 +271,7 @@ pub fn alter_columns_type_with_change_set(
     new_type: String,
     expected_generation: Option<u64>,
 ) -> Result<String, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.alter_columns_type_with_change_set(
         &dataset_id,
@@ -265,6 +287,7 @@ pub fn rename_dataset(
     dataset_id: String,
     new_name: String,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.rename_dataset(&dataset_id, &new_name)
 }
@@ -276,6 +299,7 @@ pub fn add_column(
     col_name: String,
     col_type: String,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.add_column(&dataset_id, &col_name, &col_type)
 }
@@ -289,6 +313,7 @@ pub fn add_column_with_change_set(
     at_index: Option<i32>,
     expected_generation: Option<u64>,
 ) -> Result<String, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.add_column_with_change_set(
         &dataset_id,
@@ -307,6 +332,7 @@ pub fn add_columns_with_change_set(
     at_index: Option<i32>,
     expected_generation: Option<u64>,
 ) -> Result<String, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.add_columns_with_change_set(
         &dataset_id,
@@ -324,6 +350,7 @@ pub fn insert_column_at(
     col_type: String,
     at_index: usize,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.insert_column_at(&dataset_id, &col_name, &col_type, at_index)
 }
@@ -335,6 +362,7 @@ pub fn reorder_column(
     from: usize,
     to: usize,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.reorder_column(&dataset_id, from, to)
 }
@@ -347,6 +375,7 @@ pub fn reorder_column_if_generation(
     to: usize,
     expected_generation: u64,
 ) -> Result<u64, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.reorder_column_if_generation(&dataset_id, from, to, expected_generation)
 }
@@ -357,6 +386,7 @@ pub fn delete_column(
     dataset_id: String,
     col_name: String,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.delete_column(&dataset_id, &col_name)
 }
@@ -368,6 +398,7 @@ pub fn rename_column(
     old_name: String,
     new_name: String,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.rename_column(&dataset_id, &old_name, &new_name)
 }
@@ -379,6 +410,7 @@ pub fn change_column_type(
     col_name: String,
     new_type: String,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.change_column_type(&dataset_id, &col_name, &new_type)
 }
@@ -394,6 +426,7 @@ pub fn paste_at_position(
     col_types: Vec<String>,
     expected_generation: Option<u64>,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.paste_at_position(
         &dataset_id,
@@ -417,6 +450,7 @@ pub fn paste_at_position_with_change_set(
     col_types: Vec<String>,
     expected_generation: Option<u64>,
 ) -> Result<crate::models::table::PasteChangeSetResult, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     let change_set_id = service.paste_at_position_with_change_set(
         &dataset_id,
@@ -436,6 +470,7 @@ pub fn apply_table_change_set(
     change_set_id: String,
     undo: bool,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     DataService::new(&state).apply_change_set(&change_set_id, undo)
 }
 
@@ -444,6 +479,7 @@ pub fn drop_table_change_set(
     state: State<'_, AppState>,
     change_set_id: String,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     DataService::new(&state).drop_change_set(&change_set_id)
 }
 
@@ -455,6 +491,7 @@ pub fn restore_snapshot(
     col_types: Vec<String>,
     rows: Vec<Vec<serde_json::Value>>,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.restore_snapshot(&dataset_id, &col_names, &col_types, &rows)
 }
@@ -477,6 +514,7 @@ pub fn set_column_display_props(
     dataset_id: String,
     props: Vec<ColumnDisplayProps>,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let mut display = state
         .column_display
         .lock()

@@ -7,6 +7,12 @@ use crate::models::table::DatasetMeta;
 use crate::services::io_service::IoService;
 use crate::state::AppState;
 
+pub(crate) fn acquire_mutation_permit(
+    state: &AppState,
+) -> Result<crate::services::save_coordinator::MutationPermit<'_>, AppError> {
+    state.save_coordinator.mutation_permit()
+}
+
 #[derive(Clone, Serialize)]
 struct ImportProgress {
     table_name: String,
@@ -32,6 +38,7 @@ pub fn import_sqlite(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<Vec<DatasetMeta>, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = IoService::new(&state);
     service.import_sqlite(
         &file_path,
