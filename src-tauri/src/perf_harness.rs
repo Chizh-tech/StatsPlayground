@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::engine::duckdb_engine::DuckDbEngine;
 use crate::error::AppError;
+use crate::models::save::SaveProjectRequest;
 use crate::services::project_service::{seed_save_project, ProjectService};
 use crate::services::spprj_archive;
 use crate::state::AppState;
@@ -204,20 +205,23 @@ fn execute_save_current(options: Options) -> Result<PerformanceReport, AppError>
 
     let operation_started = Instant::now();
     let save_result = ProjectService::new(&state).save_project(
+        SaveProjectRequest {
+            file_path: None,
+            history,
+            snapshots,
+            graph_builders,
+            tabulates,
+            folders,
+            table_folders,
+            graph_folders,
+            tabulate_folders,
+        },
         None,
-        Some(history),
-        Some(snapshots),
-        Some(graph_builders),
-        Some(tabulates),
-        Some(folders),
-        Some(table_folders),
-        Some(graph_folders),
-        Some(tabulate_folders),
     );
     let operation_ms = operation_started.elapsed().as_millis();
 
     let save_metrics_result = match save_result {
-        Ok(()) => {
+        Ok(_) => {
             let archive_bytes = std::fs::metadata(&archive_path)
                 .map(|metadata| metadata.len())
                 .map_err(AppError::from)?;

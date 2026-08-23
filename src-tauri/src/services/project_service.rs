@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use crate::models::save::{SaveProgressCallback, SaveProjectRequest, SaveSnapshot};
 use duckdb::appender_params_from_iter;
 use duckdb::types::Value as DuckValue;
 use crate::models::project::{DatasetNameMigration, ProjectInfo};
@@ -9,6 +10,7 @@ use crate::services::archive_cell::{
 use crate::services::spprj_archive::{
     self, GraphDoc, ProjectBundle, TableColumn, TableColumnFormat, TableDoc,
 };
+use crate::services::streaming_project_writer::StreamingProjectWriter;
 use crate::state::AppState;
 
 pub struct ProjectService<'a> {
@@ -235,54 +237,38 @@ impl<'a> ProjectService<'a> {
         })
     }
 
-    /// Save the current project state to disk as a new ZIP archive.
-    ///
-    /// Per issue #7, folder routing is supplied OUT-OF-BAND via
-    /// `table_folders` and `graph_folders` (id → folder path). The file
-    /// bodies themselves never carry folder info.
+    /// Save the current project state to disk as a ZIP archive using the
+    /// streaming writer pipeline.
     pub fn save_project(
         &self,
-        file_path: Option<&str>,
-        history_data: Option<Vec<serde_json::Value>>,
-        snapshots_data: Option<Vec<serde_json::Value>>,
-        graph_builders_data: Option<Vec<serde_json::Value>>,
-        tabulates_data: Option<Vec<serde_json::Value>>,
-        folders: Option<Vec<String>>,
-        table_folders: Option<std::collections::HashMap<String, String>>,
-        graph_folders: Option<std::collections::HashMap<String, String>>,
-        tabulate_folders: Option<std::collections::HashMap<String, String>>,
-    ) -> Result<(), AppError> {
-        let mut proj = self
+        request: SaveProjectRequest,
+        progress_cb: Option<&SaveProgressCallback<'_>>,
+    ) -> Result<ProjectInfo, AppError> {
+        let save_guard = self.state.save_coordinator.begin_save()?;
+
+        let current_project = self
             .state
             .project
-            .write()
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        let project = proj
-            .as_mut()
+            .read()
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .clone()
             .ok_or_else(|| AppError::InvalidParam("No project is open".into()))?;
 
-        if let Some(fp) = file_path {
-            project.file_path = fp.to_string();
-            if let Some(stem) = std::path::Path::new(fp)
-                .file_stem()
-                .and_then(|s| s.to_str())
-            {
-                project.name = stem.to_string();
-            }
-        }
-        if project.file_path.is_empty() {
+        let destination_path_string = request
+            .file_path
+            .clone()
+            .unwrap_or_else(|| current_project.file_path.clone());
+        if destination_path_string.is_empty() {
             return Err(AppError::InvalidParam("Project has no file path".into()));
         }
 
-        let save_path = project.file_path.clone();
-        let save_name = project.name.clone();
-        let save_created_at = project.created_at.clone();
-        drop(proj);
+        let destination_path = std::path::PathBuf::from(destination_path_string);
+        let destination_name = destination_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| stem.to_string())
+            .unwrap_or_else(|| current_project.name.clone());
 
-        // Compose every dataset into a TableDoc. The doc body is folder-free
-        // (issue #7); folder routing is supplied separately via the
-        // `table_folders` map and consumed by `build_bundle` to derive
-        // archive paths.
         let datasets = {
             let db = self
                 .state
@@ -291,36 +277,45 @@ impl<'a> ProjectService<'a> {
                 .map_err(|e| AppError::Database(e.to_string()))?;
             db.list_datasets()?
         };
-        let table_folders_map = table_folders.unwrap_or_default();
-        let graph_folders_map = graph_folders.unwrap_or_default();
-        let tabulate_folders_map = tabulate_folders.unwrap_or_default();
-        let mut table_docs = Vec::with_capacity(datasets.len());
-        for ds in &datasets {
-            let doc = self.compose_table_doc(&ds.id)?;
-            table_docs.push(doc);
+        let column_display = self
+            .state
+            .column_display
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .clone();
+
+        let snapshot = SaveSnapshot {
+            current_project: current_project.clone(),
+            destination_path: destination_path.clone(),
+            destination_name: destination_name.clone(),
+            datasets,
+            column_display,
+            request: request.clone(),
+        };
+
+        let writer = StreamingProjectWriter::new(self.state, &save_guard);
+        writer.write(&snapshot, &destination_path, progress_cb)?;
+
+        let destination_utf8 = destination_path
+            .to_str()
+            .ok_or_else(|| AppError::InvalidParam("Project path must be valid UTF-8".into()))?;
+        let _ = spprj_archive::read_project_file(destination_utf8)?;
+
+        let mut project_guard = self
+            .state
+            .project
+            .write()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let project = project_guard
+            .as_mut()
+            .ok_or_else(|| AppError::InvalidParam("No project is open".into()))?;
+
+        if request.file_path.is_some() {
+            project.file_path = destination_path.to_string_lossy().to_string();
+            project.name = destination_name;
         }
 
-        // Graph docs are folder-free too — `compose_graph_docs` strips any
-        // legacy in-body `folder` field via `lift_graph_meta`.
-        let graph_docs = compose_graph_docs(graph_builders_data.unwrap_or_default());
-
-        let bundle = spprj_archive::build_bundle(
-            save_name,
-            SPPRJ_VERSION.to_string(),
-            save_created_at,
-            table_docs,
-            graph_docs,
-            tabulates_data.unwrap_or_default(),
-            folders.unwrap_or_default(),
-            &table_folders_map,
-            &graph_folders_map,
-            &tabulate_folders_map,
-            history_data.unwrap_or_default(),
-            snapshots_data.unwrap_or_default(),
-        );
-        spprj_archive::write_project_archive(&bundle, &save_path)?;
-
-        Ok(())
+        Ok(project.clone())
     }
 
     /// Get current project info
@@ -883,12 +878,24 @@ fn normalize_duplicate_dataset_names(docs: &mut [TableDoc]) -> Vec<DatasetNameMi
 #[cfg(test)]
 mod tests {
     use super::{folder_from_entry_path, normalize_duplicate_dataset_names, ProjectService};
+    use crate::models::save::SaveProjectRequest;
     use crate::models::table::{ColumnDisplayProps, ColumnFormatInfo};
     use crate::models::project::ProjectInfo;
     use crate::services::spprj_archive::{self, TableColumn, TableDoc};
     use crate::state::AppState;
     use std::cell::RefCell;
     use std::collections::{BTreeMap, HashMap};
+
+    fn source_between(source: &str, start: &str, end: &str) -> String {
+        let start_idx = source
+            .find(start)
+            .unwrap_or_else(|| panic!("missing start marker: {start}"));
+        let rest = &source[start_idx..];
+        let end_idx = rest
+            .find(end)
+            .unwrap_or_else(|| panic!("missing end marker: {end}"));
+        rest[..end_idx].to_string()
+    }
 
     fn table_doc(id: &str, name: &str) -> TableDoc {
         TableDoc {
@@ -899,6 +906,44 @@ mod tests {
             columns: vec![],
             rows: vec![],
         }
+    }
+
+    fn save_request(
+        file_path: Option<String>,
+        history: Vec<serde_json::Value>,
+        snapshots: Vec<serde_json::Value>,
+        graph_builders: Vec<serde_json::Value>,
+        tabulates: Vec<serde_json::Value>,
+        folders: Vec<String>,
+        table_folders: HashMap<String, String>,
+        graph_folders: HashMap<String, String>,
+        tabulate_folders: HashMap<String, String>,
+    ) -> SaveProjectRequest {
+        SaveProjectRequest {
+            file_path,
+            history,
+            snapshots,
+            graph_builders,
+            tabulates,
+            folders,
+            table_folders,
+            graph_folders,
+            tabulate_folders,
+        }
+    }
+
+    fn empty_save_request(file_path: Option<String>) -> SaveProjectRequest {
+        save_request(
+            file_path,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     #[test]
@@ -1048,15 +1093,8 @@ mod tests {
 
         service
             .save_project(
-                project_path.to_str(),
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(HashMap::new()),
-                Some(HashMap::new()),
-                Some(HashMap::new()),
+                empty_save_request(project_path.to_str().map(|path| path.to_string())),
+                None,
             )
             .unwrap();
         let bundle = spprj_archive::read_project_file(project_path.to_str().unwrap()).unwrap();
@@ -1285,15 +1323,18 @@ mod tests {
         let service = ProjectService::new(&state);
         service
             .save_project(
+                save_request(
+                    None,
+                    history.clone(),
+                    snapshots.clone(),
+                    graph_builders.clone(),
+                    tabulates.clone(),
+                    folders.clone(),
+                    table_folders.clone(),
+                    graph_folders.clone(),
+                    tabulate_folders.clone(),
+                ),
                 None,
-                Some(history.clone()),
-                Some(snapshots.clone()),
-                Some(graph_builders.clone()),
-                Some(tabulates.clone()),
-                Some(folders.clone()),
-                Some(table_folders.clone()),
-                Some(graph_folders.clone()),
-                Some(tabulate_folders.clone()),
             )
             .unwrap();
 
@@ -1395,54 +1436,155 @@ mod tests {
 
         let service = ProjectService::new(&state);
         service
-            .save_project(
-                None,
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(HashMap::new()),
-                Some(HashMap::new()),
-                Some(HashMap::new()),
-            )
+            .save_project(empty_save_request(None), None)
             .unwrap();
 
         let before = std::fs::read(&project_path).unwrap();
-        let tmp_path = format!("{}.tmp", project_path.to_string_lossy());
-        let expected_tmp_path = tmp_path.clone();
-
-        spprj_archive::install_test_before_destination_mutation_hook(Some(Box::new(
-            move |_dest, tmp| {
-                assert_eq!(tmp, expected_tmp_path);
-                assert!(std::path::Path::new(tmp).is_file());
-                Err(crate::error::AppError::FileIO(
-                    "injected placement-boundary failure".to_string(),
-                ))
-            },
-        )));
+        let invalid_save_as_path = std::env::temp_dir()
+            .join(format!("stats_playground_missing_parent_{}", uuid::Uuid::new_v4()))
+            .join("save_failure.spprj");
 
         let error = service
             .save_project(
+                empty_save_request(Some(invalid_save_as_path.to_string_lossy().to_string())),
                 None,
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(Vec::new()),
-                Some(HashMap::new()),
-                Some(HashMap::new()),
-                Some(HashMap::new()),
             )
             .unwrap_err();
-        spprj_archive::install_test_before_destination_mutation_hook(None);
-        assert!(matches!(&error, crate::error::AppError::FileIO(message) if message.contains("placement-boundary")));
+        assert!(matches!(&error, crate::error::AppError::InvalidParam(message) if message.contains("destination parent does not exist")));
 
         let after = std::fs::read(&project_path).unwrap();
         assert_eq!(after, before);
-        assert!(!std::path::Path::new(&tmp_path).exists());
 
         let _ = std::fs::remove_file(project_path);
+    }
+
+    #[test]
+    fn save_as_failure_preserves_existing_project_identity() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.seed_benchmark_table("save-as-failure-id", "Save As Failure", 5, 2)
+                .unwrap();
+        }
+
+        let original_path = std::env::temp_dir().join(format!(
+            "stats_playground_save_as_original_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        let new_path = std::env::temp_dir()
+            .join(format!("stats_playground_missing_parent_{}", uuid::Uuid::new_v4()))
+            .join("save_as_new.spprj");
+
+        *state.project.write().unwrap() = Some(ProjectInfo {
+            name: "Original Save As Project".to_string(),
+            file_path: original_path.to_string_lossy().to_string(),
+            created_at: "2026-08-23T00:00:00Z".to_string(),
+        });
+
+        let service = ProjectService::new(&state);
+        service
+            .save_project(empty_save_request(None), None)
+            .unwrap();
+
+        let save_result = service.save_project(
+            empty_save_request(Some(new_path.to_string_lossy().to_string())),
+            None,
+        );
+
+        assert!(save_result.is_err());
+        let current = state
+            .project
+            .read()
+            .unwrap()
+            .clone()
+            .expect("project should remain set");
+        assert_eq!(current.file_path, original_path.to_string_lossy());
+        assert_eq!(current.name, "Original Save As Project");
+
+        let _ = std::fs::remove_file(original_path);
+    }
+
+    #[test]
+    fn save_as_success_commits_project_identity_to_new_destination() {
+        let state = AppState::new().unwrap();
+        {
+            let db = state.db.lock().unwrap();
+            db.seed_benchmark_table("save-as-success-id", "Save As Success", 3, 2)
+                .unwrap();
+        }
+
+        let original_path = std::env::temp_dir().join(format!(
+            "stats_playground_save_as_success_original_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        let new_path = std::env::temp_dir().join(format!(
+            "stats_playground_save_as_success_new_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+
+        *state.project.write().unwrap() = Some(ProjectInfo {
+            name: "Before Save As".to_string(),
+            file_path: original_path.to_string_lossy().to_string(),
+            created_at: "2026-08-23T00:00:00Z".to_string(),
+        });
+
+        let service = ProjectService::new(&state);
+        service
+            .save_project(empty_save_request(None), None)
+            .unwrap();
+
+        service
+            .save_project(
+                empty_save_request(Some(new_path.to_string_lossy().to_string())),
+                None,
+            )
+            .unwrap();
+
+        let current = state
+            .project
+            .read()
+            .unwrap()
+            .clone()
+            .expect("project should remain set");
+        assert_eq!(current.file_path, new_path.to_string_lossy());
+        assert_eq!(current.name, new_path.file_stem().unwrap().to_string_lossy());
+        assert!(spprj_archive::read_project_file(new_path.to_str().unwrap()).is_ok());
+
+        let _ = std::fs::remove_file(original_path);
+        let _ = std::fs::remove_file(new_path);
+    }
+
+    #[test]
+    fn save_pipeline_begins_save_guard_before_metadata_snapshot_and_delegates_to_streaming_writer() {
+        let source = include_str!("project_service.rs");
+        let body = source_between(source, "pub fn save_project(", "/// Get current project info");
+
+        assert!(
+            body.contains("self.state.save_coordinator.begin_save()"),
+            "save_project must acquire SaveGuard before reading mutable metadata"
+        );
+        assert!(
+            body.contains("SaveSnapshot"),
+            "save_project must construct a stable SaveSnapshot"
+        );
+        assert!(
+            body.contains("StreamingProjectWriter"),
+            "save_project must delegate archive writing to StreamingProjectWriter"
+        );
+        assert!(
+            body.contains("read_project_file"),
+            "save_project must validate the saved archive can be reopened before committing Save As identity"
+        );
+    }
+
+    #[test]
+    fn save_pipeline_snapshot_captures_required_state_fields() {
+        let source = include_str!("project_service.rs");
+        let body = source_between(source, "pub fn save_project(", "/// Get current project info");
+
+        assert!(body.contains("datasets"));
+        assert!(body.contains("column_display"));
+        assert!(body.contains("request: request.clone()"));
     }
 
     #[test]

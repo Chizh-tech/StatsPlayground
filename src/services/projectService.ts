@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
 
 /** Optional folder payload accepted by the save_project command.
@@ -16,6 +16,30 @@ export interface SaveProjectFolders {
   tabulateFolders: Record<string, string>;
 }
 
+export interface SaveProjectRequest {
+  filePath?: string;
+  history: unknown[];
+  snapshots: unknown[];
+  graphBuilders: unknown[];
+  tabulates: unknown[];
+  folders: string[];
+  tableFolders: Record<string, string>;
+  graphFolders: Record<string, string>;
+  tabulateFolders: Record<string, string>;
+}
+
+export type SavePhase = "preparing" | "table" | "metadata" | "compressing" | "finalizing";
+
+export interface SaveProgress {
+  phase: SavePhase;
+  tableIndex: number;
+  tableTotal: number;
+  tableName?: string;
+  rowsDone: number;
+  rowsTotal: number;
+  overallProgress?: number;
+}
+
 export const projectService = {
   initProject: () =>
     invoke<ProjectInfo>("init_project"),
@@ -27,24 +51,18 @@ export const projectService = {
     invoke<OpenProjectResult>("open_project", { filePath }),
 
   saveProject: (
-    filePath?: string,
-    history?: unknown[],
-    snapshots?: unknown[],
-    graphBuilders?: unknown[],
-    folders?: SaveProjectFolders,
-    tabulates?: unknown[],
-  ) =>
-    invoke<ProjectInfo>("save_project", {
-      filePath: filePath ?? null,
-      history: history ?? null,
-      snapshots: snapshots ?? null,
-      graphBuilders: graphBuilders ?? null,
-      tabulates: tabulates ?? null,
-      folders: folders?.folders ?? null,
-      tableFolders: folders?.tableFolders ?? null,
-      graphFolders: folders?.graphFolders ?? null,
-      tabulateFolders: folders?.tabulateFolders ?? null,
-    }),
+    request: SaveProjectRequest,
+    onProgress?: (progress: SaveProgress) => void,
+  ) => {
+    const progressChannel = new Channel<SaveProgress>();
+    if (onProgress) {
+      progressChannel.onmessage = onProgress;
+    }
+    return invoke<ProjectInfo>("save_project", {
+      request,
+      onProgress: progressChannel,
+    });
+  },
 
   getCurrentProject: () => invoke<ProjectInfo | null>("get_current_project"),
 

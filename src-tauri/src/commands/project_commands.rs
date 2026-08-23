@@ -1,7 +1,9 @@
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
 use crate::models::project::ProjectInfo;
+use crate::models::save::{SaveProgress, SaveProjectRequest};
 use crate::services::project_service::{OpenProjectResult, ProjectService};
 use crate::state::AppState;
 
@@ -45,35 +47,28 @@ pub fn open_project(
     )
 }
 
-#[tauri::command]
-pub fn save_project(
+#[tauri::command(async)]
+pub async fn save_project(
     state: State<'_, AppState>,
-    file_path: Option<String>,
-    history: Option<Vec<serde_json::Value>>,
-    snapshots: Option<Vec<serde_json::Value>>,
-    graph_builders: Option<Vec<serde_json::Value>>,
-    tabulates: Option<Vec<serde_json::Value>>,
-    folders: Option<Vec<String>>,
-    table_folders: Option<std::collections::HashMap<String, String>>,
-    graph_folders: Option<std::collections::HashMap<String, String>>,
-    tabulate_folders: Option<std::collections::HashMap<String, String>>,
+    request: SaveProjectRequest,
+    on_progress: Channel<SaveProgress>,
 ) -> Result<ProjectInfo, AppError> {
-    let service = ProjectService::new(&state);
-    service.save_project(
-        file_path.as_deref(),
-        history,
-        snapshots,
-        graph_builders,
-        tabulates,
-        folders,
-        table_folders,
-        graph_folders,
-        tabulate_folders,
-    )?;
-    // Return updated project info
-    service
-        .get_current_project()?
-        .ok_or_else(|| AppError::InvalidParam("No project".into()))
+    let state_ref: &AppState = &state;
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(move || {
+            let service = ProjectService::new(state_ref);
+            service.save_project(
+                request,
+                Some(&|progress| {
+                    let _ = on_progress.send(progress);
+                }),
+            )
+        });
+
+        handle
+            .join()
+            .map_err(|_| AppError::Busy("Save worker thread panicked".to_string()))?
+    })
 }
 
 #[tauri::command]
@@ -155,6 +150,17 @@ pub fn import_graph(
 
 #[cfg(test)]
 mod tests {
+    fn function_signature(source: &str, function_name: &str) -> String {
+        let start = source
+            .find(function_name)
+            .unwrap_or_else(|| panic!("{function_name} command must exist"));
+        let rest = &source[start..];
+        let end = rest
+            .find(") ->")
+            .unwrap_or_else(|| panic!("{function_name} signature must contain a return type"));
+        rest[..end + 1].to_string()
+    }
+
     #[test]
     fn project_open_uses_async_command_scheduling() {
         let source = include_str!("project_commands.rs");
@@ -180,6 +186,75 @@ mod tests {
         assert!(
             command_attribute.trim_end().ends_with("#[tauri::command(async)]"),
             "import_table must not run blocking archive and database work on Tauri's main command thread"
+        );
+    }
+
+    #[test]
+    fn project_save_uses_async_command_scheduling() {
+        let source = include_str!("project_commands.rs");
+        let save_start = source
+            .find("pub async fn save_project(")
+            .expect("save_project command must exist");
+        let command_attribute = &source[..save_start];
+
+        assert!(
+            command_attribute
+                .trim_end()
+                .ends_with("#[tauri::command(async)]"),
+            "save_project must run off the Tauri main command thread"
+        );
+    }
+
+    #[test]
+    fn project_save_accepts_only_request_and_progress_channel() {
+        let source = include_str!("project_commands.rs");
+        let signature = function_signature(source, "pub async fn save_project(");
+
+        assert!(
+            signature.contains("request: SaveProjectRequest"),
+            "save_project must accept one typed SaveProjectRequest object"
+        );
+        assert!(
+            signature.contains("on_progress: Channel<SaveProgress>"),
+            "save_project must accept a progress channel"
+        );
+        assert!(
+            !signature.contains("file_path:"),
+            "legacy loose save arguments must be removed from save_project"
+        );
+        assert!(
+            !signature.contains("history:"),
+            "legacy loose save arguments must be removed from save_project"
+        );
+        assert!(
+            !signature.contains("snapshots:"),
+            "legacy loose save arguments must be removed from save_project"
+        );
+        assert!(
+            !signature.contains("graph_builders:"),
+            "legacy loose save arguments must be removed from save_project"
+        );
+        assert!(
+            !signature.contains("tabulates:"),
+            "legacy loose save arguments must be removed from save_project"
+        );
+        assert!(
+            !signature.contains("table_folders:"),
+            "legacy loose save arguments must be removed from save_project"
+        );
+    }
+
+    #[test]
+    fn project_save_ignores_progress_channel_send_failures() {
+        let source = include_str!("project_commands.rs");
+        let body = source
+            .split("pub async fn save_project(")
+            .nth(1)
+            .expect("save_project command must exist");
+
+        assert!(
+            body.contains("let _ = on_progress.send(progress);") ,
+            "save_project progress callback must ignore channel send failures"
         );
     }
 }

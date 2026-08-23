@@ -703,9 +703,28 @@ export function Workspace() {
         filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
       });
       if (!filePath) return; // User cancelled
-      await saveProject(filePath, [], snapshots, gbItems, folderPayload, tabulates);
+      await saveProject({
+        filePath: filePath as string,
+        history: [],
+        snapshots,
+        graphBuilders: gbItems,
+        tabulates,
+        folders: folderPayload.folders,
+        tableFolders: folderPayload.tableFolders,
+        graphFolders: folderPayload.graphFolders,
+        tabulateFolders: folderPayload.tabulateFolders,
+      });
     } else {
-      await saveProject(undefined, [], snapshots, gbItems, folderPayload, tabulates);
+      await saveProject({
+        history: [],
+        snapshots,
+        graphBuilders: gbItems,
+        tabulates,
+        folders: folderPayload.folders,
+        tableFolders: folderPayload.tableFolders,
+        graphFolders: folderPayload.graphFolders,
+        tabulateFolders: folderPayload.tabulateFolders,
+      });
     }
     showToast(t("common.saved"), 1500);
   };
