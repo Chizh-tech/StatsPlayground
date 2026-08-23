@@ -1475,7 +1475,7 @@ export function Workspace() {
               <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : handleImportTableSptb}>{t("menu.importSptb")}</div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.data")}>
-              <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => setShowSqlQuery(true))}>{t("menu.sqlQuery")}</div>
+              <div className="menu-item" onClick={() => setShowSqlQuery(true)}>{t("menu.sqlQuery")}</div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.graph")}>
               <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : handleCreateGraphBuilder}>{t("menu.newGraph")}</div>

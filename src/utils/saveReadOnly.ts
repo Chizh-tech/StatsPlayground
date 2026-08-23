@@ -38,7 +38,7 @@ export function completeSaveState(state: SaveLifecycleState): SaveLifecycleState
 export function failSaveState(state: SaveLifecycleState): SaveLifecycleState {
   return {
     ...state,
-    dirty: true,
+    dirty: state.dirty,
     saving: false,
     readOnly: false,
     saveProgress: null,

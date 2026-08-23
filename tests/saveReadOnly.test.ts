@@ -23,6 +23,13 @@ import type { SaveProgress } from "../src/services/projectService";
 }
 
 {
+  const cleanStarted = beginSaveState({ dirty: false, saving: false, readOnly: false, saveProgress: null });
+  const failed = failSaveState(cleanStarted);
+  assert.equal(failed.dirty, false);
+  assert.equal(failed.readOnly, false);
+}
+
+{
   const current: SaveProgress = {
     phase: "table",
     tableIndex: 1,

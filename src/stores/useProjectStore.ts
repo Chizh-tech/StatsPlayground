@@ -13,6 +13,15 @@ import {
   replaceSaveProgress,
 } from "@/utils/saveReadOnly";
 
+type ProjectServiceLike = Pick<
+  typeof projectService,
+  "initProject" | "createProject" | "openProject" | "saveProject" | "getCurrentProject"
+>;
+
+interface ProjectStoreDeps {
+  projectService: ProjectServiceLike;
+}
+
 interface ProjectStore {
   /** 当前打开的项目 */
   project: ProjectInfo | null;
@@ -42,97 +51,124 @@ interface ProjectStore {
   markDirty: () => void;
 }
 
-export const useProjectStore = create<ProjectStore>((set) => ({
-  project: null,
-  loading: false,
-  dirty: false,
-  saving: false,
-  readOnly: false,
-  saveProgress: null,
-  saveError: null,
+export function createProjectStore(
+  deps: ProjectStoreDeps = { projectService },
+) {
+  let saveGeneration = 0;
+  let activeSaveGeneration: number | null = null;
 
-  initProject: async () => {
-    set({ loading: true });
-    const project = await projectService.initProject();
-    set({ project, loading: false, dirty: false, saveError: null });
-  },
+  return create<ProjectStore>((set, get) => ({
+    project: null,
+    loading: false,
+    dirty: false,
+    saving: false,
+    readOnly: false,
+    saveProgress: null,
+    saveError: null,
 
-  createProject: async (name, filePath) => {
-    set({ loading: true });
-    const project = await projectService.createProject(name, filePath);
-    set({ project, loading: false, dirty: false, saveError: null });
-  },
+    initProject: async () => {
+      set({ loading: true });
+      const project = await deps.projectService.initProject();
+      set({ project, loading: false, dirty: false, saveError: null });
+    },
 
-  openProject: async (filePath) => {
-    set({ loading: true });
-    try {
-      const result = await projectService.openProject(filePath);
-      set({
-        project: result.project,
-        dirty: result.datasetNameMigrations.length > 0,
+    createProject: async (name, filePath) => {
+      set({ loading: true });
+      const project = await deps.projectService.createProject(name, filePath);
+      set({ project, loading: false, dirty: false, saveError: null });
+    },
+
+    openProject: async (filePath) => {
+      set({ loading: true });
+      try {
+        const result = await deps.projectService.openProject(filePath);
+        set({
+          project: result.project,
+          dirty: result.datasetNameMigrations.length > 0,
+          saveError: null,
+        });
+        return result;
+      } finally {
+        set({ loading: false });
+      }
+    },
+
+    saveProject: async (request) => {
+      set((state) => ({
+        ...beginSaveState({
+          dirty: state.dirty,
+          saving: state.saving,
+          readOnly: state.readOnly,
+          saveProgress: state.saveProgress,
+        }),
         saveError: null,
-      });
-      return result;
-    } finally {
-      set({ loading: false });
-    }
-  },
+      }));
 
-  saveProject: async (request) => {
-    set((state) => ({
-      ...beginSaveState({
-        dirty: state.dirty,
-        saving: state.saving,
-        readOnly: state.readOnly,
-        saveProgress: state.saveProgress,
-      }),
-      saveError: null,
-    }));
-    try {
-      const project = await projectService.saveProject(request, (progress) => {
+      const generation = saveGeneration + 1;
+      saveGeneration = generation;
+      activeSaveGeneration = generation;
+
+      try {
+        const project = await deps.projectService.saveProject(request, (progress) => {
+          if (activeSaveGeneration !== generation) return;
+          set((state) => {
+            if (!state.saving || activeSaveGeneration !== generation) return state;
+            return {
+              saveProgress: replaceSaveProgress(state.saveProgress, progress),
+            };
+          });
+        });
+
+        if (activeSaveGeneration !== generation) return;
+
         set((state) => ({
-          saveProgress: replaceSaveProgress(state.saveProgress, progress),
+          project,
+          ...completeSaveState({
+            dirty: state.dirty,
+            saving: state.saving,
+            readOnly: state.readOnly,
+            saveProgress: state.saveProgress,
+          }),
+          saveError: null,
         }));
-      });
-      set((state) => ({
-        project,
-        ...completeSaveState({
-          dirty: state.dirty,
-          saving: state.saving,
-          readOnly: state.readOnly,
-          saveProgress: state.saveProgress,
-        }),
+      } catch (error) {
+        if (activeSaveGeneration === generation) {
+          set((state) => ({
+            ...failSaveState({
+              dirty: state.dirty,
+              saving: state.saving,
+              readOnly: state.readOnly,
+              saveProgress: state.saveProgress,
+            }),
+            saveError: String(error),
+          }));
+        }
+        throw error;
+      } finally {
+        if (activeSaveGeneration === generation) {
+          activeSaveGeneration = null;
+          set({ saving: false, readOnly: false, saveProgress: null });
+        }
+      }
+    },
+
+    closeProject: () => {
+      activeSaveGeneration = null;
+      set({
+        project: null,
+        dirty: false,
+        saving: false,
+        readOnly: false,
+        saveProgress: null,
         saveError: null,
-      }));
-    } catch (error) {
-      set((state) => ({
-        ...failSaveState({
-          dirty: state.dirty,
-          saving: state.saving,
-          readOnly: state.readOnly,
-          saveProgress: state.saveProgress,
-        }),
-        saveError: String(error),
-      }));
-      throw error;
-    } finally {
-      set({ saving: false, readOnly: false, saveProgress: null });
-    }
-  },
+      });
+    },
 
-  closeProject: () => {
-    set({
-      project: null,
-      dirty: false,
-      saving: false,
-      readOnly: false,
-      saveProgress: null,
-      saveError: null,
-    });
-  },
+    markDirty: () => {
+      assertProjectMutable(get().readOnly);
+      set({ dirty: true });
+    },
+  }));
+}
 
-  markDirty: () => {
-    assertProjectMutable(useProjectStore.getState().readOnly);
-    set({ dirty: true });
-  },
-}));
+export const useProjectStore = createProjectStore();

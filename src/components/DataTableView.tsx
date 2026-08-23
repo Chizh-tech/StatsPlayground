@@ -2892,7 +2892,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
     if (readOnly) {
       const key = e.key.toLowerCase();
-      const isMutationShortcut = (isMeta && (key === "x" || key === "v"))
+      const isMutationShortcut = (isMeta && (key === "x" || key === "v" || key === "z" || key === "y"))
         || key === "delete"
         || key === "backspace";
       if (isMutationShortcut) {

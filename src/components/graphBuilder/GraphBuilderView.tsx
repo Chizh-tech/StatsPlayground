@@ -1750,6 +1750,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           onOverlayContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
           width={rightWidth}
           threeD={!!item.threeD}
+          readOnly={readOnly}
         />
       </div>
 
@@ -3199,9 +3200,11 @@ interface LegendStylePanelProps {
   /** Whether the chart is in 3D mode — the Gradient mark only applies to
    *  (and is only shown for) 3D surfaces / scatter. */
   threeD: boolean;
+  /** Read-only while project save is in progress. */
+  readOnly: boolean;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD, readOnly }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // `data` and `elements` are still part of the public prop contract for
@@ -3476,7 +3479,9 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
                       style={{ background: bg }}
                       title={`${p.fill} / ${p.line} / ${p.point}`}
                       onClick={() => applyCustomTheme(selected, p)}
+                      disabled={readOnly}
                       onContextMenu={(e) => {
+                        if (readOnly) return;
                         e.preventDefault();
                         e.stopPropagation();
                         setPaletteCtxMenu({ id: p.id, x: e.clientX, y: e.clientY });
@@ -3488,7 +3493,11 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
                   type="button"
                   className="gb-style-color-swatch gb-style-theme-swatch gb-style-theme-add"
                   title={t("graph.style.addTheme")}
-                  onClick={() => setShowAddDialog(true)}
+                  onClick={() => {
+                    if (readOnly) return;
+                    setShowAddDialog(true);
+                  }}
+                  disabled={readOnly}
                   aria-label={t("graph.style.addTheme")}
                 >
                   +
@@ -3541,7 +3550,10 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           this panel's local stacking context. */}
       {showAddDialog && (
         <AddPaletteDialog
-          onSave={(p) => addPalette(p)}
+          onSave={(p) => {
+            if (readOnly) return;
+            addPalette(p);
+          }}
           onClose={() => setShowAddDialog(false)}
         />
       )}
@@ -3558,11 +3570,11 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div
-            className="sp-ctx-item sp-ctx-danger"
-            onClick={() => {
+            className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`}
+            onClick={readOnly ? undefined : (() => {
               removePalette(paletteCtxMenu.id);
               setPaletteCtxMenu(null);
-            }}
+            })}
           >
             {t("graph.style.removeTheme")}
           </div>
