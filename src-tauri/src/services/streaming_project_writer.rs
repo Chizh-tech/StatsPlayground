@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::engine::duckdb_engine::ArchiveKeysetReadPlan;
 use crate::error::AppError;
@@ -23,68 +24,126 @@ const TARGET_BATCH_BYTES: usize = 4 * 1024 * 1024;
 const HARD_BATCH_BYTES: usize = 8 * 1024 * 1024;
 const ROW_LIMIT_PER_BATCH: usize = 2048;
 const PROGRESS_MIN_INTERVAL_MS: u64 = 100;
-const PROGRESS_MAX_INTERVAL_MS: u64 = 250;
+const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(PROGRESS_MIN_INTERVAL_MS);
 
-trait SaveClock: Send + Sync {
-    fn now_ms(&self) -> u64;
+#[cfg(test)]
+macro_rules! run_save_test_hook {
+    ($point:expr, $dataset_id:expr, $retained_batch_bytes:expr) => {
+        run_test_hook(
+            $point,
+            SaveHookContext {
+                dataset_id: $dataset_id,
+                retained_batch_bytes: $retained_batch_bytes,
+            },
+        )?
+    };
 }
 
-struct SystemClock {
-    started: Instant,
+#[cfg(not(test))]
+macro_rules! run_save_test_hook {
+    ($($tt:tt)*) => {};
 }
 
-impl SystemClock {
-    fn new() -> Self {
+enum ProgressCommand {
+    Emit(SaveProgress),
+    UpdateTable(SaveProgress),
+}
+
+struct ProgressDispatcher<'scope> {
+    tx: Option<mpsc::Sender<ProgressCommand>>,
+    handle: Option<thread::ScopedJoinHandle<'scope, ()>>,
+}
+
+impl<'scope> ProgressDispatcher<'scope> {
+    fn new(
+        scope: &'scope thread::Scope<'scope, '_>,
+        progress_cb: Option<&'scope SaveProgressCallback<'scope>>,
+    ) -> Self {
+        let Some(callback) = progress_cb else {
+            return Self {
+                tx: None,
+                handle: None,
+            };
+        };
+
+        let (tx, rx) = mpsc::channel::<ProgressCommand>();
+        let handle = scope.spawn(move || {
+            let mut latest_table: Option<SaveProgress> = None;
+            let mut table_active = false;
+            let mut last_emit_at: Option<Instant> = None;
+
+            loop {
+                match rx.recv_timeout(HEARTBEAT_INTERVAL) {
+                    Ok(ProgressCommand::Emit(progress)) => {
+                        table_active = progress.phase == SavePhase::Table;
+                        if table_active {
+                            latest_table = Some(progress.clone());
+                        }
+                        callback(progress);
+                        last_emit_at = Some(Instant::now());
+                    }
+                    Ok(ProgressCommand::UpdateTable(progress)) => {
+                        if let Some(previous) = latest_table.as_mut() {
+                            if progress.rows_done >= previous.rows_done {
+                                previous.rows_done = progress.rows_done;
+                            }
+                            previous.rows_total = progress.rows_total;
+                            previous.table_index = progress.table_index;
+                            previous.table_total = progress.table_total;
+                            previous.table_name = progress.table_name.clone();
+                            previous.overall_progress = Some(
+                                progress
+                                    .overall_progress
+                                    .unwrap_or(0.0)
+                                    .max(previous.overall_progress.unwrap_or(0.0)),
+                            );
+                        } else {
+                            latest_table = Some(progress);
+                        }
+                        table_active = true;
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+
+                if table_active {
+                    if let Some(progress) = latest_table.clone() {
+                        if last_emit_at
+                            .map(|last| last.elapsed() >= HEARTBEAT_INTERVAL)
+                            .unwrap_or(true)
+                        {
+                            callback(progress);
+                            last_emit_at = Some(Instant::now());
+                        }
+                    }
+                }
+            }
+        });
+
         Self {
-            started: Instant::now(),
+            tx: Some(tx),
+            handle: Some(handle),
+        }
+    }
+
+    fn emit(&self, progress: SaveProgress) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(ProgressCommand::Emit(progress));
+        }
+    }
+
+    fn update_table(&self, progress: SaveProgress) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(ProgressCommand::UpdateTable(progress));
         }
     }
 }
 
-impl SaveClock for SystemClock {
-    fn now_ms(&self) -> u64 {
-        self.started.elapsed().as_millis() as u64
-    }
-}
-
-#[derive(Default)]
-struct RowProgressThrottle {
-    first_checkpoint_ms: Option<u64>,
-    last_emit_ms: Option<u64>,
-}
-
-impl RowProgressThrottle {
-    fn should_emit(&mut self, now_ms: u64, force: bool) -> bool {
-        if force {
-            self.last_emit_ms = Some(now_ms);
-            return true;
-        }
-
-        match self.last_emit_ms {
-            None => {
-                let first_checkpoint_ms = self.first_checkpoint_ms.get_or_insert(now_ms);
-                let elapsed = now_ms.saturating_sub(*first_checkpoint_ms);
-                if elapsed >= PROGRESS_MIN_INTERVAL_MS {
-                    self.last_emit_ms = Some(now_ms);
-                    true
-                } else {
-                    false
-                }
-            }
-            Some(last_emit_ms) => {
-                let elapsed = now_ms.saturating_sub(last_emit_ms);
-                // Progress is checkpoint-driven: we only emit while rows are
-                // actually advancing at row checkpoints.
-                if elapsed >= PROGRESS_MAX_INTERVAL_MS {
-                    self.last_emit_ms = Some(now_ms);
-                    true
-                } else if elapsed >= PROGRESS_MIN_INTERVAL_MS {
-                    self.last_emit_ms = Some(now_ms);
-                    true
-                } else {
-                    false
-                }
-            }
+impl Drop for ProgressDispatcher<'_> {
+    fn drop(&mut self) {
+        self.tx.take();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
         }
     }
 }
@@ -104,8 +163,7 @@ impl ArchiveReplacer for OsArchiveReplacer {
 pub struct StreamingProjectWriter<'state, 'guard> {
     state: &'state AppState,
     _save_guard: &'guard SaveGuard<'state>,
-    clock: Arc<dyn SaveClock>,
-    replacer: Arc<dyn ArchiveReplacer>,
+    replacer: std::sync::Arc<dyn ArchiveReplacer>,
 }
 
 impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
@@ -113,22 +171,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         Self {
             state,
             _save_guard: save_guard,
-            clock: Arc::new(SystemClock::new()),
-            replacer: Arc::new(OsArchiveReplacer),
-        }
-    }
-
-    #[cfg(test)]
-    fn with_clock(
-        state: &'state AppState,
-        save_guard: &'guard SaveGuard<'state>,
-        clock: Arc<dyn SaveClock>,
-    ) -> Self {
-        Self {
-            state,
-            _save_guard: save_guard,
-            clock,
-            replacer: Arc::new(OsArchiveReplacer),
+            replacer: std::sync::Arc::new(OsArchiveReplacer),
         }
     }
 
@@ -136,13 +179,11 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
     fn with_clock_and_replacer(
         state: &'state AppState,
         save_guard: &'guard SaveGuard<'state>,
-        clock: Arc<dyn SaveClock>,
-        replacer: Arc<dyn ArchiveReplacer>,
+        replacer: std::sync::Arc<dyn ArchiveReplacer>,
     ) -> Self {
         Self {
             state,
             _save_guard: save_guard,
-            clock,
             replacer,
         }
     }
@@ -165,19 +206,6 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             .iter()
             .map(|dataset| usize::try_from(dataset.row_count.max(0)).unwrap_or(usize::MAX))
             .sum::<usize>();
-
-        emit_progress(
-            progress_cb,
-            SaveProgress {
-                phase: SavePhase::Preparing,
-                table_index: 0,
-                table_total: snapshot.datasets.len(),
-                table_name: None,
-                rows_done: 0,
-                rows_total: total_rows,
-                overall_progress: Some(0.0),
-            },
-        );
 
         let graph_docs = spprj_archive::build_graph_docs(snapshot.request.graph_builders.clone());
         let placeholder_tables = snapshot
@@ -208,33 +236,44 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             snapshot.request.snapshots.clone(),
         );
 
-        let temp_path = PathBuf::from(format!("{}.tmp", snapshot.destination_path.to_string_lossy()));
-        let run_result = self.write_temp_archive(
-            snapshot,
-            &bundle.manifest,
-            &bundle.graphs,
-            &temp_path,
-            total_rows,
-            progress_cb,
-        );
+        thread::scope(|scope| {
+            let dispatcher = ProgressDispatcher::new(scope, progress_cb);
+            dispatcher.emit(SaveProgress {
+                phase: SavePhase::Preparing,
+                table_index: 0,
+                table_total: snapshot.datasets.len(),
+                table_name: None,
+                rows_done: 0,
+                rows_total: total_rows,
+                overall_progress: Some(0.0),
+            });
 
-        if let Err(error) = run_result {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(error);
-        }
+            let temp_path = PathBuf::from(format!(
+                "{}.tmp",
+                snapshot.destination_path.to_string_lossy()
+            ));
+            if let Err(error) = self.write_temp_archive(
+                snapshot,
+                &bundle.manifest,
+                &bundle.graphs,
+                &temp_path,
+                total_rows,
+                &dispatcher,
+            ) {
+                let _ = std::fs::remove_file(&temp_path);
+                return Err(error);
+            }
 
-        if let Err(error) = self
-            .replacer
-            .replace_archive(&temp_path, &snapshot.destination_path)
-        {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(error);
-        }
-        let archive_bytes = std::fs::metadata(&snapshot.destination_path)?.len();
+            if let Err(error) = self
+                .replacer
+                .replace_archive(&temp_path, &snapshot.destination_path)
+            {
+                let _ = std::fs::remove_file(&temp_path);
+                return Err(error);
+            }
+            let archive_bytes = std::fs::metadata(&snapshot.destination_path)?.len();
 
-        emit_progress(
-            progress_cb,
-            SaveProgress {
+            dispatcher.emit(SaveProgress {
                 phase: SavePhase::Finalizing,
                 table_index: snapshot.datasets.len(),
                 table_total: snapshot.datasets.len(),
@@ -242,13 +281,13 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 rows_done: total_rows,
                 rows_total: total_rows,
                 overall_progress: Some(1.0),
-            },
-        );
+            });
 
-        Ok(SaveWriteResult {
-            archive_bytes,
-            tables_written: snapshot.datasets.len(),
-            rows_written: total_rows,
+            Ok(SaveWriteResult {
+                archive_bytes,
+                tables_written: snapshot.datasets.len(),
+                rows_written: total_rows,
+            })
         })
     }
 
@@ -259,7 +298,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         graph_docs: &[GraphDoc],
         temp_path: &Path,
         total_rows: usize,
-        progress_cb: Option<&SaveProgressCallback<'_>>,
+        dispatcher: &ProgressDispatcher<'_>,
     ) -> Result<(), AppError> {
         let temp_file = std::fs::File::create(temp_path)?;
         let mut zip = zip::ZipWriter::new(temp_file);
@@ -284,18 +323,15 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         let mut rows_written = 0usize;
 
         for (table_index, dataset) in snapshot.datasets.iter().enumerate() {
-            emit_progress(
-                progress_cb,
-                SaveProgress {
-                    phase: SavePhase::Table,
-                    table_index,
-                    table_total: snapshot.datasets.len(),
-                    table_name: Some(dataset.name.clone()),
-                    rows_done: rows_written,
-                    rows_total: total_rows,
-                    overall_progress: Some(progress_fraction(rows_written, total_rows)),
-                },
-            );
+            dispatcher.emit(SaveProgress {
+                phase: SavePhase::Table,
+                table_index,
+                table_total: snapshot.datasets.len(),
+                table_name: Some(dataset.name.clone()),
+                rows_done: rows_written,
+                rows_total: total_rows,
+                overall_progress: Some(progress_fraction(rows_written, total_rows)),
+            });
 
             let Some(table_ref) = manifest.tables.iter().find(|entry| entry.id == dataset.id) else {
                 return Err(AppError::FileIO(format!(
@@ -322,19 +358,10 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             zip.start_file(&table_ref.file, file_opts)
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
             write_table_header(&mut zip, dataset, &columns)?;
-            run_test_hook(
-                SaveFailurePoint::AfterHeader,
-                SaveHookContext {
-                    dataset_id: Some(dataset.id.clone()),
-                    retained_batch_bytes: None,
-                },
-            )?;
+            run_save_test_hook!(SaveFailurePoint::AfterHeader, Some(dataset.id.clone()), None);
 
             let mut next_row_id = 0i64;
             let mut first_row = true;
-            let dataset_rows_total = usize::try_from(dataset.row_count.max(0)).unwrap_or(usize::MAX);
-            let mut dataset_rows_done = 0usize;
-            let mut throttle = RowProgressThrottle::default();
 
             loop {
                 let batch = {
@@ -356,13 +383,11 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                     break;
                 }
 
-                run_test_hook(
+                run_save_test_hook!(
                     SaveFailurePoint::BetweenBatches,
-                    SaveHookContext {
-                        dataset_id: Some(dataset.id.clone()),
-                        retained_batch_bytes: Some(batch.retained_bytes_estimate),
-                    },
-                )?;
+                    Some(dataset.id.clone()),
+                    Some(batch.retained_bytes_estimate)
+                );
 
                 for row in batch.rows {
                     if !first_row {
@@ -373,43 +398,31 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                     write_streamed_row(&mut zip, row.row_id, &row.values, &plan)?;
                     next_row_id = row.row_id;
 
-                    dataset_rows_done = dataset_rows_done.saturating_add(1);
                     rows_written = rows_written.saturating_add(1);
-
-                    let force = dataset_rows_done == dataset_rows_total;
-                    let now_ms = self.clock.now_ms();
-                    if throttle.should_emit(now_ms, force) {
-                        emit_progress(
-                            progress_cb,
-                            SaveProgress {
-                                phase: SavePhase::Table,
-                                table_index,
-                                table_total: snapshot.datasets.len(),
-                                table_name: Some(dataset.name.clone()),
-                                rows_done: rows_written,
-                                rows_total: total_rows,
-                                overall_progress: Some(progress_fraction(rows_written, total_rows)),
-                            },
-                        );
-                    }
+                    dispatcher.update_table(SaveProgress {
+                        phase: SavePhase::Table,
+                        table_index,
+                        table_total: snapshot.datasets.len(),
+                        table_name: Some(dataset.name.clone()),
+                        rows_done: rows_written,
+                        rows_total: total_rows,
+                        overall_progress: Some(progress_fraction(rows_written, total_rows)),
+                    });
                 }
             }
 
             zip.write_all(b"]}")?;
         }
 
-        emit_progress(
-            progress_cb,
-            SaveProgress {
-                phase: SavePhase::Metadata,
-                table_index: snapshot.datasets.len(),
-                table_total: snapshot.datasets.len(),
-                table_name: None,
-                rows_done: rows_written,
-                rows_total: total_rows,
-                overall_progress: Some(progress_fraction(rows_written, total_rows)),
-            },
-        );
+        dispatcher.emit(SaveProgress {
+            phase: SavePhase::Metadata,
+            table_index: snapshot.datasets.len(),
+            table_total: snapshot.datasets.len(),
+            table_name: None,
+            rows_done: rows_written,
+            rows_total: total_rows,
+            overall_progress: Some(progress_fraction(rows_written, total_rows)),
+        });
 
         for graph_ref in &manifest.graphs {
             if let Some(graph_doc) = graph_by_id.get(graph_ref.id.as_str()) {
@@ -434,59 +447,35 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 .map_err(|e| AppError::FileIO(format!("failed to serialize snapshots: {e}")))?;
         }
 
-        emit_progress(
-            progress_cb,
-            SaveProgress {
-                phase: SavePhase::Compressing,
-                table_index: snapshot.datasets.len(),
-                table_total: snapshot.datasets.len(),
-                table_name: None,
-                rows_done: rows_written,
-                rows_total: total_rows,
-                overall_progress: Some(progress_fraction(rows_written, total_rows)),
-            },
-        );
+        dispatcher.emit(SaveProgress {
+            phase: SavePhase::Compressing,
+            table_index: snapshot.datasets.len(),
+            table_total: snapshot.datasets.len(),
+            table_name: None,
+            rows_done: rows_written,
+            rows_total: total_rows,
+            overall_progress: Some(progress_fraction(rows_written, total_rows)),
+        });
 
-        run_test_hook(
-            SaveFailurePoint::ZipFinish,
-            SaveHookContext {
-                dataset_id: None,
-                retained_batch_bytes: None,
-            },
-        )?;
+        run_save_test_hook!(SaveFailurePoint::ZipFinish, None, None);
         let finished_file = zip
             .finish()
             .map_err(|e| AppError::FileIO(format!("failed to finish archive: {e}")))?;
 
-        run_test_hook(
-            SaveFailurePoint::SyncAll,
-            SaveHookContext {
-                dataset_id: None,
-                retained_batch_bytes: None,
-            },
-        )?;
+        run_save_test_hook!(SaveFailurePoint::SyncAll, None, None);
         finished_file.sync_all()?;
 
-        emit_progress(
-            progress_cb,
-            SaveProgress {
-                phase: SavePhase::Finalizing,
-                table_index: snapshot.datasets.len(),
-                table_total: snapshot.datasets.len(),
-                table_name: None,
-                rows_done: rows_written,
-                rows_total: total_rows,
-                overall_progress: None,
-            },
-        );
+        dispatcher.emit(SaveProgress {
+            phase: SavePhase::Finalizing,
+            table_index: snapshot.datasets.len(),
+            table_total: snapshot.datasets.len(),
+            table_name: None,
+            rows_done: rows_written,
+            rows_total: total_rows,
+            overall_progress: None,
+        });
 
-        run_test_hook(
-            SaveFailurePoint::Validation,
-            SaveHookContext {
-                dataset_id: None,
-                retained_batch_bytes: None,
-            },
-        )?;
+        run_save_test_hook!(SaveFailurePoint::Validation, None, None);
 
         let mut expected_entries = Vec::new();
         if !snapshot.request.history.is_empty() {
@@ -580,12 +569,6 @@ fn write_streamed_row<W: Write>(
     }
     writer.write_all(b"]")?;
     Ok(())
-}
-
-fn emit_progress(progress_cb: Option<&SaveProgressCallback<'_>>, progress: SaveProgress) {
-    if let Some(callback) = progress_cb {
-        callback(progress);
-    }
 }
 
 fn progress_fraction(rows_done: usize, rows_total: usize) -> f64 {
@@ -725,39 +708,15 @@ fn run_test_hook(point: SaveFailurePoint, context: SaveHookContext) -> Result<()
     })
 }
 
-#[cfg(not(test))]
-#[derive(Clone)]
-struct SaveHookContext {
-    dataset_id: Option<String>,
-    retained_batch_bytes: Option<usize>,
-}
-
-#[cfg(not(test))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SaveFailurePoint {
-    AfterHeader,
-    BetweenBatches,
-    ZipFinish,
-    SyncAll,
-    Validation,
-}
-
-#[cfg(not(test))]
-fn run_test_hook(_point: SaveFailurePoint, context: SaveHookContext) -> Result<(), AppError> {
-    let _ = context.dataset_id;
-    let _ = context.retained_batch_bytes;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use duckdb::params;
 
@@ -767,11 +726,7 @@ mod tests {
     use crate::services::spprj_archive;
     use crate::state::AppState;
 
-    use super::{
-        install_save_test_hook, ArchiveReplacer, SaveClock, SaveFailurePoint,
-        StreamingProjectWriter,
-        HARD_BATCH_BYTES,
-    };
+    use super::{install_save_test_hook, ArchiveReplacer, SaveFailurePoint, StreamingProjectWriter, HARD_BATCH_BYTES};
 
     #[derive(Default)]
     struct TestReplacerState {
@@ -836,30 +791,6 @@ mod tests {
         } else {
             std::fs::rename(temp_path, destination_path)?;
             Ok(())
-        }
-    }
-
-    struct StepClock {
-        now: AtomicU64,
-        step_ms: u64,
-    }
-
-    impl StepClock {
-        fn new(step_ms: u64) -> Self {
-            Self {
-                now: AtomicU64::new(0),
-                step_ms,
-            }
-        }
-
-        fn current(&self) -> u64 {
-            self.now.load(Ordering::SeqCst)
-        }
-    }
-
-    impl SaveClock for StepClock {
-        fn now_ms(&self) -> u64 {
-            self.now.fetch_add(self.step_ms, Ordering::SeqCst)
         }
     }
 
@@ -1111,18 +1042,23 @@ mod tests {
     #[test]
     fn stream_writer_progress_is_throttled_without_sleep() {
         let state = AppState::new().unwrap();
-        let dataset = seed_benchmark_dataset(&state, 300);
+        let dataset = seed_benchmark_dataset(&state, 8_000);
         let destination = temp_path("progress");
         let snapshot = save_snapshot(&destination, vec![dataset]);
-        let clock = Arc::new(StepClock::new(50));
 
-        let progress_events: Arc<Mutex<Vec<(u64, crate::models::save::SaveProgress)>>> =
+        install_save_test_hook(Some(Box::new(move |point, _| {
+            if point == SaveFailurePoint::BetweenBatches {
+                std::thread::sleep(Duration::from_millis(130));
+            }
+            Ok(())
+        })));
+
+        let progress_events: Arc<Mutex<Vec<(Instant, crate::models::save::SaveProgress)>>> =
             Arc::new(Mutex::new(Vec::new()));
         let progress_events_clone = Arc::clone(&progress_events);
-        let clock_for_cb = Arc::clone(&clock);
 
         let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::with_clock(&state, &guard, clock);
+        let writer = StreamingProjectWriter::new(&state, &guard);
         writer
             .write(
                 &snapshot,
@@ -1131,10 +1067,11 @@ mod tests {
                     progress_events_clone
                         .lock()
                         .unwrap()
-                        .push((clock_for_cb.current(), event));
+                        .push((Instant::now(), event));
                 }),
             )
             .unwrap();
+        install_save_test_hook(None);
 
         let events = progress_events.lock().unwrap();
         let table_events = events
@@ -1151,9 +1088,9 @@ mod tests {
         assert!(advancing_events.len() >= 2);
 
         for pair in advancing_events.windows(2) {
-            let delta = pair[1].0.saturating_sub(pair[0].0);
-            assert!(delta >= 100);
-            assert!(delta <= 250);
+            let delta = pair[1].0.duration_since(pair[0].0).as_millis();
+            assert!(delta >= 80);
+            assert!(delta <= 320);
         }
 
         let phases = events
@@ -1193,15 +1130,13 @@ mod tests {
         let dataset = seed_benchmark_dataset(&state, 0);
         let destination = temp_path("progress-zero");
         let snapshot = save_snapshot(&destination, vec![dataset]);
-        let clock = Arc::new(StepClock::new(300));
 
-        let progress_events: Arc<Mutex<Vec<(u64, crate::models::save::SaveProgress)>>> =
+        let progress_events: Arc<Mutex<Vec<(Instant, crate::models::save::SaveProgress)>>> =
             Arc::new(Mutex::new(Vec::new()));
         let progress_events_clone = Arc::clone(&progress_events);
-        let clock_for_cb = Arc::clone(&clock);
 
         let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::with_clock(&state, &guard, clock);
+        let writer = StreamingProjectWriter::new(&state, &guard);
         writer
             .write(
                 &snapshot,
@@ -1210,7 +1145,7 @@ mod tests {
                     progress_events_clone
                         .lock()
                         .unwrap()
-                        .push((clock_for_cb.current(), event));
+                        .push((Instant::now(), event));
                 }),
             )
             .unwrap();
@@ -1237,18 +1172,23 @@ mod tests {
     #[test]
     fn stream_writer_progress_emits_on_advancement_checkpoints_after_large_jumps() {
         let state = AppState::new().unwrap();
-        let dataset = seed_benchmark_dataset(&state, 80);
+        let dataset = seed_benchmark_dataset(&state, 8_000);
         let destination = temp_path("progress-jumps");
         let snapshot = save_snapshot(&destination, vec![dataset]);
-        let clock = Arc::new(StepClock::new(120));
 
-        let progress_events: Arc<Mutex<Vec<(u64, crate::models::save::SaveProgress)>>> =
+        install_save_test_hook(Some(Box::new(move |point, _| {
+            if point == SaveFailurePoint::BetweenBatches {
+                std::thread::sleep(Duration::from_millis(260));
+            }
+            Ok(())
+        })));
+
+        let progress_events: Arc<Mutex<Vec<(Instant, crate::models::save::SaveProgress)>>> =
             Arc::new(Mutex::new(Vec::new()));
         let progress_events_clone = Arc::clone(&progress_events);
-        let clock_for_cb = Arc::clone(&clock);
 
         let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::with_clock(&state, &guard, clock);
+        let writer = StreamingProjectWriter::new(&state, &guard);
         writer
             .write(
                 &snapshot,
@@ -1257,10 +1197,11 @@ mod tests {
                     progress_events_clone
                         .lock()
                         .unwrap()
-                        .push((clock_for_cb.current(), event));
+                        .push((Instant::now(), event));
                 }),
             )
             .unwrap();
+        install_save_test_hook(None);
 
         let events = progress_events.lock().unwrap();
         let advancing_events = events
@@ -1275,9 +1216,9 @@ mod tests {
         assert!(advancing_events.len() >= 2);
 
         for pair in advancing_events.windows(2) {
-            let delta = pair[1].0.saturating_sub(pair[0].0);
-            assert!(delta >= 100);
-            assert!(delta <= 250);
+            let delta = pair[1].0.duration_since(pair[0].0).as_millis();
+            assert!(delta >= 80);
+            assert!(delta <= 320);
         }
 
         let _ = std::fs::remove_file(destination);
@@ -1286,18 +1227,23 @@ mod tests {
     #[test]
     fn stream_writer_progress_first_advancing_event_waits_for_minimum_interval() {
         let state = AppState::new().unwrap();
-        let dataset = seed_benchmark_dataset(&state, 40);
+        let dataset = seed_benchmark_dataset(&state, 8_000);
         let destination = temp_path("progress-first-window");
         let snapshot = save_snapshot(&destination, vec![dataset]);
-        let clock = Arc::new(StepClock::new(60));
 
-        let progress_events: Arc<Mutex<Vec<(u64, crate::models::save::SaveProgress)>>> =
+        install_save_test_hook(Some(Box::new(move |point, _| {
+            if point == SaveFailurePoint::BetweenBatches {
+                std::thread::sleep(Duration::from_millis(260));
+            }
+            Ok(())
+        })));
+
+        let progress_events: Arc<Mutex<Vec<(Instant, crate::models::save::SaveProgress)>>> =
             Arc::new(Mutex::new(Vec::new()));
         let progress_events_clone = Arc::clone(&progress_events);
-        let clock_for_cb = Arc::clone(&clock);
 
         let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::with_clock(&state, &guard, clock);
+        let writer = StreamingProjectWriter::new(&state, &guard);
         writer
             .write(
                 &snapshot,
@@ -1306,10 +1252,11 @@ mod tests {
                     progress_events_clone
                         .lock()
                         .unwrap()
-                        .push((clock_for_cb.current(), event));
+                        .push((Instant::now(), event));
                 }),
             )
             .unwrap();
+        install_save_test_hook(None);
 
         let events = progress_events.lock().unwrap();
         let first_advancing = events
@@ -1321,8 +1268,74 @@ mod tests {
             })
             .expect("expected an advancing progress event");
 
-        assert!(first_advancing.0 >= 100);
-        assert!(first_advancing.0 <= 250);
+        let first_table = events
+            .iter()
+            .find(|(_, event)| event.phase == SavePhase::Table)
+            .expect("expected table progress event");
+
+        let first_delta_ms = first_advancing
+            .0
+            .duration_since(first_table.0)
+            .as_millis();
+        assert!(first_delta_ms >= 80);
+        assert!(first_delta_ms <= 320);
+
+        let _ = std::fs::remove_file(&destination);
+    }
+
+    #[test]
+    fn stream_writer_progress_heartbeat_covers_blocking_table_work_wall_clock() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 8_000);
+        let destination = temp_path("progress-heartbeat-block");
+        let snapshot = save_snapshot(&destination, vec![dataset]);
+
+        install_save_test_hook(Some(Box::new(move |point, _| {
+            if point == SaveFailurePoint::BetweenBatches {
+                std::thread::sleep(Duration::from_millis(380));
+            }
+            Ok(())
+        })));
+
+        let progress_events: Arc<Mutex<Vec<(Instant, crate::models::save::SaveProgress)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let progress_events_clone = Arc::clone(&progress_events);
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::new(&state, &guard);
+        writer
+            .write(
+                &snapshot,
+                &destination,
+                Some(&|event| {
+                    progress_events_clone
+                        .lock()
+                        .unwrap()
+                        .push((Instant::now(), event));
+                }),
+            )
+            .unwrap();
+        install_save_test_hook(None);
+
+        let events = progress_events.lock().unwrap();
+        let table_events = events
+            .iter()
+            .filter(|(_, event)| event.phase == SavePhase::Table)
+            .map(|(ts, event)| (*ts, event.rows_done, event.rows_total))
+            .collect::<Vec<_>>();
+        assert!(table_events.len() >= 3);
+
+        let mut max_gap_ms = 0u128;
+        for pair in table_events.windows(2) {
+            let gap_ms = pair[1].0.duration_since(pair[0].0).as_millis();
+            if gap_ms > max_gap_ms {
+                max_gap_ms = gap_ms;
+            }
+        }
+
+        // Scheduler tolerance: prove at least one regular progress callback gap
+        // remains within the required cadence while table work is active.
+        assert!(max_gap_ms <= 320, "max table progress gap was {max_gap_ms}ms");
 
         let _ = std::fs::remove_file(&destination);
     }
@@ -1396,10 +1409,8 @@ mod tests {
         let replacer: Arc<dyn ArchiveReplacer> = Arc::new(TestReplacer {
             state: Arc::clone(&replacer_state),
         });
-        let clock = Arc::new(StepClock::new(50));
-
         let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, clock, replacer);
+        let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, replacer);
         let error = writer.write(&snapshot, &destination, None).unwrap_err();
 
         assert!(matches!(error, AppError::FileIO(_)));
@@ -1430,7 +1441,6 @@ mod tests {
             let writer = StreamingProjectWriter::with_clock_and_replacer(
                 &state,
                 &guard,
-                Arc::new(StepClock::new(50)),
                 replacer,
             );
             writer.write(&snapshot, &destination, None).unwrap();
@@ -1467,7 +1477,6 @@ mod tests {
             let writer = StreamingProjectWriter::with_clock_and_replacer(
                 &state,
                 &guard,
-                Arc::new(StepClock::new(50)),
                 race_replacer.clone(),
             );
             writer.write(&snapshot, &destination, None).unwrap();
