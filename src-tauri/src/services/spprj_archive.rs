@@ -315,16 +315,34 @@ pub fn validate_archive_manifest_and_entries(
     }
 
     for table in &expected_manifest.tables {
-        zip.by_name(&table.file)
+        let mut table_entry = zip
+            .by_name(&table.file)
             .map_err(|e| AppError::FileIO(format!("Archive missing table entry {}: {e}", table.file)))?;
+        serde_json::from_reader::<_, serde::de::IgnoredAny>(&mut table_entry).map_err(|e| {
+            AppError::FileIO(format!(
+                "Archive table entry {} is not valid JSON: {e}",
+                table.file
+            ))
+        })?;
     }
     for graph in &expected_manifest.graphs {
-        zip.by_name(&graph.file)
+        let mut graph_entry = zip
+            .by_name(&graph.file)
             .map_err(|e| AppError::FileIO(format!("Archive missing graph entry {}: {e}", graph.file)))?;
+        serde_json::from_reader::<_, serde::de::IgnoredAny>(&mut graph_entry).map_err(|e| {
+            AppError::FileIO(format!(
+                "Archive graph entry {} is not valid JSON: {e}",
+                graph.file
+            ))
+        })?;
     }
     for entry in expected_extra_entries {
-        zip.by_name(entry)
+        let mut extra_entry = zip
+            .by_name(entry)
             .map_err(|e| AppError::FileIO(format!("Archive missing entry {}: {e}", entry)))?;
+        serde_json::from_reader::<_, serde::de::IgnoredAny>(&mut extra_entry).map_err(|e| {
+            AppError::FileIO(format!("Archive entry {} is not valid JSON: {e}", entry))
+        })?;
     }
 
     Ok(())
@@ -829,6 +847,7 @@ fn folder_ancestors(folder: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
 
     fn table_doc(id: &str, name: &str) -> TableDoc {
         TableDoc {
@@ -975,5 +994,54 @@ mod tests {
         assert!(loaded.tabulates.is_empty());
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn validate_archive_rejects_corrupt_table_entry_json() {
+        let path = temp_project_path("validate-corrupt");
+        let corrupted_path = temp_project_path("validate-corrupt-out");
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let input = std::fs::File::open(&path).unwrap();
+        let mut input_zip = zip::ZipArchive::new(input).unwrap();
+        let output = std::fs::File::create(&corrupted_path).unwrap();
+        let mut output_zip = zip::ZipWriter::new(output);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for index in 0..input_zip.len() {
+            let mut entry = input_zip.by_index(index).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            output_zip.start_file(entry.name(), opts).unwrap();
+            if entry.name().ends_with(".sptb") {
+                output_zip.write_all(br#"{\"id\":\"broken\""#).unwrap();
+            } else {
+                output_zip.write_all(&bytes).unwrap();
+            }
+        }
+        output_zip.finish().unwrap();
+
+        let error = validate_archive_manifest_and_entries(&corrupted_path, &bundle.manifest, &[])
+            .unwrap_err();
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("not valid JSON")));
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(corrupted_path);
     }
 }

@@ -23,6 +23,7 @@ const TARGET_BATCH_BYTES: usize = 4 * 1024 * 1024;
 const HARD_BATCH_BYTES: usize = 8 * 1024 * 1024;
 const ROW_LIMIT_PER_BATCH: usize = 2048;
 const PROGRESS_MIN_INTERVAL_MS: u64 = 100;
+const PROGRESS_MAX_INTERVAL_MS: u64 = 250;
 
 trait SaveClock: Send + Sync {
     fn now_ms(&self) -> u64;
@@ -48,6 +49,7 @@ impl SaveClock for SystemClock {
 
 #[derive(Default)]
 struct RowProgressThrottle {
+    first_checkpoint_ms: Option<u64>,
     last_emit_ms: Option<u64>,
 }
 
@@ -60,11 +62,23 @@ impl RowProgressThrottle {
 
         match self.last_emit_ms {
             None => {
-                self.last_emit_ms = Some(now_ms);
-                true
+                let first_checkpoint_ms = self.first_checkpoint_ms.get_or_insert(now_ms);
+                let elapsed = now_ms.saturating_sub(*first_checkpoint_ms);
+                if elapsed >= PROGRESS_MIN_INTERVAL_MS {
+                    self.last_emit_ms = Some(now_ms);
+                    true
+                } else {
+                    false
+                }
             }
             Some(last_emit_ms) => {
-                if now_ms.saturating_sub(last_emit_ms) >= PROGRESS_MIN_INTERVAL_MS {
+                let elapsed = now_ms.saturating_sub(last_emit_ms);
+                // Progress is checkpoint-driven: we only emit while rows are
+                // actually advancing at row checkpoints.
+                if elapsed >= PROGRESS_MAX_INTERVAL_MS {
+                    self.last_emit_ms = Some(now_ms);
+                    true
+                } else if elapsed >= PROGRESS_MIN_INTERVAL_MS {
                     self.last_emit_ms = Some(now_ms);
                     true
                 } else {
@@ -75,10 +89,23 @@ impl RowProgressThrottle {
     }
 }
 
+trait ArchiveReplacer: Send + Sync {
+    fn replace_archive(&self, temp_path: &Path, destination_path: &Path) -> Result<(), AppError>;
+}
+
+struct OsArchiveReplacer;
+
+impl ArchiveReplacer for OsArchiveReplacer {
+    fn replace_archive(&self, temp_path: &Path, destination_path: &Path) -> Result<(), AppError> {
+        replace_archive_atomically_os(temp_path, destination_path)
+    }
+}
+
 pub struct StreamingProjectWriter<'state, 'guard> {
     state: &'state AppState,
     _save_guard: &'guard SaveGuard<'state>,
     clock: Arc<dyn SaveClock>,
+    replacer: Arc<dyn ArchiveReplacer>,
 }
 
 impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
@@ -87,6 +114,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             state,
             _save_guard: save_guard,
             clock: Arc::new(SystemClock::new()),
+            replacer: Arc::new(OsArchiveReplacer),
         }
     }
 
@@ -100,6 +128,22 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             state,
             _save_guard: save_guard,
             clock,
+            replacer: Arc::new(OsArchiveReplacer),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_clock_and_replacer(
+        state: &'state AppState,
+        save_guard: &'guard SaveGuard<'state>,
+        clock: Arc<dyn SaveClock>,
+        replacer: Arc<dyn ArchiveReplacer>,
+    ) -> Self {
+        Self {
+            state,
+            _save_guard: save_guard,
+            clock,
+            replacer,
         }
     }
 
@@ -109,7 +153,12 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         destination_path: &Path,
         progress_cb: Option<&SaveProgressCallback<'_>>,
     ) -> Result<SaveWriteResult, AppError> {
-        validate_destination_path(destination_path)?;
+        if snapshot.destination_path != destination_path {
+            return Err(AppError::InvalidParam(
+                "snapshot destination path and writer destination path must match".to_string(),
+            ));
+        }
+        validate_destination_path(&snapshot.destination_path)?;
 
         let total_rows = snapshot
             .datasets
@@ -159,7 +208,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             snapshot.request.snapshots.clone(),
         );
 
-        let temp_path = PathBuf::from(format!("{}.tmp", destination_path.to_string_lossy()));
+        let temp_path = PathBuf::from(format!("{}.tmp", snapshot.destination_path.to_string_lossy()));
         let run_result = self.write_temp_archive(
             snapshot,
             &bundle.manifest,
@@ -174,8 +223,14 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             return Err(error);
         }
 
-        place_archive_atomically(&temp_path, destination_path)?;
-        let archive_bytes = std::fs::metadata(destination_path)?.len();
+        if let Err(error) = self
+            .replacer
+            .replace_archive(&temp_path, &snapshot.destination_path)
+        {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(error);
+        }
+        let archive_bytes = std::fs::metadata(&snapshot.destination_path)?.len();
 
         emit_progress(
             progress_cb,
@@ -442,14 +497,6 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         }
         spprj_archive::validate_archive_manifest_and_entries(temp_path, manifest, &expected_entries)?;
 
-        run_test_hook(
-            SaveFailurePoint::Replacement,
-            SaveHookContext {
-                dataset_id: None,
-                retained_batch_bytes: None,
-            },
-        )?;
-
         Ok(())
     }
 }
@@ -549,21 +596,19 @@ fn progress_fraction(rows_done: usize, rows_total: usize) -> f64 {
     }
 }
 
-fn place_archive_atomically(temp_path: &Path, destination_path: &Path) -> Result<(), AppError> {
-    if destination_path.exists() {
-        #[cfg(windows)]
-        {
-            return replace_existing_windows(temp_path, destination_path);
-        }
-        #[cfg(not(windows))]
-        {
-            std::fs::rename(temp_path, destination_path)?;
-            return Ok(());
-        }
+fn replace_archive_atomically_os(temp_path: &Path, destination_path: &Path) -> Result<(), AppError> {
+    #[cfg(windows)]
+    {
+        return replace_existing_windows(temp_path, destination_path);
     }
 
-    std::fs::rename(temp_path, destination_path)?;
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        // POSIX rename within the same directory is atomic and overwrites the
+        // destination if it exists.
+        std::fs::rename(temp_path, destination_path)?;
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
@@ -572,6 +617,11 @@ fn replace_existing_windows(temp_path: &Path, destination_path: &Path) -> Result
     use std::os::windows::ffi::OsStrExt;
 
     const REPLACEFILE_WRITE_THROUGH: u32 = 0x0000_0001;
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    const ERROR_PATH_NOT_FOUND: i32 = 3;
+    const ERROR_NOT_FOUND: i32 = 1168;
 
     extern "system" {
         fn ReplaceFileW(
@@ -581,6 +631,11 @@ fn replace_existing_windows(temp_path: &Path, destination_path: &Path) -> Result
             dw_replace_flags: u32,
             lp_exclude: *mut c_void,
             lp_reserved: *mut c_void,
+        ) -> i32;
+        fn MoveFileExW(
+            lp_existing_file_name: *const u16,
+            lp_new_file_name: *const u16,
+            dw_flags: u32,
         ) -> i32;
     }
 
@@ -606,7 +661,22 @@ fn replace_existing_windows(temp_path: &Path, destination_path: &Path) -> Result
         )
     };
     if replaced == 0 {
-        return Err(AppError::FileIO(std::io::Error::last_os_error().to_string()));
+        let replace_error = std::io::Error::last_os_error();
+        let code = replace_error.raw_os_error().unwrap_or_default();
+        if code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND || code == ERROR_NOT_FOUND {
+            let moved = unsafe {
+                MoveFileExW(
+                    temp_wide.as_ptr(),
+                    dest_wide.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            };
+            if moved == 0 {
+                return Err(AppError::FileIO(std::io::Error::last_os_error().to_string()));
+            }
+            return Ok(());
+        }
+        return Err(AppError::FileIO(replace_error.to_string()));
     }
 
     Ok(())
@@ -620,7 +690,6 @@ enum SaveFailurePoint {
     ZipFinish,
     SyncAll,
     Validation,
-    Replacement,
 }
 
 #[cfg(test)]
@@ -671,7 +740,6 @@ enum SaveFailurePoint {
     ZipFinish,
     SyncAll,
     Validation,
-    Replacement,
 }
 
 #[cfg(not(test))]
@@ -686,7 +754,10 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
 
     use duckdb::params;
 
@@ -697,9 +768,76 @@ mod tests {
     use crate::state::AppState;
 
     use super::{
-        install_save_test_hook, SaveClock, SaveFailurePoint, StreamingProjectWriter,
+        install_save_test_hook, ArchiveReplacer, SaveClock, SaveFailurePoint,
+        StreamingProjectWriter,
         HARD_BATCH_BYTES,
     };
+
+    #[derive(Default)]
+    struct TestReplacerState {
+        calls: AtomicUsize,
+        fail: AtomicUsize,
+    }
+
+    struct TestReplacer {
+        state: Arc<TestReplacerState>,
+    }
+
+    impl ArchiveReplacer for TestReplacer {
+        fn replace_archive(&self, temp_path: &std::path::Path, destination_path: &std::path::Path) -> Result<(), AppError> {
+            self.state.calls.fetch_add(1, Ordering::SeqCst);
+            if self.state.fail.load(Ordering::SeqCst) != 0 {
+                return Err(AppError::FileIO("simulated replacement failure".to_string()));
+            }
+            place_temp_for_test(temp_path, destination_path)?;
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum ReplacementRaceMode {
+        DestinationAppears,
+        DestinationDisappears,
+    }
+
+    struct RaceReplacer {
+        mode: ReplacementRaceMode,
+        calls: AtomicUsize,
+    }
+
+    impl ArchiveReplacer for RaceReplacer {
+        fn replace_archive(&self, temp_path: &std::path::Path, destination_path: &std::path::Path) -> Result<(), AppError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match self.mode {
+                ReplacementRaceMode::DestinationAppears => {
+                    if !destination_path.exists() {
+                        std::fs::write(destination_path, b"appeared-during-race")?;
+                    }
+                }
+                ReplacementRaceMode::DestinationDisappears => {
+                    if destination_path.exists() {
+                        std::fs::remove_file(destination_path)?;
+                    }
+                }
+            }
+            place_temp_for_test(temp_path, destination_path)?;
+            Ok(())
+        }
+    }
+
+    fn place_temp_for_test(temp_path: &std::path::Path, destination_path: &std::path::Path) -> Result<(), AppError> {
+        // Test seam: model "replace existing" behavior without deleting the
+        // destination first. This is intentionally not an atomic guarantee.
+        if destination_path.exists() {
+            let bytes = std::fs::read(temp_path)?;
+            std::fs::write(destination_path, bytes)?;
+            std::fs::remove_file(temp_path)?;
+            Ok(())
+        } else {
+            std::fs::rename(temp_path, destination_path)?;
+            Ok(())
+        }
+    }
 
     struct StepClock {
         now: AtomicU64,
@@ -920,26 +1058,52 @@ mod tests {
         let destination = temp_path("interleave");
         let snapshot = save_snapshot(&destination, vec![dataset]);
 
-        let reads_between_batches = Arc::new(AtomicUsize::new(0));
-        let reads_between_batches_clone = Arc::clone(&reads_between_batches);
-        install_save_test_hook(Some(Box::new(move |point, _| {
-            if point == SaveFailurePoint::BetweenBatches {
-                reads_between_batches_clone.fetch_add(1, Ordering::SeqCst);
-            }
-            Ok(())
-        })));
+        let hook_seen = Arc::new(AtomicUsize::new(0));
+        thread::scope(|scope| {
+            let (reader_start_tx, reader_start_rx) = mpsc::channel::<()>();
+            let (reader_done_tx, reader_done_rx) = mpsc::channel::<()>();
+            let state_ref = &state;
 
-        let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::new(&state, &guard);
-        writer.write(&snapshot, &destination, None).unwrap();
-        install_save_test_hook(None);
+            let reader = scope.spawn(move || {
+                reader_start_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("reader did not receive start signal");
+                let db = state_ref.db.lock().unwrap();
+                let listed = db.list_datasets().unwrap();
+                assert!(!listed.is_empty());
+                drop(db);
+                reader_done_tx
+                    .send(())
+                    .expect("reader completion signal failed");
+            });
 
-        let db = state.db.lock().unwrap();
-        let listed = db.list_datasets().unwrap();
-        drop(db);
+            let hook_seen_clone = Arc::clone(&hook_seen);
+            install_save_test_hook(Some(Box::new(move |point, _| {
+                if point == SaveFailurePoint::BetweenBatches {
+                    let seen = hook_seen_clone.fetch_add(1, Ordering::SeqCst);
+                    if seen == 0 {
+                        reader_start_tx
+                            .send(())
+                            .map_err(|e| AppError::FileIO(format!("failed to start reader: {e}")))?;
+                        if reader_done_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+                            return Err(AppError::FileIO(
+                                "reader did not complete while writer paused between batches"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            })));
 
-        assert!(!listed.is_empty());
-        assert!(reads_between_batches.load(Ordering::SeqCst) >= 1);
+            let guard = state.save_coordinator.begin_save().unwrap();
+            let writer = StreamingProjectWriter::new(&state, &guard);
+            writer.write(&snapshot, &destination, None).unwrap();
+            install_save_test_hook(None);
+            reader.join().unwrap();
+        });
+
+        assert!(hook_seen.load(Ordering::SeqCst) >= 1);
 
         let _ = std::fs::remove_file(destination);
     }
@@ -1002,7 +1166,165 @@ mod tests {
         assert!(phases.contains(&SavePhase::Compressing));
         assert!(phases.contains(&SavePhase::Finalizing));
 
+        let preparing_idx = phases.iter().position(|phase| *phase == SavePhase::Preparing).unwrap();
+        let first_table_idx = phases.iter().position(|phase| *phase == SavePhase::Table).unwrap();
+        let metadata_idx = phases.iter().position(|phase| *phase == SavePhase::Metadata).unwrap();
+        let compressing_idx = phases.iter().position(|phase| *phase == SavePhase::Compressing).unwrap();
+        let finalizing_idx = phases.iter().rposition(|phase| *phase == SavePhase::Finalizing).unwrap();
+        assert!(preparing_idx < first_table_idx);
+        assert!(first_table_idx < metadata_idx);
+        assert!(metadata_idx < compressing_idx);
+        assert!(compressing_idx < finalizing_idx);
+
+        let mut last_progress = 0.0_f64;
+        for (_, event) in events.iter() {
+            if let Some(progress) = event.overall_progress {
+                assert!(progress >= last_progress);
+                last_progress = progress;
+            }
+        }
+
         let _ = std::fs::remove_file(destination);
+    }
+
+    #[test]
+    fn stream_writer_progress_handles_zero_rows_and_large_time_jumps() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 0);
+        let destination = temp_path("progress-zero");
+        let snapshot = save_snapshot(&destination, vec![dataset]);
+        let clock = Arc::new(StepClock::new(300));
+
+        let progress_events: Arc<Mutex<Vec<(u64, crate::models::save::SaveProgress)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let progress_events_clone = Arc::clone(&progress_events);
+        let clock_for_cb = Arc::clone(&clock);
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::with_clock(&state, &guard, clock);
+        writer
+            .write(
+                &snapshot,
+                &destination,
+                Some(&|event| {
+                    progress_events_clone
+                        .lock()
+                        .unwrap()
+                        .push((clock_for_cb.current(), event));
+                }),
+            )
+            .unwrap();
+
+        let events = progress_events.lock().unwrap();
+        let preparing = events
+            .iter()
+            .find(|(_, event)| event.phase == SavePhase::Preparing)
+            .expect("preparing event should be emitted");
+        assert_eq!(preparing.1.rows_total, 0);
+        assert_eq!(preparing.1.overall_progress, Some(0.0));
+
+        let finalizing = events
+            .iter()
+            .rfind(|(_, event)| event.phase == SavePhase::Finalizing)
+            .expect("finalizing event should be emitted");
+        assert_eq!(finalizing.1.rows_done, 0);
+        assert_eq!(finalizing.1.rows_total, 0);
+        assert_eq!(finalizing.1.overall_progress, Some(1.0));
+
+        let _ = std::fs::remove_file(destination);
+    }
+
+    #[test]
+    fn stream_writer_progress_emits_on_advancement_checkpoints_after_large_jumps() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 80);
+        let destination = temp_path("progress-jumps");
+        let snapshot = save_snapshot(&destination, vec![dataset]);
+        let clock = Arc::new(StepClock::new(120));
+
+        let progress_events: Arc<Mutex<Vec<(u64, crate::models::save::SaveProgress)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let progress_events_clone = Arc::clone(&progress_events);
+        let clock_for_cb = Arc::clone(&clock);
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::with_clock(&state, &guard, clock);
+        writer
+            .write(
+                &snapshot,
+                &destination,
+                Some(&|event| {
+                    progress_events_clone
+                        .lock()
+                        .unwrap()
+                        .push((clock_for_cb.current(), event));
+                }),
+            )
+            .unwrap();
+
+        let events = progress_events.lock().unwrap();
+        let advancing_events = events
+            .iter()
+            .filter(|(_, event)| {
+                event.phase == SavePhase::Table
+                    && event.rows_done > 0
+                    && event.rows_done < event.rows_total
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(advancing_events.len() >= 2);
+
+        for pair in advancing_events.windows(2) {
+            let delta = pair[1].0.saturating_sub(pair[0].0);
+            assert!(delta >= 100);
+            assert!(delta <= 250);
+        }
+
+        let _ = std::fs::remove_file(destination);
+    }
+
+    #[test]
+    fn stream_writer_progress_first_advancing_event_waits_for_minimum_interval() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 40);
+        let destination = temp_path("progress-first-window");
+        let snapshot = save_snapshot(&destination, vec![dataset]);
+        let clock = Arc::new(StepClock::new(60));
+
+        let progress_events: Arc<Mutex<Vec<(u64, crate::models::save::SaveProgress)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let progress_events_clone = Arc::clone(&progress_events);
+        let clock_for_cb = Arc::clone(&clock);
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::with_clock(&state, &guard, clock);
+        writer
+            .write(
+                &snapshot,
+                &destination,
+                Some(&|event| {
+                    progress_events_clone
+                        .lock()
+                        .unwrap()
+                        .push((clock_for_cb.current(), event));
+                }),
+            )
+            .unwrap();
+
+        let events = progress_events.lock().unwrap();
+        let first_advancing = events
+            .iter()
+            .find(|(_, event)| {
+                event.phase == SavePhase::Table
+                    && event.rows_done > 0
+                    && event.rows_done < event.rows_total
+            })
+            .expect("expected an advancing progress event");
+
+        assert!(first_advancing.0 >= 100);
+        assert!(first_advancing.0 <= 250);
+
+        let _ = std::fs::remove_file(&destination);
     }
 
     #[test]
@@ -1013,7 +1335,6 @@ mod tests {
             SaveFailurePoint::ZipFinish,
             SaveFailurePoint::SyncAll,
             SaveFailurePoint::Validation,
-            SaveFailurePoint::Replacement,
         ] {
             let state = AppState::new().unwrap();
             let dataset = seed_benchmark_dataset(&state, 64);
@@ -1059,5 +1380,121 @@ mod tests {
 
             let _ = std::fs::remove_file(&destination);
         }
+    }
+
+    #[test]
+    fn stream_writer_replacement_failure_preserves_destination_bytes_and_cleans_temp() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 64);
+        let destination = temp_path("replace-failure");
+        std::fs::write(&destination, b"original-bytes").unwrap();
+        let original = std::fs::read(&destination).unwrap();
+        let snapshot = save_snapshot(&destination, vec![dataset]);
+
+        let replacer_state = Arc::new(TestReplacerState::default());
+        replacer_state.fail.store(1, Ordering::SeqCst);
+        let replacer: Arc<dyn ArchiveReplacer> = Arc::new(TestReplacer {
+            state: Arc::clone(&replacer_state),
+        });
+        let clock = Arc::new(StepClock::new(50));
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, clock, replacer);
+        let error = writer.write(&snapshot, &destination, None).unwrap_err();
+
+        assert!(matches!(error, AppError::FileIO(_)));
+        assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(std::fs::read(&destination).unwrap(), original);
+        assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());
+
+        let _ = std::fs::remove_file(&destination);
+    }
+
+    #[test]
+    fn stream_writer_replacer_replaces_present_and_absent_destinations() {
+        for had_destination in [false, true] {
+            let state = AppState::new().unwrap();
+            let dataset = seed_benchmark_dataset(&state, 32);
+            let destination = temp_path("replace-present-absent");
+            if had_destination {
+                std::fs::write(&destination, b"previous-bytes").unwrap();
+            }
+            let snapshot = save_snapshot(&destination, vec![dataset]);
+
+            let replacer_state = Arc::new(TestReplacerState::default());
+            let replacer: Arc<dyn ArchiveReplacer> = Arc::new(TestReplacer {
+                state: Arc::clone(&replacer_state),
+            });
+
+            let guard = state.save_coordinator.begin_save().unwrap();
+            let writer = StreamingProjectWriter::with_clock_and_replacer(
+                &state,
+                &guard,
+                Arc::new(StepClock::new(50)),
+                replacer,
+            );
+            writer.write(&snapshot, &destination, None).unwrap();
+
+            let reopened = spprj_archive::read_project_file(destination.to_str().unwrap()).unwrap();
+            assert_eq!(reopened.tables.len(), 1);
+            assert_eq!(reopened.tables[0].rows.len(), 32);
+            assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 1);
+
+            let _ = std::fs::remove_file(&destination);
+        }
+    }
+
+    #[test]
+    fn stream_writer_replacer_handles_destination_appearance_and_disappearance_races() {
+        for (mode, preseed_destination) in [
+            (ReplacementRaceMode::DestinationAppears, false),
+            (ReplacementRaceMode::DestinationDisappears, true),
+        ] {
+            let state = AppState::new().unwrap();
+            let dataset = seed_benchmark_dataset(&state, 16);
+            let destination = temp_path("replace-race");
+            if preseed_destination {
+                std::fs::write(&destination, b"existing-before-race").unwrap();
+            }
+            let snapshot = save_snapshot(&destination, vec![dataset]);
+
+            let race_replacer = Arc::new(RaceReplacer {
+                mode,
+                calls: AtomicUsize::new(0),
+            });
+
+            let guard = state.save_coordinator.begin_save().unwrap();
+            let writer = StreamingProjectWriter::with_clock_and_replacer(
+                &state,
+                &guard,
+                Arc::new(StepClock::new(50)),
+                race_replacer.clone(),
+            );
+            writer.write(&snapshot, &destination, None).unwrap();
+
+            let reopened = spprj_archive::read_project_file(destination.to_str().unwrap()).unwrap();
+            assert_eq!(reopened.tables.len(), 1);
+            assert_eq!(reopened.tables[0].rows.len(), 16);
+            assert_eq!(race_replacer.calls.load(Ordering::SeqCst), 1);
+
+            let _ = std::fs::remove_file(&destination);
+        }
+    }
+
+    #[test]
+    fn stream_writer_rejects_destination_path_mismatch() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 1);
+        let destination = temp_path("path-match");
+        let snapshot = save_snapshot(&destination, vec![dataset]);
+        let mismatch = temp_path("path-mismatch");
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::new(&state, &guard);
+        let error = writer.write(&snapshot, &mismatch, None).unwrap_err();
+        assert!(matches!(error, AppError::InvalidParam(_)));
+
+        let _ = std::fs::remove_file(&destination);
+        let _ = std::fs::remove_file(&mismatch);
     }
 }

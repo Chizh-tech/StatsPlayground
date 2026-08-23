@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::mem;
 use std::time::Instant;
 
 use duckdb::{Config, params, params_from_iter, Connection};
@@ -11,7 +12,7 @@ use crate::models::table::{
     TableWindowRequest, TableWindowResult,
 };
 use crate::models::tabulate::{StatisticKind, TabulateRequest, TabulateResult, TabulateStatistic};
-use crate::services::archive_cell::{archive_cell_to_json, archive_export_expression};
+use crate::services::archive_cell::archive_export_expression;
 
 /// DuckDB engine wrapper
 pub struct DuckDbEngine {
@@ -5323,24 +5324,20 @@ impl DuckDbEngine {
         while let Some(row) = query_rows.next()? {
             let row_id: i64 = row.get(0)?;
             let mut values = Vec::with_capacity(plan.columns.len());
-            let mut row_bytes = 4usize;
+            let mut row_bytes = estimate_retained_row_header_bytes(plan.columns.len());
+            row_bytes = row_bytes.saturating_add(mem::size_of::<i64>());
 
-            row_bytes = row_bytes.saturating_add(estimate_archive_value_bytes(
-                &Value::BigInt(row_id),
-                "BIGINT",
-            )?);
-
-            for (index, (_, column_type)) in plan.columns.iter().enumerate() {
+            for index in 0..plan.columns.len() {
                 let value: Value = row.get(index + 1)?;
-                row_bytes = row_bytes.saturating_add(estimate_archive_value_bytes(&value, column_type)?);
+                row_bytes = row_bytes.saturating_add(estimate_retained_value_bytes(&value));
+                if row_bytes > hard_batch_bytes {
+                    return Err(AppError::InvalidParam(format!(
+                        "single archive row exceeds hard batch cap: {row_bytes} > {hard_batch_bytes}"
+                    )));
+                }
                 values.push(value);
             }
-
-            if row_bytes > hard_batch_bytes {
-                return Err(AppError::InvalidParam(format!(
-                    "single archive row exceeds hard batch cap: {row_bytes} > {hard_batch_bytes}"
-                )));
-            }
+            let _ = row_id;
 
             if !rows.is_empty() && retained_bytes_estimate.saturating_add(row_bytes) > hard_batch_bytes {
                 break;
@@ -5381,11 +5378,74 @@ fn quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
-fn estimate_archive_value_bytes(value: &Value, column_type: &str) -> Result<usize, AppError> {
-    let json = archive_cell_to_json(value, column_type)?;
-    let encoded = serde_json::to_vec(&json)
-        .map_err(|e| AppError::FileIO(format!("failed to estimate archive row bytes: {e}")))?;
-    Ok(encoded.len())
+fn estimate_retained_row_header_bytes(column_count: usize) -> usize {
+    let mut bytes = mem::size_of::<ArchiveBatchRow>();
+    bytes = bytes.saturating_add(mem::size_of::<Vec<Value>>());
+    bytes = bytes.saturating_add(column_count.saturating_mul(mem::size_of::<Value>()));
+    bytes
+}
+
+fn estimate_retained_value_bytes(value: &Value) -> usize {
+    let base = mem::size_of::<Value>();
+    match value {
+        Value::Null => base,
+        Value::Boolean(_) => base.saturating_add(mem::size_of::<bool>()),
+        Value::TinyInt(_) => base.saturating_add(mem::size_of::<i8>()),
+        Value::SmallInt(_) => base.saturating_add(mem::size_of::<i16>()),
+        Value::Int(_) => base.saturating_add(mem::size_of::<i32>()),
+        Value::BigInt(_) => base.saturating_add(mem::size_of::<i64>()),
+        Value::HugeInt(_) => base.saturating_add(mem::size_of::<i128>()),
+        Value::UTinyInt(_) => base.saturating_add(mem::size_of::<u8>()),
+        Value::USmallInt(_) => base.saturating_add(mem::size_of::<u16>()),
+        Value::UInt(_) => base.saturating_add(mem::size_of::<u32>()),
+        Value::UBigInt(_) => base.saturating_add(mem::size_of::<u64>()),
+        Value::UHugeInt(_) => base.saturating_add(mem::size_of::<u128>()),
+        Value::Float(_) => base.saturating_add(mem::size_of::<f32>()),
+        Value::Double(_) => base.saturating_add(mem::size_of::<f64>()),
+        Value::Decimal(_) => base.saturating_add(mem::size_of::<i128>()),
+        Value::Timestamp(_, _) => base.saturating_add(mem::size_of::<i64>()),
+        Value::Date32(_) => base.saturating_add(mem::size_of::<i32>()),
+        Value::Time64(_, _) => base.saturating_add(mem::size_of::<i64>()),
+        Value::Interval { .. } => base.saturating_add(mem::size_of::<i64>() * 3),
+        Value::Text(text) | Value::Enum(text) => {
+            base.saturating_add(mem::size_of::<String>())
+                .saturating_add(text.capacity())
+        }
+        Value::Blob(bytes) | Value::Geometry(bytes) => {
+            base.saturating_add(mem::size_of::<Vec<u8>>())
+                .saturating_add(bytes.capacity())
+        }
+        Value::List(items) | Value::Array(items) => {
+            let mut total = base
+                .saturating_add(mem::size_of::<Vec<Value>>())
+                .saturating_add(items.capacity().saturating_mul(mem::size_of::<Value>()));
+            for item in items {
+                total = total.saturating_add(estimate_retained_value_bytes(item));
+            }
+            total
+        }
+        Value::Struct(entries) => {
+            let mut total = base.saturating_add(mem::size_of::<OrderedMap<String, Value>>());
+            for (key, entry_value) in entries.iter() {
+                total = total
+                    .saturating_add(mem::size_of::<String>())
+                    .saturating_add(key.capacity())
+                    .saturating_add(estimate_retained_value_bytes(entry_value));
+            }
+            total
+        }
+        Value::Map(entries) => {
+            let mut total = base.saturating_add(mem::size_of::<OrderedMap<Value, Value>>());
+            for (key, entry_value) in entries.iter() {
+                total = total
+                    .saturating_add(estimate_retained_value_bytes(key))
+                    .saturating_add(estimate_retained_value_bytes(entry_value));
+            }
+            total
+        }
+        Value::Union(inner) => base.saturating_add(estimate_retained_value_bytes(inner)),
+        _ => base,
+    }
 }
 
 struct PercentageTransformContext<'a> {
@@ -5833,6 +5893,9 @@ fn dedupe_sqlite_table_name(base: &str, used: &mut std::collections::HashSet<Str
 mod tests {
     use super::*;
     use duckdb::types::Decimal;
+    use crate::services::archive_cell::{
+        archive_cell_to_json_call_count, reset_archive_cell_to_json_call_count,
+    };
     use crate::models::table::{
         TableWindowFilter, TableWindowFilterRule, TableWindowRequest, TableWindowSort,
     };
@@ -8490,5 +8553,71 @@ mod tests {
             vec![Some(4.0), Some(0.0), Some(0.0), Some(0.0)]
         );
         assert_eq!(result.cell_count, 4);
+    }
+
+    #[test]
+    fn archive_keyset_batch_does_not_call_json_cell_encoder() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "archive-batch",
+            "Archive Batch",
+            &["payload".to_string()],
+            &["VARCHAR".to_string()],
+        )
+        .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO \"dataset_archive_batch\" (\"_row_id\", \"payload\") VALUES (1, 'alpha')",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = 1 WHERE id = 'archive-batch'",
+                [],
+            )
+            .unwrap();
+
+        let plan = db.prepare_archive_keyset_read("archive-batch").unwrap();
+        reset_archive_cell_to_json_call_count();
+        let batch = db
+            .read_archive_keyset_batch(&plan, 0, 128, 1024 * 1024, 2 * 1024 * 1024)
+            .unwrap();
+
+        assert_eq!(batch.rows.len(), 1);
+        assert_eq!(archive_cell_to_json_call_count(), 0);
+    }
+
+    #[test]
+    fn archive_keyset_batch_retained_estimate_exceeds_raw_string_payload() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "archive-retained",
+            "Archive Retained",
+            &["payload".to_string()],
+            &["VARCHAR".to_string()],
+        )
+        .unwrap();
+
+        let payload = "\\\"escaped\\ntext\\\"".repeat(8_000);
+        db.conn()
+            .execute(
+                "INSERT INTO \"dataset_archive_retained\" (\"_row_id\", \"payload\") VALUES ($1, $2)",
+                params![1_i64, payload.as_str()],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = 1 WHERE id = 'archive-retained'",
+                [],
+            )
+            .unwrap();
+
+        let plan = db.prepare_archive_keyset_read("archive-retained").unwrap();
+        let batch = db
+            .read_archive_keyset_batch(&plan, 0, 16, 2 * 1024 * 1024, 8 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(batch.rows.len(), 1);
+        assert!(batch.retained_bytes_estimate > payload.len());
     }
 }

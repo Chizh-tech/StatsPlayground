@@ -4,6 +4,22 @@ use duckdb::types::Value as DuckValue;
 
 use crate::error::AppError;
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(test)]
+static ARCHIVE_CELL_TO_JSON_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_archive_cell_to_json_call_count() {
+    ARCHIVE_CELL_TO_JSON_CALLS.store(0, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn archive_cell_to_json_call_count() -> usize {
+    ARCHIVE_CELL_TO_JSON_CALLS.load(Ordering::SeqCst)
+}
+
 pub(crate) fn is_archive_scalar_type(column_type: &str) -> bool {
     matches!(
         column_type.trim().to_ascii_uppercase().as_str(),
@@ -44,6 +60,11 @@ pub(crate) fn archive_cell_to_json(
     value: &DuckValue,
     column_type: &str,
 ) -> Result<serde_json::Value, AppError> {
+    #[cfg(test)]
+    {
+        ARCHIVE_CELL_TO_JSON_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
     if is_archive_scalar_type(column_type) {
         scalar_value_to_json(value)
     } else {
