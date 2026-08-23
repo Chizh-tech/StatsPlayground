@@ -11,6 +11,18 @@ pub(crate) fn acquire_mutation_permit(
     state.save_coordinator.mutation_permit()
 }
 
+pub(crate) fn sort_table_entry(
+    state: &AppState,
+    source_id: &str,
+    sort_cols: &[String],
+    sort_orders: &[String],
+    new_name: &str,
+) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state)?;
+    let service = DataService::new(state);
+    service.sort_table(source_id, sort_cols, sort_orders, new_name)
+}
+
 #[tauri::command]
 pub fn get_columns(
     state: State<'_, AppState>,
@@ -28,9 +40,13 @@ pub fn sort_table(
     sort_orders: Vec<String>,
     new_name: String,
 ) -> Result<DatasetMeta, AppError> {
-    let _permit = acquire_mutation_permit(state.inner())?;
-    let service = DataService::new(&state);
-    service.sort_table(&source_id, &sort_cols, &sort_orders, &new_name)
+    sort_table_entry(
+        state.inner(),
+        &source_id,
+        &sort_cols,
+        &sort_orders,
+        &new_name,
+    )
 }
 
 #[tauri::command]

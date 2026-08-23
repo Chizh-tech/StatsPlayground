@@ -13,6 +13,29 @@ pub(crate) fn acquire_mutation_permit(
     state.save_coordinator.mutation_permit()
 }
 
+pub(crate) fn create_project_entry(
+    state: &AppState,
+    name: &str,
+    file_path: &str,
+) -> Result<ProjectInfo, AppError> {
+    let _permit = acquire_mutation_permit(state)?;
+    let service = ProjectService::new(state);
+    service.create_project(name, file_path)
+}
+
+pub(crate) fn get_current_project_entry(state: &AppState) -> Result<Option<ProjectInfo>, AppError> {
+    let service = ProjectService::new(state);
+    service.get_current_project()
+}
+
+pub(crate) fn import_graph_entry(
+    state: &AppState,
+    file_path: &str,
+) -> Result<serde_json::Value, AppError> {
+    let service = ProjectService::new(state);
+    service.import_graph(file_path)
+}
+
 #[tauri::command]
 pub fn init_project(state: State<'_, AppState>) -> Result<ProjectInfo, AppError> {
     let _permit = acquire_mutation_permit(state.inner())?;
@@ -26,9 +49,7 @@ pub fn create_project(
     name: String,
     file_path: String,
 ) -> Result<ProjectInfo, AppError> {
-    let _permit = acquire_mutation_permit(state.inner())?;
-    let service = ProjectService::new(&state);
-    service.create_project(&name, &file_path)
+    create_project_entry(state.inner(), &name, &file_path)
 }
 
 #[tauri::command(async)]
@@ -87,8 +108,7 @@ pub async fn save_project(
 
 #[tauri::command]
 pub fn get_current_project(state: State<'_, AppState>) -> Result<Option<ProjectInfo>, AppError> {
-    let service = ProjectService::new(&state);
-    service.get_current_project()
+    get_current_project_entry(state.inner())
 }
 
 // ----------------------------------------------------------------------------
@@ -159,8 +179,7 @@ pub fn import_graph(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<serde_json::Value, AppError> {
-    let service = ProjectService::new(&state);
-    service.import_graph(&file_path)
+    import_graph_entry(state.inner(), &file_path)
 }
 
 #[cfg(test)]

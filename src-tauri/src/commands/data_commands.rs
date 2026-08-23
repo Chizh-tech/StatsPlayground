@@ -14,6 +14,20 @@ pub(crate) fn acquire_mutation_permit(
     state.save_coordinator.mutation_permit()
 }
 
+pub(crate) fn delete_dataset_entry(state: &AppState, dataset_id: &str) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state)?;
+    let service = DataService::new(state);
+    service.delete_dataset(dataset_id)
+}
+
+pub(crate) fn query_table_window_entry(
+    state: &AppState,
+    request: &TableWindowRequest,
+) -> Result<TableWindowResult, AppError> {
+    let service = DataService::new(state);
+    service.query_table_window(request)
+}
+
 #[tauri::command]
 pub fn import_file(state: State<'_, AppState>, file_path: String) -> Result<DatasetMeta, AppError> {
     let _permit = acquire_mutation_permit(state.inner())?;
@@ -29,9 +43,7 @@ pub fn list_datasets(state: State<'_, AppState>) -> Result<Vec<DatasetMeta>, App
 
 #[tauri::command]
 pub fn delete_dataset(state: State<'_, AppState>, dataset_id: String) -> Result<(), AppError> {
-    let _permit = acquire_mutation_permit(state.inner())?;
-    let service = DataService::new(&state);
-    service.delete_dataset(&dataset_id)
+    delete_dataset_entry(state.inner(), &dataset_id)
 }
 
 #[tauri::command]
@@ -58,8 +70,7 @@ pub fn query_table_window(
     state: State<'_, AppState>,
     request: TableWindowRequest,
 ) -> Result<TableWindowResult, AppError> {
-    let service = DataService::new(&state);
-    service.query_table_window(&request)
+    query_table_window_entry(state.inner(), &request)
 }
 
 #[tauri::command]

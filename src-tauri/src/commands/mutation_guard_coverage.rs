@@ -1,8 +1,12 @@
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeSet, HashMap};
+    use std::path::PathBuf;
 
     use crate::error::AppError;
+    use crate::models::table::TableWindowRequest;
+    use crate::services::data_service::DataService;
+    use crate::services::spprj_archive::{self, GraphDoc};
     use crate::state::AppState;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -252,21 +256,127 @@ mod tests {
         ]
     }
 
-    fn assert_has_permit_statement(module_source: &str, function_name: &str, file_name: &str) {
-        let function_header = format!("pub fn {function_name}(");
-        let function_start = module_source.find(&function_header).unwrap_or_else(|| {
-            panic!("{function_name} must exist in {file_name} for mutation coverage")
-        });
+    fn extract_function_slice<'a>(module_source: &'a str, function_name: &str) -> &'a str {
+        let public_header = format!("pub fn {function_name}");
+        let crate_header = format!("pub(crate) fn {function_name}");
+        let function_start = module_source
+            .find(&public_header)
+            .or_else(|| module_source.find(&crate_header))
+            .unwrap_or_else(|| panic!("{function_name} must exist for mutation coverage"));
         let function_body = &module_source[function_start..];
-        let function_end = function_body
-            .find("\n#[tauri::command")
-            .unwrap_or(function_body.len());
-        let function_slice = &function_body[..function_end];
+
+        let body_start = function_body
+            .find('{')
+            .expect("function body must start with {");
+        let mut depth = 0usize;
+        let mut end = None;
+        for (idx, ch) in function_body[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth
+                        .checked_sub(1)
+                        .expect("brace depth should never underflow");
+                    if depth == 0 {
+                        end = Some(body_start + idx + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let function_end = end.expect("function body must have a closing brace");
+        &function_body[..function_end]
+    }
+
+    fn assert_module_helper_routes_to_save_coordinator(module_source: &str, file_name: &str) {
+        let helper_slice = extract_function_slice(module_source, "acquire_mutation_permit");
+        assert!(
+            helper_slice.contains("state.save_coordinator.mutation_permit()"),
+            "{file_name}::acquire_mutation_permit must delegate to save_coordinator.mutation_permit"
+        );
+    }
+
+    fn assert_has_permit_statement(module_source: &str, function_name: &str, file_name: &str) {
+        let function_slice = extract_function_slice(module_source, function_name);
+        let body = function_slice
+            .split_once('{')
+            .map(|(_, rest)| rest)
+            .unwrap_or(function_slice);
+        let first_statement = body
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && *line != "{" && !line.starts_with("//"))
+            .next()
+            .unwrap_or("");
+
+        let has_direct_permit = first_statement.starts_with("let _permit = acquire_mutation_permit(");
+        let delegated_permit = if has_direct_permit {
+            true
+        } else {
+            first_statement
+                .split('(')
+                .next()
+                .map(str::trim)
+                .filter(|callee| callee.ends_with("_entry"))
+                .map(|callee| {
+                    let callee_slice = extract_function_slice(module_source, callee);
+                    let callee_body = callee_slice
+                        .split_once('{')
+                        .map(|(_, rest)| rest)
+                        .unwrap_or(callee_slice);
+                    let callee_first_statement = callee_body
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty() && *line != "{" && !line.starts_with("//"))
+                        .next()
+                        .unwrap_or("");
+                    callee_first_statement.starts_with("let _permit = acquire_mutation_permit(")
+                })
+                .unwrap_or(false)
+        };
 
         assert!(
-            function_slice.contains("let _permit = state.save_coordinator.mutation_permit()?;"),
-            "{file_name}::{function_name} must acquire mutation permit at command entry"
+            delegated_permit,
+            "{file_name}::{function_name} must acquire mutation permit at command entry (directly or via a dedicated entry helper)"
         );
+
+        assert!(
+            !function_slice.contains("drop(_permit)"),
+            "{file_name}::{function_name} must keep mutation permit alive through delegated service return"
+        );
+    }
+
+    fn temp_file_path(prefix: &str, suffix: &str) -> String {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "stats_playground_{prefix}_{}{}",
+            uuid::Uuid::new_v4(),
+            suffix
+        ));
+        path.to_string_lossy().to_string()
+    }
+
+    fn seed_numeric_dataset(state: &AppState) -> (String, u64) {
+        let service = DataService::new(state);
+        let dataset = service
+            .create_table(
+                "guard-seed",
+                &["value".to_string()],
+                &["INTEGER".to_string()],
+            )
+            .expect("seed table should be created");
+        let row_id = service
+            .add_row(&dataset.id)
+            .expect("seed row should be created");
+        service
+            .update_cell(&dataset.id, row_id, "value", "42")
+            .expect("seed row should be updated");
+        let generation = service
+            .get_dataset_generation(&dataset.id)
+            .expect("dataset generation should be readable");
+        (dataset.id, generation)
     }
 
     #[test]
@@ -291,6 +401,12 @@ mod tests {
         let io_source = include_str!("io_commands.rs");
         let history_source = include_str!("history_commands.rs");
         let project_source = include_str!("project_commands.rs");
+
+        assert_module_helper_routes_to_save_coordinator(data_source, "data_commands.rs");
+        assert_module_helper_routes_to_save_coordinator(table_source, "table_commands.rs");
+        assert_module_helper_routes_to_save_coordinator(io_source, "io_commands.rs");
+        assert_module_helper_routes_to_save_coordinator(history_source, "history_commands.rs");
+        assert_module_helper_routes_to_save_coordinator(project_source, "project_commands.rs");
 
         for (file_name, function_name) in functions_requiring_mutation_permit() {
             let source = match file_name {
@@ -330,47 +446,109 @@ mod tests {
             .begin_save()
             .expect("save guard should start");
 
-        let data = crate::commands::data_commands::acquire_mutation_permit(&state)
-            .expect_err("data family mutation must be blocked while save is active");
+        let data = crate::commands::data_commands::delete_dataset_entry(&state, "missing")
+            .expect_err("data family mutation command must be blocked while save is active");
         assert!(matches!(data, AppError::ReadOnly(_)));
 
-        let table = crate::commands::table_commands::acquire_mutation_permit(&state)
-            .expect_err("table family mutation must be blocked while save is active");
+        let table = crate::commands::table_commands::sort_table_entry(
+            &state,
+            "missing",
+            &[],
+            &[],
+            "sorted",
+        )
+        .expect_err("table family mutation command must be blocked while save is active");
         assert!(matches!(table, AppError::ReadOnly(_)));
 
-        let io = crate::commands::io_commands::acquire_mutation_permit(&state)
-            .expect_err("io family mutation must be blocked while save is active");
+        let io = crate::commands::io_commands::import_sqlite_entry(
+            &state,
+            "missing.sqlite",
+            |_table_name, _table_index, _table_total, _rows_done, _rows_total| {},
+        )
+        .expect_err("io family mutation command must be blocked while save is active");
         assert!(matches!(io, AppError::ReadOnly(_)));
 
-        let history = crate::commands::history_commands::acquire_mutation_permit(&state)
-            .expect_err("history family mutation must be blocked while save is active");
+        let history = crate::commands::history_commands::restore_project_snapshot_entry(
+            &state,
+            &crate::commands::history_commands::ProjectDataSnapshot { datasets: vec![] },
+            |_dataset_index, _dataset_total, _dataset_name| {},
+        )
+        .expect_err("history family mutation command must be blocked while save is active");
         assert!(matches!(history, AppError::ReadOnly(_)));
 
-        let project = crate::commands::project_commands::acquire_mutation_permit(&state)
-            .expect_err("project family mutation must be blocked while save is active");
+        let project_path = temp_file_path("blocked_create_project", ".spprj");
+        let project = crate::commands::project_commands::create_project_entry(
+            &state,
+            "blocked",
+            &project_path,
+        )
+        .expect_err("project family mutation command must be blocked while save is active");
         assert!(matches!(project, AppError::ReadOnly(_)));
     }
 
     #[test]
-    fn save_does_not_block_basic_backend_reads() {
+    fn save_does_not_block_command_read_paths() {
         let state = AppState::new().expect("app state should initialize");
+        let (dataset_id, generation) = seed_numeric_dataset(&state);
+
+        let export_path = temp_file_path("read_export_csv", ".csv");
+        let graph_path = temp_file_path("read_import_graph", ".spgh");
+        let graph_doc = GraphDoc {
+            id: "graph-read-1".to_string(),
+            name: "Graph Read".to_string(),
+            version: "1".to_string(),
+            body: serde_json::Map::from_iter([(
+                "graphType".to_string(),
+                serde_json::Value::String("line".to_string()),
+            )]),
+        };
+        spprj_archive::write_graph_file(&graph_doc, &graph_path)
+            .expect("graph fixture should be writable");
+
         let _save_guard = state
             .save_coordinator
             .begin_save()
             .expect("save guard should start");
 
-        let datasets = state
-            .db
-            .lock()
-            .expect("db lock should be available")
-            .list_datasets()
-            .expect("list_datasets should stay available during save");
-        assert!(datasets.is_empty());
+        let table_window = crate::commands::data_commands::query_table_window_entry(
+            &state,
+            &TableWindowRequest {
+                dataset_id: dataset_id.clone(),
+                start: 0,
+                count: 10,
+                sort: None,
+                filters: vec![],
+                generation,
+            },
+        )
+        .expect("table-window command path should succeed during save");
+        assert_eq!(table_window.total_rows, 1);
 
-        let project = state
-            .project
-            .read()
-            .expect("project lock should be available");
+        let graph = crate::commands::project_commands::import_graph_entry(&state, &graph_path)
+            .expect("graph read path should succeed during save");
+        assert_eq!(
+            graph.get("id").and_then(serde_json::Value::as_str),
+            Some("graph-read-1")
+        );
+
+        let stats = crate::services::stats_service::StatsService::new(&state)
+            .get_descriptive_stats(&dataset_id)
+            .expect("stats read path should succeed during save");
+        assert_eq!(stats.dataset_id, dataset_id);
+        assert!(!stats.columns.is_empty());
+
+        crate::commands::io_commands::export_csv_entry(&state, &dataset_id, &export_path)
+            .expect("export read path should succeed during save");
+        let export_bytes = std::fs::metadata(PathBuf::from(&export_path))
+            .expect("export output should exist")
+            .len();
+        assert!(export_bytes > 0, "export output should be non-empty");
+
+        let project = crate::commands::project_commands::get_current_project_entry(&state)
+            .expect("current-project read path should succeed during save");
         assert!(project.is_none());
+
+        let _ = std::fs::remove_file(export_path);
+        let _ = std::fs::remove_file(graph_path);
     }
 }

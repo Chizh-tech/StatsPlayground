@@ -13,6 +13,28 @@ pub(crate) fn acquire_mutation_permit(
     state.save_coordinator.mutation_permit()
 }
 
+pub(crate) fn export_csv_entry(
+    state: &AppState,
+    dataset_id: &str,
+    output_path: &str,
+) -> Result<(), AppError> {
+    let service = IoService::new(state);
+    service.export_csv(dataset_id, output_path)
+}
+
+pub(crate) fn import_sqlite_entry<F>(
+    state: &AppState,
+    file_path: &str,
+    on_progress: F,
+) -> Result<Vec<DatasetMeta>, AppError>
+where
+    F: Fn(&str, usize, usize, usize, usize),
+{
+    let _permit = acquire_mutation_permit(state)?;
+    let service = IoService::new(state);
+    service.import_sqlite(file_path, on_progress)
+}
+
 #[derive(Clone, Serialize)]
 struct ImportProgress {
     table_name: String,
@@ -28,8 +50,7 @@ pub fn export_csv(
     dataset_id: String,
     output_path: String,
 ) -> Result<(), AppError> {
-    let service = IoService::new(&state);
-    service.export_csv(&dataset_id, &output_path)
+    export_csv_entry(state.inner(), &dataset_id, &output_path)
 }
 
 #[tauri::command(async)]
@@ -38,9 +59,8 @@ pub fn import_sqlite(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<Vec<DatasetMeta>, AppError> {
-    let _permit = acquire_mutation_permit(state.inner())?;
-    let service = IoService::new(&state);
-    service.import_sqlite(
+    import_sqlite_entry(
+        state.inner(),
         &file_path,
         |table_name, table_index, table_total, rows_done, rows_total| {
             let _ = app.emit(
