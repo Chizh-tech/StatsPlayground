@@ -1,9 +1,10 @@
-export const GRAPH_TABLE_PAGE_SIZE = 4096;
+export const GRAPH_TABLE_PAGE_SIZE = 2000;
 
 export interface GraphTablePage {
   columns: string[];
   rows: unknown[][];
   totalRows: number;
+  generation: number;
 }
 
 export interface GraphTableData {
@@ -13,11 +14,13 @@ export interface GraphTableData {
 
 interface LoadGraphTableDataOptions {
   datasetId: string;
+  generation: number;
   signal: AbortSignal;
-  queryPage: (
+  queryWindow: (
     datasetId: string,
-    page: number,
-    pageSize: number,
+    start: number,
+    count: number,
+    generation: number,
   ) => Promise<GraphTablePage>;
   yieldToBrowser?: () => Promise<void>;
 }
@@ -32,16 +35,20 @@ export async function loadGraphTableData(
   const rows: unknown[][] = [];
   let columns: string[] = [];
 
-  for (let page = 0; ; page += 1) {
+  for (;;) {
     if (options.signal.aborted) return null;
-    const result = await options.queryPage(
+    const result = await options.queryWindow(
       options.datasetId,
-      page,
+      rows.length,
       GRAPH_TABLE_PAGE_SIZE,
+      options.generation,
     );
     if (options.signal.aborted) return null;
+    if (result.generation !== options.generation) {
+      throw new Error("Dataset changed during graph loading.");
+    }
 
-    if (page === 0) columns = result.columns;
+    if (rows.length === 0) columns = result.columns;
     rows.push(...result.rows);
     if (rows.length >= result.totalRows || result.rows.length === 0) {
       return { columns, rows };

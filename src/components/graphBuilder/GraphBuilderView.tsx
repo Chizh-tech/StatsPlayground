@@ -30,6 +30,7 @@ import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPalet
 import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
+import { loadGraphTableData } from "./loadGraphTableData";
 import { FilterPanel, applyFilters } from "@/components/filter";
 
 interface GraphBuilderViewProps {
@@ -524,23 +525,33 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
   // 加载列信息 + 全表数据
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
     (async () => {
       try {
+        const generation = await dataService.getDatasetGeneration(dataset.id);
         const cols = await dataService.getColumns(dataset.id);
         const fields: FieldRef[] = cols.map(([name, type]) => ({
           name,
           type: inferFieldType(type),
         }));
         const sqlTypes = cols.map(([, type]) => type);
-        // 简化：一次性拉取全部数据（后续可流式优化）
-        const result = await dataService.queryTable({
+        const result = await loadGraphTableData({
           datasetId: dataset.id,
-          page: 0,
-          pageSize: Math.max(1, dataset.rowCount || 100000),
+          generation,
+          signal: controller.signal,
+          queryWindow: (datasetId, start, count, expectedGeneration) =>
+            dataService.queryTableWindow({
+            datasetId,
+            start,
+            count,
+            sort: null,
+            filters: [],
+            generation: expectedGeneration,
+          }),
         });
+        if (!result) return;
         // Pull per-column display props in parallel with data so the
         // Value Order metadata is available on first render. Display
         // props can legitimately be missing (older projects, fresh
@@ -549,7 +560,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         try {
           displayProps = await dataService.getColumnDisplayProps(dataset.id);
         } catch { /* ignore — empty value orders are fine */ }
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         // Build the colIndex → name map from `cols` (which already excludes
         // internal `_row_id` because get_user_columns filters it out). The
         // colIndex stored in ColumnDisplayProps is the visible-column
@@ -589,13 +600,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         setValueOrders(vo);
         setSpecByCol(sp);
       } catch (e) {
-        if (!cancelled) setError(String(e));
+        if (!controller.signal.aborted) setError(String(e));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     })();
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [dataset.id, dataset.rowCount]);
 
