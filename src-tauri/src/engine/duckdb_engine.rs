@@ -5315,7 +5315,7 @@ impl DuckDbEngine {
             return Err(AppError::InvalidParam("row limit must be positive".into()));
         }
 
-        let mut stmt = self.conn.prepare(&plan.select_sql)?;
+        let mut stmt = self.conn.prepare_cached(&plan.select_sql)?;
         let mut query_rows = stmt.query(params![after_row_id, row_limit as i64])?;
 
         let mut rows = Vec::new();

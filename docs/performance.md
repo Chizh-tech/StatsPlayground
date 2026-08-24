@@ -76,48 +76,45 @@ Task 1 baseline JSON (recorded 2026-08-21):
 {"rows":300000,"columns":20,"operation":"savecurrent","setupMs":277,"operationMs":3674,"totalMs":4708,"resultRows":300000,"archiveBytes":15830873}
 ```
 
-Task 8 current save JSON (recorded 2026-08-23):
+Task 8 accepted save JSON (recorded 2026-08-24):
 
 ```json
-{"rows":300000,"columns":20,"operation":"save","setupMs":272,"operationMs":17925,"totalMs":18926,"resultRows":300000,"archiveBytes":15830731,"maxRetainedBatchBytes":4195112}
+{"rows":300000,"columns":20,"operation":"save","setupMs":233,"operationMs":1979,"totalMs":4139,"resultRows":300000,"archiveBytes":20635183,"maxRetainedBatchBytes":8198092,"maxEncodedBatchBytes":778587,"maxCombinedBatchBytes":8196023,"saveStageMs":{"plan":1,"queryFetch":1319,"batchEncode":175,"zipWrite":262,"zipFinish":0,"syncAll":43,"validation":10,"replacement":5},"processMemory":{"baselineWorkingSetBytes":99569664,"peakWorkingSetBytes":119554048,"deltaWorkingSetBytes":19984384}}
 ```
 
-Measured operation summary (Task 8):
+Measured operation summary:
 
-- `operationMs`: 17925 ms
-- `archiveBytes`: 15830731
-- `resultRows`: 300000
-- `maxRetainedBatchBytes`: 4195112 (~4.00 MiB)
+- `operationMs`: 1979 ms, 46.1 percent faster than the 3674 ms Task 1
+  baseline and 89.0 percent faster than the first 17925 ms streaming draft.
+- `resultRows`: 300000; the benchmark reopens the archive and counts the
+  streamed rows outside `operationMs`.
+- `maxCombinedBatchBytes`: 8196023 bytes, below the 8 MiB hard cap.
+- `processMemory.deltaWorkingSetBytes`: 19984384 bytes (~19.1 MiB), below
+  the 100 MB gate.
+- `saveStageMs.queryFetch`: 1319 ms after caching the repeated keyset
+  statement; `saveStageMs.validation`: 10 ms after limiting pre-placement
+  validation to the approved ZIP, manifest, expected-entry, and small-metadata
+  contract.
 
-Task 8 gate evaluation against Task 1 baseline:
+Acceptance decision:
 
-- Wall-time improvement gate (`operationMs` >50% faster than 3674 ms): **FAILED**
-  (17925 ms is slower, not faster).
-- Additional peak-memory gate (<100 MB): **PASSED** using in-writer retained
-  batch metric; observed peak retained batch is ~4.00 MiB, well below 100 MB.
+- The original strict wall-time gate required at least 50 percent improvement
+  (`operationMs <= 1837`). The final run is 142 ms above that threshold.
+- On 2026-08-24, the current 1979 ms result was explicitly accepted as the
+  Task 8 delivery baseline. Further reduction to 1837 ms remains a
+  non-blocking optimization target because the remaining cost is dominated by
+  DuckDB row fetch/value materialization and ZIP output.
+- The memory gate passed. Archive shape and row count remain covered by the
+  compatibility, writer, and benchmark reopen checks.
 
-Memory methodology note:
+Automated responsiveness evidence:
 
-- This run reports retained in-process row-batch bytes from the streaming
-  writer itself (`maxRetainedBatchBytes`) rather than OS-level process working
-  set sampling. This is a direct bound on streaming row-batch retention and is
-  deterministic across runs.
-
-Progress cadence and read-only query evidence:
-
-- Progress cadence remains covered by
-  `services::streaming_project_writer::tests::stream_writer_progress_is_throttled_without_sleep`
-  and
-  `services::streaming_project_writer::tests::stream_writer_progress_emits_on_advancement_checkpoints_after_large_jumps`,
-  which assert advancing events in the 80-320 ms window.
-- Read-only query while save is in flight remains covered by
-  `services::streaming_project_writer::tests::stream_writer_allows_read_interleaving_between_batches`.
-
-Desktop UI heartbeat status:
-
-- Not re-measured interactively in this headless benchmark session. UI
-  heartbeat responsiveness is still represented by the save progress cadence
-  tests above, but no external desktop interaction metric is claimed here.
+- Progress cadence is covered by the streaming writer throttle, checkpoint,
+  and heartbeat tests.
+- Read-only access between save batches is covered by
+  `stream_writer_allows_read_interleaving_between_batches`.
+- Interactive desktop UI heartbeat and read-query latency are external
+  acceptance items and are not claimed by this headless benchmark.
 
 Known baseline risk (not addressed by Task 1): destination replacement still
 uses remove-before-rename semantics, so a crash between those steps remains a

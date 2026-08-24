@@ -29,11 +29,27 @@ pub struct SaveSnapshot {
     pub request: SaveProjectRequest,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SavePerfMetrics {
+    pub plan_ms: u128,
+    pub query_fetch_ms: u128,
+    pub batch_encode_ms: u128,
+    pub zip_write_ms: u128,
+    pub zip_finish_ms: u128,
+    pub sync_all_ms: u128,
+    pub validation_ms: u128,
+    pub replacement_ms: u128,
+    pub max_retained_batch_bytes: usize,
+    pub max_encoded_batch_bytes: usize,
+    pub max_combined_batch_bytes: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SaveWriteResult {
     pub archive_bytes: u64,
     pub tables_written: usize,
     pub rows_written: usize,
+    pub perf: SavePerfMetrics,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

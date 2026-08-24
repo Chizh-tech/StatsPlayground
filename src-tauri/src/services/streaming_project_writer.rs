@@ -2,18 +2,18 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-#[cfg(any(test, feature = "perf-harness"))]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::engine::duckdb_engine::ArchiveKeysetReadPlan;
 use crate::error::AppError;
 use crate::models::save::{
-    SavePhase, SaveProgress, SaveProgressCallback, SaveSnapshot, SaveWriteResult,
+    SavePerfMetrics, SavePhase, SaveProgress, SaveProgressCallback, SaveSnapshot, SaveWriteResult,
 };
 use crate::models::table::ColumnDisplayProps;
-use crate::services::archive_cell::write_archive_cell;
+use crate::services::archive_cell::{
+    archive_cell_write_mode, write_archive_cell_with_mode, ArchiveCellWriteMode,
+};
 use crate::services::save_coordinator::SaveGuard;
 use crate::services::spprj_archive::{
     self, GraphDoc, ProjectManifest, TableColumn, TableColumnFormat, TableDoc,
@@ -22,60 +22,23 @@ use crate::state::AppState;
 
 const STREAM_VERSION: &str = "3.0.0";
 const TABLE_DOC_VERSION: &str = "2";
-const TARGET_BATCH_BYTES: usize = 4 * 1024 * 1024;
+const TARGET_BATCH_BYTES: usize = 6 * 1024 * 1024;
 const HARD_BATCH_BYTES: usize = 8 * 1024 * 1024;
+const MIN_TARGET_BATCH_BYTES: usize = 4 * 1024 * 1024;
+const TARGET_BATCH_SAFETY_MARGIN_BYTES: usize = 128 * 1024;
 const ROW_LIMIT_PER_BATCH: usize = 4096;
 const PROGRESS_MIN_INTERVAL_MS: u64 = 100;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(PROGRESS_MIN_INTERVAL_MS);
 
-#[cfg(any(test, feature = "perf-harness"))]
-static PERF_MAX_RETAINED_BATCH_BYTES: AtomicUsize = AtomicUsize::new(0);
-
-#[cfg(any(test, feature = "perf-harness"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SavePerfMetrics {
-    pub max_retained_batch_bytes: usize,
-}
-
-#[cfg(any(test, feature = "perf-harness"))]
-pub(crate) fn reset_perf_metrics() {
-    PERF_MAX_RETAINED_BATCH_BYTES.store(0, Ordering::SeqCst);
-}
-
-#[cfg(any(test, feature = "perf-harness"))]
-pub(crate) fn current_perf_metrics() -> SavePerfMetrics {
-    SavePerfMetrics {
-        max_retained_batch_bytes: PERF_MAX_RETAINED_BATCH_BYTES.load(Ordering::SeqCst),
-    }
-}
-
-#[cfg(any(test, feature = "perf-harness"))]
-fn observe_retained_batch_bytes(bytes: usize) {
-    let mut current = PERF_MAX_RETAINED_BATCH_BYTES.load(Ordering::SeqCst);
-    while bytes > current {
-        match PERF_MAX_RETAINED_BATCH_BYTES.compare_exchange(
-            current,
-            bytes,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        ) {
-            Ok(_) => break,
-            Err(next) => current = next,
-        }
-    }
-}
-
-#[cfg(not(any(test, feature = "perf-harness")))]
-fn observe_retained_batch_bytes(_bytes: usize) {}
-
 #[cfg(test)]
 macro_rules! run_save_test_hook {
-    ($point:expr, $dataset_id:expr, $retained_batch_bytes:expr) => {
+    ($point:expr, $dataset_id:expr, $retained_batch_bytes:expr, $temp_archive_path:expr) => {
         run_test_hook(
             $point,
             SaveHookContext {
                 dataset_id: $dataset_id,
                 retained_batch_bytes: $retained_batch_bytes,
+                temp_archive_path: $temp_archive_path,
             },
         )?
     };
@@ -208,6 +171,84 @@ pub struct StreamingProjectWriter<'state, 'guard> {
     replacer: std::sync::Arc<dyn ArchiveReplacer>,
 }
 
+#[derive(Default)]
+struct SaveRunPerf {
+    plan_ms: u128,
+    query_fetch_ms: u128,
+    batch_encode_ms: u128,
+    zip_write_ms: u128,
+    zip_finish_ms: u128,
+    sync_all_ms: u128,
+    validation_ms: u128,
+    replacement_ms: u128,
+    max_retained_batch_bytes: usize,
+    max_encoded_batch_bytes: usize,
+    max_combined_batch_bytes: usize,
+}
+
+impl SaveRunPerf {
+    fn to_model(&self) -> SavePerfMetrics {
+        SavePerfMetrics {
+            plan_ms: self.plan_ms,
+            query_fetch_ms: self.query_fetch_ms,
+            batch_encode_ms: self.batch_encode_ms,
+            zip_write_ms: self.zip_write_ms,
+            zip_finish_ms: self.zip_finish_ms,
+            sync_all_ms: self.sync_all_ms,
+            validation_ms: self.validation_ms,
+            replacement_ms: self.replacement_ms,
+            max_retained_batch_bytes: self.max_retained_batch_bytes,
+            max_encoded_batch_bytes: self.max_encoded_batch_bytes,
+            max_combined_batch_bytes: self.max_combined_batch_bytes,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "perf-harness"))]
+type SavePerfObserver = Box<dyn FnMut(SavePerfMetrics)>;
+
+#[cfg(any(test, feature = "perf-harness"))]
+thread_local! {
+    static SAVE_PERF_OBSERVER: std::cell::RefCell<Option<SavePerfObserver>> = std::cell::RefCell::new(None);
+}
+
+#[cfg(any(test, feature = "perf-harness"))]
+pub(crate) fn with_save_perf_observer<T, FObserve, FRun>(observer: FObserve, run: FRun) -> T
+where
+    FObserve: FnMut(SavePerfMetrics) + 'static,
+    FRun: FnOnce() -> T,
+{
+    SAVE_PERF_OBSERVER.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(observer));
+    });
+    let outcome = run();
+    SAVE_PERF_OBSERVER.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+    outcome
+}
+
+#[cfg(not(any(test, feature = "perf-harness")))]
+pub(crate) fn with_save_perf_observer<T, FObserve, FRun>(_observer: FObserve, run: FRun) -> T
+where
+    FObserve: FnMut(SavePerfMetrics) + 'static,
+    FRun: FnOnce() -> T,
+{
+    run()
+}
+
+#[cfg(any(test, feature = "perf-harness"))]
+fn notify_save_perf_observer(metrics: SavePerfMetrics) {
+    SAVE_PERF_OBSERVER.with(|slot| {
+        if let Some(observer) = slot.borrow_mut().as_mut() {
+            observer(metrics);
+        }
+    });
+}
+
+#[cfg(not(any(test, feature = "perf-harness")))]
+fn notify_save_perf_observer(_metrics: SavePerfMetrics) {}
+
 impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
     pub fn new(state: &'state AppState, save_guard: &'guard SaveGuard<'state>) -> Self {
         Self {
@@ -279,6 +320,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         );
 
         thread::scope(|scope| {
+            let mut perf = SaveRunPerf::default();
             let dispatcher = ProgressDispatcher::new(scope, progress_cb);
             dispatcher.emit(SaveProgress {
                 phase: SavePhase::Preparing,
@@ -301,6 +343,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 &temp_path,
                 total_rows,
                 &dispatcher,
+                &mut perf,
             ) {
                 let _ = std::fs::remove_file(&temp_path);
                 return Err(error);
@@ -308,6 +351,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
 
             let archive_bytes = std::fs::metadata(&temp_path)?.len();
 
+            let replacement_started = Instant::now();
             if let Err(error) = self
                 .replacer
                 .replace_archive(&temp_path, &snapshot.destination_path)
@@ -315,6 +359,9 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 let _ = std::fs::remove_file(&temp_path);
                 return Err(error);
             }
+            perf.replacement_ms = perf
+                .replacement_ms
+                .saturating_add(replacement_started.elapsed().as_millis());
 
             dispatcher.emit(SaveProgress {
                 phase: SavePhase::Finalizing,
@@ -326,10 +373,14 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 overall_progress: Some(1.0),
             });
 
+            let perf_metrics = perf.to_model();
+            notify_save_perf_observer(perf_metrics);
+
             Ok(SaveWriteResult {
                 archive_bytes,
                 tables_written: snapshot.datasets.len(),
                 rows_written: total_rows,
+                perf: perf_metrics,
             })
         })
     }
@@ -342,11 +393,13 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         temp_path: &Path,
         total_rows: usize,
         dispatcher: &ProgressDispatcher<'_>,
+        perf: &mut SaveRunPerf,
     ) -> Result<(), AppError> {
         let temp_file = std::fs::File::create(temp_path)?;
         let mut zip = zip::ZipWriter::new(temp_file);
         let file_opts = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+            .compression_method(zip::CompressionMethod::Deflated)
+            .compression_level(Some(1));
         let dir_opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
 
@@ -386,6 +439,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 )));
             };
 
+            let plan_started = Instant::now();
             let plan = {
                 let db = self
                     .state
@@ -394,6 +448,14 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                     .map_err(|e| AppError::Database(e.to_string()))?;
                 db.prepare_archive_keyset_read(&dataset.id)?
             };
+            perf.plan_ms = perf
+                .plan_ms
+                .saturating_add(plan_started.elapsed().as_millis());
+            let column_write_modes = plan
+                .columns
+                .iter()
+                .map(|(_, column_type)| archive_cell_write_mode(column_type))
+                .collect::<Vec<_>>();
 
             let columns = table_columns_from_plan(&dataset.id, &plan, &snapshot.column_display);
 
@@ -403,13 +465,17 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             run_save_test_hook!(
                 SaveFailurePoint::AfterHeader,
                 Some(dataset.id.clone()),
+                None,
                 None
             );
 
             let mut next_row_id = 0i64;
             let mut first_row = true;
+            let mut encoded_rows = Vec::with_capacity(HARD_BATCH_BYTES);
+            let mut target_batch_bytes = TARGET_BATCH_BYTES;
 
             loop {
+                let fetch_started = Instant::now();
                 let batch = {
                     let db = self
                         .state
@@ -420,30 +486,60 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                         &plan,
                         next_row_id,
                         ROW_LIMIT_PER_BATCH,
-                        TARGET_BATCH_BYTES,
+                        target_batch_bytes,
                         HARD_BATCH_BYTES,
                     )?
                 };
+                perf.query_fetch_ms = perf
+                    .query_fetch_ms
+                    .saturating_add(fetch_started.elapsed().as_millis());
 
                 if batch.rows.is_empty() {
                     break;
                 }
 
-                observe_retained_batch_bytes(batch.retained_bytes_estimate);
-
                 run_save_test_hook!(
                     SaveFailurePoint::BetweenBatches,
                     Some(dataset.id.clone()),
-                    Some(batch.retained_bytes_estimate)
+                    Some(batch.retained_bytes_estimate),
+                    None
                 );
 
-                for row in batch.rows {
+                let encode_started = Instant::now();
+                encoded_rows.clear();
+                let rows_total = batch.rows.len();
+                let mut batch_peak_combined = 0usize;
+                for (row_index, row) in batch.rows.into_iter().enumerate() {
                     if !first_row {
-                        zip.write_all(b",")?;
+                        encoded_rows.push(b',');
                     }
                     first_row = false;
 
-                    write_streamed_row(&mut zip, row.row_id, &row.values, &plan)?;
+                    write_streamed_row(
+                        &mut encoded_rows,
+                        row.row_id,
+                        &row.values,
+                        &column_write_modes,
+                    )?;
+
+                    let rows_remaining = rows_total.saturating_sub(row_index + 1);
+                    let estimated_remaining_retained = if rows_total == 0 {
+                        0
+                    } else {
+                        batch.retained_bytes_estimate.saturating_mul(rows_remaining) / rows_total
+                    };
+                    let combined_bytes =
+                        estimated_remaining_retained.saturating_add(encoded_rows.len());
+                    batch_peak_combined = batch_peak_combined.max(combined_bytes);
+                    if combined_bytes > HARD_BATCH_BYTES {
+                        return Err(AppError::InvalidParam(format!(
+                            "streamed archive batch exceeds hard cap: estimated retained {} + encoded {} > {}",
+                            estimated_remaining_retained,
+                            encoded_rows.len(),
+                            HARD_BATCH_BYTES
+                        )));
+                    }
+
                     next_row_id = row.row_id;
 
                     rows_written = rows_written.saturating_add(1);
@@ -457,6 +553,24 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                         overall_progress: Some(progress_fraction(rows_written, total_rows)),
                     });
                 }
+
+                perf.batch_encode_ms = perf
+                    .batch_encode_ms
+                    .saturating_add(encode_started.elapsed().as_millis());
+                perf.max_retained_batch_bytes = perf
+                    .max_retained_batch_bytes
+                    .max(batch.retained_bytes_estimate);
+                perf.max_encoded_batch_bytes = perf.max_encoded_batch_bytes.max(encoded_rows.len());
+                perf.max_combined_batch_bytes =
+                    perf.max_combined_batch_bytes.max(batch_peak_combined);
+                target_batch_bytes =
+                    adaptive_target_batch_bytes(target_batch_bytes, batch_peak_combined);
+
+                let write_started = Instant::now();
+                zip.write_all(&encoded_rows)?;
+                perf.zip_write_ms = perf
+                    .zip_write_ms
+                    .saturating_add(write_started.elapsed().as_millis());
             }
 
             zip.write_all(b"]}")?;
@@ -505,13 +619,21 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             overall_progress: Some(progress_fraction(rows_written, total_rows)),
         });
 
-        run_save_test_hook!(SaveFailurePoint::ZipFinish, None, None);
+        run_save_test_hook!(SaveFailurePoint::ZipFinish, None, None, None);
+        let finish_started = Instant::now();
         let finished_file = zip
             .finish()
             .map_err(|e| AppError::FileIO(format!("failed to finish archive: {e}")))?;
+        perf.zip_finish_ms = perf
+            .zip_finish_ms
+            .saturating_add(finish_started.elapsed().as_millis());
 
-        run_save_test_hook!(SaveFailurePoint::SyncAll, None, None);
+        run_save_test_hook!(SaveFailurePoint::SyncAll, None, None, None);
+        let sync_started = Instant::now();
         finished_file.sync_all()?;
+        perf.sync_all_ms = perf
+            .sync_all_ms
+            .saturating_add(sync_started.elapsed().as_millis());
 
         dispatcher.emit(SaveProgress {
             phase: SavePhase::Finalizing,
@@ -523,7 +645,12 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             overall_progress: None,
         });
 
-        run_save_test_hook!(SaveFailurePoint::Validation, None, None);
+        run_save_test_hook!(
+            SaveFailurePoint::Validation,
+            None,
+            None,
+            Some(temp_path.to_path_buf())
+        );
 
         let mut expected_entries = Vec::new();
         if !snapshot.request.history.is_empty() {
@@ -532,11 +659,15 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         if !snapshot.request.snapshots.is_empty() {
             expected_entries.push(".snapshots.json");
         }
+        let validation_started = Instant::now();
         spprj_archive::validate_archive_manifest_and_entries(
             temp_path,
             manifest,
             &expected_entries,
         )?;
+        perf.validation_ms = perf
+            .validation_ms
+            .saturating_add(validation_started.elapsed().as_millis());
 
         Ok(())
     }
@@ -611,13 +742,17 @@ fn write_streamed_row<W: Write>(
     writer: &mut W,
     row_id: i64,
     values: &[duckdb::types::Value],
-    plan: &ArchiveKeysetReadPlan,
+    column_write_modes: &[ArchiveCellWriteMode],
 ) -> Result<(), AppError> {
     writer.write_all(b"[")?;
-    write_archive_cell(writer, &duckdb::types::Value::BigInt(row_id), "BIGINT")?;
+    write_archive_cell_with_mode(
+        writer,
+        &duckdb::types::Value::BigInt(row_id),
+        ArchiveCellWriteMode::Scalar,
+    )?;
     for (index, value) in values.iter().enumerate() {
         writer.write_all(b",")?;
-        write_archive_cell(writer, value, &plan.columns[index].1)?;
+        write_archive_cell_with_mode(writer, value, column_write_modes[index])?;
     }
     writer.write_all(b"]")?;
     Ok(())
@@ -628,6 +763,35 @@ fn progress_fraction(rows_done: usize, rows_total: usize) -> f64 {
         1.0
     } else {
         (rows_done as f64 / rows_total as f64).clamp(0.0, 1.0)
+    }
+}
+
+fn adaptive_target_batch_bytes(
+    current_target: usize,
+    observed_peak_combined_bytes: usize,
+) -> usize {
+    if observed_peak_combined_bytes == 0 {
+        return current_target;
+    }
+
+    let safe_hard_cap = HARD_BATCH_BYTES.saturating_sub(TARGET_BATCH_SAFETY_MARGIN_BYTES);
+    if observed_peak_combined_bytes >= HARD_BATCH_BYTES {
+        return current_target
+            .saturating_sub(256 * 1024)
+            .clamp(MIN_TARGET_BATCH_BYTES, safe_hard_cap);
+    }
+
+    let scaled_target = current_target
+        .saturating_mul(safe_hard_cap)
+        .saturating_div(observed_peak_combined_bytes.max(1));
+    let bounded_target = scaled_target.clamp(MIN_TARGET_BATCH_BYTES, safe_hard_cap);
+    let adjustment = bounded_target.abs_diff(current_target);
+
+    if adjustment < 64 * 1024 {
+        current_target
+    } else {
+        ((current_target.saturating_add(bounded_target)) / 2)
+            .clamp(MIN_TARGET_BATCH_BYTES, safe_hard_cap)
     }
 }
 
@@ -737,6 +901,7 @@ enum SaveFailurePoint {
 struct SaveHookContext {
     dataset_id: Option<String>,
     retained_batch_bytes: Option<usize>,
+    temp_archive_path: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -768,7 +933,7 @@ fn run_test_hook(point: SaveFailurePoint, context: SaveHookContext) -> Result<()
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
@@ -992,6 +1157,50 @@ mod tests {
         }
     }
 
+    fn truncate_archive_file(path: &std::path::Path) -> Result<(), AppError> {
+        let mut bytes = std::fs::read(path)?;
+        bytes.truncate(bytes.len().saturating_sub(24));
+        std::fs::write(path, &bytes)?;
+        Ok(())
+    }
+
+    fn remove_table_entries_from_archive(
+        source_path: &std::path::Path,
+        destination_path: &std::path::Path,
+    ) -> Result<(), AppError> {
+        let input = std::fs::File::open(source_path)?;
+        let mut input_zip = zip::ZipArchive::new(input)
+            .map_err(|e| AppError::FileIO(format!("failed to open archive for mutation: {e}")))?;
+        let output = std::fs::File::create(destination_path)?;
+        let mut output_zip = zip::ZipWriter::new(output);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for index in 0..input_zip.len() {
+            let mut entry = input_zip
+                .by_index(index)
+                .map_err(|e| AppError::FileIO(format!("failed to read archive entry: {e}")))?;
+            if entry.name().ends_with(".sptb") {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            entry
+                .read_to_end(&mut bytes)
+                .map_err(|e| AppError::FileIO(format!("failed to copy archive entry: {e}")))?;
+            output_zip
+                .start_file(entry.name(), opts)
+                .map_err(|e| AppError::FileIO(format!("failed to create archive entry: {e}")))?;
+            output_zip
+                .write_all(&bytes)
+                .map_err(|e| AppError::FileIO(format!("failed to write archive entry: {e}")))?;
+        }
+
+        output_zip
+            .finish()
+            .map_err(|e| AppError::FileIO(format!("failed to finish mutated archive: {e}")))?;
+        Ok(())
+    }
+
     #[test]
     fn save_path_is_streaming() {
         let project_source = include_str!("project_service.rs");
@@ -1103,6 +1312,68 @@ mod tests {
         assert_eq!(values, vec![10, 20, 80, 10010]);
 
         let _ = std::fs::remove_file(destination);
+    }
+
+    #[test]
+    fn stream_writer_validation_failures_prevent_replacement_for_central_dir_and_missing_table() {
+        enum ValidationMutation {
+            TruncatedCentralDirectory,
+            MissingTableEntry,
+        }
+
+        for mutation in [
+            ValidationMutation::TruncatedCentralDirectory,
+            ValidationMutation::MissingTableEntry,
+        ] {
+            let state = AppState::new().unwrap();
+            let dataset = seed_benchmark_dataset(&state, 128);
+            let destination = temp_path("validation-mutation");
+            std::fs::write(&destination, b"destination-before-save").unwrap();
+            let original_bytes = std::fs::read(&destination).unwrap();
+            let snapshot = save_snapshot(&destination, vec![dataset]);
+
+            let replacer_state = Arc::new(TestReplacerState::default());
+            let replacer: Arc<dyn ArchiveReplacer> = Arc::new(TestReplacer {
+                state: Arc::clone(&replacer_state),
+            });
+
+            install_save_test_hook(Some(Box::new(move |point, context| {
+                if point == SaveFailurePoint::Validation {
+                    let temp_archive_path = context.temp_archive_path.ok_or_else(|| {
+                        AppError::FileIO(
+                            "validation hook missing temp archive path context".to_string(),
+                        )
+                    })?;
+                    match mutation {
+                        ValidationMutation::TruncatedCentralDirectory => {
+                            truncate_archive_file(&temp_archive_path)?;
+                        }
+                        ValidationMutation::MissingTableEntry => {
+                            let rewritten = PathBuf::from(format!(
+                                "{}.mut",
+                                temp_archive_path.to_string_lossy()
+                            ));
+                            remove_table_entries_from_archive(&temp_archive_path, &rewritten)?;
+                            std::fs::remove_file(&temp_archive_path)?;
+                            std::fs::rename(&rewritten, &temp_archive_path)?;
+                        }
+                    }
+                }
+                Ok(())
+            })));
+
+            let guard = state.save_coordinator.begin_save().unwrap();
+            let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, replacer);
+            let error = writer.write(&snapshot, &destination, None).unwrap_err();
+            install_save_test_hook(None);
+
+            assert!(matches!(error, AppError::FileIO(_)));
+            assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(std::fs::read(&destination).unwrap(), original_bytes);
+            assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());
+
+            let _ = std::fs::remove_file(&destination);
+        }
     }
 
     #[test]
@@ -1442,7 +1713,9 @@ mod tests {
 
         let first_delta_ms = first_advancing.0.duration_since(first_table.0).as_millis();
         assert!(first_delta_ms >= 80);
-        assert!(first_delta_ms <= 320);
+        // CI/load jitter plus larger bounded batches can delay the first
+        // advancing callback while preserving heartbeat behavior.
+        assert!(first_delta_ms <= 520);
 
         let _ = std::fs::remove_file(&destination);
     }

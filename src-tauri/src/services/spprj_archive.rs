@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
 
+use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -43,8 +44,13 @@ use crate::error::AppError;
 type BeforeDestinationMutationHook = Box<dyn Fn(&str, &str) -> Result<(), AppError>>;
 
 #[cfg(test)]
+type ValidateTableEntryOpenHook = Box<dyn Fn(&str, u64, u64) -> Result<(), AppError>>;
+
+#[cfg(test)]
 thread_local! {
     static BEFORE_DESTINATION_MUTATION_HOOK: std::cell::RefCell<Option<BeforeDestinationMutationHook>> =
+        std::cell::RefCell::new(None);
+    static VALIDATE_TABLE_ENTRY_OPEN_HOOK: std::cell::RefCell<Option<ValidateTableEntryOpenHook>> =
         std::cell::RefCell::new(None);
 }
 
@@ -58,6 +64,15 @@ pub(crate) fn install_test_before_destination_mutation_hook(
 }
 
 #[cfg(test)]
+pub(crate) fn install_test_validate_table_entry_open_hook(
+    hook: Option<ValidateTableEntryOpenHook>,
+) {
+    VALIDATE_TABLE_ENTRY_OPEN_HOOK.with(|slot| {
+        *slot.borrow_mut() = hook;
+    });
+}
+
+#[cfg(test)]
 fn run_before_destination_mutation_hook(path: &str, tmp_path: &str) -> Result<(), AppError> {
     BEFORE_DESTINATION_MUTATION_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow().as_ref() {
@@ -65,6 +80,29 @@ fn run_before_destination_mutation_hook(path: &str, tmp_path: &str) -> Result<()
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+fn run_validate_table_entry_open_hook(
+    entry_name: &str,
+    entry_size: u64,
+    body_bytes_read: u64,
+) -> Result<(), AppError> {
+    VALIDATE_TABLE_ENTRY_OPEN_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow().as_ref() {
+            hook(entry_name, entry_size, body_bytes_read)?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(not(test))]
+fn run_validate_table_entry_open_hook(
+    _entry_name: &str,
+    _entry_size: u64,
+    _body_bytes_read: u64,
+) -> Result<(), AppError> {
+    Ok(())
 }
 
 #[cfg(not(test))]
@@ -315,20 +353,16 @@ pub fn validate_archive_manifest_and_entries(
     }
 
     for table in &expected_manifest.tables {
-        let mut table_entry = zip
-            .by_name(&table.file)
-            .map_err(|e| AppError::FileIO(format!("Archive missing table entry {}: {e}", table.file)))?;
-        serde_json::from_reader::<_, serde::de::IgnoredAny>(&mut table_entry).map_err(|e| {
-            AppError::FileIO(format!(
-                "Archive table entry {} is not valid JSON: {e}",
-                table.file
-            ))
+        let table_entry = zip.by_name(&table.file).map_err(|e| {
+            AppError::FileIO(format!("Archive missing table entry {}: {e}", table.file))
         })?;
+        run_validate_table_entry_open_hook(&table.file, table_entry.size(), 0)?;
+        drop(table_entry);
     }
     for graph in &expected_manifest.graphs {
-        let mut graph_entry = zip
-            .by_name(&graph.file)
-            .map_err(|e| AppError::FileIO(format!("Archive missing graph entry {}: {e}", graph.file)))?;
+        let mut graph_entry = zip.by_name(&graph.file).map_err(|e| {
+            AppError::FileIO(format!("Archive missing graph entry {}: {e}", graph.file))
+        })?;
         serde_json::from_reader::<_, serde::de::IgnoredAny>(&mut graph_entry).map_err(|e| {
             AppError::FileIO(format!(
                 "Archive graph entry {} is not valid JSON: {e}",
@@ -346,6 +380,102 @@ pub fn validate_archive_manifest_and_entries(
     }
 
     Ok(())
+}
+
+pub fn count_project_rows_streaming(path: &str) -> Result<usize, AppError> {
+    let bytes = std::fs::read(path)?;
+    if !is_zip(&bytes) {
+        let bundle = read_legacy_json(&bytes)?;
+        return Ok(bundle.tables.iter().map(|table| table.rows.len()).sum());
+    }
+
+    let cursor = Cursor::new(bytes);
+    let mut zip = zip::ZipArchive::new(cursor)
+        .map_err(|e| AppError::FileIO(format!("Invalid project archive: {e}")))?;
+
+    let manifest_bytes = read_entry_bytes(&mut zip, "manifest.json")
+        .ok_or_else(|| AppError::FileIO("Project archive missing manifest.json".into()))?;
+    let manifest: ProjectManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| AppError::FileIO(format!("Invalid manifest.json: {e}")))?;
+
+    let mut total_rows = 0usize;
+    for table in manifest.tables {
+        let mut table_entry = zip
+            .by_name(&table.file)
+            .map_err(|e| AppError::FileIO(format!("Missing table entry: {} ({e})", table.file)))?;
+        total_rows = total_rows.saturating_add(count_rows_in_table_json(&mut table_entry)?);
+    }
+
+    Ok(total_rows)
+}
+
+fn count_rows_in_table_json<R: Read>(reader: R) -> Result<usize, AppError> {
+    struct RowsCountSeed;
+
+    impl<'de> DeserializeSeed<'de> for RowsCountSeed {
+        type Value = usize;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            struct RowsVisitor;
+
+            impl<'de> Visitor<'de> for RowsVisitor {
+                type Value = usize;
+
+                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    formatter.write_str("a JSON array of table rows")
+                }
+
+                fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                where
+                    A: SeqAccess<'de>,
+                {
+                    let mut count = 0usize;
+                    while seq.next_element::<IgnoredAny>()?.is_some() {
+                        count = count.saturating_add(1);
+                    }
+                    Ok(count)
+                }
+            }
+
+            deserializer.deserialize_seq(RowsVisitor)
+        }
+    }
+
+    struct TableVisitor;
+
+    impl<'de> Visitor<'de> for TableVisitor {
+        type Value = usize;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a table JSON object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut rows_count: Option<usize> = None;
+            while let Some(key) = map.next_key::<String>()? {
+                if key == "rows" {
+                    rows_count = Some(map.next_value_seed(RowsCountSeed)?);
+                } else {
+                    let _: IgnoredAny = map.next_value()?;
+                }
+            }
+            rows_count.ok_or_else(|| serde::de::Error::missing_field("rows"))
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let row_count = serde::de::Deserializer::deserialize_any(&mut deserializer, TableVisitor)
+        .map_err(|e| AppError::FileIO(format!("Invalid table JSON while counting rows: {e}")))?;
+    deserializer
+        .end()
+        .map_err(|e| AppError::FileIO(format!("Trailing table JSON content: {e}")))?;
+    Ok(row_count)
 }
 
 fn is_zip(bytes: &[u8]) -> bool {
@@ -697,8 +827,7 @@ fn write_zip_json_entry_pretty<W: Write + Seek, T: Serialize>(
 ) -> Result<(), AppError> {
     zip.start_file(name, opts)
         .map_err(|e| AppError::FileIO(e.to_string()))?;
-    serde_json::to_writer_pretty(&mut *zip, value)
-        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    serde_json::to_writer_pretty(&mut *zip, value).map_err(|e| AppError::FileIO(e.to_string()))?;
     Ok(())
 }
 
@@ -930,7 +1059,8 @@ mod tests {
         };
 
         let json = serde_json::to_vec(&manifest).expect("serialize manifest");
-        let round_trip: ProjectManifest = serde_json::from_slice(&json).expect("deserialize manifest");
+        let round_trip: ProjectManifest =
+            serde_json::from_slice(&json).expect("deserialize manifest");
 
         assert_eq!(round_trip.table_folders, Some(HashMap::new()));
         assert_eq!(round_trip.graph_folders, Some(HashMap::new()));
@@ -1014,9 +1144,54 @@ mod tests {
     }
 
     #[test]
-    fn validate_archive_rejects_corrupt_table_entry_json() {
-        let path = temp_project_path("validate-corrupt");
-        let corrupted_path = temp_project_path("validate-corrupt-out");
+    fn validate_archive_accepts_table_entry_without_deep_table_body_validation() {
+        let path = temp_project_path("validate-table-open-only");
+
+        let mut table = table_doc("table-1", "Table 1");
+        table.rows = (0_i64..40_000_i64)
+            .map(|row| vec![json!(row), json!(row * 2), json!(format!("row-{row}"))])
+            .collect();
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen_clone = std::sync::Arc::clone(&seen);
+        install_test_validate_table_entry_open_hook(Some(Box::new(
+            move |entry_name, entry_size, body_bytes_read| {
+                if entry_name.ends_with(".sptb") {
+                    seen_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                    assert!(entry_size > 1_000_000);
+                    assert_eq!(body_bytes_read, 0);
+                }
+                Ok(())
+            },
+        )));
+
+        validate_archive_manifest_and_entries(&path, &bundle.manifest, &[]).unwrap();
+        install_test_validate_table_entry_open_hook(None);
+
+        assert!(seen.load(std::sync::atomic::Ordering::SeqCst));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn validate_archive_rejects_missing_expected_table_entry() {
+        let path = temp_project_path("validate-missing-entry");
+        let missing_path = temp_project_path("validate-missing-entry-out");
 
         let bundle = build_bundle(
             "Project".to_string(),
@@ -1036,7 +1211,141 @@ mod tests {
 
         let input = std::fs::File::open(&path).unwrap();
         let mut input_zip = zip::ZipArchive::new(input).unwrap();
-        let output = std::fs::File::create(&corrupted_path).unwrap();
+        let output = std::fs::File::create(&missing_path).unwrap();
+        let mut output_zip = zip::ZipWriter::new(output);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for index in 0..input_zip.len() {
+            let mut entry = input_zip.by_index(index).unwrap();
+            if entry.name().ends_with(".sptb") {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            output_zip.start_file(entry.name(), opts).unwrap();
+            output_zip.write_all(&bytes).unwrap();
+        }
+        output_zip.finish().unwrap();
+
+        let error = validate_archive_manifest_and_entries(&missing_path, &bundle.manifest, &[])
+            .unwrap_err();
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("missing table entry"))
+        );
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(missing_path);
+    }
+
+    #[test]
+    fn validate_archive_rejects_truncated_archive_file() {
+        let path = temp_project_path("validate-truncated-archive");
+        let truncated_path = temp_project_path("validate-truncated-archive-out");
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.truncate(bytes.len().saturating_sub(24));
+        std::fs::write(&truncated_path, &bytes).unwrap();
+
+        let error = validate_archive_manifest_and_entries(&truncated_path, &bundle.manifest, &[])
+            .unwrap_err();
+        assert!(matches!(error, AppError::FileIO(_)));
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(truncated_path);
+    }
+
+    #[test]
+    fn validate_archive_rejects_missing_manifest() {
+        let path = temp_project_path("validate-missing-manifest");
+        let missing_manifest_path = temp_project_path("validate-missing-manifest-out");
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let input = std::fs::File::open(&path).unwrap();
+        let mut input_zip = zip::ZipArchive::new(input).unwrap();
+        let output = std::fs::File::create(&missing_manifest_path).unwrap();
+        let mut output_zip = zip::ZipWriter::new(output);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for index in 0..input_zip.len() {
+            let mut entry = input_zip.by_index(index).unwrap();
+            if entry.name() == "manifest.json" {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            output_zip.start_file(entry.name(), opts).unwrap();
+            output_zip.write_all(&bytes).unwrap();
+        }
+        output_zip.finish().unwrap();
+
+        let error =
+            validate_archive_manifest_and_entries(&missing_manifest_path, &bundle.manifest, &[])
+                .unwrap_err();
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("missing manifest.json"))
+        );
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(missing_manifest_path);
+    }
+
+    #[test]
+    fn validate_archive_rejects_invalid_manifest_json() {
+        let path = temp_project_path("validate-bad-manifest");
+        let bad_manifest_path = temp_project_path("validate-bad-manifest-out");
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let input = std::fs::File::open(&path).unwrap();
+        let mut input_zip = zip::ZipArchive::new(input).unwrap();
+        let output = std::fs::File::create(&bad_manifest_path).unwrap();
         let mut output_zip = zip::ZipWriter::new(output);
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
@@ -1046,19 +1355,22 @@ mod tests {
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes).unwrap();
             output_zip.start_file(entry.name(), opts).unwrap();
-            if entry.name().ends_with(".sptb") {
-                output_zip.write_all(br#"{\"id\":\"broken\""#).unwrap();
+            if entry.name() == "manifest.json" {
+                output_zip.write_all(br#"{"name":"broken""#).unwrap();
             } else {
                 output_zip.write_all(&bytes).unwrap();
             }
         }
         output_zip.finish().unwrap();
 
-        let error = validate_archive_manifest_and_entries(&corrupted_path, &bundle.manifest, &[])
-            .unwrap_err();
-        assert!(matches!(error, AppError::FileIO(message) if message.contains("not valid JSON")));
+        let error =
+            validate_archive_manifest_and_entries(&bad_manifest_path, &bundle.manifest, &[])
+                .unwrap_err();
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("Invalid manifest.json"))
+        );
 
         let _ = std::fs::remove_file(path);
-        let _ = std::fs::remove_file(corrupted_path);
+        let _ = std::fs::remove_file(bad_manifest_path);
     }
 }

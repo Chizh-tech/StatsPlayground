@@ -10,6 +10,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static ARCHIVE_CELL_TO_JSON_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArchiveCellWriteMode {
+    Scalar,
+    BlobTagged,
+    Tagged,
+}
+
 #[cfg(test)]
 pub(crate) fn reset_archive_cell_to_json_call_count() {
     ARCHIVE_CELL_TO_JSON_CALLS.store(0, Ordering::SeqCst);
@@ -46,18 +53,93 @@ pub(crate) fn archive_export_expression(column_name: &str, column_type: &str) ->
     }
 }
 
+pub(crate) fn archive_cell_write_mode(column_type: &str) -> ArchiveCellWriteMode {
+    if is_archive_scalar_type(column_type) {
+        ArchiveCellWriteMode::Scalar
+    } else if column_type.trim().eq_ignore_ascii_case("BLOB") {
+        ArchiveCellWriteMode::BlobTagged
+    } else {
+        ArchiveCellWriteMode::Tagged
+    }
+}
+
+pub(crate) fn write_archive_cell_with_mode<W: Write>(
+    writer: &mut W,
+    value: &DuckValue,
+    mode: ArchiveCellWriteMode,
+) -> Result<(), AppError> {
+    match mode {
+        ArchiveCellWriteMode::Scalar => write_scalar_archive_cell(writer, value),
+        ArchiveCellWriteMode::BlobTagged => write_blob_tagged_archive_cell(writer, value),
+        ArchiveCellWriteMode::Tagged => {
+            if let DuckValue::Blob(bytes) = value {
+                write_tagged_blob(writer, bytes)
+            } else {
+                let json = tagged_value_to_json(value, "")?;
+                serde_json::to_writer(writer, &json)
+                    .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
+            }
+        }
+    }
+}
+
+fn write_blob_tagged_archive_cell<W: Write>(
+    writer: &mut W,
+    value: &DuckValue,
+) -> Result<(), AppError> {
+    match value {
+        DuckValue::Null => writer
+            .write_all(b"null")
+            .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}"))),
+        DuckValue::Blob(bytes) => write_tagged_blob(writer, bytes),
+        DuckValue::Text(text) => write_tagged_text(writer, text),
+        other => {
+            let json = serde_json::json!({ "$duckdbValue": format!("{:?}", other) });
+            serde_json::to_writer(writer, &json)
+                .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
+        }
+    }
+}
+
+fn write_tagged_text<W: Write>(writer: &mut W, text: &str) -> Result<(), AppError> {
+    writer
+        .write_all(b"{\"$duckdbValue\":")
+        .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))?;
+    serde_json::to_writer(&mut *writer, text)
+        .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))?;
+    writer
+        .write_all(b"}")
+        .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
+}
+
+fn write_tagged_blob<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<(), AppError> {
+    writer
+        .write_all(b"{\"$duckdbValue\":\"")
+        .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))?;
+    write_upper_hex_bytes(writer, bytes)?;
+    writer
+        .write_all(b"\"}")
+        .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
+}
+
+fn write_upper_hex_bytes<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<(), AppError> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = Vec::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize]);
+        encoded.push(HEX[(byte & 0x0F) as usize]);
+    }
+    writer
+        .write_all(&encoded)
+        .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
+}
+
 pub(crate) fn write_archive_cell<W: Write>(
     writer: &mut W,
     value: &DuckValue,
     column_type: &str,
 ) -> Result<(), AppError> {
-    if is_archive_scalar_type(column_type) {
-        return write_scalar_archive_cell(writer, value);
-    }
-
-    let json = tagged_value_to_json(value, column_type)?;
-    serde_json::to_writer(writer, &json)
-        .map_err(|e| AppError::FileIO(format!("failed to serialize archive cell: {e}")))
+    write_archive_cell_with_mode(writer, value, archive_cell_write_mode(column_type))
 }
 
 fn write_scalar_archive_cell<W: Write>(writer: &mut W, value: &DuckValue) -> Result<(), AppError> {
@@ -157,22 +239,17 @@ fn finite_float_to_json(value: f64) -> Result<serde_json::Value, AppError> {
     }
 }
 
-fn tagged_value_to_json(value: &DuckValue, column_type: &str) -> Result<serde_json::Value, AppError> {
+fn tagged_value_to_json(
+    value: &DuckValue,
+    column_type: &str,
+) -> Result<serde_json::Value, AppError> {
     match value {
         DuckValue::Null => Ok(serde_json::Value::Null),
         DuckValue::Text(text) => Ok(serde_json::json!({ "$duckdbValue": text })),
-        DuckValue::UTinyInt(value) => {
-            Ok(serde_json::json!({ "$duckdbValue": value.to_string() }))
-        }
-        DuckValue::USmallInt(value) => {
-            Ok(serde_json::json!({ "$duckdbValue": value.to_string() }))
-        }
-        DuckValue::UInt(value) => {
-            Ok(serde_json::json!({ "$duckdbValue": value.to_string() }))
-        }
-        DuckValue::UBigInt(value) => {
-            Ok(serde_json::json!({ "$duckdbValue": value.to_string() }))
-        }
+        DuckValue::UTinyInt(value) => Ok(serde_json::json!({ "$duckdbValue": value.to_string() })),
+        DuckValue::USmallInt(value) => Ok(serde_json::json!({ "$duckdbValue": value.to_string() })),
+        DuckValue::UInt(value) => Ok(serde_json::json!({ "$duckdbValue": value.to_string() })),
+        DuckValue::UBigInt(value) => Ok(serde_json::json!({ "$duckdbValue": value.to_string() })),
         DuckValue::Blob(bytes) if column_type.trim().eq_ignore_ascii_case("BLOB") => {
             Ok(serde_json::json!({ "$duckdbValue": bytes_to_upper_hex(bytes) }))
         }
@@ -181,9 +258,11 @@ fn tagged_value_to_json(value: &DuckValue, column_type: &str) -> Result<serde_js
 }
 
 fn bytes_to_upper_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        out.push_str(&format!("{byte:02X}"));
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0F) as usize] as char);
     }
     out
 }
@@ -238,9 +317,27 @@ mod tests {
     #[test]
     fn golden_scalar_and_tagged_cases_are_independent_of_compose() {
         let cases: Vec<(&str, DuckValue, &str, serde_json::Value, Option<&[u8]>)> = vec![
-            ("null", DuckValue::Null, "INTEGER", serde_json::Value::Null, Some(b"null")),
-            ("bool", DuckValue::Boolean(true), "BOOLEAN", json!(true), Some(b"true")),
-            ("i64", DuckValue::BigInt(-42), "BIGINT", json!(-42), Some(b"-42")),
+            (
+                "null",
+                DuckValue::Null,
+                "INTEGER",
+                serde_json::Value::Null,
+                Some(b"null"),
+            ),
+            (
+                "bool",
+                DuckValue::Boolean(true),
+                "BOOLEAN",
+                json!(true),
+                Some(b"true"),
+            ),
+            (
+                "i64",
+                DuckValue::BigInt(-42),
+                "BIGINT",
+                json!(-42),
+                Some(b"-42"),
+            ),
             (
                 "u64-over-i64",
                 DuckValue::Text("9223372036854775808".to_string()),
@@ -438,7 +535,8 @@ mod tests {
     fn edge_matrix_uses_real_duckdb_values() {
         let source = include_str!("archive_cell.rs");
         assert!(
-            !source.contains("unwrap_or_else(|| json!({\"$duckdbValue\": format!(\"{:?}\", value)}))"),
+            !source
+                .contains("unwrap_or_else(|| json!({\"$duckdbValue\": format!(\"{:?}\", value)}))"),
             "expected values in this test must be fixed literals without runtime debug fallback"
         );
 
@@ -488,24 +586,14 @@ mod tests {
                 "VARCHAR",
                 json!("line1\n\"quoted\"\\\\slash"),
             ),
-            (
-                "blob_hex",
-                4,
-                "BLOB",
-                json!({"$duckdbValue": "00FF7A"}),
-            ),
+            ("blob_hex", 4, "BLOB", json!({"$duckdbValue": "00FF7A"})),
             (
                 "dec_value",
                 5,
                 "DECIMAL(10,4)",
                 json!({"$duckdbValue": "Decimal(Decimal { width: 10, scale: 4, value: -123400 })"}),
             ),
-            (
-                "date",
-                6,
-                "DATE",
-                json!({"$duckdbValue": "Date32(20685)"}),
-            ),
+            ("date", 6, "DATE", json!({"$duckdbValue": "Date32(20685)"})),
             (
                 "time",
                 7,
@@ -593,18 +681,17 @@ mod tests {
     #[test]
     fn writer_sink_failures_map_to_fileio_and_allow_partial_bytes() {
         let mut sink = FailingSink::new(3);
-        let error = write_archive_cell(
-            &mut sink,
-            &DuckValue::Text("hello".to_string()),
-            "VARCHAR",
-        )
-        .unwrap_err();
+        let error = write_archive_cell(&mut sink, &DuckValue::Text("hello".to_string()), "VARCHAR")
+            .unwrap_err();
 
         assert!(
             matches!(&error, AppError::FileIO(message) if message.contains("failed to serialize archive cell")),
             "expected FileIO sink error, got {error:?}"
         );
-        assert!(!sink.bytes.is_empty(), "sink should receive partial bytes before failure");
+        assert!(
+            !sink.bytes.is_empty(),
+            "sink should receive partial bytes before failure"
+        );
         assert!(sink.bytes.len() < br#""hello""#.len());
     }
 
@@ -664,7 +751,9 @@ mod tests {
         }
 
         let service = ProjectService::new(&state);
-        let doc = service.compose_table_doc("compose-unsigned-overflow").unwrap();
+        let doc = service
+            .compose_table_doc("compose-unsigned-overflow")
+            .unwrap();
         assert_eq!(
             doc.rows[0],
             vec![
