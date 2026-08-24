@@ -1595,6 +1595,11 @@ mod tests {
         let mut encoded_rows = Vec::with_capacity(256_000);
         encoded_rows.extend_from_slice(b"encoded");
 
+        assert_eq!(
+            combined_batch_allocation_estimate(remaining_retained, encoded_rows.capacity()),
+            row_bytes.iter().sum::<usize>() + encoded_rows.capacity()
+        );
+
         remaining_retained = remaining_retained_after_row(remaining_retained, row_bytes[0]);
 
         assert_eq!(remaining_retained, 1_400_000);

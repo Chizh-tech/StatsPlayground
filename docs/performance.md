@@ -36,8 +36,10 @@ Fields:
   diagnostic rather than a hard cap or OS process-memory measurement.
 - `saveStageMs`: elapsed milliseconds attributed to planning, query/fetch,
   batch encoding, ZIP writes/finish, file sync, validation, and replacement.
-- `processMemory`: sampled process working-set baseline, peak, and delta during
-  `save`. This is the acceptance measurement for additional process memory.
+- `processMemory`: Windows-only sampled process working-set baseline, peak, and
+  delta during `save`; it is omitted on other platforms. This is the
+  acceptance measurement for additional process memory on the recorded Windows
+  machine.
 
 The current `paste` baseline deliberately includes construction of the nested
 string payload consumed by `paste_at_position`. This represents part of the
