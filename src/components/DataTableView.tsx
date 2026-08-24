@@ -819,6 +819,8 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
   const { refreshDatasets, setStatusInfo } = useDataStore();
   const { markDirty, readOnly } = useProjectStore();
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const {
     record: recordHistory,
     recordTable,
@@ -869,6 +871,19 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const colWidthsRef = useRef<number[]>([]);
   if (data) dataRef.current = data;
   colWidthsRef.current = colWidths;
+
+  useEffect(() => {
+    if (!readOnly) return;
+    const activeResize = resizingRef.current;
+    if (!activeResize) return;
+    resizingRef.current = null;
+    setColWidths((previous) => {
+      const next = [...previous];
+      next[activeResize.colIdx] = activeResize.startW;
+      colWidthsRef.current = next;
+      return next;
+    });
+  }, [readOnly]);
 
   const refreshAndMarkDirty = useCallback(async () => {
     await refreshDatasets();
@@ -3862,6 +3877,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
   // ---- Column resize (drag) — batch-aware (Excel-style) ----
   const handleResizeStart = (e: React.MouseEvent, colIdx: number) => {
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
@@ -3876,6 +3892,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     resizingRef.current = { colIdx, startX, startW };
 
     const onMouseMove = (ev: MouseEvent) => {
+      if (readOnlyRef.current) return;
       if (!resizingRef.current) return;
       const delta = ev.clientX - offsetX - resizingRef.current.startX;
       const newW = Math.max(BASE_DEFAULT_COL_WIDTH, startW + delta / zoom);
@@ -3887,11 +3904,13 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     };
 
     const onMouseUp = () => {
+      const completedResize = resizingRef.current;
       resizingRef.current = null;
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      if (!completedResize || readOnlyRef.current) return;
       // Suppress the click event that follows mouseup from changing selection
       suppressSelectionRef.current = true;
       requestAnimationFrame(() => { suppressSelectionRef.current = false; });
@@ -3951,6 +3970,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
   // ---- Double-click resize to auto-fit (supports batch) ----
   const handleResizeDoubleClick = (e: React.MouseEvent, colIdx: number) => {
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
     // If this column is in the selected set, auto-fit all selected columns
@@ -4382,9 +4402,9 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
                     {/* Resize handle */}
                     <div
                       className="sp-resize-handle"
-                      onMouseDown={(e) => handleResizeStart(e, ci)}
+                      onMouseDown={readOnly ? undefined : (e) => handleResizeStart(e, ci)}
                       onClick={(e) => e.stopPropagation()}
-                      onDoubleClick={(e) => handleResizeDoubleClick(e, ci)}
+                      onDoubleClick={readOnly ? undefined : (e) => handleResizeDoubleClick(e, ci)}
                     />
                   </th>
                 );

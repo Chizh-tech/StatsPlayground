@@ -338,11 +338,15 @@ impl<'a> ProjectService<'a> {
             .clone()
             .unwrap_or_else(|| current_project.file_path.clone());
         let destination_path = std::path::PathBuf::from(destination_path_string);
-        let destination_name = destination_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(|stem| stem.to_string())
-            .unwrap_or_else(|| current_project.name.clone());
+        let destination_name = if request.file_path.is_some() {
+            destination_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|stem| stem.to_string())
+                .unwrap_or_else(|| current_project.name.clone())
+        } else {
+            current_project.name.clone()
+        };
 
         let (datasets, dataset_generations) = {
             let db = self
@@ -507,6 +511,23 @@ impl<'a> ProjectService<'a> {
             return Err(AppError::InvalidParam(format!(
                 "table rows must contain exactly {expected_row_width} values"
             )));
+        }
+
+        let mut row_ids = std::collections::HashSet::with_capacity(doc.rows.len());
+        for row in &doc.rows {
+            let row_id = row[0].as_i64().ok_or_else(|| {
+                AppError::InvalidParam("table row IDs must be integers".into())
+            })?;
+            if row_id <= 0 {
+                return Err(AppError::InvalidParam(
+                    "table row IDs must be positive".into(),
+                ));
+            }
+            if !row_ids.insert(row_id) {
+                return Err(AppError::InvalidParam(
+                    "table row IDs must be unique".into(),
+                ));
+            }
         }
 
         let db = self
@@ -1260,6 +1281,63 @@ mod tests {
             .unwrap();
         assert_eq!(first, (1, 10));
         assert_eq!(last, (row_count as i64, (row_count * 10) as i64));
+    }
+
+    #[test]
+    fn restore_rejects_non_positive_and_duplicate_row_ids() {
+        for rows in [
+            vec![vec![serde_json::json!(0), serde_json::json!(10)]],
+            vec![
+                vec![serde_json::json!(1), serde_json::json!(10)],
+                vec![serde_json::json!(1), serde_json::json!(20)],
+            ],
+        ] {
+            let state = AppState::new().unwrap();
+            let doc = TableDoc {
+                id: "invalid-row-ids".into(),
+                name: "Invalid Row IDs".into(),
+                source_type: "manual".into(),
+                version: "2".into(),
+                columns: vec![TableColumn {
+                    name: "value".into(),
+                    col_type: "BIGINT".into(),
+                    width: None,
+                    format: None,
+                    extras: None,
+                }],
+                rows,
+            };
+
+            let error = ProjectService::new(&state)
+                .restore_table_doc(&doc)
+                .unwrap_err();
+            assert!(matches!(error, AppError::InvalidParam(_)));
+            assert!(state.db.lock().unwrap().list_datasets().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn ordinary_save_preserves_manifest_project_name() {
+        let state = AppState::new().unwrap();
+        let destination = std::env::temp_dir().join(format!(
+            "renamed_project_file_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        *state.project.write().unwrap() = Some(ProjectInfo {
+            name: "Quarterly".into(),
+            file_path: destination.to_string_lossy().to_string(),
+            created_at: "2026-08-24T00:00:00Z".into(),
+        });
+
+        ProjectService::new(&state)
+            .save_project(empty_save_request(None), None)
+            .unwrap();
+
+        let bundle = spprj_archive::read_project_file(destination.to_str().unwrap()).unwrap();
+        assert_eq!(bundle.manifest.name, "Quarterly");
+        assert_eq!(state.project.read().unwrap().as_ref().unwrap().name, "Quarterly");
+
+        let _ = std::fs::remove_file(destination);
     }
 
     #[test]

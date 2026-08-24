@@ -74,22 +74,21 @@ impl<'scope> ProgressDispatcher<'scope> {
 
         let (tx, rx) = mpsc::channel::<ProgressCommand>();
         let handle = scope.spawn(move || {
-            let mut latest_table: Option<SaveProgress> = None;
-            let mut table_active = false;
+            let mut latest_progress: Option<SaveProgress> = None;
             let mut last_emit_at: Option<Instant> = None;
 
             loop {
                 match rx.recv_timeout(HEARTBEAT_INTERVAL) {
                     Ok(ProgressCommand::Emit(progress)) => {
-                        table_active = progress.phase == SavePhase::Table;
-                        if table_active {
-                            latest_table = Some(progress.clone());
-                        }
+                        latest_progress = Some(progress.clone());
                         callback(progress);
                         last_emit_at = Some(Instant::now());
                     }
                     Ok(ProgressCommand::UpdateTable(progress)) => {
-                        if let Some(previous) = latest_table.as_mut() {
+                        if let Some(previous) = latest_progress
+                            .as_mut()
+                            .filter(|previous| previous.phase == SavePhase::Table)
+                        {
                             if progress.rows_done >= previous.rows_done {
                                 previous.rows_done = progress.rows_done;
                             }
@@ -104,23 +103,20 @@ impl<'scope> ProgressDispatcher<'scope> {
                                     .max(previous.overall_progress.unwrap_or(0.0)),
                             );
                         } else {
-                            latest_table = Some(progress);
+                            latest_progress = Some(progress);
                         }
-                        table_active = true;
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
 
-                if table_active {
-                    if let Some(progress) = latest_table.clone() {
-                        if last_emit_at
-                            .map(|last| last.elapsed() >= HEARTBEAT_INTERVAL)
-                            .unwrap_or(true)
-                        {
-                            callback(progress);
-                            last_emit_at = Some(Instant::now());
-                        }
+                if let Some(progress) = latest_progress.clone() {
+                    if last_emit_at
+                        .map(|last| last.elapsed() >= HEARTBEAT_INTERVAL)
+                        .unwrap_or(true)
+                    {
+                        callback(progress);
+                        last_emit_at = Some(Instant::now());
                     }
                 }
             }
@@ -164,6 +160,49 @@ impl ArchiveReplacer for OsArchiveReplacer {
     fn replace_archive(&self, temp_path: &Path, destination_path: &Path) -> Result<(), AppError> {
         replace_archive_atomically_os(temp_path, destination_path)
     }
+}
+
+struct OwnedTempArchive {
+    path: PathBuf,
+}
+
+impl OwnedTempArchive {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for OwnedTempArchive {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn create_unique_temp_archive(
+    destination_path: &Path,
+) -> Result<(OwnedTempArchive, std::fs::File), AppError> {
+    let parent = destination_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = destination_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("project.spprj");
+
+    for _ in 0..16 {
+        let temp_path = parent.join(format!("{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => return Ok((OwnedTempArchive { path: temp_path }, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    Err(AppError::FileIO(
+        "failed to allocate a unique temporary project file".into(),
+    ))
 }
 
 pub struct StreamingProjectWriter<'state, 'guard> {
@@ -333,20 +372,19 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 overall_progress: Some(0.0),
             });
 
-            let temp_path = PathBuf::from(format!(
-                "{}.tmp",
-                snapshot.destination_path.to_string_lossy()
-            ));
+            let (temp_archive, temp_file) =
+                create_unique_temp_archive(&snapshot.destination_path)?;
+            let temp_path = temp_archive.path();
             if let Err(error) = self.write_temp_archive(
                 snapshot,
                 &bundle.manifest,
                 &bundle.graphs,
                 &temp_path,
+                temp_file,
                 total_rows,
                 &dispatcher,
                 &mut perf,
             ) {
-                let _ = std::fs::remove_file(&temp_path);
                 return Err(error);
             }
 
@@ -357,7 +395,6 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 .replacer
                 .replace_archive(&temp_path, &snapshot.destination_path)
             {
-                let _ = std::fs::remove_file(&temp_path);
                 return Err(error);
             }
             perf.replacement_ms = perf
@@ -392,11 +429,11 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         manifest: &ProjectManifest,
         graph_docs: &[GraphDoc],
         temp_path: &Path,
+        temp_file: std::fs::File,
         total_rows: usize,
         dispatcher: &ProgressDispatcher<'_>,
         perf: &mut SaveRunPerf,
     ) -> Result<(), AppError> {
-        let temp_file = std::fs::File::create(temp_path)?;
         let mut zip = zip::ZipWriter::new(temp_file);
         let file_opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
@@ -429,7 +466,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 table_name: Some(dataset.name.clone()),
                 rows_done: rows_written,
                 rows_total: total_rows,
-                overall_progress: Some(progress_fraction(rows_written, total_rows)),
+                overall_progress: Some(incomplete_progress_fraction(rows_written, total_rows)),
             });
 
             let Some(table_ref) = manifest.tables.iter().find(|entry| entry.id == dataset.id)
@@ -564,7 +601,10 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                         table_name: Some(dataset.name.clone()),
                         rows_done: rows_written,
                         rows_total: total_rows,
-                        overall_progress: Some(progress_fraction(rows_written, total_rows)),
+                        overall_progress: Some(incomplete_progress_fraction(
+                            rows_written,
+                            total_rows,
+                        )),
                     });
                 }
 
@@ -601,7 +641,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             table_name: None,
             rows_done: rows_written,
             rows_total: total_rows,
-            overall_progress: Some(progress_fraction(rows_written, total_rows)),
+            overall_progress: Some(incomplete_progress_fraction(rows_written, total_rows)),
         });
 
         for graph_ref in &manifest.graphs {
@@ -634,7 +674,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             table_name: None,
             rows_done: rows_written,
             rows_total: total_rows,
-            overall_progress: Some(progress_fraction(rows_written, total_rows)),
+            overall_progress: Some(incomplete_progress_fraction(rows_written, total_rows)),
         });
 
         run_save_test_hook!(SaveFailurePoint::ZipFinish, None, None, None);
@@ -782,6 +822,10 @@ fn progress_fraction(rows_done: usize, rows_total: usize) -> f64 {
     } else {
         (rows_done as f64 / rows_total as f64).clamp(0.0, 1.0)
     }
+}
+
+fn incomplete_progress_fraction(rows_done: usize, rows_total: usize) -> f64 {
+    progress_fraction(rows_done, rows_total).min(0.99)
 }
 
 fn adaptive_target_batch_bytes(
@@ -971,13 +1015,14 @@ mod tests {
 
     use crate::error::AppError;
     use crate::models::project::ProjectInfo;
-    use crate::models::save::{SavePhase, SaveProjectRequest, SaveSnapshot};
+    use crate::models::save::{SavePhase, SaveProgress, SaveProjectRequest, SaveSnapshot};
     use crate::services::spprj_archive;
     use crate::state::AppState;
 
     use super::{
         combined_batch_allocation_estimate, install_save_test_hook, remaining_retained_after_row,
-        ArchiveReplacer, SaveFailurePoint, StreamingProjectWriter, HARD_BATCH_BYTES,
+        ArchiveReplacer, ProgressDispatcher, SaveFailurePoint, StreamingProjectWriter,
+        HARD_BATCH_BYTES, HEARTBEAT_INTERVAL,
     };
 
     #[derive(Default)]
@@ -1341,6 +1386,70 @@ mod tests {
     }
 
     #[test]
+    fn progress_dispatcher_heartbeats_during_non_table_phases() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = Arc::clone(&events);
+        let callback = |progress| events_clone.lock().unwrap().push(progress);
+
+        thread::scope(|scope| {
+            let dispatcher = ProgressDispatcher::new(scope, Some(&callback));
+            dispatcher.emit(SaveProgress {
+                phase: SavePhase::Metadata,
+                table_index: 1,
+                table_total: 1,
+                table_name: None,
+                rows_done: 10,
+                rows_total: 10,
+                overall_progress: Some(0.9),
+            });
+            thread::sleep(HEARTBEAT_INTERVAL * 3);
+        });
+
+        let events = events.lock().unwrap();
+        assert!(events.len() >= 3);
+        assert!(events.iter().all(|event| event.phase == SavePhase::Metadata));
+    }
+
+    #[test]
+    fn stream_writer_preserves_existing_destination_tmp_sibling() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 1);
+        let destination = temp_path("existing-temp-sibling");
+        let sibling = PathBuf::from(format!("{}.tmp", destination.to_string_lossy()));
+        std::fs::write(&sibling, b"unrelated-sibling-file").unwrap();
+        let snapshot = save_snapshot(&destination, vec![dataset]);
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        StreamingProjectWriter::new(&state, &guard)
+            .write(&snapshot, &destination, None)
+            .unwrap();
+
+        assert_eq!(std::fs::read(&sibling).unwrap(), b"unrelated-sibling-file");
+        let _ = std::fs::remove_file(destination);
+        let _ = std::fs::remove_file(sibling);
+    }
+
+    #[test]
+    fn owned_temp_archive_removes_only_its_unique_file_on_drop() {
+        let destination = temp_path("owned-temp-cleanup");
+        let sibling = PathBuf::from(format!("{}.tmp", destination.to_string_lossy()));
+        std::fs::write(&sibling, b"unrelated").unwrap();
+
+        let owned_path = {
+            let (owned, file) = super::create_unique_temp_archive(&destination).unwrap();
+            let path = owned.path().to_path_buf();
+            assert!(path.exists());
+            drop(file);
+            drop(owned);
+            path
+        };
+
+        assert!(!owned_path.exists());
+        assert_eq!(std::fs::read(&sibling).unwrap(), b"unrelated");
+        let _ = std::fs::remove_file(sibling);
+    }
+
+    #[test]
     fn stream_writer_validation_failures_prevent_replacement_for_central_dir_and_missing_table() {
         enum ValidationMutation {
             TruncatedCentralDirectory,
@@ -1651,6 +1760,9 @@ mod tests {
         assert_eq!(finalizing.1.rows_done, 0);
         assert_eq!(finalizing.1.rows_total, 0);
         assert_eq!(finalizing.1.overall_progress, Some(1.0));
+        assert!(events[..events.len() - 1]
+            .iter()
+            .all(|(_, event)| event.overall_progress != Some(1.0)));
 
         let _ = std::fs::remove_file(destination);
     }
@@ -1876,9 +1988,9 @@ mod tests {
             assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());
 
             let progress = progress_events.lock().unwrap();
-            let has_completion = progress.iter().any(|event| {
-                event.phase == SavePhase::Finalizing && event.overall_progress == Some(1.0)
-            });
+            let has_completion = progress
+                .iter()
+                .any(|event| event.overall_progress == Some(1.0));
             assert!(!has_completion);
 
             let _ = std::fs::remove_file(&destination);

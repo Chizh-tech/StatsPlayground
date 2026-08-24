@@ -49,6 +49,7 @@ function scoreProgress(progress: SaveProgress): number {
   if (typeof progress.overallProgress === "number" && Number.isFinite(progress.overallProgress)) {
     return progress.overallProgress;
   }
+  if (progress.phase === "finalizing") return 1;
   const tableTotal = progress.tableTotal > 0 ? progress.tableTotal : 1;
   const tablePart = Math.max(0, Math.min(1, progress.tableIndex / tableTotal));
   const rowPart = progress.rowsTotal > 0
