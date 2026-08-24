@@ -34,6 +34,7 @@ pub(crate) struct ArchiveKeysetReadPlan {
 pub(crate) struct ArchiveBatchRow {
     pub row_id: i64,
     pub values: Vec<Value>,
+    pub retained_bytes_estimate: usize,
 }
 
 pub(crate) struct ArchiveBatch {
@@ -5319,7 +5320,7 @@ impl DuckDbEngine {
         let mut query_rows = stmt.query(params![after_row_id, row_limit as i64])?;
 
         let mut rows = Vec::new();
-        let mut retained_bytes_estimate = 0usize;
+        let mut releasable_bytes_estimate = 0usize;
 
         while let Some(row) = query_rows.next()? {
             let row_id: i64 = row.get(0)?;
@@ -5339,18 +5340,40 @@ impl DuckDbEngine {
             }
             let _ = row_id;
 
-            if !rows.is_empty() && retained_bytes_estimate.saturating_add(row_bytes) > hard_batch_bytes {
+            let row_releasable_bytes =
+                row_bytes.saturating_sub(mem::size_of::<ArchiveBatchRow>());
+            rows.reserve(1);
+            let projected_retained_bytes = rows
+                .capacity()
+                .saturating_mul(mem::size_of::<ArchiveBatchRow>())
+                .saturating_add(releasable_bytes_estimate)
+                .saturating_add(row_releasable_bytes);
+            if projected_retained_bytes > hard_batch_bytes {
+                if rows.is_empty() {
+                    return Err(AppError::InvalidParam(format!(
+                        "single archive row exceeds retained batch cap: {projected_retained_bytes} > {hard_batch_bytes}"
+                    )));
+                }
                 break;
             }
 
-            retained_bytes_estimate = retained_bytes_estimate.saturating_add(row_bytes);
-            rows.push(ArchiveBatchRow { row_id, values });
+            releasable_bytes_estimate =
+                releasable_bytes_estimate.saturating_add(row_releasable_bytes);
+            rows.push(ArchiveBatchRow {
+                row_id,
+                values,
+                retained_bytes_estimate: row_releasable_bytes,
+            });
 
-            if retained_bytes_estimate >= target_batch_bytes {
+            if projected_retained_bytes >= target_batch_bytes {
                 break;
             }
         }
 
+        let retained_bytes_estimate = rows
+            .capacity()
+            .saturating_mul(mem::size_of::<ArchiveBatchRow>())
+            .saturating_add(releasable_bytes_estimate);
         Ok(ArchiveBatch {
             rows,
             retained_bytes_estimate,
