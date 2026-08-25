@@ -73,3 +73,6 @@ testdata/
 
 # Local analysis fixtures (subfolders use <name>-YYYY-MM-DD)
 /xumax-test/
+
+# Local Superpowers visual brainstorming sessions
+/.superpowers/
