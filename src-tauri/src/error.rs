@@ -13,6 +13,12 @@ pub enum AppError {
 
     #[error("Invalid parameter: {0}")]
     InvalidParam(String),
+
+    #[error("Busy: {0}")]
+    Busy(String),
+
+    #[error("Read-only: {0}")]
+    ReadOnly(String),
 }
 
 // Tauri commands require errors to be serializable

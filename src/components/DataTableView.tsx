@@ -818,7 +818,9 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   // Excel-like formula bar state lives inside <FormulaBar /> now.
 
   const { refreshDatasets, setStatusInfo } = useDataStore();
-  const { markDirty } = useProjectStore();
+  const { markDirty, readOnly } = useProjectStore();
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const {
     record: recordHistory,
     recordTable,
@@ -869,6 +871,19 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   const colWidthsRef = useRef<number[]>([]);
   if (data) dataRef.current = data;
   colWidthsRef.current = colWidths;
+
+  useEffect(() => {
+    if (!readOnly) return;
+    const activeResize = resizingRef.current;
+    if (!activeResize) return;
+    resizingRef.current = null;
+    setColWidths((previous) => {
+      const next = [...previous];
+      next[activeResize.colIdx] = activeResize.startW;
+      colWidthsRef.current = next;
+      return next;
+    });
+  }, [readOnly]);
 
   const refreshAndMarkDirty = useCallback(async () => {
     await refreshDatasets();
@@ -1762,10 +1777,12 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleAddRow = async () => {
+    if (readOnly) return;
     await addRowsWithHistory(1, t("history.addRow"));
   };
 
   const handleInsertMultiRows = async () => {
+    if (readOnly) return;
     if (pendingAction) return;
     const count = parseInt(insertRowCount, 10);
     if (isNaN(count) || count < 1) return;
@@ -1776,6 +1793,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleDeleteRows = async () => {
+    if (readOnly) return;
     if (pendingAction) return;
     if (selectedRows.size === 0) return;
     if ([...selectedRows].some((rowIdx) => !displayRowAt(rowIdx))) {
@@ -1809,6 +1827,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleDeleteSingleRow = async (rowIdx: number) => {
+    if (readOnly) return;
     if (pendingAction) return;
     const row = data.rows[toDataIdx(rowIdx)] as unknown[];
     if (!row) {
@@ -1838,6 +1857,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleInsertRowAbove = async () => {
+    if (readOnly) return;
     if (pendingAction) return;
     const added = await addRowsWithHistory(1, t("history.insertRow"));
     if (!added) return;
@@ -1874,6 +1894,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleAddColumnQuick = async () => {
+    if (readOnly) return;
     if (pendingAction) return;
     const name = generateColName(cols);
     await addColumnWithHistory(name, "VARCHAR", null, t("history.addColumn"));
@@ -1883,6 +1904,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   // (used by the column header context menu so "insert column" lands next to
   // the right-clicked column instead of at the far end).
   const handleInsertColumnAfter = async (index: number) => {
+    if (readOnly) return;
     if (pendingAction) return;
     const name = generateColName(cols);
     const added = await addColumnWithHistory(
@@ -1896,6 +1918,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleAddColumn = async () => {
+    if (readOnly) return;
     if (pendingAction) return;
     const name = newColName.trim();
     if (!name) return;
@@ -1912,6 +1935,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleInsertMultiCols = async () => {
+    if (readOnly) return;
     if (pendingAction) return;
     const count = parseInt(insertColCount, 10);
     if (isNaN(count) || count < 1) return;
@@ -1956,6 +1980,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   // `from`/`to` are visible column indices; the backend renumbers col_index
   // and remaps any stored display props so widths/formats/extras follow.
   const handleColsPanelReorder = async (from: number, to: number) => {
+    if (readOnly) return;
     if (pendingAction) return;
     if (from === to) return;
     if (!tryBeginTableMutation()) return;
@@ -1985,6 +2010,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleDeleteColumn = async (colName: string) => {
+    if (readOnly) return;
     if (pendingAction) return;
     if (cols.length <= 1) return;
     if (!tryBeginTableMutation()) return;
@@ -2011,6 +2037,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleDeleteSelectedCols = async () => {
+    if (readOnly) return;
     if (pendingAction) return;
     if (selectedCols.size === 0) return;
     if (cols.length - selectedCols.size < 1) {
@@ -2069,6 +2096,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleApplyBatchColProps = async () => {
+    if (readOnly) return;
     if (pendingAction) return;
     if (!batchColProps) return;
     // Apply column widths — user-entered value is visual; store as base.
@@ -2125,6 +2153,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   /** Apply the result of the manage-extras batch dialog. Replaces the entire
    *  per-column extras array, syncs to backend, marks dirty, records history. */
   const handleApplyManageExtras = (next: Array<Record<string, unknown> | null>) => {
+    if (readOnly) return;
     setColExtras(next);
     colExtrasRef.current = next;
     syncDisplayProps(colWidthsRef.current, colFormatsRef.current);
@@ -2133,6 +2162,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleRenameColumn = async () => {
+    if (readOnly) return;
     if (pendingAction) return;
     if (!renameCol || !renameValue.trim()) return;
     const nameChanged = renameValue.trim() !== renameCol.oldName;
@@ -2229,6 +2259,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleCellDoubleClick = (row: number, col: number, value: unknown) => {
+    if (readOnly) return;
     setActiveCell({ row, col });
     setEditCell({ row, col });
     setEditValue(value == null ? "" : String(value));
@@ -2368,6 +2399,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
   // ---- Write a value to the active cell from the formula bar ----
   const writeActiveCellValue = async (value: string) => {
+    if (readOnly) return false;
     if (!activeCell) return;
     const { row: editRow, col: editCol } = activeCell;
     const colType = colTypes[editCol];
@@ -2423,6 +2455,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
   // ---- Clear cells (Delete key) ----
   const clearCells = async (cells: { row: number; col: number }[]) => {
+    if (readOnly) return;
     if (cells.some(({ row, col }) => !displayRowAt(row) || col < 0 || col >= cols.length)) {
       setErrorMsg(t("dataTable.unloadedRangeUnsupported", {
         defaultValue: "This operation requires rows outside the loaded window.",
@@ -2630,6 +2663,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
   // ---- Paste from clipboard (Excel TSV) ----
   const doPaste = async (text: string, withHeader: boolean) => {
+    if (readOnly) return;
     if (tableFilters.length > 0) {
       setErrorMsg(t("dataTable.pasteFilteredUnsupported", {
         defaultValue: "Paste is unavailable while table filters are active.",
@@ -2802,6 +2836,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleCellContextMenu = (e: React.MouseEvent, row: number, col: number) => {
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
     // If right-clicking within an existing selection, don't change activeCell or selection
@@ -2821,6 +2856,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleContextMenuPaste = async (withHeader: boolean) => {
+    if (readOnly) return;
     setCellMenu(null);
     setCornerMenu(null);
     try {
@@ -2868,6 +2904,17 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
       if (!tgt?.classList.contains("sp-cell-input")) return;
     }
     const isMeta = e.ctrlKey || e.metaKey;
+
+    if (readOnly) {
+      const key = e.key.toLowerCase();
+      const isMutationShortcut = (isMeta && (key === "x" || key === "v" || key === "z" || key === "y"))
+        || key === "delete"
+        || key === "backspace";
+      if (isMutationShortcut) {
+        e.preventDefault();
+        return;
+      }
+    }
 
     // Cmd/Ctrl + = or + : zoom in   |   Cmd/Ctrl + - : zoom out   |   Cmd/Ctrl + 0 : reset
     // Match both physical keys: `=` (Plus) and `+` (Shift+=) and `-`/`_`.
@@ -3805,6 +3852,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleColContextMenu = (e: React.MouseEvent, colIdx: number) => {
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
     // If right-clicked column is not in selection, select just that one
@@ -3816,6 +3864,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   };
 
   const handleRowContextMenu = (e: React.MouseEvent, rowIdx: number) => {
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
     // If right-clicked row is not in selection, select just that one
@@ -3828,6 +3877,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
   // ---- Column resize (drag) — batch-aware (Excel-style) ----
   const handleResizeStart = (e: React.MouseEvent, colIdx: number) => {
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
@@ -3842,6 +3892,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     resizingRef.current = { colIdx, startX, startW };
 
     const onMouseMove = (ev: MouseEvent) => {
+      if (readOnlyRef.current) return;
       if (!resizingRef.current) return;
       const delta = ev.clientX - offsetX - resizingRef.current.startX;
       const newW = Math.max(BASE_DEFAULT_COL_WIDTH, startW + delta / zoom);
@@ -3853,11 +3904,13 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     };
 
     const onMouseUp = () => {
+      const completedResize = resizingRef.current;
       resizingRef.current = null;
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      if (!completedResize || readOnlyRef.current) return;
       // Suppress the click event that follows mouseup from changing selection
       suppressSelectionRef.current = true;
       requestAnimationFrame(() => { suppressSelectionRef.current = false; });
@@ -3917,6 +3970,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
 
   // ---- Double-click resize to auto-fit (supports batch) ----
   const handleResizeDoubleClick = (e: React.MouseEvent, colIdx: number) => {
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
     // If this column is in the selected set, auto-fit all selected columns
@@ -4025,6 +4079,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         <button
           className={`sp-tb-btn${showTableFilters ? " sp-tb-btn-active" : ""}`}
           onClick={() => setShowTableFilters((v) => !v)}
+          disabled={readOnly}
           title={t("graph.filter.toggleTitle", { defaultValue: "Show/Hide local data filter" })}
         >
           {t("graph.filter.toolbarBtn", { defaultValue: "Filter" })}
@@ -4035,18 +4090,18 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
         {onTableOp && (
           <>
             <div className="sp-tb-sep" />
-            <button className="sp-tb-btn" onClick={() => onTableOp("summary")}>
+            <button className="sp-tb-btn" onClick={() => onTableOp("summary")} disabled={readOnly}>
               {t("menu.opSummary")}
             </button>
             <div className="sp-tb-sep" />
-            <button className="sp-tb-btn" onClick={() => onTableOp("subset")}>
+            <button className="sp-tb-btn" onClick={() => onTableOp("subset")} disabled={readOnly}>
               {t("menu.opSubset")}
             </button>
-            <button className="sp-tb-btn" onClick={() => onTableOp("sort")}>
+            <button className="sp-tb-btn" onClick={() => onTableOp("sort")} disabled={readOnly}>
               {t("menu.opSort")}
             </button>
             <div className="sp-tb-sep" />
-            <button className="sp-tb-btn" onClick={() => onTableOp("stack")}>
+            <button className="sp-tb-btn" onClick={() => onTableOp("stack")} disabled={readOnly}>
               {t("menu.opStack")}
             </button>
             <button className="sp-tb-btn" onClick={() => onTableOp("split")}>
@@ -4347,9 +4402,9 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
                     {/* Resize handle */}
                     <div
                       className="sp-resize-handle"
-                      onMouseDown={(e) => handleResizeStart(e, ci)}
+                      onMouseDown={readOnly ? undefined : (e) => handleResizeStart(e, ci)}
                       onClick={(e) => e.stopPropagation()}
-                      onDoubleClick={(e) => handleResizeDoubleClick(e, ci)}
+                      onDoubleClick={readOnly ? undefined : (e) => handleResizeDoubleClick(e, ci)}
                     />
                   </th>
                 );

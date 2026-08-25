@@ -30,7 +30,10 @@ import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPalet
 import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
+import { prepareAxisBinding } from "./axisBinding";
+import { loadGraphTableData, type GraphTableLoadProgress } from "./loadGraphTableData";
 import { FilterPanel, applyFilters } from "@/components/filter";
+import { graphTableDataCache } from "@/utils/graphTableDataCache";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -82,9 +85,18 @@ const LAYER_DIM: Record<ElementKind, LayerDim> = {
 const DRAG_MIME = "text/plain";
 
 export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
-  const { t } = useTranslation();
-  const updateItem = useGraphBuilderStore((s) => s.updateItem);
-  const markDirty = useProjectStore((s) => s.markDirty);
+  const { t, i18n } = useTranslation();
+  const updateItemRaw = useGraphBuilderStore((s) => s.updateItem);
+  const markDirtyRaw = useProjectStore((s) => s.markDirty);
+  const readOnly = useProjectStore((s) => s.readOnly);
+  const markDirty = useCallback(() => {
+    if (readOnly) return;
+    markDirtyRaw();
+  }, [readOnly, markDirtyRaw]);
+  const updateItem = useCallback((id: string, patch: Partial<GraphBuilderItem>) => {
+    if (readOnly) return;
+    updateItemRaw(id, patch);
+  }, [readOnly, updateItemRaw]);
   // Cross-view bridge: click a scatter point → highlight the matching
   // cell in the DataTableView for `dataset.id` next time it mounts.
   const pickCell = useTableSelectionStore((s) => s.pick);
@@ -101,6 +113,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const [colSqlTypes, setColSqlTypes] = useState<string[]>([]);
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadProgress, setLoadProgress] = useState<GraphTableLoadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Y-axis settings dialog open state. Opened by double-clicking the Y
   // axis (or its label/title area) in <Graph>; closed via the dialog's
@@ -515,23 +528,38 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
   // 加载列信息 + 全表数据
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    const cacheEpoch = graphTableDataCache.captureEpoch();
     setLoading(true);
+    setLoadProgress(null);
     setError(null);
     (async () => {
       try {
+        const generation = await dataService.getDatasetGeneration(dataset.id);
         const cols = await dataService.getColumns(dataset.id);
         const fields: FieldRef[] = cols.map(([name, type]) => ({
           name,
           type: inferFieldType(type),
         }));
         const sqlTypes = cols.map(([, type]) => type);
-        // 简化：一次性拉取全部数据（后续可流式优化）
-        const result = await dataService.queryTable({
+        const result = await loadGraphTableData({
           datasetId: dataset.id,
-          page: 0,
-          pageSize: Math.max(1, dataset.rowCount || 100000),
+          generation,
+          signal: controller.signal,
+          cache: graphTableDataCache,
+          cacheEpoch,
+          onProgress: setLoadProgress,
+          queryWindow: (datasetId, start, count, expectedGeneration) =>
+            dataService.queryTableWindow({
+            datasetId,
+            start,
+            count,
+            sort: null,
+            filters: [],
+            generation: expectedGeneration,
+          }),
         });
+        if (!result) return;
         // Pull per-column display props in parallel with data so the
         // Value Order metadata is available on first render. Display
         // props can legitimately be missing (older projects, fresh
@@ -540,7 +568,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         try {
           displayProps = await dataService.getColumnDisplayProps(dataset.id);
         } catch { /* ignore — empty value orders are fine */ }
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         // Build the colIndex → name map from `cols` (which already excludes
         // internal `_row_id` because get_user_columns filters it out). The
         // colIndex stored in ColumnDisplayProps is the visible-column
@@ -580,13 +608,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         setValueOrders(vo);
         setSpecByCol(sp);
       } catch (e) {
-        if (!cancelled) setError(String(e));
+        if (!controller.signal.aborted) setError(String(e));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     })();
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [dataset.id, dataset.rowCount]);
 
@@ -980,26 +1008,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       const multiKey: "multiX" | "multiY" | null =
         slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
       const hadMulti = multiKey ? (item[multiKey]?.length ?? 0) > 0 : false;
-      const fieldChanged =
-        (slot === "x" || slot === "y") &&
-        prevField !== undefined &&
-        prevField.name !== field.name;
-      if (fieldChanged || hadMulti) {
-        const axisKey: "xAxis" | "yAxis" | null =
-          slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
-        const prevAxis = axisKey ? item[axisKey] : undefined;
-        const needsAxisReset =
-          axisKey !== undefined &&
-          prevAxis !== undefined &&
-          (prevAxis.min !== undefined ||
-            prevAxis.max !== undefined ||
-            prevAxis.tickInterval !== undefined);
-        const nextAxis = needsAxisReset
-          ? { ...prevAxis, min: undefined, max: undefined, tickInterval: undefined }
-          : prevAxis;
+      const axisKey: "xAxis" | "yAxis" | null =
+        slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
+      const prevAxis = axisKey ? item[axisKey] : undefined;
+      const { bindingChanged, axisConfig } = axisKey
+        ? prepareAxisBinding(prevField?.name, field.name, hadMulti, prevAxis)
+        : { bindingChanged: false, axisConfig: undefined };
+      if (bindingChanged) {
         updateItem(item.id, {
           encoding: { ...item.encoding, [slot]: field },
-          ...(needsAxisReset && axisKey ? { [axisKey]: nextAxis } : {}),
+          ...(axisKey ? { [axisKey]: axisConfig } : {}),
           ...(multiKey ? { [multiKey]: undefined } : {}),
         });
         markDirty();
@@ -1330,6 +1348,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
   );
+  const numberFormatter = useMemo(
+    () => new Intl.NumberFormat(i18n.resolvedLanguage || i18n.language || undefined),
+    [i18n.language, i18n.resolvedLanguage],
+  );
+  const loadPercent = loadProgress && loadProgress.totalRows > 0
+    ? Math.min(100, Math.max(0, Math.round(
+      (loadProgress.loadedRows / loadProgress.totalRows) * 100,
+    )))
+    : loadProgress?.totalRows === 0 ? 100 : null;
 
   return (
     <div className="gb-root">
@@ -1620,7 +1647,35 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               }}
             >
               {loading ? (
-                <div className="gb-empty">{t("graph.loading")}</div>
+                <div className="gb-empty">
+                  <div className="gb-loading-status">
+                    <div>{t("graph.loading")}</div>
+                    <div
+                      className="sp-progress-bar"
+                      role="progressbar"
+                      aria-label={t("graph.loading")}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={loadPercent ?? undefined}
+                    >
+                      <div
+                        className={`sp-progress-fill ${loadPercent === null ? "sp-progress-indeterminate" : ""}`}
+                        style={loadPercent === null ? undefined : { width: `${loadPercent}%` }}
+                      />
+                    </div>
+                    {loadProgress && loadPercent !== null ? (
+                      <>
+                        <div className="gb-loading-detail">{loadPercent}%</div>
+                        <div className="gb-loading-detail">
+                          {t("graph.loadingProgress", {
+                            loaded: numberFormatter.format(loadProgress.loadedRows),
+                            total: numberFormatter.format(loadProgress.totalRows),
+                          })}
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
               ) : error ? (
                 <div className="gb-empty gb-error">{error}</div>
               ) : !data ? (
@@ -1741,6 +1796,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           onOverlayContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
           width={rightWidth}
           threeD={!!item.threeD}
+          readOnly={readOnly}
         />
       </div>
 
@@ -3190,9 +3246,11 @@ interface LegendStylePanelProps {
   /** Whether the chart is in 3D mode — the Gradient mark only applies to
    *  (and is only shown for) 3D surfaces / scatter. */
   threeD: boolean;
+  /** Read-only while project save is in progress. */
+  readOnly: boolean;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD, readOnly }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // `data` and `elements` are still part of the public prop contract for
@@ -3467,7 +3525,9 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
                       style={{ background: bg }}
                       title={`${p.fill} / ${p.line} / ${p.point}`}
                       onClick={() => applyCustomTheme(selected, p)}
+                      disabled={readOnly}
                       onContextMenu={(e) => {
+                        if (readOnly) return;
                         e.preventDefault();
                         e.stopPropagation();
                         setPaletteCtxMenu({ id: p.id, x: e.clientX, y: e.clientY });
@@ -3479,7 +3539,11 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
                   type="button"
                   className="gb-style-color-swatch gb-style-theme-swatch gb-style-theme-add"
                   title={t("graph.style.addTheme")}
-                  onClick={() => setShowAddDialog(true)}
+                  onClick={() => {
+                    if (readOnly) return;
+                    setShowAddDialog(true);
+                  }}
+                  disabled={readOnly}
                   aria-label={t("graph.style.addTheme")}
                 >
                   +
@@ -3532,7 +3596,10 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           this panel's local stacking context. */}
       {showAddDialog && (
         <AddPaletteDialog
-          onSave={(p) => addPalette(p)}
+          onSave={(p) => {
+            if (readOnly) return;
+            addPalette(p);
+          }}
           onClose={() => setShowAddDialog(false)}
         />
       )}
@@ -3549,11 +3616,11 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div
-            className="sp-ctx-item sp-ctx-danger"
-            onClick={() => {
+            className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`}
+            onClick={readOnly ? undefined : (() => {
               removePalette(paletteCtxMenu.id);
               setPaletteCtxMenu(null);
-            }}
+            })}
           >
             {t("graph.style.removeTheme")}
           </div>

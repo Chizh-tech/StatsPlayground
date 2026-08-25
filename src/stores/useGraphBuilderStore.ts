@@ -6,6 +6,8 @@
 
 import { create } from "zustand";
 import type { GraphBuilderItem } from "@/types/graphBuilder";
+import { useProjectStore } from "@/stores/useProjectStore";
+import { assertProjectMutable } from "@/utils/saveReadOnly";
 
 interface GraphBuilderStore {
   items: GraphBuilderItem[];
@@ -27,21 +29,36 @@ interface GraphBuilderStore {
 export const useGraphBuilderStore = create<GraphBuilderStore>((set) => ({
   items: [],
   counter: 0,
-  addItem: (item) => set((s) => ({ items: [...s.items, item] })),
+  addItem: (item) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
+    set((s) => ({ items: [...s.items, item] }));
+  },
   updateItem: (id, patch) =>
-    set((s) => ({
-      items: s.items.map((it) => (it.id === id ? { ...it, ...patch } : it)),
-    })),
+    {
+      assertProjectMutable(useProjectStore.getState().readOnly);
+      set((s) => ({
+        items: s.items.map((it) => (it.id === id ? { ...it, ...patch } : it)),
+      }));
+    },
   renameItem: (id, name) =>
-    set((s) => ({
-      items: s.items.map((it) => (it.id === id ? { ...it, name } : it)),
-    })),
+    {
+      assertProjectMutable(useProjectStore.getState().readOnly);
+      set((s) => ({
+        items: s.items.map((it) => (it.id === id ? { ...it, name } : it)),
+      }));
+    },
   deleteItem: (id) =>
-    set((s) => ({ items: s.items.filter((it) => it.id !== id) })),
+    {
+      assertProjectMutable(useProjectStore.getState().readOnly);
+      set((s) => ({ items: s.items.filter((it) => it.id !== id) }));
+    },
   deleteByDataset: (datasetId) =>
-    set((s) => ({
-      items: s.items.filter((it) => it.sourceDatasetId !== datasetId),
-    })),
+    {
+      assertProjectMutable(useProjectStore.getState().readOnly);
+      set((s) => ({
+        items: s.items.filter((it) => it.sourceDatasetId !== datasetId),
+      }));
+    },
   loadFromProject: (items) =>
     set(() => {
       const maxNum = items.reduce((m, it) => {
@@ -51,5 +68,8 @@ export const useGraphBuilderStore = create<GraphBuilderStore>((set) => ({
       return { items, counter: maxNum };
     }),
   reset: () => set({ items: [], counter: 0 }),
-  bumpCounter: (n) => set({ counter: n }),
+  bumpCounter: (n) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
+    set({ counter: n });
+  },
 }));

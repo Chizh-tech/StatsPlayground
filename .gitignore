@@ -5,6 +5,7 @@ dist/
 
 # ----- Rust / Cargo -----
 src-tauri/target/
+.superpowers/
 
 # ----- Tauri -----
 # DuckDB database files (user data, not version-controlled)

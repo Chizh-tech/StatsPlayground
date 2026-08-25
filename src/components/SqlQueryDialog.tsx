@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
+import { useProjectStore } from "@/stores/useProjectStore";
 import type { DatasetMeta, SqlQueryResult } from "@/types/data";
 import { folderAncestors, folderBaseName, normalizeFolderPath } from "@/stores/useFolderStore";
 import "./sqlQueryDialog.css";
@@ -51,6 +52,7 @@ function renderCell(value: unknown): string {
 
 export function SqlQueryDialog({ datasets, tableFolders, onClose, onCreated }: SqlQueryDialogProps) {
   const { t } = useTranslation();
+  const readOnly = useProjectStore((s) => s.readOnly);
   const [sql, setSql] = useState("");
   const [result, setResult] = useState<SqlQueryResult | null>(null);
   const [successfulSql, setSuccessfulSql] = useState<string | null>(null);
@@ -180,14 +182,14 @@ export function SqlQueryDialog({ datasets, tableFolders, onClose, onCreated }: S
   };
 
   const openCreatePrompt = () => {
-    if (!isPreviewCurrent || busy) return;
+    if (readOnly || !isPreviewCurrent || busy) return;
     setError(null);
     setNewTableName(nextResultName(datasets));
     setShowCreate(true);
   };
 
   const confirmCreate = async () => {
-    if (!isPreviewCurrent || busyRef.current || !successfulSql) return;
+    if (readOnly || !isPreviewCurrent || busyRef.current || !successfulSql) return;
     if (!createState.trimmed) {
       setError(`${t("sqlQuery.validationErrorTitle")}: ${t("sqlQuery.nameValidationEmpty")}`);
       return;
@@ -265,7 +267,7 @@ export function SqlQueryDialog({ datasets, tableFolders, onClose, onCreated }: S
                   <i className="fa-solid fa-eraser" aria-hidden="true" />
                   <span>{t("sqlQuery.clear")}</span>
                 </button>
-                <button type="button" className="sql-query-toolbar-btn" onClick={openCreatePrompt} disabled={!isPreviewCurrent || busy} title={t("sqlQuery.createTooltip")} aria-label={t("sqlQuery.createTable")}>
+                <button type="button" className="sql-query-toolbar-btn" onClick={openCreatePrompt} disabled={readOnly || !isPreviewCurrent || busy} title={t("sqlQuery.createTooltip")} aria-label={t("sqlQuery.createTable")}>
                   <i className="fa-solid fa-table" aria-hidden="true" />
                   <span>{t("sqlQuery.createTable")}</span>
                 </button>

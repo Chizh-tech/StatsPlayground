@@ -159,6 +159,15 @@
     "importProgressTable": "資料表 {{i}}/{{total}}：{{name}}",
     "importProgressRows": "列",
     "createSnapshotTitle": "建立快照",
+    "savingProject": "正在儲存專案…",
+    "readOnlyWhileSaving": "儲存期間為唯讀",
+    "savePhase": {
+      "preparing": "準備中",
+      "table": "正在儲存資料表",
+      "metadata": "正在儲存中繼資料",
+      "compressing": "壓縮中",
+      "finalizing": "完成中"
+    },
     "zoomIn": "放大表格",
     "zoomOut": "縮小表格",
     "zoomReset": "重設為 100%",
@@ -631,6 +640,7 @@
       "fitStat": { "equation": "方程", "rmse": "RMSE", "r2": "R²", "fTest": "F 檢驗" }
     },
     "loading": "正在載入資料…",
+    "loadingProgress": "{{loaded}} / {{total}} 列",
     "noData": "無資料",
     "dragHint": "將欄拖曳至座標槽以開始繪圖",
     "removeSlot": "移除",

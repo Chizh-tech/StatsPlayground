@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as echarts from "echarts";
 import type { GraphSpec, GraphData } from "./types";
+import { withoutGraphAnimation } from "./animation";
 import { getGraphTheme } from "./theme";
 import { buildGraph, type ScatterPointPick } from "./transform";
 import { Chart3D } from "./Chart3D";
@@ -961,7 +962,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
 
   // 更新选项
   useEffect(() => {
-    chartRef.current?.setOption(option as echarts.EChartsCoreOption, true);
+    chartRef.current?.setOption(withoutGraphAnimation(option as echarts.EChartsCoreOption), true);
   }, [option]);
 
   // Right-click on an axis strip → open the axis context menu. Handled

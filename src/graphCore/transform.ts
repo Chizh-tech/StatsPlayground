@@ -4851,6 +4851,7 @@ function buildElementSeries(
           symbol: sym.symbol,
           symbolSize: sizes ? (_val: any, params: any) => sizes![params.dataIndex] : style.point.size,
           itemStyle: pointItemStyle(style.point, sym.hollow),
+          progressive: 0,
           data: points.map((p, i) => {
             const value = xIsCategory ? [toStr(p.x), p.y] : [toNum(p.x), p.y];
             const off = offsets ? offsets[i] : null;
