@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphData.ts";
 import {
   createInitialGraphStreamState,
+  createStreamStartCancellationCoordinator,
   deriveFields,
   reduceGraphStream,
   type GraphLoadProgress,
@@ -20,6 +21,23 @@ import type {
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
 
 const TEST_FILE_DIR = dirname(fileURLToPath(import.meta.url));
+
+type JsonObject = Record<string, unknown>;
+
+function readJson(relativePath: string): JsonObject {
+  return JSON.parse(readFileSync(resolve(TEST_FILE_DIR, relativePath), "utf8")) as JsonObject;
+}
+
+function getPathValue(root: JsonObject, path: string): unknown {
+  return path
+    .split(".")
+    .reduce<unknown>((current, segment) => {
+      if (!current || typeof current !== "object") {
+        return undefined;
+      }
+      return (current as Record<string, unknown>)[segment];
+    }, root);
+}
 
 export function makeGraphRows(count: number): Array<[number, string, number]> {
   return Array.from({ length: count }, (_, index) => [
@@ -57,6 +75,47 @@ assert.equal(makeGraphRows(10).length, 10);
     graphBuilderViewSource.includes("newRows.push([...row"),
     false,
     "GraphBuilderView production graph path must not do frontend melt expansion with newRows.push([...row, ...])",
+  );
+}
+
+{
+  const en = readJson("../src/i18n/locales/en.json");
+  const vi = readJson("../src/i18n/locales/vi.json");
+  const zhCn = readJson("../src/i18n/locales/zh-CN.json");
+  const zhTw = readJson("../src/i18n/locales/zh-TW.json");
+  const requiredLocalePaths = [
+    "graph.rowStatus.pending",
+    "graph.rowStatus.pendingRows",
+    "graph.pipeline.progress",
+  ];
+
+  for (const keyPath of requiredLocalePaths) {
+    assert.equal(typeof getPathValue(en, keyPath), "string", `en locale must define ${keyPath}`);
+    assert.equal(typeof getPathValue(vi, keyPath), "string", `vi locale must define ${keyPath}`);
+    assert.equal(typeof getPathValue(zhCn, keyPath), "string", `zh-CN locale must define ${keyPath}`);
+    assert.equal(typeof getPathValue(zhTw, keyPath), "string", `zh-TW locale must define ${keyPath}`);
+  }
+}
+
+{
+  const projectStoreSource = readFileSync(
+    resolve(TEST_FILE_DIR, "../src/stores/useProjectStore.ts"),
+    "utf8",
+  );
+  const workspaceSource = readFileSync(
+    resolve(TEST_FILE_DIR, "../src/components/Workspace.tsx"),
+    "utf8",
+  );
+
+  assert.equal(
+    projectStoreSource.includes("graphTableDataCache"),
+    false,
+    "Task 3 migration: project lifecycle must not use obsolete graph table cache",
+  );
+  assert.equal(
+    workspaceSource.includes("graphTableDataCache"),
+    false,
+    "Task 3 migration: dataset deletion lifecycle must not use obsolete graph table cache",
   );
 }
 
@@ -488,6 +547,107 @@ function makeProgressedChunk(
       },
     },
   };
+}
+
+{
+  const reducerCancels: string[] = [];
+  const coordinator = createStreamStartCancellationCoordinator((requestId, generation) => {
+    reducerCancels.push(`${requestId}:${generation}`);
+  });
+  const handle = coordinator.activate("req-cancel-before-bind", 41);
+  let transportCancelCalls = 0;
+
+  handle.cancel();
+  handle.cancel();
+  handle.bindCancel(async () => {
+    transportCancelCalls += 1;
+  });
+
+  assert.deepEqual(reducerCancels, ["req-cancel-before-bind:41"]);
+  assert.equal(transportCancelCalls, 1);
+}
+
+{
+  const reducerCancels: string[] = [];
+  const coordinator = createStreamStartCancellationCoordinator((requestId, generation) => {
+    reducerCancels.push(`${requestId}:${generation}`);
+  });
+  const oldHandle = coordinator.activate("req-old", 51);
+  let oldTransportCancels = 0;
+  oldHandle.bindCancel(async () => {
+    oldTransportCancels += 1;
+  });
+
+  let oldCallbacks = 0;
+  let newCallbacks = 0;
+  const oldCallback = oldHandle.wrap(() => {
+    oldCallbacks += 1;
+  });
+
+  const newHandle = coordinator.activate("req-new", 52);
+  newHandle.bindCancel(async () => {});
+  const newCallback = newHandle.wrap(() => {
+    newCallbacks += 1;
+  });
+
+  oldCallback();
+  newCallback();
+
+  assert.deepEqual(reducerCancels, ["req-old:51"]);
+  assert.equal(oldTransportCancels, 1);
+  assert.equal(oldCallbacks, 0);
+  assert.equal(newCallbacks, 1);
+}
+
+{
+  const reducerCancels: string[] = [];
+  const coordinator = createStreamStartCancellationCoordinator((requestId, generation) => {
+    reducerCancels.push(`${requestId}:${generation}`);
+  });
+  const handle = coordinator.activate("req-normal", 61);
+  let transportCancelCalls = 0;
+  let callbackCalls = 0;
+  handle.bindCancel(async () => {
+    transportCancelCalls += 1;
+  });
+
+  const callback = handle.wrap(() => {
+    callbackCalls += 1;
+  });
+  callback();
+
+  assert.deepEqual(reducerCancels, []);
+  assert.equal(transportCancelCalls, 0);
+  assert.equal(callbackCalls, 1);
+}
+
+{
+  const reducerCancels: string[] = [];
+  const coordinator = createStreamStartCancellationCoordinator((requestId, generation) => {
+    reducerCancels.push(`${requestId}:${generation}`);
+  });
+  const oldHandle = coordinator.activate("req-fail-cancel", 71);
+  oldHandle.bindCancel(async () => {
+    throw new Error("cancel failed");
+  });
+
+  let staleCommits = 0;
+  let freshCommits = 0;
+  const staleCommit = oldHandle.wrap(() => {
+    staleCommits += 1;
+  });
+
+  const freshHandle = coordinator.activate("req-fresh", 72);
+  const freshCommit = freshHandle.wrap(() => {
+    freshCommits += 1;
+  });
+
+  staleCommit();
+  freshCommit();
+
+  assert.deepEqual(reducerCancels, ["req-fail-cancel:71"]);
+  assert.equal(staleCommits, 0);
+  assert.equal(freshCommits, 1);
 }
 
 {

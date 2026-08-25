@@ -790,6 +790,8 @@
     },
     "rowStatus": {
       "empty": "尚無圖形資料幀",
+      "pending": "正在處理資料列...",
+      "pendingRows": "處理中：{{processed}} / {{source}} 列",
       "full": "完整資料：{{processed}} 列",
       "sampled": "已取樣：{{processed}} / {{source}} 列"
     },
@@ -798,7 +800,8 @@
       "pending": "正在更新圖形...",
       "error": "更新失敗",
       "metaLoading": "正在載入欄位資訊...",
-      "metaError": "欄位中繼資料不可用"
+      "metaError": "欄位中繼資料不可用",
+      "progress": "圖形資料載入進度"
     }
   }
 }

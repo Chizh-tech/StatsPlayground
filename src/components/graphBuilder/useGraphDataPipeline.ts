@@ -645,6 +645,92 @@ function createRequestId(datasetId: string, generation: number): string {
   return `${datasetId}-${generation}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+type StreamCancelFn = (() => Promise<void>) | (() => void);
+
+function invokeCancelSafely(cancel: StreamCancelFn): void {
+  try {
+    const result = cancel();
+    if (result && typeof (result as Promise<void>).then === "function") {
+      void (result as Promise<void>).catch(() => {
+        // Ignore transport cancellation failures. State fencing already prevents stale commits.
+      });
+    }
+  } catch {
+    // Ignore transport cancellation failures. State fencing already prevents stale commits.
+  }
+}
+
+export interface StreamStartCancellationHandle {
+  wrap: <TArgs extends unknown[]>(callback: (...args: TArgs) => void) => (...args: TArgs) => void;
+  bindCancel: (cancel: StreamCancelFn) => void;
+  cancel: () => void;
+}
+
+export interface StreamStartCancellationCoordinator {
+  activate: (requestId: string, generation: number) => StreamStartCancellationHandle;
+  cancelActive: () => void;
+}
+
+export function createStreamStartCancellationCoordinator(
+  onCancelState: (requestId: string, generation: number) => void,
+): StreamStartCancellationCoordinator {
+  let activeHandle: StreamStartCancellationHandle | null = null;
+
+  const activate = (requestId: string, generation: number): StreamStartCancellationHandle => {
+    activeHandle?.cancel();
+
+    let cancelled = false;
+    let reducerCancelDispatched = false;
+    let transportCancel: StreamCancelFn | null = null;
+    let transportCancelInvoked = false;
+
+    const cancel = (): void => {
+      if (cancelled) {
+        return;
+      }
+      cancelled = true;
+
+      if (!reducerCancelDispatched) {
+        reducerCancelDispatched = true;
+        onCancelState(requestId, generation);
+      }
+
+      if (transportCancel && !transportCancelInvoked) {
+        transportCancelInvoked = true;
+        invokeCancelSafely(transportCancel);
+      }
+    };
+
+    const handle: StreamStartCancellationHandle = {
+      wrap: <TArgs extends unknown[]>(callback: (...args: TArgs) => void) =>
+        (...args: TArgs) => {
+          if (cancelled || activeHandle !== handle) {
+            return;
+          }
+          callback(...args);
+        },
+      bindCancel: (cancelFn: StreamCancelFn) => {
+        transportCancel = cancelFn;
+        if (cancelled && !transportCancelInvoked) {
+          transportCancelInvoked = true;
+          invokeCancelSafely(cancelFn);
+        }
+      },
+      cancel,
+    };
+
+    activeHandle = handle;
+    return handle;
+  };
+
+  return {
+    activate,
+    cancelActive: () => {
+      activeHandle?.cancel();
+    },
+  };
+}
+
 export function useGraphDataPipeline(
   item: GraphBuilderItem,
   dataset: DatasetMeta,
@@ -693,9 +779,13 @@ export function useGraphDataPipeline(
     }
 
     let disposed = false;
-    let cancel: (() => Promise<void>) | null = null;
-    let activePendingRequest: { requestId: string; generation: number } | null = null;
-    let cancelAfterStreamStart = false;
+    const cancellationCoordinator = createStreamStartCancellationCoordinator((requestId, generation) => {
+      setState((previous) => reduceGraphStream(previous, {
+        type: "cancel",
+        requestId,
+        generation,
+      }));
+    });
 
     const load = async (): Promise<void> => {
       try {
@@ -722,22 +812,22 @@ export function useGraphDataPipeline(
         };
 
         setState((previous) => reduceGraphStream(previous, { type: "start", request }));
-        activePendingRequest = { requestId, generation };
+        const streamHandle = cancellationCoordinator.activate(requestId, generation);
 
         const stream = graphDataService.stream(request, {
-          onHeader: (header) => {
+          onHeader: streamHandle.wrap((header) => {
             setState((previous) => reduceGraphStream(previous, { type: "header", header }));
-          },
-          onPayload: (payload) => {
+          }),
+          onPayload: streamHandle.wrap((payload) => {
             setState((previous) => reduceGraphStream(previous, { type: "payload", payload }));
-          },
-          onAggregate: (packet) => {
+          }),
+          onAggregate: streamHandle.wrap((packet) => {
             setState((previous) => reduceGraphStream(previous, { type: "aggregate", packet }));
-          },
-          onComplete: (completion) => {
+          }),
+          onComplete: streamHandle.wrap((completion) => {
             setState((previous) => reduceGraphStream(previous, { type: "complete", completion }));
-          },
-          onError: (error) => {
+          }),
+          onError: streamHandle.wrap((error) => {
             setState((previous) =>
               reduceGraphStream(previous, {
                 type: "error",
@@ -745,12 +835,12 @@ export function useGraphDataPipeline(
                 generation,
                 error,
               }));
-          },
+          }),
         });
 
-        cancel = stream.cancel;
-        if (disposed || cancelAfterStreamStart) {
-          void cancel();
+        streamHandle.bindCancel(stream.cancel);
+        if (disposed) {
+          streamHandle.cancel();
         }
       } catch (error) {
         if (disposed) {
@@ -772,19 +862,7 @@ export function useGraphDataPipeline(
 
     return () => {
       disposed = true;
-      if (activePendingRequest) {
-        const requestToCancel = activePendingRequest;
-        setState((previous) => reduceGraphStream(previous, {
-          type: "cancel",
-          requestId: requestToCancel.requestId,
-          generation: requestToCancel.generation,
-        }));
-      }
-      if (cancel) {
-        void cancel();
-      } else {
-        cancelAfterStreamStart = true;
-      }
+      cancellationCoordinator.cancelActive();
     };
   }, [dataset.id, requestSkeleton]);
 

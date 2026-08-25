@@ -801,6 +801,8 @@
     },
     "rowStatus": {
       "empty": "尚无图形数据帧",
+      "pending": "正在处理行数据...",
+      "pendingRows": "处理中：{{processed}} / {{source}} 行",
       "full": "全量数据：{{processed}} 行",
       "sampled": "采样：{{processed}} / {{source}} 行"
     },
@@ -809,7 +811,8 @@
       "pending": "正在更新图形...",
       "error": "更新失败",
       "metaLoading": "正在加载列信息...",
-      "metaError": "列元数据不可用"
+      "metaError": "列元数据不可用",
+      "progress": "图形数据加载进度"
     }
   }
 }

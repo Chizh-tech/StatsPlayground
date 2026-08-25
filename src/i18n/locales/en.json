@@ -790,6 +790,8 @@
     },
     "rowStatus": {
       "empty": "No graph frame yet",
+      "pending": "Processing rows...",
+      "pendingRows": "Processing: {{processed}} / {{source}} rows",
       "full": "Full Data: {{processed}} rows",
       "sampled": "Sampled: {{processed}} / {{source}} rows"
     },
@@ -798,7 +800,8 @@
       "pending": "Updating graph...",
       "error": "Update failed",
       "metaLoading": "Loading columns...",
-      "metaError": "Column metadata unavailable"
+      "metaError": "Column metadata unavailable",
+      "progress": "Graph data loading progress"
     }
   }
 }
