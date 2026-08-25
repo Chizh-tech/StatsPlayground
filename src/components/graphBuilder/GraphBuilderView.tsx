@@ -30,7 +30,7 @@ import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPalet
 import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
-import { loadGraphTableData } from "./loadGraphTableData";
+import { loadGraphTableData, type GraphTableLoadProgress } from "./loadGraphTableData";
 import { FilterPanel, applyFilters } from "@/components/filter";
 
 interface GraphBuilderViewProps {
@@ -83,7 +83,7 @@ const LAYER_DIM: Record<ElementKind, LayerDim> = {
 const DRAG_MIME = "text/plain";
 
 export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const updateItemRaw = useGraphBuilderStore((s) => s.updateItem);
   const markDirtyRaw = useProjectStore((s) => s.markDirty);
   const readOnly = useProjectStore((s) => s.readOnly);
@@ -111,6 +111,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const [colSqlTypes, setColSqlTypes] = useState<string[]>([]);
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadProgress, setLoadProgress] = useState<GraphTableLoadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Y-axis settings dialog open state. Opened by double-clicking the Y
   // axis (or its label/title area) in <Graph>; closed via the dialog's
@@ -527,6 +528,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
+    setLoadProgress(null);
     setError(null);
     (async () => {
       try {
@@ -541,6 +543,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           datasetId: dataset.id,
           generation,
           signal: controller.signal,
+          onProgress: setLoadProgress,
           queryWindow: (datasetId, start, count, expectedGeneration) =>
             dataService.queryTableWindow({
             datasetId,
@@ -1350,6 +1353,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
   );
+  const numberFormatter = useMemo(
+    () => new Intl.NumberFormat(i18n.resolvedLanguage || i18n.language || undefined),
+    [i18n.language, i18n.resolvedLanguage],
+  );
+  const loadPercent = loadProgress && loadProgress.totalRows > 0
+    ? Math.min(100, Math.max(0, Math.round(
+      (loadProgress.loadedRows / loadProgress.totalRows) * 100,
+    )))
+    : loadProgress?.totalRows === 0 ? 100 : null;
 
   return (
     <div className="gb-root">
@@ -1640,7 +1652,42 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               }}
             >
               {loading ? (
-                <div className="gb-empty">{t("graph.loading")}</div>
+                <div className="gb-empty">
+                  <div className="gb-loading-status">
+                    <div>{t("graph.loading")}</div>
+                    {loadPercent === null ? (
+                      <div
+                        className="sp-progress"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                      >
+                        <div className="sp-progress-indeterminate" />
+                      </div>
+                    ) : (
+                      <div
+                        className="sp-progress"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={loadPercent}
+                      >
+                        <div className="sp-progress-bar" style={{ width: `${loadPercent}%` }} />
+                      </div>
+                    )}
+                    {loadProgress && loadPercent !== null ? (
+                      <>
+                        <div className="gb-loading-detail">{loadPercent}%</div>
+                        <div className="gb-loading-detail">
+                          {t("graph.loadingProgress", {
+                            loaded: numberFormatter.format(loadProgress.loadedRows),
+                            total: numberFormatter.format(loadProgress.totalRows),
+                          })}
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
               ) : error ? (
                 <div className="gb-empty gb-error">{error}</div>
               ) : !data ? (

@@ -640,6 +640,7 @@
       "fitStat": { "equation": "Equation", "rmse": "RMSE", "r2": "R²", "fTest": "F Test" }
     },
     "loading": "Loading data…",
+    "loadingProgress": "{{loaded}} / {{total}} rows",
     "noData": "No data",
     "dragHint": "Drag a column onto an axis slot to begin",
     "removeSlot": "Remove",

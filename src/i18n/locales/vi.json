@@ -640,6 +640,7 @@
       "fitStat": { "equation": "Phương trình", "rmse": "RMSE", "r2": "R²", "fTest": "Kiểm định F" }
     },
     "loading": "Đang tải dữ liệu…",
+    "loadingProgress": "{{loaded}} / {{total}} hàng",
     "noData": "Không có dữ liệu",
     "dragHint": "Kéo cột vào ô trục để bắt đầu",
     "removeSlot": "Xóa",

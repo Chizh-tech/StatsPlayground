@@ -640,6 +640,7 @@
       "fitStat": { "equation": "方程", "rmse": "RMSE", "r2": "R²", "fTest": "F 檢驗" }
     },
     "loading": "正在載入資料…",
+    "loadingProgress": "{{loaded}} / {{total}} 列",
     "noData": "無資料",
     "dragHint": "將欄拖曳至座標槽以開始繪圖",
     "removeSlot": "移除",

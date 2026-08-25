@@ -189,6 +189,26 @@ import {
       < source.indexOf("getColumns(dataset.id)"),
     "the generation must be captured before column metadata",
   );
+  assert.match(source, /setLoadProgress\(null\)/);
+  assert.match(source, /onProgress: setLoadProgress/);
+  assert.match(source, /role="progressbar"/);
+  assert.match(source, /aria-valuenow=/);
+  assert.match(source, /t\("graph\.loadingProgress"/);
+
+  for (const locale of ["en", "vi", "zh-CN", "zh-TW"]) {
+    const localeSource = readFileSync(
+      new URL(`../src/i18n/locales/${locale}.json`, import.meta.url),
+      "utf8",
+    );
+    const parsed = JSON.parse(localeSource) as {
+      graph?: { loadingProgress?: string };
+    };
+    const loadingProgress = parsed.graph?.loadingProgress;
+    assert.equal(typeof loadingProgress, "string", `missing graph.loadingProgress in ${locale}`);
+    assert.ok(loadingProgress.trim().length > 0, `graph.loadingProgress empty in ${locale}`);
+    assert.match(loadingProgress, /\{\{loaded\}\}/, `graph.loadingProgress missing {{loaded}} in ${locale}`);
+    assert.match(loadingProgress, /\{\{total\}\}/, `graph.loadingProgress missing {{total}} in ${locale}`);
+  }
 }
 
 console.log("cancellable graph table loader passed");
