@@ -17,7 +17,12 @@ export interface GraphTableData {
   rows: unknown[][];
 }
 
-interface LoadGraphTableDataOptions {
+export interface GraphTableDataCachePort {
+  get(datasetId: string, generation: number): GraphTableData | undefined;
+  putIfCurrent(epoch: number, datasetId: string, generation: number, data: GraphTableData): boolean;
+}
+
+interface LoadGraphTableDataBaseOptions {
   datasetId: string;
   generation: number;
   signal: AbortSignal;
@@ -40,6 +45,17 @@ interface LoadGraphTableDataOptions {
   onProgress?: (progress: GraphTableLoadProgress) => void;
 }
 
+type LoadGraphTableDataOptions = LoadGraphTableDataBaseOptions & (
+  | {
+      cache?: undefined;
+      cacheEpoch?: never;
+    }
+  | {
+      cache: GraphTableDataCachePort;
+      cacheEpoch: number;
+    }
+);
+
 function yieldToBrowser(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -47,6 +63,9 @@ function yieldToBrowser(): Promise<void> {
 export async function loadGraphTableData(
   options: LoadGraphTableDataOptions,
 ): Promise<GraphTableData | null> {
+  const cached = options.cache?.get(options.datasetId, options.generation);
+  if (cached) return cached;
+
   const rows: unknown[][] = [];
   let columns: string[] = [];
 
@@ -71,7 +90,16 @@ export async function loadGraphTableData(
       totalRows: result.totalRows,
     });
     if (rows.length >= result.totalRows || result.rows.length === 0) {
-      return { columns, rows };
+      const data = { columns, rows };
+      if (options.cache) {
+        options.cache.putIfCurrent(
+          options.cacheEpoch,
+          options.datasetId,
+          options.generation,
+          data,
+        );
+      }
+      return data;
     }
 
     await (options.yieldToBrowser ?? yieldToBrowser)();

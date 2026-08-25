@@ -32,6 +32,7 @@ import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
 import { loadGraphTableData, type GraphTableLoadProgress } from "./loadGraphTableData";
 import { FilterPanel, applyFilters } from "@/components/filter";
+import { graphTableDataCache } from "@/utils/graphTableDataCache";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -527,6 +528,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // 加载列信息 + 全表数据
   useEffect(() => {
     const controller = new AbortController();
+    const cacheEpoch = graphTableDataCache.captureEpoch();
     setLoading(true);
     setLoadProgress(null);
     setError(null);
@@ -543,6 +545,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           datasetId: dataset.id,
           generation,
           signal: controller.signal,
+          cache: graphTableDataCache,
+          cacheEpoch,
           onProgress: setLoadProgress,
           queryWindow: (datasetId, start, count, expectedGeneration) =>
             dataService.queryTableWindow({

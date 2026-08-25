@@ -31,6 +31,7 @@ import { listen } from "@tauri-apps/api/event";
 import { modKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import type { NamedSnapshot } from "@/types/history";
+import { graphTableDataCache } from "@/utils/graphTableDataCache";
 
 function formatStat(n: number): string {
   if (Number.isInteger(n) && Math.abs(n) < 1e15) return n.toString();
@@ -499,6 +500,7 @@ export function Workspace() {
 
   const handleDeleteDataset = async (id: string) => {
     const name = datasets.find((d) => d.id === id)?.name ?? id;
+    graphTableDataCache.invalidateDataset(id);
     await dataService.deleteDataset(id);
     if (activeDatasetId === id) setActiveDataset(null);
     // 联动删除引用此数据表的图表

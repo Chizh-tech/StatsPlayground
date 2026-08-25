@@ -7,6 +7,7 @@ import {
   type GraphTablePage,
   type GraphTableLoadProgress,
 } from "../src/components/graphBuilder/loadGraphTableData.ts";
+import { GraphTableDataCache } from "../src/utils/graphTableDataCache.ts";
 
 {
   const events: string[] = [];
@@ -65,6 +66,82 @@ import {
 }
 
 {
+  const cache = new GraphTableDataCache();
+  const cached = { columns: ["value"], rows: [[1], [2]] };
+  cache.putIfCurrent(cache.captureEpoch(), "cached", 9, cached);
+  let requests = 0;
+
+  const result = await loadGraphTableData({
+    datasetId: "cached",
+    generation: 9,
+    signal: new AbortController().signal,
+    cache,
+    cacheEpoch: cache.captureEpoch(),
+    queryWindow: async () => {
+      requests += 1;
+      throw new Error("cache hit should skip queries");
+    },
+  });
+
+  assert.equal(result, cached);
+  assert.equal(requests, 0);
+}
+
+{
+  const cache = new GraphTableDataCache();
+  const cacheEpoch = cache.captureEpoch();
+  let requests = 0;
+
+  const result = await loadGraphTableData({
+    datasetId: "miss",
+    generation: 5,
+    signal: new AbortController().signal,
+    cache,
+    cacheEpoch,
+    queryWindow: async () => {
+      requests += 1;
+      return {
+        columns: ["value"],
+        rows: [[1], [2]],
+        totalRows: 2,
+        generation: 5,
+      };
+    },
+  });
+
+  assert.deepEqual(result, { columns: ["value"], rows: [[1], [2]] });
+  assert.equal(requests, 1);
+  assert.equal(cache.get("miss", 5), result);
+}
+
+{
+  const cache = new GraphTableDataCache();
+  const cacheEpoch = cache.captureEpoch();
+  let requests = 0;
+
+  const result = await loadGraphTableData({
+    datasetId: "empty-miss",
+    generation: 6,
+    signal: new AbortController().signal,
+    cache,
+    cacheEpoch,
+    queryWindow: async () => {
+      requests += 1;
+      return {
+        columns: ["value"],
+        rows: [],
+        totalRows: 0,
+        generation: 6,
+      };
+    },
+  });
+
+  assert.deepEqual(result, { columns: ["value"], rows: [] });
+  assert.equal(requests, 1);
+  assert.equal(cache.get("empty-miss", 6), result);
+}
+
+{
   const controller = new AbortController();
   const requestedPages: number[] = [];
   const progress: GraphTableLoadProgress[] = [];
@@ -83,6 +160,26 @@ import {
   assert.equal(result, null);
   assert.deepEqual(requestedPages, [0]);
   assert.deepEqual(progress, []);
+}
+
+{
+  const cache = new GraphTableDataCache();
+  const cacheEpoch = cache.captureEpoch();
+  const controller = new AbortController();
+  const result = await loadGraphTableData({
+    datasetId: "abort-no-cache",
+    generation: 1,
+    signal: controller.signal,
+    cache,
+    cacheEpoch,
+    queryWindow: async () => {
+      controller.abort();
+      return { columns: ["value"], rows: [[1]], totalRows: 1, generation: 1 };
+    },
+  });
+
+  assert.equal(result, null);
+  assert.equal(cache.get("abort-no-cache", 1), undefined);
 }
 
 {
@@ -124,25 +221,32 @@ import {
 
 {
   const expected = new Error("query failed");
+  const cache = new GraphTableDataCache();
   await assert.rejects(
     loadGraphTableData({
       datasetId: "failure",
       generation: 1,
       signal: new AbortController().signal,
+      cache,
+      cacheEpoch: cache.captureEpoch(),
       queryWindow: async () => {
         throw expected;
       },
     }),
     (error) => error === expected,
   );
+  assert.equal(cache.get("failure", 1), undefined);
 }
 
 {
+  const cache = new GraphTableDataCache();
   await assert.rejects(
     loadGraphTableData({
       datasetId: "changed",
       generation: 4,
       signal: new AbortController().signal,
+      cache,
+      cacheEpoch: cache.captureEpoch(),
       queryWindow: async () => ({
         columns: ["value"],
         rows: [[1]],
@@ -152,6 +256,7 @@ import {
     }),
     /dataset changed during graph loading/i,
   );
+  assert.equal(cache.get("changed", 4), undefined);
 
   // ensure no progress callback on generation mismatch
   await assert.rejects(
@@ -174,6 +279,61 @@ import {
 }
 
 {
+  const cache = new GraphTableDataCache();
+  const cacheEpoch = cache.captureEpoch();
+  let resolveSecondPage: ((page: GraphTablePage) => void) | undefined;
+  let markSecondPageRequested: (() => void) | undefined;
+  const secondPageRequested = new Promise<void>((resolve) => {
+    markSecondPageRequested = resolve;
+  });
+  let requests = 0;
+
+  const pending = loadGraphTableData({
+    datasetId: "cleared-mid-flight",
+    generation: 8,
+    signal: new AbortController().signal,
+    cache,
+    cacheEpoch,
+    queryWindow: async (_datasetId, start) => {
+      requests += 1;
+      if (start === 0) {
+        return { columns: ["value"], rows: [[1]], totalRows: 2, generation: 8 };
+      }
+      markSecondPageRequested?.();
+      return new Promise((resolve) => {
+        resolveSecondPage = resolve;
+      });
+    },
+    yieldToBrowser: async () => {
+      // keep the second page request on the original epoch
+    },
+  });
+
+  await secondPageRequested;
+  cache.clear();
+  resolveSecondPage?.({ columns: ["value"], rows: [[2]], totalRows: 2, generation: 8 });
+  const result = await pending;
+
+  assert.deepEqual(result, { columns: ["value"], rows: [[1], [2]] });
+  assert.equal(cache.get("cleared-mid-flight", 8), undefined);
+
+  const reused = await loadGraphTableData({
+    datasetId: "cleared-mid-flight",
+    generation: 8,
+    signal: new AbortController().signal,
+    cache,
+    cacheEpoch: cache.captureEpoch(),
+    queryWindow: async () => {
+      requests += 1;
+      return { columns: ["value"], rows: [[9]], totalRows: 1, generation: 8 };
+    },
+  });
+
+  assert.deepEqual(reused, { columns: ["value"], rows: [[9]] });
+  assert.equal(requests, 3);
+}
+
+{
   const source = readFileSync(
     new URL("../src/components/graphBuilder/GraphBuilderView.tsx", import.meta.url),
     "utf8",
@@ -189,6 +349,13 @@ import {
       < source.indexOf("getColumns(dataset.id)"),
     "the generation must be captured before column metadata",
   );
+  assert.ok(
+    source.indexOf("graphTableDataCache.captureEpoch()")
+      < source.indexOf("await dataService.getDatasetGeneration(dataset.id)"),
+    "the cache epoch must be captured before the first await",
+  );
+  assert.match(source, /cache:\s*graphTableDataCache/);
+  assert.match(source, /cacheEpoch/);
   assert.match(source, /setLoadProgress\(null\)/);
   assert.match(source, /onProgress: setLoadProgress/);
   assert.match(
@@ -198,6 +365,20 @@ import {
   assert.match(source, /className=\{`sp-progress-fill \$\{loadPercent === null \? "sp-progress-indeterminate" : ""\}`\}/);
   assert.match(source, /style=\{loadPercent === null \? undefined : \{ width: `\$\{loadPercent\}%` \}\}/);
   assert.match(source, /t\("graph\.loadingProgress"/);
+
+  const projectStoreSource = readFileSync(
+    new URL("../src/stores/useProjectStore.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(projectStoreSource, /initProject: async \(\) => \{[\s\S]*graphTableDataCache\.clear\(\)[\s\S]*deps\.projectService\.initProject\(/);
+  assert.match(projectStoreSource, /createProject: async \(name, filePath\) => \{[\s\S]*graphTableDataCache\.clear\(\)[\s\S]*deps\.projectService\.createProject\(/);
+  assert.match(projectStoreSource, /openProject: async \(filePath\) => \{[\s\S]*graphTableDataCache\.clear\(\)[\s\S]*deps\.projectService\.openProject\(/);
+
+  const workspaceSource = readFileSync(
+    new URL("../src/components/Workspace.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(workspaceSource, /graphTableDataCache\.invalidateDataset\(id\)[\s\S]*dataService\.deleteDataset\(id\)/);
 
   for (const locale of ["en", "vi", "zh-CN", "zh-TW"]) {
     const localeSource = readFileSync(
