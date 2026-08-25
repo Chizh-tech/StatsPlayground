@@ -85,8 +85,8 @@ const displayOnly: YAxisConfig = {
   tickPosition: "inside",
   showMajorGrid: true,
   showMinorGrid: false,
-  majorGridStyle: { color: "#123456", width: 2, dash: "dotted" },
-  minorGridStyle: { color: "#abcdef", width: 1, dash: "dashed" },
+  majorGridStyle: { color: "#123456", width: 2, style: "dotted" },
+  minorGridStyle: { color: "#abcdef", width: 1, style: "dashed" },
 };
 
 assert.deepStrictEqual(
