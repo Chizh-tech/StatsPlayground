@@ -191,8 +191,12 @@ import {
   );
   assert.match(source, /setLoadProgress\(null\)/);
   assert.match(source, /onProgress: setLoadProgress/);
-  assert.match(source, /role="progressbar"/);
-  assert.match(source, /aria-valuenow=/);
+  assert.match(
+    source,
+    /className="sp-progress-bar"\s+role="progressbar"\s+aria-label=\{t\("graph\.loading"\)\}\s+aria-valuemin=\{0\}\s+aria-valuemax=\{100\}\s+aria-valuenow=\{loadPercent \?\? undefined\}/,
+  );
+  assert.match(source, /className=\{`sp-progress-fill \$\{loadPercent === null \? "sp-progress-indeterminate" : ""\}`\}/);
+  assert.match(source, /style=\{loadPercent === null \? undefined : \{ width: `\$\{loadPercent\}%` \}\}/);
   assert.match(source, /t\("graph\.loadingProgress"/);
 
   for (const locale of ["en", "vi", "zh-CN", "zh-TW"]) {

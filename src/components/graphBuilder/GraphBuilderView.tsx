@@ -1655,26 +1655,19 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 <div className="gb-empty">
                   <div className="gb-loading-status">
                     <div>{t("graph.loading")}</div>
-                    {loadPercent === null ? (
+                    <div
+                      className="sp-progress-bar"
+                      role="progressbar"
+                      aria-label={t("graph.loading")}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={loadPercent ?? undefined}
+                    >
                       <div
-                        className="sp-progress"
-                        role="progressbar"
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                      >
-                        <div className="sp-progress-indeterminate" />
-                      </div>
-                    ) : (
-                      <div
-                        className="sp-progress"
-                        role="progressbar"
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={loadPercent}
-                      >
-                        <div className="sp-progress-bar" style={{ width: `${loadPercent}%` }} />
-                      </div>
-                    )}
+                        className={`sp-progress-fill ${loadPercent === null ? "sp-progress-indeterminate" : ""}`}
+                        style={loadPercent === null ? undefined : { width: `${loadPercent}%` }}
+                      />
+                    </div>
                     {loadProgress && loadPercent !== null ? (
                       <>
                         <div className="gb-loading-detail">{loadPercent}%</div>
