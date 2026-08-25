@@ -14,7 +14,13 @@ function walk(node: ts.Node, visit: (n: ts.Node) => void): void {
   node.forEachChild((child) => walk(child, visit));
 }
 
-function hasIdentifier(node: ts.Node, name: string): boolean {
+function unwrapParens<T extends ts.Node>(node: T): ts.Node {
+  let current: ts.Node = node;
+  while (ts.isParenthesizedExpression(current)) current = current.expression;
+  return current;
+}
+
+function containsIdentifier(node: ts.Node, name: string): boolean {
   let found = false;
   walk(node, (n) => {
     if (ts.isIdentifier(n) && n.text === name) found = true;
@@ -22,30 +28,12 @@ function hasIdentifier(node: ts.Node, name: string): boolean {
   return found;
 }
 
-function isComputedObjectWithValue(node: ts.Node, valueName: string): boolean {
-  if (!ts.isObjectLiteralExpression(node)) return false;
-  return node.properties.some((prop) => {
-    if (!ts.isPropertyAssignment(prop)) return false;
-    return ts.isComputedPropertyName(prop.name)
-      && ts.isIdentifier(prop.initializer)
-      && prop.initializer.text === valueName;
+function containsNodeText(root: ts.Node, sourceFile: ts.SourceFile, exactText: string): boolean {
+  let found = false;
+  walk(root, (n) => {
+    if (n.getText(sourceFile) === exactText) found = true;
   });
-}
-
-function isComputedObjectWithUndefined(node: ts.Node): boolean {
-  if (!ts.isObjectLiteralExpression(node)) return false;
-  return node.properties.some((prop) => {
-    if (!ts.isPropertyAssignment(prop)) return false;
-    return ts.isComputedPropertyName(prop.name)
-      && ts.isIdentifier(prop.initializer)
-      && prop.initializer.text === "undefined";
-  });
-}
-
-function unwrapParens<T extends ts.Node>(node: T): ts.Node {
-  let current: ts.Node = node;
-  while (ts.isParenthesizedExpression(current)) current = current.expression;
-  return current;
+  return found;
 }
 
 const rangeAndStyle: YAxisConfig = {
@@ -201,66 +189,87 @@ assert.ok(preparedVarName, "bindFieldToSlot must call prepareAxisBinding before 
 assert.ok(bindingChangedVarName, "bindFieldToSlot must extract bindingChanged from prepareAxisBinding result");
 assert.ok(axisConfigVarName, "bindFieldToSlot must extract axisConfig from prepareAxisBinding result");
 
-let gatedIf: ts.IfStatement | null = null;
+let guardedAxisIf: ts.IfStatement | null = null;
+let guardedPayload: ts.ObjectLiteralExpression | null = null;
+let axisKeyExprText: string | null = null;
+
 for (const stmt of bindBody.statements) {
-  if (!ts.isIfStatement(stmt)) continue;
-  if (!ts.isBinaryExpression(stmt.expression) || stmt.expression.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken) {
-    continue;
+  if (!ts.isIfStatement(stmt) || !ts.isBlock(stmt.thenStatement)) continue;
+
+  for (const thenStmt of stmt.thenStatement.statements) {
+    if (!ts.isExpressionStatement(thenStmt) || !ts.isCallExpression(thenStmt.expression)) continue;
+    const call = thenStmt.expression;
+    if (!ts.isIdentifier(call.expression) || call.expression.text !== "updateItem") continue;
+    if (call.arguments.length < 2 || !ts.isObjectLiteralExpression(call.arguments[1])) continue;
+
+    const payload = call.arguments[1];
+    const encodingProp = payload.properties.find(
+      (p) => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === "encoding",
+    );
+    if (!encodingProp || !ts.isPropertyAssignment(encodingProp)) continue;
+    if (
+      !ts.isObjectLiteralExpression(encodingProp.initializer)
+      || !encodingProp.initializer.properties.some(
+        (prop) => ts.isPropertyAssignment(prop) && ts.isComputedPropertyName(prop.name),
+      )
+    ) {
+      continue;
+    }
+
+    let payloadAxisKeyExpr: ts.Expression | null = null;
+    let hasAxisConfigSpread = false;
+    let hasMultiClearSpread = false;
+
+    for (const prop of payload.properties) {
+      if (!ts.isSpreadAssignment(prop)) continue;
+      const spreadExpr = unwrapParens(prop.expression);
+      if (!ts.isConditionalExpression(spreadExpr)) continue;
+
+      const whenTrue = unwrapParens(spreadExpr.whenTrue);
+      if (!ts.isObjectLiteralExpression(whenTrue)) continue;
+
+      for (const innerProp of whenTrue.properties) {
+        if (!ts.isPropertyAssignment(innerProp) || !ts.isComputedPropertyName(innerProp.name)) continue;
+
+        if (ts.isIdentifier(innerProp.initializer) && innerProp.initializer.text === axisConfigVarName) {
+          hasAxisConfigSpread = true;
+          payloadAxisKeyExpr = innerProp.name.expression;
+        }
+        if (ts.isIdentifier(innerProp.initializer) && innerProp.initializer.text === "undefined") {
+          hasMultiClearSpread = true;
+        }
+      }
+    }
+
+    if (hasAxisConfigSpread && hasMultiClearSpread && payloadAxisKeyExpr) {
+      guardedAxisIf = stmt;
+      guardedPayload = payload;
+      axisKeyExprText = payloadAxisKeyExpr.getText(graphBuilderAst);
+      break;
+    }
   }
-  if (hasIdentifier(stmt.expression, bindingChangedVarName!)) {
-    gatedIf = stmt;
-    break;
-  }
+
+  if (guardedAxisIf) break;
 }
 
-assert.ok(gatedIf, "bindFieldToSlot must have an axis-scoped AND-gated branch driven by bindingChanged");
-assert.ok(ts.isBlock(gatedIf!.thenStatement), "axis-scoped gated branch must be a block");
-
-let atomicUpdateCall: ts.CallExpression | null = null;
-for (const stmt of gatedIf!.thenStatement.statements) {
-  if (!ts.isExpressionStatement(stmt) || !ts.isCallExpression(stmt.expression)) continue;
-  const call = stmt.expression;
-  if (!ts.isIdentifier(call.expression) || call.expression.text !== "updateItem") continue;
-  if (call.arguments.length < 2) continue;
-  if (ts.isObjectLiteralExpression(call.arguments[1])) {
-    atomicUpdateCall = call;
-    break;
-  }
-}
-
-assert.ok(atomicUpdateCall, "axis-scoped gated branch must issue a single updateItem object payload");
-
-const payload = atomicUpdateCall!.arguments[1] as ts.ObjectLiteralExpression;
-const encodingProp = payload.properties.find(
-  (p) => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === "encoding",
-);
-assert.ok(encodingProp && ts.isPropertyAssignment(encodingProp), "atomic payload must include encoding");
-assert.ok(
-  ts.isObjectLiteralExpression(encodingProp.initializer)
-  && encodingProp.initializer.properties.some(
-    (prop) => ts.isPropertyAssignment(prop) && ts.isComputedPropertyName(prop.name),
-  ),
-  "encoding payload must include a computed slot assignment",
-);
-
-const spreadExprs = payload.properties
-  .filter(ts.isSpreadAssignment)
-  .map((spread) => unwrapParens(spread.expression));
+assert.ok(guardedAxisIf, "bindFieldToSlot must issue one guarded atomic update payload for axis binding");
+assert.ok(guardedPayload, "guarded atomic axis update payload must be present");
+assert.ok(axisKeyExprText, "axis key expression must be inferred from computed axis payload property");
 
 assert.ok(
-  spreadExprs.some((expr) => {
-    if (!ts.isConditionalExpression(expr)) return false;
-    return isComputedObjectWithValue(unwrapParens(expr.whenTrue), axisConfigVarName!);
-  }),
-  "atomic payload must include a computed axis property whose value comes from axisConfig",
+  ts.isBinaryExpression(guardedAxisIf!.expression)
+  && guardedAxisIf!.expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken,
+  "atomic axis update branch must be guarded by a conjunction",
 );
 
 assert.ok(
-  spreadExprs.some((expr) => {
-    if (!ts.isConditionalExpression(expr)) return false;
-    return isComputedObjectWithUndefined(unwrapParens(expr.whenTrue));
-  }),
-  "atomic payload must include a computed property clearing the matching multi slot",
+  containsIdentifier(guardedAxisIf!.expression, bindingChangedVarName!),
+  "guard conjunction must include the binding-change expression derived from prepareAxisBinding",
+);
+
+assert.ok(
+  containsNodeText(guardedAxisIf!.expression, graphBuilderAst, axisKeyExprText!),
+  "guard conjunction must include the same computed axis-key expression used in the atomic payload",
 );
 
 let foundSetEncodingFallback = false;

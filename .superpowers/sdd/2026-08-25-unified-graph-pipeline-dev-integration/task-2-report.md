@@ -248,3 +248,55 @@ scatter progressive source regression passed
 
 ### Concerns
 1. AST checks are intentionally robust to formatting/local renames but still coupled to current control-flow topology (e.g., presence of a dedicated points switch case and explicit setOption boundaries). Major architectural rewrites may require test adaptation.
+
+## Task 2 Fix Round 3 of 5 (2026-08-25)
+
+### Scope
+- Addressed only the two open Important findings from round 2:
+  - axis guard conjunction had to be tied to the same computed axis-key used in the atomic update payload,
+  - scatter regression still depended on internal/local identifiers.
+- No production code changes were required.
+
+### Files Changed
+- `tests/axisBinding.test.ts`
+- `tests/scatterProgressive.test.ts`
+- `.superpowers/sdd/2026-08-25-unified-graph-pipeline-dev-integration/task-2-report.md`
+
+### What Changed
+- `tests/axisBinding.test.ts`
+  - Kept AST-based structural verification of atomic `updateItem(item.id, { ... })` payload shape:
+    - `encoding` property with computed slot assignment,
+    - computed axis property sourced from the `axisConfig` symbol,
+    - computed multi-slot clear (`undefined`).
+  - Reworked guard verification to infer the computed axis-key expression from the axis payload itself, then assert the `if` condition is an `&&` conjunction that includes:
+    - the binding-change symbol (derived from `prepareAxisBinding` result destructuring), and
+    - the exact same computed axis-key expression used in the atomic payload.
+  - This removes permissive matching of “any `&&` containing bindingChanged”.
+
+- `tests/scatterProgressive.test.ts`
+  - Removed assertions tied to internal implementation names (`buildFrameBackedRawDescriptor`, `frameSafeData`, and local temporary symbol names).
+  - Retained stable contract checks and expanded runtime behavior checks:
+    - `Graph.tsx` imports/renders `RawPointsLayer` and passes `descriptor={rawPoints}`.
+    - `buildGraph(...)` structurally contains a frame-backed data substitution conditional that switches between original input data and an object with `columns` + empty `rows`.
+    - Runtime (non-frame): raw scatter fallback carries `__pick`, sets `progressive: 0`, and never enables `large: true`.
+    - Runtime (frame-backed single panel): panel exposes non-null `rawPoints` descriptor; scatter fallback with `__pick` is unreachable; no scatter enables `large: true`.
+    - Runtime (frame-backed faceted path): all panels expose non-null `rawPoints`; scatter fallback with `__pick` remains unreachable; no scatter enables `large: true`.
+
+### Exact Commands Run
+```powershell
+node --experimental-strip-types tests/axisBinding.test.ts
+node --experimental-strip-types tests/graphAnimation.test.ts
+node --experimental-strip-types tests/scatterProgressive.test.ts
+node --experimental-strip-types tests/rawPoints.test.ts
+npx tsc -b --pretty false
+```
+
+### Relevant Output / Exit Status
+- `node --experimental-strip-types tests/axisBinding.test.ts` → exit `0`
+- `node --experimental-strip-types tests/graphAnimation.test.ts` → exit `0`
+- `node --experimental-strip-types tests/scatterProgressive.test.ts` → exit `0`
+- `node --experimental-strip-types tests/rawPoints.test.ts` → exit `0`
+- `npx tsc -b --pretty false` → exit `0`
+
+### Concerns
+1. The new scatter checks intentionally emphasize stable public contracts and behavior, so they are less brittle than internal-symbol assertions; however, they now depend on build-time behavior from `buildGraph` and may need adjustment if typed-buffer integration APIs are redesigned.
