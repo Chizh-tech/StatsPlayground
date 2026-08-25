@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphData.ts";
 import {
   createInitialGraphStreamState,
@@ -39,6 +40,39 @@ function getPathValue(root: JsonObject, path: string): unknown {
     }, root);
 }
 
+function parseTs(fileName: string, source: string): ts.SourceFile {
+  const scriptKind = fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  return ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKind);
+}
+
+function walk(node: ts.Node, visit: (current: ts.Node) => void): void {
+  visit(node);
+  node.forEachChild((child) => walk(child, visit));
+}
+
+function referencesIdentifier(sourceFile: ts.SourceFile, symbolName: string): boolean {
+  let found = false;
+  walk(sourceFile, (node) => {
+    if (ts.isIdentifier(node) && node.text === symbolName) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+function hasCallWithPropertyName(sourceFile: ts.SourceFile, propertyName: string): boolean {
+  let found = false;
+  walk(sourceFile, (node) => {
+    if (!ts.isCallExpression(node)) {
+      return;
+    }
+    if (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === propertyName) {
+      found = true;
+    }
+  });
+  return found;
+}
+
 export function makeGraphRows(count: number): Array<[number, string, number]> {
   return Array.from({ length: count }, (_, index) => [
     index + 1,
@@ -57,10 +91,15 @@ assert.equal(makeGraphRows(10).length, 10);
 }
 
 {
-  const graphBuilderViewSource = readFileSync(
-    resolve(TEST_FILE_DIR, "../src/components/graphBuilder/GraphBuilderView.tsx"),
+  const graphBuilderViewPath = resolve(TEST_FILE_DIR, "../src/components/graphBuilder/GraphBuilderView.tsx");
+  const graphBuilderViewSource = readFileSync(graphBuilderViewPath, "utf8");
+  const graphBuilderViewAst = parseTs("GraphBuilderView.tsx", graphBuilderViewSource);
+  const pipelineSource = readFileSync(
+    resolve(TEST_FILE_DIR, "../src/components/graphBuilder/useGraphDataPipeline.ts"),
     "utf8",
   );
+  const pipelineAst = parseTs("useGraphDataPipeline.ts", pipelineSource);
+
   assert.equal(
     graphBuilderViewSource.includes("dataService.queryTable("),
     false,
@@ -75,6 +114,26 @@ assert.equal(makeGraphRows(10).length, 10);
     graphBuilderViewSource.includes("newRows.push([...row"),
     false,
     "GraphBuilderView production graph path must not do frontend melt expansion with newRows.push([...row, ...])",
+  );
+  assert.equal(
+    referencesIdentifier(graphBuilderViewAst, "loadGraphTableData"),
+    false,
+    "GraphBuilderView must not reference the removed loadGraphTableData symbol",
+  );
+  assert.equal(
+    referencesIdentifier(graphBuilderViewAst, "graphTableDataCache"),
+    false,
+    "GraphBuilderView must not reference the removed graphTableDataCache symbol",
+  );
+  assert.equal(
+    hasCallWithPropertyName(graphBuilderViewAst, "queryTableWindow"),
+    false,
+    "GraphBuilder pipeline view must not call dataService.queryTableWindow",
+  );
+  assert.equal(
+    hasCallWithPropertyName(pipelineAst, "queryTableWindow"),
+    false,
+    "Graph data pipeline reducer/hook must not call dataService.queryTableWindow",
   );
 }
 
@@ -98,24 +157,56 @@ assert.equal(makeGraphRows(10).length, 10);
 }
 
 {
-  const projectStoreSource = readFileSync(
-    resolve(TEST_FILE_DIR, "../src/stores/useProjectStore.ts"),
+  const projectStorePath = resolve(TEST_FILE_DIR, "../src/stores/useProjectStore.ts");
+  const projectStoreSource = readFileSync(projectStorePath, "utf8");
+  const projectStoreAst = parseTs("useProjectStore.ts", projectStoreSource);
+  const workspacePath = resolve(TEST_FILE_DIR, "../src/components/Workspace.tsx");
+  const workspaceSource = readFileSync(workspacePath, "utf8");
+  const workspaceAst = parseTs("Workspace.tsx", workspaceSource);
+  const dataTableViewSource = readFileSync(
+    resolve(TEST_FILE_DIR, "../src/components/DataTableView.tsx"),
     "utf8",
   );
-  const workspaceSource = readFileSync(
-    resolve(TEST_FILE_DIR, "../src/components/Workspace.tsx"),
-    "utf8",
-  );
+  const dataTableViewAst = parseTs("DataTableView.tsx", dataTableViewSource);
+
+  const deletedPaths = [
+    "../src/components/graphBuilder/loadGraphTableData.ts",
+    "../src/utils/graphTableDataCache.ts",
+    "../tests/loadGraphTableData.test.ts",
+    "../tests/graphTableDataCache.test.ts",
+  ];
+  for (const relativePath of deletedPaths) {
+    assert.equal(
+      existsSync(resolve(TEST_FILE_DIR, relativePath)),
+      false,
+      `Task 4 cutover: ${relativePath} must be deleted`,
+    );
+  }
 
   assert.equal(
-    projectStoreSource.includes("graphTableDataCache"),
+    referencesIdentifier(projectStoreAst, "graphTableDataCache"),
     false,
-    "Task 3 migration: project lifecycle must not use obsolete graph table cache",
+    "Task 4 migration: project lifecycle must not use obsolete graph table cache",
   );
   assert.equal(
-    workspaceSource.includes("graphTableDataCache"),
+    referencesIdentifier(workspaceAst, "graphTableDataCache"),
     false,
-    "Task 3 migration: dataset deletion lifecycle must not use obsolete graph table cache",
+    "Task 4 migration: dataset deletion lifecycle must not use obsolete graph table cache",
+  );
+  assert.equal(
+    referencesIdentifier(projectStoreAst, "loadGraphTableData"),
+    false,
+    "Project lifecycle store must not reference removed loadGraphTableData helper",
+  );
+  assert.equal(
+    referencesIdentifier(workspaceAst, "loadGraphTableData"),
+    false,
+    "Workspace lifecycle view must not reference removed loadGraphTableData helper",
+  );
+  assert.equal(
+    hasCallWithPropertyName(dataTableViewAst, "queryTableWindow"),
+    true,
+    "Table viewport/table view path must continue owning queryTableWindow access",
   );
 }
 
