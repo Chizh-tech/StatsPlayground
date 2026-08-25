@@ -7,6 +7,11 @@ export interface GraphTablePage {
   generation: number;
 }
 
+export interface GraphTableLoadProgress {
+  loadedRows: number;
+  totalRows: number;
+}
+
 export interface GraphTableData {
   columns: string[];
   rows: unknown[][];
@@ -23,6 +28,7 @@ interface LoadGraphTableDataOptions {
     generation: number,
   ) => Promise<GraphTablePage>;
   yieldToBrowser?: () => Promise<void>;
+  onProgress?: (progress: GraphTableLoadProgress) => void;
 }
 
 function yieldToBrowser(): Promise<void> {
@@ -50,6 +56,11 @@ export async function loadGraphTableData(
 
     if (rows.length === 0) columns = result.columns;
     rows.push(...result.rows);
+    // emit progress after appending the page but only for accepted generation
+    options.onProgress?.({
+      loadedRows: Math.min(rows.length, result.totalRows),
+      totalRows: result.totalRows,
+    });
     if (rows.length >= result.totalRows || result.rows.length === 0) {
       return { columns, rows };
     }

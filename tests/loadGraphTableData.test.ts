@@ -13,6 +13,7 @@ import {
     { columns: ["value"], rows: [[1], [2]], totalRows: 3, generation: 7 },
     { columns: ["value"], rows: [[3]], totalRows: 3, generation: 7 },
   ];
+  const progress: any[] = [];
 
   const result = await loadGraphTableData({
     datasetId: "large",
@@ -28,16 +29,22 @@ import {
     yieldToBrowser: async () => {
       events.push("yield");
     },
+    onProgress: (next) => progress.push(next),
   });
 
   assert.equal(GRAPH_TABLE_PAGE_SIZE, 2000);
   assert.deepEqual(result, { columns: ["value"], rows: [[1], [2], [3]] });
   assert.deepEqual(events, ["start-0", "yield", "start-2"]);
+  assert.deepEqual(progress, [
+    { loadedRows: 2, totalRows: 3 },
+    { loadedRows: 3, totalRows: 3 },
+  ]);
 }
 
 {
   for (const rows of [[], Array.from({ length: 2000 }, (_, index) => [index])]) {
     let requests = 0;
+    const progress: any[] = [];
     const result = await loadGraphTableData({
       datasetId: "boundary",
       generation: 3,
@@ -46,15 +53,20 @@ import {
         requests += 1;
         return { columns: ["value"], rows, totalRows: rows.length, generation: 3 };
       },
+      onProgress: (p) => progress.push(p),
     });
     assert.equal(result?.rows.length, rows.length);
     assert.equal(requests, 1);
+    if (rows.length === 0) {
+      assert.deepEqual(progress, [{ loadedRows: 0, totalRows: 0 }]);
+    }
   }
 }
 
 {
   const controller = new AbortController();
   const requestedPages: number[] = [];
+  const progress: any[] = [];
   const result = await loadGraphTableData({
     datasetId: "abort-after-response",
     generation: 1,
@@ -64,10 +76,12 @@ import {
       controller.abort();
       return { columns: ["value"], rows: [[1]], totalRows: 2, generation: 1 };
     },
+    onProgress: (p) => progress.push(p),
   });
 
   assert.equal(result, null);
   assert.deepEqual(requestedPages, [0]);
+  assert.deepEqual(progress, []);
 }
 
 {
@@ -134,6 +148,25 @@ import {
         totalRows: 1,
         generation: 5,
       }),
+    }),
+    /dataset changed during graph loading/i,
+  );
+
+  // ensure no progress callback on generation mismatch
+  await assert.rejects(
+    loadGraphTableData({
+      datasetId: "changed-cb",
+      generation: 4,
+      signal: new AbortController().signal,
+      queryWindow: async () => ({
+        columns: ["value"],
+        rows: [[1]],
+        totalRows: 1,
+        generation: 5,
+      }),
+      onProgress: () => {
+        throw new Error("progress should not be called on generation mismatch");
+      },
     }),
     /dataset changed during graph loading/i,
   );
