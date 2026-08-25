@@ -437,6 +437,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     frame,
     status: pipelineStatus,
     error: pipelineError,
+    progress,
   } = useGraphDataPipeline(item, dataset, viewport);
 
   // User-saved CustomPalettes feed into legend default-color assignment:
@@ -1398,21 +1399,42 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   }, [item.id, updateItem, markDirty, sampleSize]);
 
   const rowStatus = useMemo(() => {
-    if (!frame) {
+    if (!progress) {
       return t("graph.rowStatus.empty", { defaultValue: "No graph frame yet" });
     }
-    if (frame.sampling.mode === "sample") {
+    if (pipelineStatus === "pending") {
+      if (progress.sourceRows <= 0) {
+        return t("graph.rowStatus.pending", {
+          defaultValue: "Processing rows...",
+        });
+      }
+      return t("graph.rowStatus.pendingRows", {
+        processed: progress.processedRows,
+        source: progress.sourceRows,
+        defaultValue: "Processing: {{processed}} / {{source}} rows",
+      });
+    }
+    if (frame?.sampling.mode === "sample") {
       return t("graph.rowStatus.sampled", {
-        processed: frame.processedRows,
-        source: frame.sourceRows,
+        processed: progress.processedRows,
+        source: progress.sourceRows,
         defaultValue: "Sampled: {{processed}} / {{source}} rows",
       });
     }
     return t("graph.rowStatus.full", {
-      processed: frame.processedRows,
+      processed: progress.processedRows,
       defaultValue: "Full Data: {{processed}} rows",
     });
-  }, [frame, t]);
+  }, [frame, pipelineStatus, progress, t]);
+
+  const progressPercent = progress?.percent ?? null;
+  const progressAriaProps = progressPercent === null
+    ? {}
+    : {
+      "aria-valuemin": 0,
+      "aria-valuemax": 100,
+      "aria-valuenow": Math.round(progressPercent),
+    };
 
   const pipelineStatusLabel = useMemo(() => {
     if (pipelineStatus === "pending") {
@@ -1569,6 +1591,17 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           </div>
           <div className="gb-pipeline-status">
             <span className={`gb-pipeline-state gb-pipeline-state-${pipelineStatus}`}>{pipelineStatusLabel}</span>
+            <div
+              className="gb-pipeline-progress sp-progress-bar"
+              role="progressbar"
+              aria-label={t("graph.pipeline.progress", { defaultValue: "Graph data loading progress" })}
+              {...progressAriaProps}
+            >
+              <div
+                className={`sp-progress-fill${progressPercent === null ? " sp-progress-indeterminate" : ""}`}
+                style={progressPercent === null ? undefined : { width: `${progressPercent}%` }}
+              />
+            </div>
             <span className="gb-row-status">{rowStatus}</span>
           </div>
         </div>

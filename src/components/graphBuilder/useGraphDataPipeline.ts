@@ -27,18 +27,27 @@ interface PendingGraphState {
   finalChunkIndex: number | null;
   dictionaries: Record<string, readonly string[]>;
   extents: Record<string, { min: number; max: number }>;
+  progress: GraphLoadProgress;
+}
+
+export interface GraphLoadProgress {
+  processedRows: number;
+  sourceRows: number;
+  percent: number | null;
 }
 
 export interface GraphStreamState {
   committed: GraphDataFrame | null;
   pending: PendingGraphState | null;
   pendingHeader: GraphChunkHeader | null;
+  progress: GraphLoadProgress | null;
   error: string | null;
   status: "idle" | "pending" | "ready" | "error";
 }
 
 export type GraphStreamMessage =
   | { type: "start"; request: GraphDataRequest }
+  | { type: "cancel"; requestId: string; generation: number }
   | { type: "header"; header: GraphChunkHeader }
   | { type: "payload"; payload: ArrayBuffer }
   | { type: "aggregate"; packet: GraphAggregatePacket }
@@ -50,7 +59,69 @@ export interface GraphDataPipelineResult {
   frame: GraphDataFrame | null;
   status: GraphStreamState["status"];
   error: string | null;
+  progress: GraphLoadProgress | null;
   pendingRequest: GraphDataRequest | null;
+}
+
+function sanitizeCount(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, value));
+}
+
+function derivePercent(
+  processedRows: number,
+  sourceRows: number,
+  forceCompleteForZeroRows = false,
+): number | null {
+  if (sourceRows <= 0) {
+    return forceCompleteForZeroRows ? 100 : null;
+  }
+  return clampPercent((processedRows / sourceRows) * 100);
+}
+
+function createProgress(
+  processedRows: number,
+  sourceRows: number,
+  forceCompleteForZeroRows = false,
+): GraphLoadProgress {
+  const safeProcessedRows = sanitizeCount(processedRows);
+  const safeSourceRows = sanitizeCount(sourceRows);
+  return {
+    processedRows: safeProcessedRows,
+    sourceRows: safeSourceRows,
+    percent: derivePercent(safeProcessedRows, safeSourceRows, forceCompleteForZeroRows),
+  };
+}
+
+function deriveCommittedProgress(committed: GraphDataFrame | null): GraphLoadProgress | null {
+  if (!committed) {
+    return null;
+  }
+  const zeroRowFrame = sanitizeCount(committed.sourceRows) === 0;
+  return createProgress(committed.processedRows, committed.sourceRows, zeroRowFrame);
+}
+
+function mergeMonotonicProgress(
+  previous: GraphLoadProgress,
+  processedRows: number,
+  sourceRows: number,
+): GraphLoadProgress {
+  const safeProcessedRows = Math.max(previous.processedRows, sanitizeCount(processedRows));
+  const safeSourceRows = Math.max(previous.sourceRows, sanitizeCount(sourceRows));
+  return {
+    processedRows: safeProcessedRows,
+    sourceRows: safeSourceRows,
+    percent: derivePercent(safeProcessedRows, safeSourceRows),
+  };
 }
 
 function idleStatus(committed: GraphDataFrame | null): GraphStreamState["status"] {
@@ -64,6 +135,7 @@ export function createInitialGraphStreamState(
     committed,
     pending: null,
     pendingHeader: null,
+    progress: deriveCommittedProgress(committed),
     error: null,
     status: idleStatus(committed),
   };
@@ -84,6 +156,7 @@ function failPending(state: GraphStreamState, error: string): GraphStreamState {
     ...state,
     pending: null,
     pendingHeader: null,
+    progress: deriveCommittedProgress(state.committed),
     error,
     status: "error",
   };
@@ -199,6 +272,11 @@ function ingestDecodedChunk(state: GraphStreamState, chunk: DecodedGraphChunk): 
   const dictionaries = { ...state.pending.dictionaries, ...chunk.dictionaries };
   const chunks = [...state.pending.chunks, toRawChunk(chunk)];
   const extents = applyChunkExtents(state.pending.extents, chunk);
+  const progress = mergeMonotonicProgress(
+    state.pending.progress,
+    chunk.processedRows,
+    chunk.sourceRows,
+  );
 
   return {
     ...state,
@@ -209,14 +287,19 @@ function ingestDecodedChunk(state: GraphStreamState, chunk: DecodedGraphChunk): 
       finalChunkIndex,
       dictionaries,
       extents,
+      progress,
     },
     pendingHeader: null,
+    progress,
     error: null,
     status: "pending",
   };
 }
 
 function hasCoherentCompletion(pending: PendingGraphState, chunksSent: number): boolean {
+  if (chunksSent === 0) {
+    return pending.finalChunkIndex === null && pending.chunkIndexes.size === 0;
+  }
   if (pending.finalChunkIndex === null) {
     return false;
   }
@@ -237,6 +320,7 @@ function hasCoherentCompletion(pending: PendingGraphState, chunksSent: number): 
 export function reduceGraphStream(state: GraphStreamState, message: GraphStreamMessage): GraphStreamState {
   switch (message.type) {
     case "start": {
+      const progress = createProgress(0, 0);
       return {
         ...state,
         pending: {
@@ -247,17 +331,36 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
           finalChunkIndex: null,
           dictionaries: {},
           extents: {},
+          progress,
         },
         pendingHeader: null,
+        progress,
         error: null,
         status: "pending",
+      };
+    }
+    case "cancel": {
+      if (!isMatchingPending(state, message.requestId, message.generation)) {
+        return state;
+      }
+      return {
+        ...state,
+        pending: null,
+        pendingHeader: null,
+        progress: deriveCommittedProgress(state.committed),
+        error: null,
+        status: idleStatus(state.committed),
       };
     }
     case "header": {
       if (!isMatchingPending(state, message.header.requestId, message.header.generation)) {
         return state;
       }
-      const expectedIndex = state.pending?.chunkIndexes.size ?? 0;
+      const pending = state.pending;
+      if (!pending) {
+        return state;
+      }
+      const expectedIndex = pending.chunkIndexes.size;
       if (message.header.chunkIndex !== expectedIndex) {
         return failPending(
           state,
@@ -267,12 +370,22 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
       if (state.pendingHeader) {
         return failPending(state, "graph header arrived before payload for previous chunk");
       }
-      if (state.pending?.chunkIndexes.has(message.header.chunkIndex)) {
+      if (pending.chunkIndexes.has(message.header.chunkIndex)) {
         return failPending(state, `duplicate graph chunk index ${message.header.chunkIndex}`);
       }
+      const progress = mergeMonotonicProgress(
+        pending.progress,
+        message.header.processedRows,
+        message.header.sourceRows,
+      );
       return {
         ...state,
+        pending: {
+          ...pending,
+          progress,
+        },
         pendingHeader: message.header,
+        progress,
       };
     }
     case "payload": {
@@ -315,6 +428,7 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
           ...state,
           pending: null,
           pendingHeader: null,
+          progress: deriveCommittedProgress(state.committed),
           error: null,
           status: idleStatus(state.committed),
         };
@@ -329,6 +443,22 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
         return failPending(state, "graph terminal marker has inconsistent chunksSent");
       }
 
+      const zeroRowsComplete = completion.chunksSent === 0
+        && sanitizeCount(completion.sourceRows) === 0
+        && sanitizeCount(completion.processedRows) === 0;
+      const completionProgress = {
+        ...mergeMonotonicProgress(
+          state.pending.progress,
+          completion.processedRows,
+          completion.sourceRows,
+        ),
+        percent: derivePercent(
+          Math.max(state.pending.progress.processedRows, sanitizeCount(completion.processedRows)),
+          Math.max(state.pending.progress.sourceRows, sanitizeCount(completion.sourceRows)),
+          zeroRowsComplete,
+        ),
+      };
+
       const rawChunks = [...state.pending.chunks].sort(
         (left, right) => left.chunkIndex - right.chunkIndex,
       );
@@ -337,8 +467,8 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
         requestId: state.pending.request.requestId,
         datasetId: completion.datasetId,
         generation: completion.generation,
-        sourceRows: completion.sourceRows,
-        processedRows: completion.processedRows,
+        sourceRows: completionProgress.sourceRows,
+        processedRows: completionProgress.processedRows,
         sampling: state.pending.request.sampling,
         dictionaries: state.pending.dictionaries,
         extents: state.pending.extents,
@@ -350,6 +480,7 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
         committed,
         pending: null,
         pendingHeader: null,
+        progress: completionProgress,
         error: null,
         status: "ready",
       };
@@ -563,6 +694,8 @@ export function useGraphDataPipeline(
 
     let disposed = false;
     let cancel: (() => Promise<void>) | null = null;
+    let activePendingRequest: { requestId: string; generation: number } | null = null;
+    let cancelAfterStreamStart = false;
 
     const load = async (): Promise<void> => {
       try {
@@ -589,6 +722,7 @@ export function useGraphDataPipeline(
         };
 
         setState((previous) => reduceGraphStream(previous, { type: "start", request }));
+        activePendingRequest = { requestId, generation };
 
         const stream = graphDataService.stream(request, {
           onHeader: (header) => {
@@ -615,6 +749,9 @@ export function useGraphDataPipeline(
         });
 
         cancel = stream.cancel;
+        if (disposed || cancelAfterStreamStart) {
+          void cancel();
+        }
       } catch (error) {
         if (disposed) {
           return;
@@ -624,6 +761,7 @@ export function useGraphDataPipeline(
           ...previous,
           pending: null,
           pendingHeader: null,
+          progress: deriveCommittedProgress(previous.committed),
           error: message,
           status: "error",
         }));
@@ -634,8 +772,18 @@ export function useGraphDataPipeline(
 
     return () => {
       disposed = true;
+      if (activePendingRequest) {
+        const requestToCancel = activePendingRequest;
+        setState((previous) => reduceGraphStream(previous, {
+          type: "cancel",
+          requestId: requestToCancel.requestId,
+          generation: requestToCancel.generation,
+        }));
+      }
       if (cancel) {
         void cancel();
+      } else {
+        cancelAfterStreamStart = true;
       }
     };
   }, [dataset.id, requestSkeleton]);
@@ -644,6 +792,7 @@ export function useGraphDataPipeline(
     frame: state.committed,
     status: state.status,
     error: state.error,
+    progress: state.progress,
     pendingRequest: state.pending?.request ?? null,
   };
 }

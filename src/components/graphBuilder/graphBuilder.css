@@ -75,7 +75,13 @@
   flex-direction: column;
   align-items: flex-end;
   min-width: 180px;
+  gap: 3px;
   line-height: 1.2;
+}
+
+.gb-pipeline-progress {
+  width: 180px;
+  height: 6px;
 }
 
 .gb-pipeline-state {

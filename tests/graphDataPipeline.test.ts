@@ -7,6 +7,7 @@ import {
   createInitialGraphStreamState,
   deriveFields,
   reduceGraphStream,
+  type GraphLoadProgress,
   type GraphStreamState,
 } from "../src/components/graphBuilder/useGraphDataPipeline.ts";
 import { createGraphStreamTransport } from "../src/services/graphDataTransport.ts";
@@ -456,6 +457,125 @@ function makeGraphBuilderItem(overrides: Partial<GraphBuilderItem> = {}): GraphB
 
 function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): string[] {
   return fields.filter((field) => field.role === role).map((field) => field.column);
+}
+
+function makeProgressedChunk(
+  requestId: string,
+  generation: number,
+  chunkIndex: number,
+  sourceRows: number,
+  processedRows: number,
+): Parameters<typeof reduceGraphStream>[1] {
+  return {
+    type: "chunk",
+    chunk: {
+      requestId,
+      generation,
+      chunkIndex,
+      rowOffset: chunkIndex,
+      rowCount: 1,
+      sourceRows,
+      processedRows,
+      dictionaries: {},
+      xEncoding: "numeric",
+      finalChunk: false,
+      xValues: new Float64Array([Number(chunkIndex)]),
+      yValues: new Float64Array([Number(chunkIndex)]),
+      rowIds: new BigInt64Array([BigInt(chunkIndex + 1)]),
+      validity: {
+        x: new Uint8Array([0b00000001]),
+        y: new Uint8Array([0b00000001]),
+      },
+    },
+  };
+}
+
+{
+  const contract: GraphLoadProgress = {
+    processedRows: 0,
+    sourceRows: 0,
+    percent: null,
+  };
+  assert.deepEqual(Object.keys(contract).sort(), ["percent", "processedRows", "sourceRows"]);
+}
+
+{
+  const request = makeRequest("req-progress-monotonic", 31);
+  const state = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request },
+    makeProgressedChunk("req-progress-monotonic", 31, 0, 10, 8),
+    makeProgressedChunk("req-progress-monotonic", 31, 1, 8, 6),
+  );
+
+  assert.deepEqual(state.progress, {
+    processedRows: 8,
+    sourceRows: 10,
+    percent: 80,
+  });
+}
+
+{
+  const request = makeRequest("req-stale-complete", 32);
+  const state = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request },
+    {
+      type: "complete",
+      completion: {
+        ...makeCompletion("other-request", 32),
+      },
+    },
+  );
+
+  assert.equal(state.pending?.request.requestId, "req-stale-complete");
+  assert.equal(state.committed?.requestId, "old-request");
+}
+
+{
+  const start = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request: makeRequest("req-explicit-cancel", 33) },
+    { type: "header", header: makeHeader("req-explicit-cancel", 33, 0, false) },
+  );
+  const cancelled = reduceGraphStream(start, {
+    type: "cancel",
+    requestId: "req-explicit-cancel",
+    generation: 33,
+  });
+
+  assert.equal(cancelled.pending, null);
+  assert.equal(cancelled.pendingHeader, null);
+  assert.equal(cancelled.committed?.requestId, "old-request");
+  assert.equal(cancelled.status, "ready");
+}
+
+{
+  const state = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request: makeRequest("req-zero", 34) },
+    {
+      type: "complete",
+      completion: {
+        requestId: "req-zero",
+        datasetId: "dataset-1",
+        generation: 34,
+        sourceRows: 0,
+        processedRows: 0,
+        chunksSent: 0,
+        cancelled: false,
+      },
+    },
+  );
+
+  assert.equal(state.status, "ready");
+  assert.equal(state.error, null);
+  assert.equal(state.committed?.requestId, "req-zero");
+  assert.deepEqual(state.progress, {
+    processedRows: 0,
+    sourceRows: 0,
+    percent: 100,
+  });
 }
 
 {
