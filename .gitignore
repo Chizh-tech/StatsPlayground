@@ -70,3 +70,6 @@ marimo/_lsp/
 __marimo__/
 
 testdata/
+
+# Local analysis fixtures (subfolders use <name>-YYYY-MM-DD)
+/xumax-test/
