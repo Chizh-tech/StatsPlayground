@@ -261,3 +261,64 @@ Recorded values:
 
 - Old-path wall time (ms): PENDING_DESKTOP_CAPTURE
 - Old-path peak working set (bytes): PENDING_DESKTOP_CAPTURE
+
+## Task 6 Unified Graph Benchmark (2026-08-25)
+
+Requested benchmark command from task brief:
+
+```powershell
+cargo run --release --manifest-path src-tauri/Cargo.toml --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation graph_projection
+```
+
+Observed command result: the current harness rejects `graph_projection` with
+`Invalid parameter: unknown operation: graph_projection`.
+
+Supported equivalent used for this baseline:
+
+```powershell
+cargo run --release --manifest-path src-tauri/Cargo.toml --example performance_baseline --features perf-harness -- --rows 300000 --columns 20 --operation graph
+```
+
+Environment facts:
+
+- Date: 2026-08-25
+- OS: Windows
+- Build profile: Rust `release` with `--features perf-harness`
+- Data mode: Full Data (benchmark graph request)
+- Shape: 300,000 rows x 20 columns
+
+Raw JSON emitted by benchmark:
+
+```json
+{"rows":300000,"columns":20,"operation":"graph","setupMs":62,"operationMs":204,"totalMs":267,"resultRows":300000,"selectedColumns":3,"queryMs":200,"encodeMs":4,"decodeMs":"desktop_only","drawMs":"desktop_only","processedRows":300000,"transferredBytes":6078360,"archiveBytes":0}
+```
+
+Observed values:
+
+- `resultRows`: 300000
+- `selectedColumns`: 3
+- `processedRows`: 300000
+- `transferredBytes`: 6078360 bytes
+- `setupMs`: 62 ms
+- `operationMs`: 204 ms
+- `totalMs`: 267 ms
+
+Outer process timing (PowerShell stopwatch around process start -> exit):
+
+- Wall time: 2735.154 ms
+
+Peak working-set capture method (PowerShell external sampler while process ran):
+
+- Baseline working set: 17735680 bytes
+- Baseline peak working set: 17735680 bytes
+- Max observed working set: 22863872 bytes
+- Max observed peak working set: 23007232 bytes
+- Delta working set: 5128192 bytes
+- Delta peak working set: 5271552 bytes
+
+Notes:
+
+- `decodeMs` and `drawMs` remain `desktop_only` in CLI runs and are not
+  interpreted as measured desktop frame timings.
+- This run reports only fields emitted by the harness JSON and externally
+  sampled process working-set data.
