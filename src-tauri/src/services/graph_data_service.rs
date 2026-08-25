@@ -1,7 +1,5 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
-#[cfg(test)]
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -234,24 +232,28 @@ struct StreamMetrics {
 }
 
 #[cfg(test)]
-static TIMING_OBSERVATION_STARTS: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    static TIMING_OBSERVATION_STARTS: Cell<u64> = const { Cell::new(0) };
+}
 
 fn begin_timing_observation() -> Instant {
     #[cfg(test)]
     {
-        TIMING_OBSERVATION_STARTS.fetch_add(1, Ordering::Relaxed);
+        TIMING_OBSERVATION_STARTS.with(|starts| {
+            starts.set(starts.get().saturating_add(1));
+        });
     }
     Instant::now()
 }
 
 #[cfg(test)]
 fn reset_timing_observation_starts() {
-    TIMING_OBSERVATION_STARTS.store(0, Ordering::Relaxed);
+    TIMING_OBSERVATION_STARTS.with(|starts| starts.set(0));
 }
 
 #[cfg(test)]
 fn timing_observation_starts() -> u64 {
-    TIMING_OBSERVATION_STARTS.load(Ordering::Relaxed)
+    TIMING_OBSERVATION_STARTS.with(Cell::get)
 }
 
 pub struct GraphDataService<'a> {
