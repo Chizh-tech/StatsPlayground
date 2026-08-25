@@ -115,12 +115,25 @@ assert.ok(
 const bindFieldToSlotSource = graphBuilderSource.slice(bindFieldToSlotStart, bindFieldToSlotEnd);
 
 assert.ok(
-  graphBuilderSource.includes("prepareAxisBinding(prevField?.name, field.name, hadMulti, prevAxis)"),
+  bindFieldToSlotSource.includes("prepareAxisBinding(")
+    && bindFieldToSlotSource.includes("prevField?.name")
+    && bindFieldToSlotSource.includes("field.name")
+    && bindFieldToSlotSource.includes("hadMulti")
+    && bindFieldToSlotSource.includes("prevAxis"),
   "GraphBuilderView.tsx must compute axis reset state through prepareAxisBinding",
 );
 assert.ok(
-  bindFieldToSlotSource.includes("if (bindingChanged) {"),
-  "bindFieldToSlot must still gate the atomic path on bindingChanged",
+  bindFieldToSlotSource.includes("const prepared = prepareAxisBinding("),
+  "bindFieldToSlot should hold prepareAxisBinding output in a named variable before branching",
+);
+assert.ok(
+  bindFieldToSlotSource.includes("const { bindingChanged, axisConfig } = prepared;"),
+  "bindFieldToSlot should destructure bindingChanged/axisConfig from the prepared contract",
+);
+assert.ok(
+  bindFieldToSlotSource.includes("if (axisKey && bindingChanged) {")
+    || bindFieldToSlotSource.includes("if (bindingChanged) {"),
+  "bindFieldToSlot must gate the atomic path on bindingChanged for axis slots",
 );
 assert.ok(
   bindFieldToSlotSource.includes("updateItem(item.id, {"),
@@ -137,6 +150,10 @@ assert.ok(
 assert.ok(
   bindFieldToSlotSource.includes("...(multiKey ? { [multiKey]: undefined } : {})"),
   "bindFieldToSlot must clear the matching multi slot in the atomic update payload",
+);
+assert.ok(
+  bindFieldToSlotSource.includes("setEncoding((prev) => ({ ...prev, [slot]: field }));"),
+  "same-field re-drop path must preserve axis/multi state by only updating encoding",
 );
 
 console.log("axis binding helper checks passed");

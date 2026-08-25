@@ -1007,10 +1007,14 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       const axisKey: "xAxis" | "yAxis" | null =
         slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
       const prevAxis = axisKey ? item[axisKey] : undefined;
-      const { bindingChanged, axisConfig } = axisKey
-        ? prepareAxisBinding(prevField?.name, field.name, hadMulti, prevAxis)
-        : { bindingChanged: false, axisConfig: undefined };
-      if (bindingChanged) {
+      const prepared = prepareAxisBinding(
+        prevField?.name,
+        field.name,
+        hadMulti,
+        prevAxis,
+      );
+      const { bindingChanged, axisConfig } = prepared;
+      if (axisKey && bindingChanged) {
         updateItem(item.id, {
           encoding: { ...item.encoding, [slot]: field },
           ...(axisKey ? { [axisKey]: axisConfig } : {}),

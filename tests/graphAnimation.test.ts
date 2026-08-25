@@ -36,8 +36,12 @@ assert.deepStrictEqual(
 
 const graphSource = readFileSync(new URL("../src/graphCore/Graph.tsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 assert.ok(
-  graphSource.includes("setOption(withoutGraphAnimation(option as echarts.EChartsCoreOption), true)"),
-  "Graph.tsx must wrap the full option-prop setOption boundary",
+  graphSource.includes("setOption(")
+    && graphSource.includes("withoutGraphAnimation(")
+    && graphSource.includes("withInterleavedGraphLayers(option) as echarts.EChartsCoreOption")
+    && graphSource.includes("true,")
+    && graphSource.includes("applyZrenderCanvasZIndices"),
+  "Graph.tsx must wrap the final full option boundary with withoutGraphAnimation after interleaving graph layers",
 );
 assert.ok(
   graphSource.includes("{ ...p, animation: false } as echarts.EChartsCoreOption")
