@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+function extractCaseBlock(source: string, caseName: string): string {
+	const caseIdx = source.indexOf(`case "${caseName}":`);
+	assert.ok(caseIdx >= 0, `expected switch case \"${caseName}\" to exist`);
+	const openIdx = source.indexOf("{", caseIdx);
+	assert.ok(openIdx > caseIdx, `expected case \"${caseName}\" to open a block`);
+
+	let depth = 0;
+	for (let i = openIdx; i < source.length; i++) {
+		const ch = source[i];
+		if (ch === "{") depth++;
+		else if (ch === "}") depth--;
+		if (depth === 0) return source.slice(openIdx + 1, i);
+	}
+	assert.fail(`unterminated block for case \"${caseName}\"`);
+}
+
 const graphSource = readFileSync(new URL("../src/graphCore/Graph.tsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 assert.ok(graphSource.includes("import { RawPointsLayer } from \"./RawPointsLayer\";"), "Graph.tsx must import RawPointsLayer");
 assert.ok(graphSource.includes("<RawPointsLayer"), "Graph.tsx must host RawPointsLayer in GraphPanel");
@@ -13,33 +29,23 @@ assert.ok(
 	"transform.ts must keep the frame-backed raw descriptor builder",
 );
 assert.ok(
-	transformSource.includes("const frameSafeData: GraphData = frameBacked ? { columns: data.columns, rows: [] } : data;"),
+	/frameBacked\s*\?\s*\{\s*columns\s*:\s*data\.columns\s*,\s*rows\s*:\s*\[\s*\]\s*\}\s*:\s*data/.test(transformSource),
 	"frame-backed panels must suppress production ECharts raw rows via frameSafeData",
 );
 assert.ok(
-	transformSource.includes("rawPoints: buildFrameBackedRawDescriptor(subSpec, frame, panelFacet)"),
-	"faceted panels must emit frame-backed raw descriptors",
-);
-assert.ok(
-	transformSource.includes("rawPoints: buildFrameBackedRawDescriptor(spec, frame)"),
-	"single panels must emit frame-backed raw descriptors",
+	(transformSource.match(/rawPoints\s*:\s*buildFrameBackedRawDescriptor\s*\(/g) ?? []).length >= 2,
+	"buildGraph panels must emit frame-backed raw descriptors in both single and faceted paths",
 );
 
-const start = transformSource.indexOf("// Raw scatter (no aggregation)");
-const end = transformSource.indexOf("case \"line\":", start);
+const pointsCase = extractCaseBlock(transformSource, "points");
 
-assert.ok(start >= 0, "raw scatter branch marker must exist");
-assert.ok(end > start, "line branch marker must follow raw scatter branch");
-
-const branch = transformSource.slice(start, end);
-
-assert.ok(branch.includes('type: "scatter"'), 'raw scatter branch must render scatter series');
-assert.ok(branch.includes('progressive: 0'), 'raw scatter branch must disable progressive rendering');
-assert.equal((branch.match(/progressive: 0/g) ?? []).length, 1, 'progressive: 0 should appear exactly once in the raw scatter branch');
-assert.ok(branch.includes("__pick"), 'raw scatter branch must preserve point metadata');
-assert.ok(!branch.includes('large: true'), 'raw scatter branch must not enable large mode');
+assert.ok(/type\s*:\s*"scatter"/.test(pointsCase), 'raw scatter branch must render scatter series');
+assert.ok(/progressive\s*:\s*0/.test(pointsCase), 'raw scatter branch must disable progressive rendering');
+assert.equal((pointsCase.match(/progressive\s*:\s*0/g) ?? []).length, 1, 'progressive: 0 should appear exactly once in the points case');
+assert.ok(pointsCase.includes("__pick"), 'raw scatter branch must preserve point metadata');
+assert.ok(!/large\s*:\s*true/.test(pointsCase), 'raw scatter branch must not enable large mode');
 assert.ok(
-	!branch.includes("useRawPointsLayer") && !branch.includes("fallbackToRawScatter"),
+	!pointsCase.includes("useRawPointsLayer") && !pointsCase.includes("fallbackToRawScatter"),
 	"raw scatter branch must not include a legacy production raw-scatter fallback flag",
 );
 

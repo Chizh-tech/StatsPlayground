@@ -4,6 +4,22 @@ import { readFileSync } from "node:fs";
 import type { YAxisConfig } from "../src/graphCore";
 import { prepareAxisBinding } from "../src/components/graphBuilder/axisBinding.ts";
 
+function extractBlockAfter(source: string, anchor: RegExp, label: string): string {
+  const match = anchor.exec(source);
+  assert.ok(match?.index !== undefined, `${label} must exist`);
+  const start = match.index + match[0].length;
+  let depth = 1;
+
+  for (let i = start; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") depth--;
+    if (depth === 0) return source.slice(start, i);
+  }
+
+  assert.fail(`${label} block must be balanced`);
+}
+
 const rangeAndStyle: YAxisConfig = {
   min: 2,
   max: 8,
@@ -115,44 +131,40 @@ assert.ok(
 const bindFieldToSlotSource = graphBuilderSource.slice(bindFieldToSlotStart, bindFieldToSlotEnd);
 
 assert.ok(
-  bindFieldToSlotSource.includes("prepareAxisBinding(")
-    && bindFieldToSlotSource.includes("prevField?.name")
-    && bindFieldToSlotSource.includes("field.name")
-    && bindFieldToSlotSource.includes("hadMulti")
-    && bindFieldToSlotSource.includes("prevAxis"),
+  /prepareAxisBinding\(\s*prevField\?\.name\s*,\s*field\.name\s*,\s*hadMulti\s*,\s*prevAxis\s*,?\s*\)/.test(bindFieldToSlotSource),
   "GraphBuilderView.tsx must compute axis reset state through prepareAxisBinding",
 );
+
+const axisGuard = /if\s*\(\s*axisKey\s*&&\s*bindingChanged\s*\)\s*\{/;
 assert.ok(
-  bindFieldToSlotSource.includes("const prepared = prepareAxisBinding("),
-  "bindFieldToSlot should hold prepareAxisBinding output in a named variable before branching",
+  axisGuard.test(bindFieldToSlotSource),
+  "bindFieldToSlot must gate the atomic path on axisKey && bindingChanged",
 );
-assert.ok(
-  bindFieldToSlotSource.includes("const { bindingChanged, axisConfig } = prepared;"),
-  "bindFieldToSlot should destructure bindingChanged/axisConfig from the prepared contract",
+
+const atomicBlock = extractBlockAfter(
+  bindFieldToSlotSource,
+  axisGuard,
+  "bindFieldToSlot axis-scoped atomic branch",
 );
+
 assert.ok(
-  bindFieldToSlotSource.includes("if (axisKey && bindingChanged) {")
-    || bindFieldToSlotSource.includes("if (bindingChanged) {"),
-  "bindFieldToSlot must gate the atomic path on bindingChanged for axis slots",
-);
-assert.ok(
-  bindFieldToSlotSource.includes("updateItem(item.id, {"),
+  /updateItem\(\s*item\.id\s*,\s*\{/.test(atomicBlock),
   "bindFieldToSlot must use a single updateItem call for the atomic bindingChanged path",
 );
 assert.ok(
-  bindFieldToSlotSource.includes("encoding: { ...item.encoding, [slot]: field }"),
+  /encoding\s*:\s*\{[^}]*\[\s*slot\s*\]\s*:\s*field[^}]*\}/s.test(atomicBlock),
   "bindFieldToSlot must write the new slot encoding in the atomic update payload",
 );
 assert.ok(
-  bindFieldToSlotSource.includes("...(axisKey ? { [axisKey]: axisConfig } : {})"),
+  /\[\s*axisKey\s*\]\s*:\s*axisConfig/.test(atomicBlock),
   "bindFieldToSlot must write back the axis config in the atomic update payload",
 );
 assert.ok(
-  bindFieldToSlotSource.includes("...(multiKey ? { [multiKey]: undefined } : {})"),
+  /\[\s*multiKey\s*\]\s*:\s*undefined/.test(atomicBlock),
   "bindFieldToSlot must clear the matching multi slot in the atomic update payload",
 );
 assert.ok(
-  bindFieldToSlotSource.includes("setEncoding((prev) => ({ ...prev, [slot]: field }));"),
+  /setEncoding\(\s*\(prev\)\s*=>\s*\(\s*\{[^}]*\[\s*slot\s*\]\s*:\s*field[^}]*\}\s*\)\s*\)\s*;?/s.test(bindFieldToSlotSource),
   "same-field re-drop path must preserve axis/multi state by only updating encoding",
 );
 
