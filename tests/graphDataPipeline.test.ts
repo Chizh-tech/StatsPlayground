@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -73,6 +73,30 @@ function hasCallWithPropertyName(sourceFile: ts.SourceFile, propertyName: string
   return found;
 }
 
+function listGraphBuilderProductionFiles(): string[] {
+  const root = resolve(TEST_FILE_DIR, "../src/components/graphBuilder");
+  const collected: string[] = [];
+  const stack = [root];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+    const entries = readdirSync(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const absolute = resolve(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(absolute);
+        continue;
+      }
+      if (entry.isFile() && /\.(ts|tsx)$/i.test(entry.name)) {
+        collected.push(absolute);
+      }
+    }
+  }
+
+  return collected;
+}
+
 export function makeGraphRows(count: number): Array<[number, string, number]> {
   return Array.from({ length: count }, (_, index) => [
     index + 1,
@@ -94,11 +118,7 @@ assert.equal(makeGraphRows(10).length, 10);
   const graphBuilderViewPath = resolve(TEST_FILE_DIR, "../src/components/graphBuilder/GraphBuilderView.tsx");
   const graphBuilderViewSource = readFileSync(graphBuilderViewPath, "utf8");
   const graphBuilderViewAst = parseTs("GraphBuilderView.tsx", graphBuilderViewSource);
-  const pipelineSource = readFileSync(
-    resolve(TEST_FILE_DIR, "../src/components/graphBuilder/useGraphDataPipeline.ts"),
-    "utf8",
-  );
-  const pipelineAst = parseTs("useGraphDataPipeline.ts", pipelineSource);
+  const graphBuilderFiles = listGraphBuilderProductionFiles();
 
   assert.equal(
     graphBuilderViewSource.includes("dataService.queryTable("),
@@ -130,11 +150,16 @@ assert.equal(makeGraphRows(10).length, 10);
     false,
     "GraphBuilder pipeline view must not call dataService.queryTableWindow",
   );
-  assert.equal(
-    hasCallWithPropertyName(pipelineAst, "queryTableWindow"),
-    false,
-    "Graph data pipeline reducer/hook must not call dataService.queryTableWindow",
-  );
+
+  for (const graphBuilderFile of graphBuilderFiles) {
+    const relativeFile = graphBuilderFile.replace(resolve(TEST_FILE_DIR, "../"), "").replace(/\\/g, "/");
+    const source = readFileSync(graphBuilderFile, "utf8");
+    assert.equal(
+      source.includes("queryTableWindow"),
+      false,
+      `Graph Builder production file must not reference queryTableWindow: ${relativeFile}`,
+    );
+  }
 }
 
 {
@@ -168,6 +193,7 @@ assert.equal(makeGraphRows(10).length, 10);
     "utf8",
   );
   const dataTableViewAst = parseTs("DataTableView.tsx", dataTableViewSource);
+  const dataServiceSource = readFileSync(resolve(TEST_FILE_DIR, "../src/services/dataService.ts"), "utf8");
 
   const deletedPaths = [
     "../src/components/graphBuilder/loadGraphTableData.ts",
@@ -207,6 +233,11 @@ assert.equal(makeGraphRows(10).length, 10);
     hasCallWithPropertyName(dataTableViewAst, "queryTableWindow"),
     true,
     "Table viewport/table view path must continue owning queryTableWindow access",
+  );
+  assert.equal(
+    dataServiceSource.includes("queryTableWindow"),
+    true,
+    "dataService must continue owning queryTableWindow API",
   );
 }
 

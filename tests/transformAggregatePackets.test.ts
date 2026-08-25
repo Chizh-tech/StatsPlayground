@@ -83,6 +83,26 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
   return series as Array<Record<string, unknown>>;
 }
 
+function throwOnAnyRowAccess(label: string): unknown[][] {
+  return new Proxy([] as unknown[][], {
+    get() {
+      throw new Error(`legacy rows access is forbidden for ${label}`);
+    },
+  });
+}
+
+function frameBackedAggregateData(columns: string[], sourceRows = 4): GraphData {
+  return baseData(columns, throwOnAnyRowAccess("frame-backed aggregate packet ownership"));
+}
+
+function frameBackedAggregateFrame(aggregates: GraphDataFrame["aggregates"], sourceRows = 4): GraphDataFrame {
+  return {
+    ...baseFrame(aggregates),
+    sourceRows,
+    processedRows: sourceRows,
+  };
+}
+
 {
   const throwingRows = new Proxy([] as unknown[][], {
     get(_target, prop) {
@@ -534,86 +554,135 @@ function panelSeries(option: Record<string, unknown>): Array<Record<string, unkn
 }
 
 {
-  const data = baseData(["x", "y"], []);
-  const spec: GraphSpec = {
-    encoding: {
-      x: { name: "x", type: "continuous" },
-      y: { name: "y", type: "continuous" },
-    },
-    elements: [{ kind: "heatmap" as any, enabled: true }],
-  };
-
-  const frame = baseFrame([
+  const matrix: Array<{
+    name: string;
+    data: GraphData;
+    spec: GraphSpec;
+    frame: GraphDataFrame;
+    verify: (series: Array<Record<string, unknown>>) => void;
+  }> = [
     {
-      kind: "heatmap",
-      xColumn: "x",
-      yColumn: "y",
-      xBinCount: 2,
-      yBinCount: 2,
-      xMin: 0,
-      xMax: 2,
-      yMin: 0,
-      yMax: 2,
-      missingCount: 0,
-      xBinWidth: 1,
-      yBinWidth: 1,
-      totalCount: 3,
-      cells: [
-        { xBinIndex: 0, yBinIndex: 0, xBinStart: 0, xBinEnd: 1, yBinStart: 0, yBinEnd: 1, count: 2 },
-        { xBinIndex: 1, yBinIndex: 1, xBinStart: 1, xBinEnd: 2, yBinStart: 1, yBinEnd: 2, count: 1 },
-      ],
+      name: "histogram packet",
+      data: frameBackedAggregateData(["x", "y"]),
+      spec: {
+        encoding: {
+          x: { name: "x", type: "continuous" },
+          y: { name: "y", type: "continuous" },
+        },
+        elements: [{ kind: "histogram", enabled: true, options: { histStyle: "bar" } }],
+      },
+      frame: frameBackedAggregateFrame([
+        {
+          kind: "histogram",
+          xColumn: "x",
+          yColumn: "y",
+          binCount: 2,
+          minValue: 0,
+          maxValue: 2,
+          missingCount: 0,
+          binWidth: 1,
+          totalCount: 3,
+          bins: [
+            { binStart: 0, binEnd: 1, count: 2 },
+            { binStart: 1, binEnd: 2, count: 1 },
+          ],
+        },
+      ]),
+      verify: (series) => {
+        assert.ok(series.length > 0, "frame-backed histogram packet should produce renderable series");
+      },
     },
-  ]);
-
-  const built = buildGraph(spec, data, theme, undefined, frame);
-  const series = panelSeries(built.panels[0].option as Record<string, unknown>);
-  const heatSeries = series.find((entry) => entry.type === "heatmap" || entry.type === "custom");
-  assert.ok(heatSeries, "heatmap packet should produce a renderable series");
-  const points = Array.isArray(heatSeries?.data) ? (heatSeries?.data as unknown[][]) : [];
-  assert.ok(
-    points.some((row) => Number(row[0]) === 0.5 && Number(row[1]) === 0.5 && Number(row[2]) === 2),
-    "heatmap packet cell center/count must map to heatmap series data",
-  );
-}
-
-{
-  const data = baseData(
-    ["x", "y"],
-    [["A", 1], ["A", 2], ["A", 3], ["B", 100]],
-  );
-  const spec: GraphSpec = {
-    encoding: {
-      x: { name: "x", type: "nominal" },
-      y: { name: "y", type: "continuous" },
+    {
+      name: "heatmap packet",
+      data: frameBackedAggregateData(["x", "y"]),
+      spec: {
+        encoding: {
+          x: { name: "x", type: "continuous" },
+          y: { name: "y", type: "continuous" },
+        },
+        elements: [{ kind: "heatmap" as any, enabled: true }],
+      },
+      frame: frameBackedAggregateFrame([
+        {
+          kind: "heatmap",
+          xColumn: "x",
+          yColumn: "y",
+          xBinCount: 2,
+          yBinCount: 2,
+          xMin: 0,
+          xMax: 2,
+          yMin: 0,
+          yMax: 2,
+          missingCount: 0,
+          xBinWidth: 1,
+          yBinWidth: 1,
+          totalCount: 3,
+          cells: [
+            { xBinIndex: 0, yBinIndex: 0, xBinStart: 0, xBinEnd: 1, yBinStart: 0, yBinEnd: 1, count: 2 },
+            { xBinIndex: 1, yBinIndex: 1, xBinStart: 1, xBinEnd: 2, yBinStart: 1, yBinEnd: 2, count: 1 },
+          ],
+        },
+      ]),
+      verify: (series) => {
+        const heatSeries = series.find((entry) => entry.type === "heatmap" || entry.type === "custom");
+        assert.ok(heatSeries, "heatmap packet should produce a renderable series");
+        const points = Array.isArray(heatSeries?.data) ? (heatSeries?.data as unknown[][]) : [];
+        assert.ok(
+          points.some((row) => Number(row[0]) === 0.5 && Number(row[1]) === 0.5 && Number(row[2]) === 2),
+          "heatmap packet cell center/count must map to heatmap series data",
+        );
+      },
     },
-    elements: [{ kind: "boxplot", enabled: true }],
-  };
-
-  const built = buildGraph(spec, data, theme, undefined, baseFrame([]));
-  const series = panelSeries(built.panels[0].option as Record<string, unknown>);
-  assert.equal(series.some((entry) => entry.type === "boxplot"), false, "frame-backed boxplot must not fall back to row scan when packet is missing");
-}
-
-{
-  const data = baseData(
-    ["x", "y"],
-    [["A", 1], ["A", 2], ["B", 10], ["B", 11]],
-  );
-  const spec: GraphSpec = {
-    encoding: {
-      x: { name: "x", type: "nominal" },
-      y: { name: "y", type: "continuous" },
+    {
+      name: "boxplot missing packet",
+      data: frameBackedAggregateData(["x", "y"]),
+      spec: {
+        encoding: {
+          x: { name: "x", type: "nominal" },
+          y: { name: "y", type: "continuous" },
+        },
+        elements: [{ kind: "boxplot", enabled: true }],
+      },
+      frame: frameBackedAggregateFrame([]),
+      verify: (series) => {
+        assert.equal(
+          series.some((entry) => entry.type === "boxplot"),
+          false,
+          "frame-backed boxplot must not fall back to row scan when packet is missing",
+        );
+      },
     },
-    elements: [{ kind: "points", enabled: true, options: { summaryStat: "mean" } }],
-  };
+    {
+      name: "summary missing packet",
+      data: frameBackedAggregateData(["x", "y"]),
+      spec: {
+        encoding: {
+          x: { name: "x", type: "nominal" },
+          y: { name: "y", type: "continuous" },
+        },
+        elements: [{ kind: "points", enabled: true, options: { summaryStat: "mean" } }],
+      },
+      frame: frameBackedAggregateFrame([]),
+      verify: (series) => {
+        assert.equal(
+          series.some((entry) => String(entry.id ?? "").endsWith("__summary")),
+          false,
+          "frame-backed summary points must not be derived from row scan when summary packet is missing",
+        );
+      },
+    },
+  ];
 
-  const built = buildGraph(spec, data, theme, undefined, baseFrame([]));
-  const series = panelSeries(built.panels[0].option as Record<string, unknown>);
-  assert.equal(
-    series.some((entry) => String(entry.id ?? "").endsWith("__summary")),
-    false,
-    "frame-backed summary points must not be derived from row scan when summary packet is missing",
-  );
+  for (const testCase of matrix) {
+    assert.doesNotThrow(
+      () => {
+        const built = buildGraph(testCase.spec, testCase.data, theme, undefined, testCase.frame);
+        const series = panelSeries(built.panels[0].option as Record<string, unknown>);
+        testCase.verify(series);
+      },
+      `${testCase.name} must not reconstruct legacy rows for frame-backed packet ownership`,
+    );
+  }
 }
 
 {
