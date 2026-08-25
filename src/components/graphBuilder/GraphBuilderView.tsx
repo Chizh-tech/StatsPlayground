@@ -30,6 +30,7 @@ import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPalet
 import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
+import { prepareAxisBinding } from "./axisBinding";
 import { loadGraphTableData, type GraphTableLoadProgress } from "./loadGraphTableData";
 import { FilterPanel, applyFilters } from "@/components/filter";
 import { graphTableDataCache } from "@/utils/graphTableDataCache";
@@ -1007,26 +1008,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       const multiKey: "multiX" | "multiY" | null =
         slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
       const hadMulti = multiKey ? (item[multiKey]?.length ?? 0) > 0 : false;
-      const fieldChanged =
-        (slot === "x" || slot === "y") &&
-        prevField !== undefined &&
-        prevField.name !== field.name;
-      if (fieldChanged || hadMulti) {
-        const axisKey: "xAxis" | "yAxis" | null =
-          slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
-        const prevAxis = axisKey ? item[axisKey] : undefined;
-        const needsAxisReset =
-          axisKey !== undefined &&
-          prevAxis !== undefined &&
-          (prevAxis.min !== undefined ||
-            prevAxis.max !== undefined ||
-            prevAxis.tickInterval !== undefined);
-        const nextAxis = needsAxisReset
-          ? { ...prevAxis, min: undefined, max: undefined, tickInterval: undefined }
-          : prevAxis;
+      const axisKey: "xAxis" | "yAxis" | null =
+        slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
+      const prevAxis = axisKey ? item[axisKey] : undefined;
+      const { bindingChanged, axisConfig } = axisKey
+        ? prepareAxisBinding(prevField?.name, field.name, hadMulti, prevAxis)
+        : { bindingChanged: false, axisConfig: undefined };
+      if (bindingChanged) {
         updateItem(item.id, {
           encoding: { ...item.encoding, [slot]: field },
-          ...(needsAxisReset && axisKey ? { [axisKey]: nextAxis } : {}),
+          ...(axisKey ? { [axisKey]: axisConfig } : {}),
           ...(multiKey ? { [multiKey]: undefined } : {}),
         });
         markDirty();
