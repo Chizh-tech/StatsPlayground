@@ -780,6 +780,28 @@
       "clearAllRules": "Clear all",
       "clearAllTitle": "Remove every filter rule",
       "noMatches": "No matches"
+    },
+    "sampling": {
+      "label": "Sampling mode",
+      "full": "Full",
+      "sample": "Sample",
+      "size": "Sample size",
+      "seed": "Sample seed"
+    },
+    "rowStatus": {
+      "empty": "No graph frame yet",
+      "pending": "Processing rows...",
+      "pendingRows": "Processing: {{processed}} / {{source}} rows",
+      "full": "Full Data: {{processed}} rows",
+      "sampled": "Sampled: {{processed}} / {{source}} rows"
+    },
+    "pipeline": {
+      "ready": "Ready",
+      "pending": "Updating graph...",
+      "error": "Update failed",
+      "metaLoading": "Loading columns...",
+      "metaError": "Column metadata unavailable",
+      "progress": "Graph data loading progress"
     }
   }
 }

@@ -12,7 +12,6 @@ import {
   failSaveState,
   replaceSaveProgress,
 } from "@/utils/saveReadOnly";
-import { graphTableDataCache } from "@/utils/graphTableDataCache";
 
 type ProjectServiceLike = Pick<
   typeof projectService,
@@ -68,21 +67,18 @@ export function createProjectStore(
     saveError: null,
 
     initProject: async () => {
-      graphTableDataCache.clear();
       set({ loading: true });
       const project = await deps.projectService.initProject();
       set({ project, loading: false, dirty: false, saveError: null });
     },
 
     createProject: async (name, filePath) => {
-      graphTableDataCache.clear();
       set({ loading: true });
       const project = await deps.projectService.createProject(name, filePath);
       set({ project, loading: false, dirty: false, saveError: null });
     },
 
     openProject: async (filePath) => {
-      graphTableDataCache.clear();
       set({ loading: true });
       try {
         const result = await deps.projectService.openProject(filePath);
@@ -158,7 +154,6 @@ export function createProjectStore(
 
     closeProject: () => {
       activeSaveGeneration = null;
-      graphTableDataCache.clear();
       set({
         project: null,
         dirty: false,

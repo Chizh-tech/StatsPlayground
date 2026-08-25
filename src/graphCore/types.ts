@@ -28,6 +28,7 @@ export type ElementKind =
   | "points"       // 散点
   | "line"         // 折线
   | "bar"          // 柱状（含分组均值）
+  | "heatmap"      // 热力图
   | "histogram"    // 直方图
   | "boxplot"      // 箱线
   | "smoother"     // 平滑曲线
@@ -39,6 +40,19 @@ export type ElementKind =
 export interface SmootherOptions {
   /** 平滑窗口比例 0~1 */
   lambda?: number;
+}
+
+/** Optional typed-buffer raw-point overlay jitter controls.
+ *
+ * Default is `none` so every valid row maps directly through the affine/
+ * category projector with no implicit random perturbation. When enabled,
+ * jitter must be explicit and deterministic (`seeded`) so redraws, hit tests,
+ * and regression digests stay stable.
+ */
+export interface RawPointJitterOptions {
+  rawPointJitter?: "none" | "seeded";
+  rawPointJitterSeed?: number;
+  rawPointJitterAmplitudePx?: number;
 }
 
 /** 点的符号形状 */
@@ -275,7 +289,7 @@ export interface ChartElement {
   /** 元素是否启用 */
   enabled?: boolean;
   /** 元素特有选项 */
-  options?: SmootherOptions & Record<string, unknown>;
+  options?: SmootherOptions & RawPointJitterOptions & Record<string, unknown>;
 }
 
 /** 编码通道：将数据字段映射到视觉属性 */

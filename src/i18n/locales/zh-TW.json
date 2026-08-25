@@ -780,6 +780,28 @@
       "clearAllRules": "清除全部",
       "clearAllTitle": "移除所有篩選規則",
       "noMatches": "無符合項目"
+    },
+    "sampling": {
+      "label": "取樣模式",
+      "full": "完整",
+      "sample": "取樣",
+      "size": "樣本大小",
+      "seed": "取樣種子"
+    },
+    "rowStatus": {
+      "empty": "尚無圖形資料幀",
+      "pending": "正在處理資料列...",
+      "pendingRows": "處理中：{{processed}} / {{source}} 列",
+      "full": "完整資料：{{processed}} 列",
+      "sampled": "已取樣：{{processed}} / {{source}} 列"
+    },
+    "pipeline": {
+      "ready": "就緒",
+      "pending": "正在更新圖形...",
+      "error": "更新失敗",
+      "metaLoading": "正在載入欄位資訊...",
+      "metaError": "欄位中繼資料不可用",
+      "progress": "圖形資料載入進度"
     }
   }
 }

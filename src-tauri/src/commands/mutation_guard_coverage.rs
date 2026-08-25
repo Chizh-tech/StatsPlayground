@@ -166,6 +166,14 @@ mod tests {
                 "commands::history_commands::restore_project_snapshot",
                 CommandClass::Mutation,
             ),
+            (
+                "commands::graph_data_commands::stream_graph_data",
+                CommandClass::ReadOnly,
+            ),
+            (
+                "commands::graph_data_commands::cancel_graph_data",
+                CommandClass::ReadOnly,
+            ),
             ("commands::project_commands::init_project", CommandClass::Mutation),
             (
                 "commands::project_commands::create_project",

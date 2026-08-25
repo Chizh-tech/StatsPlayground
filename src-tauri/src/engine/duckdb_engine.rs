@@ -2,11 +2,16 @@ use std::collections::{BTreeMap, HashSet};
 use std::mem;
 use std::time::Instant;
 
-use duckdb::{Config, params, params_from_iter, Connection};
 use duckdb::types::{OrderedMap, TimeUnit, Value};
+use duckdb::{params, params_from_iter, Config, Connection};
 
-use crate::error::AppError;
 use crate::engine::sql_query::{normalize_identifier, validate_read_only_query};
+use crate::error::AppError;
+use crate::models::graph_data::{
+    BoxPlotEntry, BoxPlotOutlier, BoxPlotPacket, GraphAggregatePacket, GraphDataRequest,
+    GraphSampling, HeatmapCell, HeatmapPacket, HistogramBin, HistogramPacket, SummaryEntry,
+    SummaryPacket, GRAPH_VIRTUAL_SOURCE_COLUMN, GRAPH_VIRTUAL_VALUE_COLUMN,
+};
 use crate::models::table::{
     CellPosition, CellUpdate, DatasetMeta, SqlQueryResult, TableQueryResult, TableWindowFilterRule,
     TableWindowRequest, TableWindowResult,
@@ -19,12 +24,44 @@ pub struct DuckDbEngine {
     conn: Connection,
 }
 
+pub struct GraphProjectionStats {
+    pub source_rows: u64,
+    pub projected_columns: Vec<String>,
+    pub projected_column_types: Vec<String>,
+}
+
+struct GraphQueryPlan {
+    source_sql: String,
+    source_values: Vec<Value>,
+    projection_sql: String,
+    projection_values: Vec<Value>,
+    projection_select_items: Vec<String>,
+    projected_columns: Vec<String>,
+    projected_column_types: Vec<String>,
+}
+
 struct MaterializedQuery {
     columns: Vec<String>,
     column_types: Vec<String>,
     rows: Vec<Vec<Value>>,
 }
 type GroupedStatisticValues = std::collections::HashMap<(String, String), Vec<Option<f64>>>;
+
+fn role_column(request: &GraphDataRequest, role_name: &str) -> Option<String> {
+    request
+        .fields
+        .iter()
+        .find(|field| field.role.eq_ignore_ascii_case(role_name))
+        .map(|field| field.column.clone())
+}
+
+fn is_sampling_strata_role(role: &str) -> bool {
+    matches!(
+        role,
+        "group" | "filter" | "groupx" | "groupy" | "groupz" | "wrap" | "overlay" | "color" | "x"
+    ) || role.starts_with("multix")
+        || role.starts_with("multiy")
+}
 
 pub(crate) struct ArchiveKeysetReadPlan {
     select_sql: String,
@@ -50,7 +87,7 @@ impl DuckDbEngine {
 
     fn bump_dataset_generation(&self, dataset_id: &str) -> Result<(), AppError> {
         let changed = self.conn.execute(
-                "UPDATE _meta_datasets SET generation = generation + 1 WHERE id = ?",
+            "UPDATE _meta_datasets SET generation = generation + 1 WHERE id = ?",
             params![dataset_id],
         )?;
         if changed == 0 {
@@ -577,7 +614,12 @@ impl DuckDbEngine {
     }
 
     /// Import a CSV file as a new dataset
-    pub fn import_csv(&self, id: &str, name: &str, file_path: &str) -> Result<DatasetMeta, AppError> {
+    pub fn import_csv(
+        &self,
+        id: &str,
+        name: &str,
+        file_path: &str,
+    ) -> Result<DatasetMeta, AppError> {
         self.validate_dataset_name(name, None)?;
         let table_name = format!("dataset_{}", id.replace('-', "_"));
 
@@ -697,7 +739,9 @@ impl DuckDbEngine {
             return Err(AppError::InvalidParam("page must be at least 1".into()));
         }
         if !(1..=200).contains(&page_size) {
-            return Err(AppError::InvalidParam("page_size must be between 1 and 200".into()));
+            return Err(AppError::InvalidParam(
+                "page_size must be between 1 and 200".into(),
+            ));
         }
 
         let started_at = Instant::now();
@@ -750,20 +794,26 @@ impl DuckDbEngine {
             self.conn.execute(&create_sql, [])?;
 
             let insert_columns = std::iter::once(Self::quote_identifier("_row_id"))
-                .chain(materialized.columns.iter().map(|column_name| Self::quote_identifier(column_name)))
+                .chain(
+                    materialized
+                        .columns
+                        .iter()
+                        .map(|column_name| Self::quote_identifier(column_name)),
+                )
                 .collect::<Vec<_>>()
                 .join(", ");
             let placeholders = std::iter::once("?".to_string())
-                .chain(materialized.column_types.iter().map(|column_type| {
-                    Self::typed_parameter_expression(column_type)
-                }))
+                .chain(
+                    materialized
+                        .column_types
+                        .iter()
+                        .map(|column_type| Self::typed_parameter_expression(column_type)),
+                )
                 .collect::<Vec<_>>()
                 .join(", ");
             let insert_sql = format!(
                 "INSERT INTO {} ({}) VALUES ({})",
-                quoted_table,
-                insert_columns,
-                placeholders
+                quoted_table, insert_columns, placeholders
             );
 
             for (row_index, row_values) in materialized.rows.iter().enumerate() {
@@ -864,16 +914,20 @@ impl DuckDbEngine {
 
         let table_name = Self::quote_identifier(&Self::internal_table_name(&request.dataset_id));
         let count_sql = format!("SELECT COUNT(*) FROM {table_name} {where_clause}");
-        let total_rows: i64 = self.conn.query_row(
-            &count_sql,
-            params_from_iter(filter_values.iter()),
-            |row| row.get(0),
-        )?;
+        let total_rows: i64 =
+            self.conn
+                .query_row(&count_sql, params_from_iter(filter_values.iter()), |row| {
+                    row.get(0)
+                })?;
 
         let mut columns = vec!["_row_id".to_string()];
         let mut column_types = vec!["BIGINT".to_string()];
         columns.extend(user_columns.iter().map(|(name, _)| name.clone()));
-        column_types.extend(user_columns.iter().map(|(_, column_type)| column_type.clone()));
+        column_types.extend(
+            user_columns
+                .iter()
+                .map(|(_, column_type)| column_type.clone()),
+        );
         let select_columns = columns
             .iter()
             .zip(column_types.iter())
@@ -1006,6 +1060,1164 @@ impl DuckDbEngine {
         Ok(values)
     }
 
+    pub fn stream_graph_projection_rows<FMeta, F>(
+        &self,
+        request: &GraphDataRequest,
+        include_row_id: bool,
+        mut on_projection: FMeta,
+        mut on_row: F,
+    ) -> Result<GraphProjectionStats, AppError>
+    where
+        FMeta: FnMut(&GraphProjectionStats) -> Result<(), AppError>,
+        F: FnMut(Option<i64>, Vec<Value>, u64) -> Result<bool, AppError>,
+    {
+        let current_generation = self.get_dataset_generation(&request.dataset_id)?;
+        if current_generation != request.generation {
+            return Err(AppError::InvalidParam(format!(
+                "stale dataset generation: expected {current_generation}, received {}",
+                request.generation
+            )));
+        }
+
+        let user_columns = self.get_user_columns(&request.dataset_id)?;
+        let allowed_columns = user_columns
+            .iter()
+            .map(|(name, column_type)| (name.as_str(), column_type.as_str()))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let plan = self.compile_graph_query_plan(request, &allowed_columns)?;
+
+        let mut stats = GraphProjectionStats {
+            source_rows: 0,
+            projected_columns: plan.projected_columns.clone(),
+            projected_column_types: plan.projected_column_types.clone(),
+        };
+        on_projection(&stats)?;
+
+        let source_count_sql = format!(
+            "SELECT COUNT(*) FROM ({}) AS __sp_graph_source",
+            plan.source_sql
+        );
+        let source_rows_i64: i64 = self.conn.query_row(
+            &source_count_sql,
+            params_from_iter(plan.source_values.iter()),
+            |row| row.get(0),
+        )?;
+        stats.source_rows = u64::try_from(source_rows_i64)
+            .map_err(|_| AppError::Database("graph source row count is negative".into()))?;
+
+        let select_sql = self.build_graph_projection_select_sql(&plan, include_row_id);
+
+        let mut stmt = self.conn.prepare(&select_sql)?;
+        let mut rows = stmt.query(params_from_iter(plan.projection_values.iter()))?;
+        while let Some(row) = rows.next()? {
+            let row_id = if include_row_id {
+                Some(row.get::<_, i64>(0)?)
+            } else {
+                None
+            };
+
+            let start_index = if include_row_id { 1 } else { 0 };
+            let mut values = Vec::with_capacity(plan.projected_columns.len());
+            for index in 0..plan.projected_columns.len() {
+                values.push(row.get::<_, Value>(start_index + index)?);
+            }
+            if !on_row(row_id, values, stats.source_rows)? {
+                break;
+            }
+        }
+
+        Ok(stats)
+    }
+
+    fn build_graph_projection_select_sql(
+        &self,
+        plan: &GraphQueryPlan,
+        include_row_id: bool,
+    ) -> String {
+        let row_id_select = if include_row_id { "\"_row_id\", " } else { "" };
+        format!(
+            "SELECT {row_id_select}{projection} FROM ({}) AS __sp_graph_projection ORDER BY \"_row_id\" ASC",
+            plan.projection_sql,
+            projection = plan.projection_select_items.join(", ")
+        )
+    }
+
+    fn compile_graph_query_plan(
+        &self,
+        request: &GraphDataRequest,
+        allowed_columns: &std::collections::HashMap<&str, &str>,
+    ) -> Result<GraphQueryPlan, AppError> {
+        let role_to_column = request
+            .fields
+            .iter()
+            .map(|field| {
+                (
+                    field.role.to_ascii_lowercase(),
+                    field.column.trim().to_string(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let y_column = role_to_column
+            .get("y")
+            .ok_or_else(|| AppError::InvalidParam("graph request is missing role y".into()))?
+            .clone();
+
+        let x_column = role_to_column.get("x").cloned();
+        let group_column = role_to_column.get("group").cloned();
+        let size_column = role_to_column.get("size").cloned();
+        let z_column = role_to_column.get("z").cloned();
+        let group_x_column = role_to_column.get("groupx").cloned();
+        let group_y_column = role_to_column.get("groupy").cloned();
+        let group_z_column = role_to_column.get("groupz").cloned();
+        let wrap_column = role_to_column.get("wrap").cloned();
+
+        let mut multi_y_columns = request
+            .fields
+            .iter()
+            .filter(|field| field.role.to_ascii_lowercase().starts_with("multiy"))
+            .map(|field| field.column.trim().to_string())
+            .collect::<Vec<_>>();
+        multi_y_columns.sort();
+        multi_y_columns.dedup();
+
+        let validate_column = |column_name: &str| -> Result<(), AppError> {
+            if column_name.is_empty() {
+                return Err(AppError::InvalidParam(
+                    "graph field column must not be blank".to_string(),
+                ));
+            }
+            if !allowed_columns.contains_key(column_name) {
+                return Err(AppError::InvalidParam(format!(
+                    "unknown graph column: {column_name}"
+                )));
+            }
+            Ok(())
+        };
+
+        validate_column(&y_column)?;
+        if let Some(column) = &x_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &group_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &size_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &z_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &group_x_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &group_y_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &group_z_column {
+            validate_column(column)?;
+        }
+        if let Some(column) = &wrap_column {
+            validate_column(column)?;
+        }
+        for column in &multi_y_columns {
+            validate_column(column)?;
+        }
+
+        let mut sampling_strata_columns: Vec<String> = Vec::new();
+        for field in &request.fields {
+            let role = field.role.to_ascii_lowercase();
+            if !is_sampling_strata_role(role.as_str()) {
+                continue;
+            }
+            let column = field.column.trim().to_string();
+            if column.is_empty() || !allowed_columns.contains_key(column.as_str()) {
+                continue;
+            }
+            if !sampling_strata_columns
+                .iter()
+                .any(|existing| existing == &column)
+            {
+                sampling_strata_columns.push(column);
+            }
+        }
+        if sampling_strata_columns.is_empty() {
+            if let Some(column) = group_column.clone() {
+                sampling_strata_columns.push(column);
+            } else if let Some(column) = x_column.clone() {
+                sampling_strata_columns.push(column);
+            }
+        }
+
+        let mut sampling_strata_aliases: Vec<String> = Vec::new();
+        let mut sampling_strata_select_sql: Vec<String> = Vec::new();
+        for (index, column) in sampling_strata_columns.iter().enumerate() {
+            let alias = format!("__sp_strata_{index}");
+            sampling_strata_select_sql.push(format!(
+                "CAST({column} AS VARCHAR) AS {alias}",
+                column = Self::quote_identifier(column),
+                alias = Self::quote_identifier(alias.as_str()),
+            ));
+            sampling_strata_aliases.push(alias);
+        }
+
+        let mut strata_key_parts = if sampling_strata_aliases.is_empty() {
+            vec!["COALESCE(CAST(__sp_group AS VARCHAR), COALESCE(CAST(__sp_x AS VARCHAR), '__sp_all__'))".to_string()]
+        } else {
+            sampling_strata_aliases
+                .iter()
+                .map(|alias| format!("COALESCE(CAST({alias} AS VARCHAR), '')"))
+                .collect::<Vec<_>>()
+        };
+        strata_key_parts.push(format!(
+            "COALESCE(CAST({source_col} AS VARCHAR), '')",
+            source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN)
+        ));
+        let sampling_strata_key_expr = format!("CONCAT_WS('|', {})", strata_key_parts.join(", "));
+
+        let (where_clause, filter_values) =
+            Self::compile_table_window_filters(&request.filters, allowed_columns)?;
+        let table_name = Self::quote_identifier(&Self::internal_table_name(&request.dataset_id));
+
+        let x_expr = x_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let group_expr = group_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let size_expr = size_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let z_expr = z_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let group_x_expr = group_x_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let group_y_expr = group_y_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let group_z_expr = group_z_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let wrap_expr = wrap_column
+            .as_ref()
+            .map(|column| Self::quote_identifier(column))
+            .unwrap_or_else(|| "NULL".to_string());
+        let strata_select_sql = if sampling_strata_select_sql.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", sampling_strata_select_sql.join(", "))
+        };
+
+        let (source_sql, source_values, source_column_type) = if multi_y_columns.len() >= 2 {
+            let mut branches = Vec::with_capacity(multi_y_columns.len());
+            let mut values = Vec::with_capacity(
+                filter_values.len() * multi_y_columns.len() + multi_y_columns.len(),
+            );
+            for column in &multi_y_columns {
+                let branch = format!(
+                    "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, CAST({z_expr} AS DOUBLE) AS __sp_z, {group_x_expr} AS __sp_groupx, {group_y_expr} AS __sp_groupy, {group_z_expr} AS __sp_groupz, {wrap_expr} AS __sp_wrap{strata_select}, ? AS {source_col} FROM {table_name} {where_clause}",
+                    y_col = Self::quote_identifier(column),
+                    source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                    strata_select = strata_select_sql,
+                );
+                branches.push(branch);
+                values.push(Value::Text(column.clone()));
+                values.extend(filter_values.iter().cloned());
+            }
+            (branches.join(" UNION ALL "), values, "VARCHAR".to_string())
+        } else {
+            let source_col = if multi_y_columns.len() == 1 {
+                multi_y_columns[0].clone()
+            } else {
+                y_column.clone()
+            };
+            let sql = format!(
+                "SELECT \"_row_id\", {x_expr} AS __sp_x, CAST({y_col} AS DOUBLE) AS __sp_y, {group_expr} AS __sp_group, {size_expr} AS __sp_size, CAST({z_expr} AS DOUBLE) AS __sp_z, {group_x_expr} AS __sp_groupx, {group_y_expr} AS __sp_groupy, {group_z_expr} AS __sp_groupz, {wrap_expr} AS __sp_wrap{strata_select}, ? AS {source_col} FROM {table_name} {where_clause}",
+                y_col = Self::quote_identifier(&source_col),
+                source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                strata_select = strata_select_sql,
+            );
+            let mut values = Vec::with_capacity(filter_values.len() + 1);
+            values.push(Value::Text(source_col));
+            values.extend(filter_values.iter().cloned());
+            (sql, values, "VARCHAR".to_string())
+        };
+
+        let projection_sql = match request.sampling {
+            GraphSampling::Full => source_sql.clone(),
+            GraphSampling::Sample { size, seed } => {
+                let sample_size = i64::try_from(size)
+                    .map_err(|_| AppError::InvalidParam("sample size is too large".into()))?;
+                if sample_size <= 0 {
+                    return Err(AppError::InvalidParam(
+                        "sample size must be positive".into(),
+                    ));
+                }
+                let seed_i64 = i64::try_from(seed)
+                    .map_err(|_| AppError::InvalidParam("sample seed is too large".into()))?;
+                format!(
+                    "WITH __sp_source AS ({source_sql}),
+                      __sp_ranked AS (
+                        SELECT *,
+                                                             {strata_key} AS __sp_stratum,
+                               COUNT(*) OVER () AS __sp_total_rows,
+                                                             COUNT(*) OVER (PARTITION BY {strata_key}) AS __sp_stratum_rows,
+                               ROW_NUMBER() OVER (
+                                                                 PARTITION BY {strata_key}
+                                 ORDER BY hash(CAST(\"_row_id\" AS BIGINT), CAST({seed_i64} AS BIGINT))
+                               ) AS __sp_rank
+                        FROM __sp_source
+                      )
+                      SELECT \"_row_id\", __sp_x, __sp_y, __sp_group, __sp_size, __sp_z, __sp_groupx, __sp_groupy, __sp_groupz, __sp_wrap, {source_col}
+                      FROM __sp_ranked
+                      WHERE __sp_rank <= CASE
+                        WHEN __sp_total_rows <= {sample_size} THEN __sp_stratum_rows
+                        ELSE GREATEST(
+                          1,
+                          CAST(ROUND(({sample_size}::DOUBLE * __sp_stratum_rows) / NULLIF(__sp_total_rows, 0)) AS BIGINT)
+                        )
+                                            END",
+                                        source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                                        strata_key = sampling_strata_key_expr,
+                )
+            }
+        };
+
+        let projection_values = source_values.clone();
+
+        let melt_active = multi_y_columns.len() >= 2;
+        let mut projection_select_items = Vec::new();
+        let mut projected_columns = Vec::new();
+        let mut projected_column_types = Vec::new();
+
+        let mut push_projected = |expr: String, name: String, column_type: String| {
+            if projected_columns.iter().any(|existing| existing == &name) {
+                return;
+            }
+            projection_select_items.push(expr);
+            projected_columns.push(name);
+            projected_column_types.push(column_type);
+        };
+
+        let x_public = x_column.clone().unwrap_or_else(|| "__sp_x".to_string());
+        push_projected(
+            format!("__sp_x AS {}", Self::quote_identifier(&x_public)),
+            x_public,
+            x_column
+                .as_ref()
+                .and_then(|column| allowed_columns.get(column.as_str()).copied())
+                .unwrap_or("VARCHAR")
+                .to_string(),
+        );
+
+        let y_public = if melt_active {
+            GRAPH_VIRTUAL_VALUE_COLUMN.to_string()
+        } else {
+            y_column.clone()
+        };
+        push_projected(
+            format!("__sp_y AS {}", Self::quote_identifier(&y_public)),
+            y_public,
+            "DOUBLE".to_string(),
+        );
+
+        if let Some(column) = group_column.clone() {
+            push_projected(
+                format!("__sp_group AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("VARCHAR")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = size_column.clone() {
+            push_projected(
+                format!("__sp_size AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("DOUBLE")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = z_column.clone() {
+            push_projected(
+                format!("__sp_z AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("DOUBLE")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = group_x_column.clone() {
+            push_projected(
+                format!("__sp_groupx AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("VARCHAR")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = group_y_column.clone() {
+            push_projected(
+                format!("__sp_groupy AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("VARCHAR")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = group_z_column.clone() {
+            push_projected(
+                format!("__sp_groupz AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("VARCHAR")
+                    .to_string(),
+            );
+        }
+
+        if let Some(column) = wrap_column.clone() {
+            push_projected(
+                format!("__sp_wrap AS {}", Self::quote_identifier(&column)),
+                column.clone(),
+                allowed_columns
+                    .get(column.as_str())
+                    .copied()
+                    .unwrap_or("VARCHAR")
+                    .to_string(),
+            );
+        }
+
+        if melt_active {
+            push_projected(
+                format!(
+                    "{} AS {}",
+                    Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                    Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN)
+                ),
+                GRAPH_VIRTUAL_SOURCE_COLUMN.to_string(),
+                source_column_type,
+            );
+        }
+
+        Ok(GraphQueryPlan {
+            source_sql,
+            source_values,
+            projection_sql,
+            projection_values,
+            projection_select_items,
+            projected_columns,
+            projected_column_types,
+        })
+    }
+
+    pub fn collect_graph_aggregate_packets(
+        &self,
+        request: &GraphDataRequest,
+    ) -> Result<Vec<GraphAggregatePacket>, AppError> {
+        let user_columns = self.get_user_columns(&request.dataset_id)?;
+        let allowed_columns = user_columns
+            .iter()
+            .map(|(name, column_type)| (name.as_str(), column_type.as_str()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let plan = self.compile_graph_query_plan(request, &allowed_columns)?;
+
+        let mut want_histogram = false;
+        let mut want_heatmap = false;
+        let mut want_boxplot = false;
+        let mut want_summary = false;
+        for element in &request.elements {
+            let kind = element.kind.to_ascii_lowercase();
+            match kind.as_str() {
+                "histogram" => want_histogram = true,
+                "heatmap" => want_heatmap = true,
+                "boxplot" => want_boxplot = true,
+                "summary" | "points" | "line" => want_summary = true,
+                _ => {}
+            }
+        }
+
+        if !(want_histogram || want_heatmap || want_boxplot || want_summary) {
+            return Ok(Vec::new());
+        }
+
+        let mut packets = Vec::new();
+
+        if want_histogram {
+            packets.push(GraphAggregatePacket::Histogram(
+                self.query_histogram_packet(request, &plan)?,
+            ));
+        }
+        if want_heatmap {
+            packets.push(GraphAggregatePacket::Heatmap(
+                self.query_heatmap_packet(request, &plan)?,
+            ));
+        }
+        if want_boxplot {
+            packets.push(GraphAggregatePacket::BoxPlot(
+                self.query_boxplot_packet(request, &plan)?,
+            ));
+        }
+        if want_summary {
+            packets.push(GraphAggregatePacket::Summary(
+                self.query_summary_packet(request, &plan)?,
+            ));
+        }
+
+        Ok(packets)
+    }
+
+    fn query_histogram_packet(
+        &self,
+        request: &GraphDataRequest,
+        plan: &GraphQueryPlan,
+    ) -> Result<HistogramPacket, AppError> {
+        let stats_sql = format!(
+            "WITH __sp_source AS ({})
+             SELECT
+                             COALESCE(SUM(CASE WHEN __sp_y IS NOT NULL AND isfinite(__sp_y) THEN 1 ELSE 0 END), 0) AS valid_rows,
+                             COALESCE(SUM(CASE WHEN __sp_y IS NOT NULL AND isfinite(__sp_y) THEN 0 ELSE 1 END), 0) AS missing_rows,
+               MIN(CASE WHEN __sp_y IS NOT NULL AND isfinite(__sp_y) THEN __sp_y ELSE NULL END) AS min_y,
+               MAX(CASE WHEN __sp_y IS NOT NULL AND isfinite(__sp_y) THEN __sp_y ELSE NULL END) AS max_y
+             FROM __sp_source",
+            plan.source_sql
+        );
+        let (total_count, missing_count, min_y, max_y): (i64, i64, Option<f64>, Option<f64>) =
+            self.conn.query_row(
+                &stats_sql,
+                params_from_iter(plan.source_values.iter()),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        let total_count_u64 = u64::try_from(total_count)
+            .map_err(|_| AppError::Database("histogram total count is negative".into()))?;
+        let missing_count_u64 = u64::try_from(missing_count)
+            .map_err(|_| AppError::Database("histogram missing count is negative".into()))?;
+
+        let bin_count_i64: i64 = 20;
+        let bin_count = bin_count_i64 as f64;
+        let bin_width = if let (Some(minimum), Some(maximum)) = (min_y, max_y) {
+            if maximum > minimum {
+                (maximum - minimum) / bin_count
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+
+        let mut bins = Vec::new();
+        if total_count_u64 > 0 {
+            let bins_sql = format!(
+                "WITH __sp_source AS ({source}),
+                 __sp_valid AS (
+                    SELECT
+                      CAST(__sp_group AS VARCHAR) AS grp,
+                      CAST(__sp_x AS VARCHAR) AS cat,
+                                            CAST({source_col} AS VARCHAR) AS src,
+                                            CAST(__sp_groupx AS VARCHAR) AS facet_x,
+                                            CAST(__sp_groupy AS VARCHAR) AS facet_y,
+                                            CAST(__sp_groupz AS VARCHAR) AS facet_z,
+                                            CAST(__sp_wrap AS VARCHAR) AS wrp,
+                      __sp_y AS y
+                    FROM __sp_source
+                    WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
+                 )
+                 SELECT
+                   grp,
+                   cat,
+                   src,
+                                     facet_x,
+                                     facet_y,
+                                     facet_z,
+                                     wrp,
+                   CASE
+                                         WHEN ? <= 0 THEN 0
+                                         WHEN y = ? THEN ? - 1
+                                         ELSE CAST(FLOOR((y - ?) / ?) AS BIGINT)
+                   END AS bin_idx,
+                                     COUNT(*) AS cnt
+                 FROM __sp_valid
+                                 GROUP BY grp, cat, src, facet_x, facet_y, facet_z, wrp, bin_idx
+                                 ORDER BY grp, cat, src, facet_x, facet_y, facet_z, wrp, bin_idx",
+                source = plan.source_sql,
+                source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+            );
+
+            let mut values = plan.source_values.clone();
+            values.push(Value::Double(bin_width.max(1e-12)));
+            values.push(Value::Double(max_y.unwrap_or(0.0)));
+            values.push(Value::BigInt(bin_count_i64));
+            values.push(Value::Double(min_y.unwrap_or(0.0)));
+            values.push(Value::Double(bin_width.max(1e-12)));
+
+            let mut stmt = self.conn.prepare(&bins_sql)?;
+            let mut rows = stmt.query(params_from_iter(values.iter()))?;
+            while let Some(row) = rows.next()? {
+                let group: Option<String> = row.get(0)?;
+                let category: Option<String> = row.get(1)?;
+                let source_column: Option<String> = row.get(2)?;
+                let facet_x: Option<String> = row.get(3)?;
+                let facet_y: Option<String> = row.get(4)?;
+                let facet_z: Option<String> = row.get(5)?;
+                let wrap: Option<String> = row.get(6)?;
+                let bin_index: i64 = row.get(7)?;
+                let count: i64 = row.get(8)?;
+                let clamped_index = bin_index.clamp(0, bin_count_i64 - 1) as f64;
+                let start = min_y.unwrap_or(0.0) + clamped_index * bin_width;
+                bins.push(HistogramBin {
+                    group,
+                    category,
+                    source_column,
+                    facet_x,
+                    facet_y,
+                    facet_z,
+                    wrap,
+                    bin_start: start,
+                    bin_end: start + bin_width,
+                    count: u64::try_from(count).map_err(|_| {
+                        AppError::Database("histogram bin count is negative".into())
+                    })?,
+                });
+            }
+        }
+
+        Ok(HistogramPacket {
+            x_column: role_column(request, "x"),
+            y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
+            group_column: role_column(request, "group"),
+            source_column: Some(GRAPH_VIRTUAL_SOURCE_COLUMN.to_string()),
+            bin_count: u32::try_from(bin_count_i64)
+                .map_err(|_| AppError::Database("histogram bin count overflow".into()))?,
+            min_value: min_y,
+            max_value: max_y,
+            missing_count: missing_count_u64,
+            bin_width,
+            total_count: total_count_u64,
+            bins,
+        })
+    }
+
+    fn query_heatmap_packet(
+        &self,
+        request: &GraphDataRequest,
+        plan: &GraphQueryPlan,
+    ) -> Result<HeatmapPacket, AppError> {
+        let x_bin_count_i64: i64 = 20;
+        let y_bin_count_i64: i64 = 20;
+        let stats_sql = format!(
+            "WITH __sp_source AS ({})
+             SELECT
+                             COALESCE(SUM(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN 1 ELSE 0 END), 0),
+                             COALESCE(SUM(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN 0 ELSE 1 END), 0),
+                             MIN(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN TRY_CAST(__sp_x AS DOUBLE) ELSE NULL END),
+                             MAX(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN TRY_CAST(__sp_x AS DOUBLE) ELSE NULL END),
+                             MIN(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN __sp_y ELSE NULL END),
+                             MAX(CASE WHEN __sp_x IS NOT NULL AND __sp_y IS NOT NULL AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y) THEN __sp_y ELSE NULL END)
+             FROM __sp_source
+            ",
+            plan.source_sql
+        );
+        let (total_count, missing_count, min_x, max_x, min_y, max_y): (
+            i64,
+            i64,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+        ) = self.conn.query_row(
+            &stats_sql,
+            params_from_iter(plan.source_values.iter()),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )?;
+        let total_count_u64 = u64::try_from(total_count)
+            .map_err(|_| AppError::Database("heatmap total count is negative".into()))?;
+        let missing_count_u64 = u64::try_from(missing_count)
+            .map_err(|_| AppError::Database("heatmap missing count is negative".into()))?;
+        let x_bin_width = match (min_x, max_x) {
+            (Some(minimum), Some(maximum)) if maximum > minimum => {
+                (maximum - minimum) / (x_bin_count_i64 as f64)
+            }
+            _ => 1.0,
+        };
+        let y_bin_width = match (min_y, max_y) {
+            (Some(minimum), Some(maximum)) if maximum > minimum => {
+                (maximum - minimum) / (y_bin_count_i64 as f64)
+            }
+            _ => 1.0,
+        };
+
+        let mut cells: Vec<HeatmapCell> = Vec::new();
+        if total_count_u64 > 0 {
+            let cells_sql = format!(
+                "WITH __sp_source AS ({source}),
+                 __sp_valid AS (
+                   SELECT
+                     CAST(__sp_group AS VARCHAR) AS grp,
+                     CAST(__sp_x AS VARCHAR) AS cat,
+                     CAST({source_col} AS VARCHAR) AS src,
+                                         CAST(__sp_groupx AS VARCHAR) AS facet_x,
+                                         CAST(__sp_groupy AS VARCHAR) AS facet_y,
+                                         CAST(__sp_groupz AS VARCHAR) AS facet_z,
+                                         CAST(__sp_wrap AS VARCHAR) AS wrp,
+                                         TRY_CAST(__sp_x AS DOUBLE) AS x,
+                     __sp_y AS y
+                   FROM __sp_source
+                   WHERE __sp_x IS NOT NULL AND __sp_y IS NOT NULL
+                                         AND isfinite(TRY_CAST(__sp_x AS DOUBLE)) AND isfinite(__sp_y)
+                 )
+                 SELECT
+                   grp,
+                   cat,
+                   src,
+                                     facet_x,
+                                     facet_y,
+                                     facet_z,
+                                     wrp,
+                   CASE
+                     WHEN ? <= 0 THEN 0
+                     WHEN x = ? THEN ? - 1
+                     ELSE CAST(FLOOR((x - ?) / ?) AS BIGINT)
+                   END AS x_idx,
+                   CASE
+                     WHEN ? <= 0 THEN 0
+                     WHEN y = ? THEN ? - 1
+                     ELSE CAST(FLOOR((y - ?) / ?) AS BIGINT)
+                   END AS y_idx,
+                                     COUNT(*) AS cnt
+                 FROM __sp_valid
+                                 GROUP BY grp, cat, src, facet_x, facet_y, facet_z, wrp, x_idx, y_idx
+                                 ORDER BY grp, cat, src, facet_x, facet_y, facet_z, wrp, x_idx, y_idx",
+                source = plan.source_sql,
+                source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+            );
+
+            let mut values = plan.source_values.clone();
+            values.push(Value::Double(x_bin_width.max(1e-12)));
+            values.push(Value::Double(max_x.unwrap_or(0.0)));
+            values.push(Value::BigInt(x_bin_count_i64));
+            values.push(Value::Double(min_x.unwrap_or(0.0)));
+            values.push(Value::Double(x_bin_width.max(1e-12)));
+            values.push(Value::Double(y_bin_width.max(1e-12)));
+            values.push(Value::Double(max_y.unwrap_or(0.0)));
+            values.push(Value::BigInt(y_bin_count_i64));
+            values.push(Value::Double(min_y.unwrap_or(0.0)));
+            values.push(Value::Double(y_bin_width.max(1e-12)));
+
+            let mut stmt = self.conn.prepare(&cells_sql)?;
+            let mut rows = stmt.query(params_from_iter(values.iter()))?;
+            while let Some(row) = rows.next()? {
+                let group: Option<String> = row.get(0)?;
+                let category: Option<String> = row.get(1)?;
+                let source_column: Option<String> = row.get(2)?;
+                let facet_x: Option<String> = row.get(3)?;
+                let facet_y: Option<String> = row.get(4)?;
+                let facet_z: Option<String> = row.get(5)?;
+                let wrap: Option<String> = row.get(6)?;
+                let x_bin_index: i64 = row.get(7)?;
+                let y_bin_index: i64 = row.get(8)?;
+                let count: i64 = row.get(9)?;
+                let x_idx = x_bin_index.clamp(0, x_bin_count_i64 - 1);
+                let y_idx = y_bin_index.clamp(0, y_bin_count_i64 - 1);
+                let x_start = min_x.unwrap_or(0.0) + (x_idx as f64) * x_bin_width;
+                let y_start = min_y.unwrap_or(0.0) + (y_idx as f64) * y_bin_width;
+                cells.push(HeatmapCell {
+                    group,
+                    category,
+                    source_column,
+                    facet_x,
+                    facet_y,
+                    facet_z,
+                    wrap,
+                    x_bin_index: x_idx,
+                    y_bin_index: y_idx,
+                    x_bin_start: x_start,
+                    x_bin_end: x_start + x_bin_width,
+                    y_bin_start: y_start,
+                    y_bin_end: y_start + y_bin_width,
+                    count: u64::try_from(count)
+                        .map_err(|_| AppError::Database("heatmap cell count is negative".into()))?,
+                });
+            }
+        }
+
+        Ok(HeatmapPacket {
+            x_column: role_column(request, "x").unwrap_or_else(|| "__sp_x".to_string()),
+            y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
+            group_column: role_column(request, "group"),
+            source_column: Some(GRAPH_VIRTUAL_SOURCE_COLUMN.to_string()),
+            x_bin_count: u32::try_from(x_bin_count_i64)
+                .map_err(|_| AppError::Database("heatmap x bin count overflow".into()))?,
+            y_bin_count: u32::try_from(y_bin_count_i64)
+                .map_err(|_| AppError::Database("heatmap y bin count overflow".into()))?,
+            x_min: min_x,
+            x_max: max_x,
+            y_min: min_y,
+            y_max: max_y,
+            missing_count: missing_count_u64,
+            x_bin_width,
+            y_bin_width,
+            total_count: total_count_u64,
+            cells,
+        })
+    }
+
+    fn query_boxplot_packet(
+        &self,
+        request: &GraphDataRequest,
+        plan: &GraphQueryPlan,
+    ) -> Result<BoxPlotPacket, AppError> {
+        let sql = format!(
+            "WITH __sp_source AS ({source}),
+             __sp_valid AS (
+               SELECT
+                                 CAST(\"_row_id\" AS BIGINT) AS row_id,
+                 CAST(__sp_group AS VARCHAR) AS grp,
+                 CAST(__sp_x AS VARCHAR) AS cat,
+                                 CAST({source_col} AS VARCHAR) AS src,
+                                 CAST(__sp_groupx AS VARCHAR) AS facet_x,
+                                 CAST(__sp_groupy AS VARCHAR) AS facet_y,
+                                 CAST(__sp_groupz AS VARCHAR) AS facet_z,
+                                 CAST(__sp_wrap AS VARCHAR) AS wrp,
+                 __sp_y AS y
+               FROM __sp_source
+               WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
+                         ),
+                         __sp_stats AS (
+                             SELECT
+                                 grp,
+                                 cat,
+                                 src,
+                                 facet_x,
+                                 facet_y,
+                                 facet_z,
+                                 wrp,
+                                 COUNT(*) AS n,
+                                 MIN(y) AS min_y,
+                                 quantile_cont(y, 0.25) AS q1,
+                                 quantile_cont(y, 0.50) AS median,
+                                 quantile_cont(y, 0.75) AS q3,
+                                 MAX(y) AS max_y
+                             FROM __sp_valid
+                             GROUP BY grp, cat, src, facet_x, facet_y, facet_z, wrp
+                         ),
+                         __sp_whiskers AS (
+                             SELECT
+                                 s.grp,
+                                 s.cat,
+                                 s.src,
+                                 s.facet_x,
+                                 s.facet_y,
+                                 s.facet_z,
+                                 s.wrp,
+                                 MIN(v.y) FILTER (WHERE v.y >= (s.q1 - 1.5 * (s.q3 - s.q1)) AND v.y <= (s.q3 + 1.5 * (s.q3 - s.q1))) AS whisker_low,
+                                 MAX(v.y) FILTER (WHERE v.y >= (s.q1 - 1.5 * (s.q3 - s.q1)) AND v.y <= (s.q3 + 1.5 * (s.q3 - s.q1))) AS whisker_high
+                             FROM __sp_stats s
+                             JOIN __sp_valid v
+                                 ON v.grp IS NOT DISTINCT FROM s.grp
+                                AND v.cat IS NOT DISTINCT FROM s.cat
+                                AND v.src IS NOT DISTINCT FROM s.src
+                                AND v.facet_x IS NOT DISTINCT FROM s.facet_x
+                                AND v.facet_y IS NOT DISTINCT FROM s.facet_y
+                                AND v.facet_z IS NOT DISTINCT FROM s.facet_z
+                                AND v.wrp IS NOT DISTINCT FROM s.wrp
+                             GROUP BY s.grp, s.cat, s.src, s.facet_x, s.facet_y, s.facet_z, s.wrp
+             )
+             SELECT
+                             s.grp,
+                             s.cat,
+                             s.src,
+                             s.facet_x,
+                             s.facet_y,
+                             s.facet_z,
+                             s.wrp,
+                             s.n,
+                             s.min_y,
+                             s.q1,
+                             s.median,
+                             s.q3,
+                             s.max_y,
+                             COALESCE(w.whisker_low, s.min_y) AS whisker_low,
+                             COALESCE(w.whisker_high, s.max_y) AS whisker_high
+                         FROM __sp_stats s
+                         LEFT JOIN __sp_whiskers w
+                             ON w.grp IS NOT DISTINCT FROM s.grp
+                            AND w.cat IS NOT DISTINCT FROM s.cat
+                            AND w.src IS NOT DISTINCT FROM s.src
+                                     AND w.facet_x IS NOT DISTINCT FROM s.facet_x
+                                     AND w.facet_y IS NOT DISTINCT FROM s.facet_y
+                                     AND w.facet_z IS NOT DISTINCT FROM s.facet_z
+                                     AND w.wrp IS NOT DISTINCT FROM s.wrp
+                                 ORDER BY s.grp, s.cat, s.src, s.facet_x, s.facet_y, s.facet_z, s.wrp",
+                        source = plan.source_sql,
+                        source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+        );
+
+        let mut entries = Vec::new();
+        let mut entry_index_by_key: std::collections::HashMap<
+            (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ),
+            usize,
+        > = std::collections::HashMap::new();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(plan.source_values.iter()))?;
+        while let Some(row) = rows.next()? {
+            let group: Option<String> = row.get(0)?;
+            let category: Option<String> = row.get(1)?;
+            let source_column: Option<String> = row.get(2)?;
+            let facet_x: Option<String> = row.get(3)?;
+            let facet_y: Option<String> = row.get(4)?;
+            let facet_z: Option<String> = row.get(5)?;
+            let wrap: Option<String> = row.get(6)?;
+            let count: i64 = row.get(7)?;
+            let min: f64 = row.get(8)?;
+            let q1: f64 = row.get(9)?;
+            let median: f64 = row.get(10)?;
+            let q3: f64 = row.get(11)?;
+            let max: f64 = row.get(12)?;
+            let whisker_low: f64 = row.get(13)?;
+            let whisker_high: f64 = row.get(14)?;
+
+            let key = (
+                group.clone(),
+                category.clone(),
+                source_column.clone(),
+                facet_x.clone(),
+                facet_y.clone(),
+                facet_z.clone(),
+                wrap.clone(),
+            );
+            entry_index_by_key.insert(key, entries.len());
+
+            entries.push(BoxPlotEntry {
+                group,
+                category,
+                source_column,
+                facet_x,
+                facet_y,
+                facet_z,
+                wrap,
+                count: u64::try_from(count)
+                    .map_err(|_| AppError::Database("boxplot count is negative".into()))?,
+                min,
+                q1,
+                median,
+                q3,
+                max,
+                whisker_low,
+                whisker_high,
+                outliers: Vec::new(),
+            });
+        }
+
+        let outlier_sql = format!(
+                        "WITH __sp_source AS ({source}),
+                         __sp_valid AS (
+                             SELECT
+                                 CAST(\"_row_id\" AS BIGINT) AS row_id,
+                                 CAST(__sp_group AS VARCHAR) AS grp,
+                                 CAST(__sp_x AS VARCHAR) AS cat,
+                                 CAST({source_col} AS VARCHAR) AS src,
+                                 CAST(__sp_groupx AS VARCHAR) AS facet_x,
+                                 CAST(__sp_groupy AS VARCHAR) AS facet_y,
+                                 CAST(__sp_groupz AS VARCHAR) AS facet_z,
+                                 CAST(__sp_wrap AS VARCHAR) AS wrp,
+                                 __sp_y AS y
+                             FROM __sp_source
+                             WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
+                         ),
+                         __sp_bounds AS (
+                             SELECT
+                                 grp,
+                                 cat,
+                                 src,
+                                 facet_x,
+                                 facet_y,
+                                 facet_z,
+                                 wrp,
+                                 quantile_cont(y, 0.25) - 1.5 * (quantile_cont(y, 0.75) - quantile_cont(y, 0.25)) AS lo,
+                                 quantile_cont(y, 0.75) + 1.5 * (quantile_cont(y, 0.75) - quantile_cont(y, 0.25)) AS hi
+                             FROM __sp_valid
+                             GROUP BY grp, cat, src, facet_x, facet_y, facet_z, wrp
+                         )
+                         SELECT v.grp, v.cat, v.src, v.facet_x, v.facet_y, v.facet_z, v.wrp, v.row_id, v.y
+                         FROM __sp_valid v
+                         JOIN __sp_bounds b
+                             ON v.grp IS NOT DISTINCT FROM b.grp
+                            AND v.cat IS NOT DISTINCT FROM b.cat
+                            AND v.src IS NOT DISTINCT FROM b.src
+                            AND v.facet_x IS NOT DISTINCT FROM b.facet_x
+                            AND v.facet_y IS NOT DISTINCT FROM b.facet_y
+                            AND v.facet_z IS NOT DISTINCT FROM b.facet_z
+                            AND v.wrp IS NOT DISTINCT FROM b.wrp
+                         WHERE v.y < b.lo OR v.y > b.hi
+                         ORDER BY v.grp, v.cat, v.src, v.facet_x, v.facet_y, v.facet_z, v.wrp, v.row_id",
+                        source = plan.source_sql,
+                        source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+                );
+
+        let mut outlier_stmt = self.conn.prepare(&outlier_sql)?;
+        let mut outlier_rows = outlier_stmt.query(params_from_iter(plan.source_values.iter()))?;
+        while let Some(row) = outlier_rows.next()? {
+            let group: Option<String> = row.get(0)?;
+            let category: Option<String> = row.get(1)?;
+            let source_column: Option<String> = row.get(2)?;
+            let facet_x: Option<String> = row.get(3)?;
+            let facet_y: Option<String> = row.get(4)?;
+            let facet_z: Option<String> = row.get(5)?;
+            let wrap: Option<String> = row.get(6)?;
+            let row_id: Option<i64> = row.get(7)?;
+            let value: f64 = row.get(8)?;
+            let key = (
+                group,
+                category,
+                source_column.clone(),
+                facet_x,
+                facet_y,
+                facet_z,
+                wrap,
+            );
+            if let Some(entry_index) = entry_index_by_key.get(&key).copied() {
+                entries[entry_index].outliers.push(BoxPlotOutlier {
+                    value,
+                    row_id,
+                    source_column,
+                });
+            }
+        }
+
+        Ok(BoxPlotPacket {
+            x_column: role_column(request, "x"),
+            y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
+            group_column: role_column(request, "group"),
+            source_column: Some(GRAPH_VIRTUAL_SOURCE_COLUMN.to_string()),
+            entries,
+        })
+    }
+
+    fn query_summary_packet(
+        &self,
+        request: &GraphDataRequest,
+        plan: &GraphQueryPlan,
+    ) -> Result<SummaryPacket, AppError> {
+        let sql = format!(
+            "WITH __sp_source AS ({source}),
+             __sp_valid AS (
+               SELECT
+                 CAST(__sp_group AS VARCHAR) AS grp,
+                 CAST(__sp_x AS VARCHAR) AS cat,
+                                 CAST({source_col} AS VARCHAR) AS src,
+                                 CAST(__sp_groupx AS VARCHAR) AS facet_x,
+                                 CAST(__sp_groupy AS VARCHAR) AS facet_y,
+                                 CAST(__sp_groupz AS VARCHAR) AS facet_z,
+                                 CAST(__sp_wrap AS VARCHAR) AS wrp,
+                 __sp_y AS y
+               FROM __sp_source
+               WHERE __sp_y IS NOT NULL AND isfinite(__sp_y)
+             )
+                                                 SELECT grp, cat, src, facet_x, facet_y, facet_z, wrp, COUNT(*) AS n, AVG(y) AS mean_y, quantile_cont(y, 0.50) AS median_y, COALESCE(stddev_samp(y), 0.0) AS std_y, MIN(y) AS min_y, MAX(y) AS max_y
+             FROM __sp_valid
+                         GROUP BY grp, cat, src, facet_x, facet_y, facet_z, wrp
+                         ORDER BY grp, cat, src, facet_x, facet_y, facet_z, wrp",
+                        source = plan.source_sql,
+                        source_col = Self::quote_identifier(GRAPH_VIRTUAL_SOURCE_COLUMN),
+        );
+
+        let mut summaries = Vec::new();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(plan.source_values.iter()))?;
+        while let Some(row) = rows.next()? {
+            let group: Option<String> = row.get(0)?;
+            let category: Option<String> = row.get(1)?;
+            let source_column: Option<String> = row.get(2)?;
+            let facet_x: Option<String> = row.get(3)?;
+            let facet_y: Option<String> = row.get(4)?;
+            let facet_z: Option<String> = row.get(5)?;
+            let wrap: Option<String> = row.get(6)?;
+            let count: i64 = row.get(7)?;
+            let mean: f64 = row.get(8)?;
+            let median: f64 = row.get(9)?;
+            let stddev: f64 = row.get(10)?;
+            let min: f64 = row.get(11)?;
+            let max: f64 = row.get(12)?;
+            let n = u64::try_from(count)
+                .map_err(|_| AppError::Database("summary count is negative".into()))?;
+            let margin = if n > 1 {
+                1.96 * stddev / (n as f64).sqrt()
+            } else {
+                0.0
+            };
+
+            summaries.push(SummaryEntry {
+                group,
+                category,
+                source_column,
+                facet_x,
+                facet_y,
+                facet_z,
+                wrap,
+                count: n,
+                mean,
+                median,
+                stddev,
+                min,
+                max,
+                interval_low: Some(mean - margin),
+                interval_high: Some(mean + margin),
+            });
+        }
+
+        Ok(SummaryPacket {
+            x_column: role_column(request, "x"),
+            y_column: role_column(request, "y").unwrap_or_else(|| "__sp_y".to_string()),
+            group_column: role_column(request, "group"),
+            source_column: Some(GRAPH_VIRTUAL_SOURCE_COLUMN.to_string()),
+            summaries,
+        })
+    }
+
     fn compile_table_window_filters(
         filters: &[crate::models::table::TableWindowFilter],
         allowed_columns: &std::collections::HashMap<&str, &str>,
@@ -1022,9 +2234,7 @@ impl DuckDbEngine {
             let column_type = allowed_columns
                 .get(requested_field.as_str())
                 .ok_or_else(|| {
-                    AppError::InvalidParam(format!(
-                        "unknown filter column: {requested_field}"
-                    ))
+                    AppError::InvalidParam(format!("unknown filter column: {requested_field}"))
                 })?;
             let predicate = match &filter.rule {
                 TableWindowFilterRule::Continuous { field, min, max } => {
@@ -1037,19 +2247,27 @@ impl DuckDbEngine {
                     let mut parts = Vec::new();
                     if let Some(minimum) = min {
                         if !minimum.is_finite() {
-                            return Err(AppError::InvalidParam("filter minimum must be finite".into()));
+                            return Err(AppError::InvalidParam(
+                                "filter minimum must be finite".into(),
+                            ));
                         }
                         parts.push(format!("{column} >= ?"));
                         values.push(Value::Double(*minimum));
                     }
                     if let Some(maximum) = max {
                         if !maximum.is_finite() {
-                            return Err(AppError::InvalidParam("filter maximum must be finite".into()));
+                            return Err(AppError::InvalidParam(
+                                "filter maximum must be finite".into(),
+                            ));
                         }
                         parts.push(format!("{column} <= ?"));
                         values.push(Value::Double(*maximum));
                     }
-                    if parts.is_empty() { "TRUE".into() } else { parts.join(" AND ") }
+                    if parts.is_empty() {
+                        "TRUE".into()
+                    } else {
+                        parts.join(" AND ")
+                    }
                 }
                 TableWindowFilterRule::Categorical {
                     field,
@@ -1099,7 +2317,11 @@ impl DuckDbEngine {
                         parts.push(format!("{column} <= ?"));
                         values.push(Value::Text(end.clone()));
                     }
-                    if parts.is_empty() { "TRUE".into() } else { parts.join(" AND ") }
+                    if parts.is_empty() {
+                        "TRUE".into()
+                    } else {
+                        parts.join(" AND ")
+                    }
                 }
             };
 
@@ -1110,7 +2332,12 @@ impl DuckDbEngine {
                 let connector = match filter.op.to_ascii_uppercase().as_str() {
                     "AND" => "AND",
                     "OR" => "OR",
-                    _ => return Err(AppError::InvalidParam(format!("unknown filter operator: {}", filter.op))),
+                    _ => {
+                        return Err(AppError::InvalidParam(format!(
+                            "unknown filter operator: {}",
+                            filter.op
+                        )))
+                    }
                 };
                 expression = format!("({expression} {connector} {predicate})");
             }
@@ -1275,8 +2502,7 @@ impl DuckDbEngine {
             let internal_table = Self::quote_identifier(&Self::internal_table_name(&dataset.id));
             let select_sql = format!(
                 "SELECT {} FROM {} ORDER BY \"_row_id\"",
-                select_columns,
-                internal_table
+                select_columns, internal_table
             );
             let mut stmt = self.conn.prepare(&select_sql)?;
             let mut rows = stmt.query([])?;
@@ -1326,7 +2552,10 @@ impl DuckDbEngine {
         let count_sql = format!("SELECT COUNT(*) FROM ({}) AS \"_sp_query_count\"", sql);
         let total_rows: i64 = conn.query_row(&count_sql, [], |row| row.get(0))?;
 
-        let page_sql = format!("SELECT * FROM ({}) AS \"_sp_query_page\" LIMIT $1 OFFSET $2", sql);
+        let page_sql = format!(
+            "SELECT * FROM ({}) AS \"_sp_query_page\" LIMIT $1 OFFSET $2",
+            sql
+        );
         let mut stmt = conn.prepare(&page_sql)?;
 
         let limit = i64::try_from(page_size)
@@ -1376,9 +2605,8 @@ impl DuckDbEngine {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let transfer_sql = format!(
-            "SELECT {select_columns} FROM ({sql}) AS \"_sp_query_transfer\""
-        );
+        let transfer_sql =
+            format!("SELECT {select_columns} FROM ({sql}) AS \"_sp_query_transfer\"");
         let mut stmt = conn.prepare(&transfer_sql)?;
         let mut rows = stmt.query([])?;
         let column_count = columns.len();
@@ -1491,7 +2719,10 @@ impl DuckDbEngine {
         Ok(())
     }
 
-    fn finalize_transaction<T, Commit, Rollback>(commit: Commit, rollback: Rollback) -> Result<T, AppError>
+    fn finalize_transaction<T, Commit, Rollback>(
+        commit: Commit,
+        rollback: Rollback,
+    ) -> Result<T, AppError>
     where
         Commit: FnOnce() -> Result<T, AppError>,
         Rollback: FnOnce(),
@@ -1540,7 +2771,11 @@ impl DuckDbEngine {
                 Self::time_unit_label(unit),
                 value
             )),
-            Value::Interval { months, days, nanos } => serde_json::Value::String(format!(
+            Value::Interval {
+                months,
+                days,
+                nanos,
+            } => serde_json::Value::String(format!(
                 "interval(months={months}, days={days}, nanos={nanos})"
             )),
             Value::List(values) | Value::Array(values) => serde_json::Value::Array(
@@ -1563,10 +2798,18 @@ impl DuckDbEngine {
     fn duckdb_map_to_json(entries: OrderedMap<Value, Value>) -> serde_json::Value {
         let mapped = entries
             .iter()
-            .map(|(key, value)| (Self::duckdb_value_to_json(key.clone()), Self::duckdb_value_to_json(value.clone())))
+            .map(|(key, value)| {
+                (
+                    Self::duckdb_value_to_json(key.clone()),
+                    Self::duckdb_value_to_json(value.clone()),
+                )
+            })
             .collect::<Vec<_>>();
 
-        if mapped.iter().all(|(key, _)| matches!(key, serde_json::Value::String(_))) {
+        if mapped
+            .iter()
+            .all(|(key, _)| matches!(key, serde_json::Value::String(_)))
+        {
             let mut object = serde_json::Map::new();
             for (key, value) in mapped {
                 if let serde_json::Value::String(key) = key {
@@ -1965,7 +3208,9 @@ impl DuckDbEngine {
         exclude_id: Option<&str>,
     ) -> Result<(), AppError> {
         if name.trim().is_empty() {
-            return Err(AppError::InvalidParam("Dataset name cannot be empty".into()));
+            return Err(AppError::InvalidParam(
+                "Dataset name cannot be empty".into(),
+            ));
         }
 
         if name.starts_with(|ch: char| ch.is_whitespace() || ch == '.')
@@ -2215,7 +3460,10 @@ impl DuckDbEngine {
 
         // Add a hidden row_id column for row identification
         let create_sql = if col_defs.is_empty() {
-            format!("CREATE TABLE {} (\"_row_id\" INTEGER DEFAULT 0)", table_name)
+            format!(
+                "CREATE TABLE {} (\"_row_id\" INTEGER DEFAULT 0)",
+                table_name
+            )
         } else {
             format!(
                 "CREATE TABLE {} (\"_row_id\" INTEGER DEFAULT 0, {})",
@@ -2226,7 +3474,8 @@ impl DuckDbEngine {
         self.conn.execute(&create_sql, [])?;
 
         // Register column metadata
-        for (i, (col_name, col_type)) in column_names.iter().zip(canonical_types.iter()).enumerate() {
+        for (i, (col_name, col_type)) in column_names.iter().zip(canonical_types.iter()).enumerate()
+        {
             self.conn.execute(
                 "INSERT INTO _meta_columns (dataset_id, col_index, col_name, col_type) VALUES ($1, $2, $3, $4)",
                 params![id, i as i32, col_name, col_type],
@@ -2299,16 +3548,14 @@ impl DuckDbEngine {
                 .checked_add(count_i64 - 1)
                 .ok_or_else(|| AppError::InvalidParam("row ID range is exhausted".into()))?;
             self.conn.execute(
-                &format!(
-                    "INSERT INTO {table} (\"_row_id\") SELECT ? + range FROM range(?)"
-                ),
+                &format!("INSERT INTO {table} (\"_row_id\") SELECT ? + range FROM range(?)"),
                 params![first_id, count_i64],
             )?;
-            let row_count: i64 = self.conn.query_row(
-                &format!("SELECT COUNT(*) FROM {table}"),
-                [],
-                |row| row.get(0),
-            )?;
+            let row_count: i64 =
+                self.conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })?;
             self.conn.execute(
                 "UPDATE _meta_datasets SET row_count = ? WHERE id = ?",
                 params![row_count, dataset_id],
@@ -2354,9 +3601,7 @@ impl DuckDbEngine {
                     .join(", ");
                 if undo {
                     self.conn.execute(
-                        &format!(
-                            "DELETE FROM {table} WHERE \"_row_id\" IN ({placeholders})"
-                        ),
+                        &format!("DELETE FROM {table} WHERE \"_row_id\" IN ({placeholders})"),
                         params_from_iter(chunk.iter()),
                     )?;
                 } else {
@@ -2377,18 +3622,16 @@ impl DuckDbEngine {
                         .collect::<Vec<_>>()
                         .join(", ");
                     self.conn.execute(
-                        &format!(
-                            "INSERT INTO {table} (\"_row_id\") VALUES {value_rows}"
-                        ),
+                        &format!("INSERT INTO {table} (\"_row_id\") VALUES {value_rows}"),
                         params_from_iter(chunk.iter()),
                     )?;
                 }
             }
-            let row_count: i64 = self.conn.query_row(
-                &format!("SELECT COUNT(*) FROM {table}"),
-                [],
-                |row| row.get(0),
-            )?;
+            let row_count: i64 =
+                self.conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })?;
             self.conn.execute(
                 "UPDATE _meta_datasets SET row_count = ? WHERE id = ?",
                 params![row_count, dataset_id],
@@ -2437,11 +3680,7 @@ impl DuckDbEngine {
         })
     }
 
-    pub fn clear_cells(
-        &self,
-        dataset_id: &str,
-        cells: &[CellPosition],
-    ) -> Result<(), AppError> {
+    pub fn clear_cells(&self, dataset_id: &str, cells: &[CellPosition]) -> Result<(), AppError> {
         const MAX_CELLS: usize = 100_000;
         const ROW_IDS_PER_UPDATE: usize = 1_000;
         if cells.is_empty() {
@@ -2492,11 +3731,7 @@ impl DuckDbEngine {
         })
     }
 
-    pub fn update_cells(
-        &self,
-        dataset_id: &str,
-        updates: &[CellUpdate],
-    ) -> Result<(), AppError> {
+    pub fn update_cells(&self, dataset_id: &str, updates: &[CellUpdate]) -> Result<(), AppError> {
         self.update_cells_if_generation(dataset_id, updates, None)
             .map(|_| ())
     }
@@ -2618,11 +3853,11 @@ impl DuckDbEngine {
                 &format!("DELETE FROM {table} WHERE \"_row_id\" IN ({placeholders})"),
                 params_from_iter(unique_row_ids.iter()),
             )?;
-            let row_count: i64 = self.conn.query_row(
-                &format!("SELECT COUNT(*) FROM {table}"),
-                [],
-                |row| row.get(0),
-            )?;
+            let row_count: i64 =
+                self.conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })?;
             self.conn.execute(
                 "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
                 params![row_count, dataset_id],
@@ -2807,7 +4042,9 @@ impl DuckDbEngine {
         let from = from.clamp(0, column_count - 1);
         let to = to.clamp(0, column_count - 1);
         if from == to {
-            return Err(AppError::InvalidParam("column reorder has no effect".into()));
+            return Err(AppError::InvalidParam(
+                "column reorder has no effect".into(),
+            ));
         }
 
         self.conn.execute_batch("BEGIN TRANSACTION;")?;
@@ -2935,7 +4172,7 @@ impl DuckDbEngine {
 
         self.conn.execute(
             "UPDATE _meta_columns SET col_type = $1 WHERE dataset_id = $2 AND col_name = $3",
-                params![&new_type, dataset_id, col_name],
+            params![&new_type, dataset_id, col_name],
         )?;
 
         self.bump_dataset_generation(dataset_id)?;
@@ -3102,9 +4339,10 @@ impl DuckDbEngine {
             )?;
             let after_columns = self.get_user_columns(dataset_id)?;
             for ordinal in 0..paste_column_count {
-                let (after_name, after_type) = after_columns
-                    .get(start_col + ordinal)
-                    .ok_or_else(|| AppError::Database("Paste column allocation was incomplete".into()))?;
+                let (after_name, after_type) =
+                    after_columns.get(start_col + ordinal).ok_or_else(|| {
+                        AppError::Database("Paste column allocation was incomplete".into())
+                    })?;
                 let (before_name, before_type) = before_columns[ordinal]
                     .as_ref()
                     .map(|(name, column_type)| (Some(name.as_str()), Some(column_type.as_str())))
@@ -3140,7 +4378,9 @@ impl DuckDbEngine {
                 params![generation + 1, dataset_id],
             )?;
             if changed != 1 {
-                return Err(AppError::InvalidParam(format!("Unknown dataset: {dataset_id}")));
+                return Err(AppError::InvalidParam(format!(
+                    "Unknown dataset: {dataset_id}"
+                )));
             }
             Ok(())
         })();
@@ -3250,9 +4490,7 @@ impl DuckDbEngine {
                 )?;
             }
             self.conn.execute(
-                &format!(
-                    "DELETE FROM {dataset_table} WHERE \"_row_id\" IN ({placeholders})"
-                ),
+                &format!("DELETE FROM {dataset_table} WHERE \"_row_id\" IN ({placeholders})"),
                 params_from_iter(unique_ids.iter()),
             )?;
             let row_count: i64 = self.conn.query_row(
@@ -3441,13 +4679,18 @@ impl DuckDbEngine {
                 params![added_count, next_generation, dataset_id],
             )?;
             let after_select = std::iter::once("\"_row_id\"".to_string())
-                .chain(canonical_columns.iter().enumerate().map(|(ordinal, (name, _))| {
-                    format!(
-                        "{} AS {}",
-                        Self::quote_identifier(name),
-                        Self::quote_identifier(&format!("c{ordinal}"))
-                    )
-                }))
+                .chain(
+                    canonical_columns
+                        .iter()
+                        .enumerate()
+                        .map(|(ordinal, (name, _))| {
+                            format!(
+                                "{} AS {}",
+                                Self::quote_identifier(name),
+                                Self::quote_identifier(&format!("c{ordinal}"))
+                            )
+                        }),
+                )
                 .collect::<Vec<_>>()
                 .join(", ");
             self.conn.execute(
@@ -3505,7 +4748,9 @@ impl DuckDbEngine {
                 "cannot delete every user column".into(),
             ));
         }
-        let requested_set = requested.into_iter().collect::<std::collections::HashSet<_>>();
+        let requested_set = requested
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
         let deleted_columns = existing_columns
             .iter()
             .enumerate()
@@ -3534,13 +4779,18 @@ impl DuckDbEngine {
         let before_table = Self::quote_identifier(&format!("_history_before_{suffix}"));
         let after_table = Self::quote_identifier(&format!("_history_after_{suffix}"));
         let before_select = std::iter::once("\"_row_id\"".to_string())
-            .chain(deleted_columns.iter().enumerate().map(|(ordinal, (_, name, _))| {
-                format!(
-                    "{} AS {}",
-                    Self::quote_identifier(name),
-                    Self::quote_identifier(&format!("c{ordinal}"))
-                )
-            }))
+            .chain(
+                deleted_columns
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, (_, name, _))| {
+                        format!(
+                            "{} AS {}",
+                            Self::quote_identifier(name),
+                            Self::quote_identifier(&format!("c{ordinal}"))
+                        )
+                    }),
+            )
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -3570,9 +4820,7 @@ impl DuckDbEngine {
                 )?;
             }
             self.conn.execute(
-                &format!(
-                    "CREATE TABLE {after_table} AS SELECT \"_row_id\" FROM {dataset_table}"
-                ),
+                &format!("CREATE TABLE {after_table} AS SELECT \"_row_id\" FROM {dataset_table}"),
                 [],
             )?;
             self.conn.execute(
@@ -3748,7 +4996,10 @@ impl DuckDbEngine {
                 "column count must be between 1 and {MAX_COLUMNS}"
             )));
         }
-        let requested = column_names.iter().cloned().collect::<std::collections::HashSet<_>>();
+        let requested = column_names
+            .iter()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
         if requested.len() != column_names.len() {
             return Err(AppError::InvalidParam("column names must be unique".into()));
         }
@@ -3765,7 +5016,10 @@ impl DuckDbEngine {
             ));
         }
         let new_type = self.canonicalize_column_type(new_type)?;
-        if changed_columns.iter().any(|(_, _, old_type)| old_type == &new_type) {
+        if changed_columns
+            .iter()
+            .any(|(_, _, old_type)| old_type == &new_type)
+        {
             return Err(AppError::InvalidParam(
                 "one or more column changes have no effect".into(),
             ));
@@ -3930,20 +5184,22 @@ impl DuckDbEngine {
         let dataset_table = Self::quote_identifier(&Self::internal_table_name(&dataset_id));
         let assignments = columns
             .iter()
-            .filter_map(|(ordinal, _, before_name, _, after_name, _, after_present)| {
-                let target_name = if undo {
-                    before_name.as_ref()
-                } else if *after_present {
-                    Some(after_name)
-                } else {
-                    None
-                }?;
-                Some(format!(
-                    "{} = snapshot.{}",
-                    Self::quote_identifier(target_name),
-                    Self::quote_identifier(&format!("c{ordinal}"))
-                ))
-            })
+            .filter_map(
+                |(ordinal, _, before_name, _, after_name, _, after_present)| {
+                    let target_name = if undo {
+                        before_name.as_ref()
+                    } else if *after_present {
+                        Some(after_name)
+                    } else {
+                        None
+                    }?;
+                    Some(format!(
+                        "{} = snapshot.{}",
+                        Self::quote_identifier(target_name),
+                        Self::quote_identifier(&format!("c{ordinal}"))
+                    ))
+                },
+            )
             .collect::<Vec<_>>()
             .join(", ");
         self.conn.execute_batch("BEGIN TRANSACTION;")?;
@@ -3974,7 +5230,9 @@ impl DuckDbEngine {
                         )?;
                     }
                 }
-                for (_, _, before_name, before_type, after_name, after_type, after_present) in &columns {
+                for (_, _, before_name, before_type, after_name, after_type, after_present) in
+                    &columns
+                {
                     if !after_present {
                         continue;
                     }
@@ -4036,7 +5294,9 @@ impl DuckDbEngine {
                         }
                     }
                 }
-                for (_, column_index, before_name, _, after_name, _, after_present) in columns.iter().rev() {
+                for (_, column_index, before_name, _, after_name, _, after_present) in
+                    columns.iter().rev()
+                {
                     if !after_present {
                         continue;
                     }
@@ -4085,7 +5345,9 @@ impl DuckDbEngine {
                     ),
                     [],
                 )?;
-                for (_, column_index, before_name, _, after_name, after_type, after_present) in &columns {
+                for (_, column_index, before_name, _, after_name, after_type, after_present) in
+                    &columns
+                {
                     if !after_present {
                         continue;
                     }
@@ -4418,13 +5680,11 @@ impl DuckDbEngine {
             .ok_or_else(|| AppError::InvalidParam("Paste row range is too large".into()))?;
         if total_target_rows > existing_row_count {
             let need = total_target_rows - existing_row_count;
-            let max_id: Option<i64> = self
-                .conn
-                .query_row(
-                    &format!("SELECT MAX(\"_row_id\") FROM \"{}\"", table_name),
-                    [],
-                    |row| row.get(0),
-                )?;
+            let max_id: Option<i64> = self.conn.query_row(
+                &format!("SELECT MAX(\"_row_id\") FROM \"{}\"", table_name),
+                [],
+                |row| row.get(0),
+            )?;
             let start_new = max_id
                 .unwrap_or(0)
                 .checked_add(1)
@@ -4443,9 +5703,9 @@ impl DuckDbEngine {
             )?;
             let first_new_paste_row = affected_row_ids.len();
             for paste_row in first_new_paste_row..num_paste_rows {
-                let logical_row = start_row.checked_add(paste_row).ok_or_else(|| {
-                    AppError::InvalidParam("Paste row range is too large".into())
-                })?;
+                let logical_row = start_row
+                    .checked_add(paste_row)
+                    .ok_or_else(|| AppError::InvalidParam("Paste row range is too large".into()))?;
                 let offset = i64::try_from(logical_row - existing_row_count)
                     .map_err(|_| AppError::InvalidParam("Paste row range is too large".into()))?;
                 let row_id = start_new
@@ -5915,13 +7175,16 @@ fn dedupe_sqlite_table_name(base: &str, used: &mut std::collections::HashSet<Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use duckdb::types::Decimal;
+    use crate::models::graph_data::{
+        GraphDataRequest, GraphElementRequest, GraphFieldBinding, GraphSampling, GraphViewport,
+    };
     use crate::services::archive_cell::{
         archive_cell_to_json_call_count, reset_archive_cell_to_json_call_count,
     };
     use crate::models::table::{
         TableWindowFilter, TableWindowFilterRule, TableWindowRequest, TableWindowSort,
     };
+    use duckdb::types::Decimal;
 
     #[test]
     fn benchmark_fixture_creates_requested_shape() {
@@ -5934,9 +7197,7 @@ mod tests {
         assert_eq!(meta.row_count, 10_000);
         assert_eq!(meta.col_count, 20);
 
-        let page = db
-            .query_table("benchmark-id", 0, 500, None, None)
-            .unwrap();
+        let page = db.query_table("benchmark-id", 0, 500, None, None).unwrap();
         assert_eq!(page.total_rows, 10_000);
         assert_eq!(page.rows.len(), 500);
         assert_eq!(page.columns.len(), 21);
@@ -5951,6 +7212,194 @@ mod tests {
             filters: Vec::new(),
             generation: 0,
         }
+    }
+
+    #[test]
+    fn sample_projection_stratifies_by_all_active_categorical_roles() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "graph-strata-id",
+            "Graph Strata",
+            &[
+                "region".into(),
+                "batch".into(),
+                "family".into(),
+                "cost".into(),
+                "m1".into(),
+                "m2".into(),
+            ],
+            &[
+                "VARCHAR".into(),
+                "VARCHAR".into(),
+                "VARCHAR".into(),
+                "DOUBLE".into(),
+                "DOUBLE".into(),
+                "DOUBLE".into(),
+            ],
+        )
+        .unwrap();
+
+        let allowed_columns = db
+            .get_user_columns("graph-strata-id")
+            .unwrap()
+            .into_iter()
+            .map(|(name, column_type)| (name, column_type))
+            .collect::<std::collections::HashMap<_, _>>();
+        let allowed = allowed_columns
+            .iter()
+            .map(|(name, column_type)| (name.as_str(), column_type.as_str()))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let request = GraphDataRequest {
+            request_id: "req-strata".into(),
+            dataset_id: "graph-strata-id".into(),
+            generation: 0,
+            fields: vec![
+                GraphFieldBinding {
+                    role: "x".into(),
+                    column: "region".into(),
+                },
+                GraphFieldBinding {
+                    role: "y".into(),
+                    column: "cost".into(),
+                },
+                GraphFieldBinding {
+                    role: "group".into(),
+                    column: "family".into(),
+                },
+                GraphFieldBinding {
+                    role: "filter".into(),
+                    column: "batch".into(),
+                },
+                GraphFieldBinding {
+                    role: "multiX0".into(),
+                    column: "batch".into(),
+                },
+                GraphFieldBinding {
+                    role: "multiY0".into(),
+                    column: "m1".into(),
+                },
+                GraphFieldBinding {
+                    role: "multiY1".into(),
+                    column: "m2".into(),
+                },
+            ],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "points".into(),
+                summary_stat: "none".into(),
+            }],
+            sampling: GraphSampling::Sample { size: 32, seed: 7 },
+            viewport: GraphViewport {
+                width: 1280,
+                height: 720,
+            },
+        };
+
+        let plan = db.compile_graph_query_plan(&request, &allowed).unwrap();
+        assert!(
+            plan.source_sql.contains("__sp_strata_0")
+                && plan.source_sql.contains("__sp_strata_1")
+                && plan.source_sql.contains("__sp_strata_2"),
+            "source projection must carry categorical/facet strata aliases"
+        );
+        assert!(
+            plan.projection_sql.contains(
+                "PARTITION BY CONCAT_WS('|', COALESCE(CAST(__sp_strata_0 AS VARCHAR), ''),"
+            ) && plan
+                .projection_sql
+                .contains("COALESCE(CAST(__sp_strata_1 AS VARCHAR), '')")
+                && plan
+                    .projection_sql
+                    .contains("COALESCE(CAST(__sp_strata_2 AS VARCHAR), '')"),
+            "sample partition key must include all active categorical role aliases"
+        );
+    }
+
+    #[test]
+    fn graph_projection_select_is_bounded_and_preserves_exact_rows() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "graph-projection-bounded",
+            "Graph Projection Bounded",
+            &["region".into(), "cost".into(), "extra".into()],
+            &["VARCHAR".into(), "DOUBLE".into(), "DOUBLE".into()],
+        )
+        .unwrap();
+
+        db.conn()
+            .execute(
+                "INSERT INTO \"dataset_graph_projection_bounded\" (_row_id, region, cost, extra)
+                 VALUES (1, 'North', 10.0, 100.0),
+                        (2, 'South', 20.0, 200.0),
+                        (3, 'East', 30.0, 300.0),
+                        (4, 'West', 40.0, 400.0)",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
+                params![4i64, "graph-projection-bounded"],
+            )
+            .unwrap();
+
+        let allowed_columns = db
+            .get_user_columns("graph-projection-bounded")
+            .unwrap()
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+        let allowed = allowed_columns
+            .iter()
+            .map(|(name, column_type)| (name.as_str(), column_type.as_str()))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let request = GraphDataRequest {
+            request_id: "req-bounded-shape".into(),
+            dataset_id: "graph-projection-bounded".into(),
+            generation: 0,
+            fields: vec![
+                GraphFieldBinding {
+                    role: "x".into(),
+                    column: "region".into(),
+                },
+                GraphFieldBinding {
+                    role: "y".into(),
+                    column: "cost".into(),
+                },
+            ],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "points".into(),
+                summary_stat: "none".into(),
+            }],
+            sampling: GraphSampling::Full,
+            viewport: GraphViewport {
+                width: 1280,
+                height: 720,
+            },
+        };
+
+        let plan = db.compile_graph_query_plan(&request, &allowed).unwrap();
+        let select_sql = db.build_graph_projection_select_sql(&plan, true);
+        let mut stmt = db.conn().prepare(&select_sql).unwrap();
+
+        let mut rows = stmt
+            .query(params_from_iter(plan.projection_values.iter()))
+            .unwrap();
+        let mut seen = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            assert!(row.get::<_, String>(3).is_err());
+            seen.push((
+                row.get::<_, i64>(0).unwrap(),
+                row.get::<_, String>(1).unwrap(),
+                row.get::<_, f64>(2).unwrap(),
+            ));
+        }
+
+        assert_eq!(seen.len(), 4);
+        assert_eq!(seen[0], (1, "North".to_string(), 10.0));
+        assert_eq!(seen[3], (4, "West".to_string(), 40.0));
     }
 
     #[test]
@@ -6048,7 +7497,10 @@ mod tests {
         };
         let window = db.query_table_window(&request).unwrap();
         assert_eq!(window.rows[0][1], serde_json::json!("2026-08-19"));
-        assert_eq!(window.rows[0][2], serde_json::json!("2026-08-19 14:15:16.123456"));
+        assert_eq!(
+            window.rows[0][2],
+            serde_json::json!("2026-08-19 14:15:16.123456")
+        );
 
         db.update_cells(
             "temporal-id",
@@ -6115,8 +7567,7 @@ mod tests {
             .unwrap();
         assert_eq!(db.get_dataset_generation("benchmark-id").unwrap(), 0);
 
-        db.update_cell("benchmark-id", 1, "value_1", "99")
-            .unwrap();
+        db.update_cell("benchmark-id", 1, "value_1", "99").unwrap();
         assert_eq!(db.get_dataset_generation("benchmark-id").unwrap(), 1);
         assert!(matches!(
             db.get_dataset_generation("missing").unwrap_err(),
@@ -6264,8 +7715,7 @@ mod tests {
         let request = benchmark_window_request(0, 5);
         assert!(db.query_table_window(&request).is_ok());
 
-        db.update_cell("benchmark-id", 1, "value_1", "99")
-            .unwrap();
+        db.update_cell("benchmark-id", 1, "value_1", "99").unwrap();
 
         let error = db.query_table_window(&request).unwrap_err();
         assert!(matches!(error, AppError::InvalidParam(_)));
@@ -6334,7 +7784,9 @@ mod tests {
 
         let value: f64 = db
             .conn()
-            .query_row("SELECT amount FROM dataset_benchmark_id", [], |row| row.get(0))
+            .query_row("SELECT amount FROM dataset_benchmark_id", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(value, 1.5);
         assert_eq!(db.get_dataset_generation("benchmark-id").unwrap(), 0);
@@ -6447,7 +7899,10 @@ mod tests {
         let change_set_id = db
             .delete_rows_with_change_set("history-delete-id", &[2, 4], Some(0))
             .unwrap();
-        assert_eq!(db.get_dataset_meta("history-delete-id").unwrap().row_count, 2);
+        assert_eq!(
+            db.get_dataset_meta("history-delete-id").unwrap().row_count,
+            2
+        );
         assert_eq!(db.get_dataset_generation("history-delete-id").unwrap(), 1);
 
         db.apply_change_set(&change_set_id, true).unwrap();
@@ -6508,9 +7963,15 @@ mod tests {
             .unwrap();
         assert_eq!(
             db.get_user_columns("history-add-column-id").unwrap(),
-            vec![("amount".into(), "DOUBLE".into()), ("existing".into(), "VARCHAR".into())]
+            vec![
+                ("amount".into(), "DOUBLE".into()),
+                ("existing".into(), "VARCHAR".into())
+            ]
         );
-        assert_eq!(db.get_dataset_generation("history-add-column-id").unwrap(), 1);
+        assert_eq!(
+            db.get_dataset_generation("history-add-column-id").unwrap(),
+            1
+        );
 
         db.apply_change_set(&change_set_id, true).unwrap();
         assert_eq!(
@@ -6530,7 +7991,10 @@ mod tests {
         db.apply_change_set(&change_set_id, false).unwrap();
         assert_eq!(
             db.get_user_columns("history-add-column-id").unwrap(),
-            vec![("amount".into(), "DOUBLE".into()), ("existing".into(), "VARCHAR".into())]
+            vec![
+                ("amount".into(), "DOUBLE".into()),
+                ("existing".into(), "VARCHAR".into())
+            ]
         );
         let kept: String = db
             .conn()
@@ -6541,7 +8005,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(kept, "kept");
-        assert_eq!(db.get_dataset_generation("history-add-column-id").unwrap(), 3);
+        assert_eq!(
+            db.get_dataset_generation("history-add-column-id").unwrap(),
+            3
+        );
     }
 
     #[test]
@@ -6561,12 +8028,7 @@ mod tests {
             ("third".to_string(), "DOUBLE".to_string()),
         ];
         let change_set_id = db
-            .add_columns_with_change_set(
-                "history-add-columns-id",
-                &columns,
-                Some(1),
-                Some(0),
-            )
+            .add_columns_with_change_set("history-add-columns-id", &columns, Some(1), Some(0))
             .unwrap();
         assert_eq!(
             db.get_user_columns("history-add-columns-id")
@@ -6576,7 +8038,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["left", "first", "second", "third", "right"]
         );
-        assert_eq!(db.get_dataset_generation("history-add-columns-id").unwrap(), 1);
+        assert_eq!(
+            db.get_dataset_generation("history-add-columns-id").unwrap(),
+            1
+        );
 
         db.apply_change_set(&change_set_id, true).unwrap();
         assert_eq!(
@@ -6597,7 +8062,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["left", "first", "second", "third", "right"]
         );
-        assert_eq!(db.get_dataset_generation("history-add-columns-id").unwrap(), 3);
+        assert_eq!(
+            db.get_dataset_generation("history-add-columns-id").unwrap(),
+            3
+        );
     }
 
     #[test]
@@ -6628,7 +8096,11 @@ mod tests {
             db.get_user_columns("history-delete-columns-id").unwrap(),
             vec![("left".into(), "VARCHAR".into())]
         );
-        assert_eq!(db.get_dataset_generation("history-delete-columns-id").unwrap(), 1);
+        assert_eq!(
+            db.get_dataset_generation("history-delete-columns-id")
+                .unwrap(),
+            1
+        );
 
         db.apply_change_set(&change_set_id, true).unwrap();
         assert_eq!(
@@ -6654,7 +8126,11 @@ mod tests {
             db.get_user_columns("history-delete-columns-id").unwrap(),
             vec![("left".into(), "VARCHAR".into())]
         );
-        assert_eq!(db.get_dataset_generation("history-delete-columns-id").unwrap(), 3);
+        assert_eq!(
+            db.get_dataset_generation("history-delete-columns-id")
+                .unwrap(),
+            3
+        );
     }
 
     #[test]
@@ -6722,7 +8198,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(redone, 1.0);
-        assert_eq!(db.get_dataset_generation("history-alter-column-id").unwrap(), 3);
+        assert_eq!(
+            db.get_dataset_generation("history-alter-column-id")
+                .unwrap(),
+            3
+        );
     }
 
     #[test]
@@ -6803,7 +8283,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(changed, (1.0, 2.0));
-        assert_eq!(db.get_dataset_generation("history-alter-columns-id").unwrap(), 1);
+        assert_eq!(
+            db.get_dataset_generation("history-alter-columns-id")
+                .unwrap(),
+            1
+        );
 
         db.apply_change_set(&change_set_id, true).unwrap();
         let restored: (String, String) = db
@@ -6826,7 +8310,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(redone, (1.0, 2.0));
-        assert_eq!(db.get_dataset_generation("history-alter-columns-id").unwrap(), 3);
+        assert_eq!(
+            db.get_dataset_generation("history-alter-columns-id")
+                .unwrap(),
+            3
+        );
     }
 
     #[test]
@@ -6901,7 +8389,10 @@ mod tests {
             db.get_user_columns("history-schema-id").unwrap(),
             vec![("value".into(), "VARCHAR".into())]
         );
-        assert_eq!(db.get_dataset_meta("history-schema-id").unwrap().row_count, 0);
+        assert_eq!(
+            db.get_dataset_meta("history-schema-id").unwrap().row_count,
+            0
+        );
 
         db.apply_change_set(&change_set_id, false).unwrap();
         assert_eq!(
@@ -7035,8 +8526,7 @@ mod tests {
         let db = DuckDbEngine::new_in_memory().unwrap();
         db.seed_benchmark_table("stale-cells-id", "Stale Cells", 1, 1)
             .unwrap();
-        db.update_cell("stale-cells-id", 1, "value_1", "9")
-            .unwrap();
+        db.update_cell("stale-cells-id", 1, "value_1", "9").unwrap();
         db.update_cell("stale-cells-id", 1, "value_1", "12")
             .unwrap();
 
@@ -7090,7 +8580,8 @@ mod tests {
         assert_eq!(generation, 3);
         assert_eq!(db.get_dataset_meta("added-rows-id").unwrap().row_count, 3);
 
-        db.update_cell("added-rows-id", 1, "value", "changed").unwrap();
+        db.update_cell("added-rows-id", 1, "value", "changed")
+            .unwrap();
         assert!(matches!(
             db.apply_added_rows("added-rows-id", &row_ids, true, 3),
             Err(AppError::InvalidParam(_))
@@ -7177,8 +8668,14 @@ mod tests {
         db.clear_cells(
             "clear-id",
             &[
-                crate::models::table::CellPosition { row_id: 1, column_name: "first".into() },
-                crate::models::table::CellPosition { row_id: 1, column_name: "second".into() },
+                crate::models::table::CellPosition {
+                    row_id: 1,
+                    column_name: "first".into(),
+                },
+                crate::models::table::CellPosition {
+                    row_id: 1,
+                    column_name: "second".into(),
+                },
             ],
         )
         .unwrap();
@@ -7190,14 +8687,24 @@ mod tests {
             .clear_cells(
                 "clear-id",
                 &[
-                    crate::models::table::CellPosition { row_id: 1, column_name: "first".into() },
-                    crate::models::table::CellPosition { row_id: 1, column_name: "missing".into() },
+                    crate::models::table::CellPosition {
+                        row_id: 1,
+                        column_name: "first".into()
+                    },
+                    crate::models::table::CellPosition {
+                        row_id: 1,
+                        column_name: "missing".into()
+                    },
                 ],
             )
             .is_err());
         let value: String = db
             .conn()
-            .query_row("SELECT first FROM dataset_clear_id WHERE _row_id = 1", [], |row| row.get(0))
+            .query_row(
+                "SELECT first FROM dataset_clear_id WHERE _row_id = 1",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(value, "restored");
         assert_eq!(db.get_dataset_generation("clear-id").unwrap(), generation);
@@ -7235,7 +8742,9 @@ mod tests {
 
         let before_failure: String = db
             .conn()
-            .query_row("SELECT first FROM dataset_update_cells_id", [], |row| row.get(0))
+            .query_row("SELECT first FROM dataset_update_cells_id", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert!(db
             .update_cells(
@@ -7256,7 +8765,9 @@ mod tests {
             .is_err());
         let after_failure: String = db
             .conn()
-            .query_row("SELECT first FROM dataset_update_cells_id", [], |row| row.get(0))
+            .query_row("SELECT first FROM dataset_update_cells_id", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(after_failure, before_failure);
         assert_eq!(db.get_dataset_generation("update-cells-id").unwrap(), 2);
@@ -7265,7 +8776,8 @@ mod tests {
     #[test]
     fn delete_rows_updates_count_and_generation_once() {
         let db = DuckDbEngine::new_in_memory().unwrap();
-        db.seed_benchmark_table("delete-id", "Delete", 5, 1).unwrap();
+        db.seed_benchmark_table("delete-id", "Delete", 5, 1)
+            .unwrap();
 
         db.delete_rows("delete-id", &[2, 4]).unwrap();
 
@@ -7415,13 +8927,11 @@ mod tests {
         }];
 
         assert_eq!(
-            db.locate_table_row("benchmark-id", 7, &filters, 0)
-                .unwrap(),
+            db.locate_table_row("benchmark-id", 7, &filters, 0).unwrap(),
             Some(2)
         );
         assert_eq!(
-            db.locate_table_row("benchmark-id", 3, &filters, 0)
-                .unwrap(),
+            db.locate_table_row("benchmark-id", 3, &filters, 0).unwrap(),
             None
         );
         assert!(matches!(
@@ -7502,10 +9012,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = [
-            (1_i64, "North", 120.0_f64),
-            (2_i64, "South", 200.0_f64),
-        ];
+        let rows = [(1_i64, "North", 120.0_f64), (2_i64, "South", 200.0_f64)];
 
         for (row_id, region, revenue) in rows {
             db.conn()
@@ -7582,8 +9089,8 @@ mod tests {
 
     #[test]
     fn validate_result_column_names_rejects_empty_duplicate_and_reserved_values() {
-        let empty_error = DuckDbEngine::validate_result_column_names(&["".to_string()])
-            .unwrap_err();
+        let empty_error =
+            DuckDbEngine::validate_result_column_names(&["".to_string()]).unwrap_err();
         assert!(matches!(empty_error, AppError::InvalidParam(_)));
 
         let duplicate_error = DuckDbEngine::validate_result_column_names(&[
@@ -7593,10 +9100,8 @@ mod tests {
         .unwrap_err();
         assert!(matches!(duplicate_error, AppError::InvalidParam(_)));
 
-        let reserved_error = DuckDbEngine::validate_result_column_names(&[
-            "_row_id".to_string(),
-        ])
-        .unwrap_err();
+        let reserved_error =
+            DuckDbEngine::validate_result_column_names(&["_row_id".to_string()]).unwrap_err();
         assert!(matches!(reserved_error, AppError::InvalidParam(_)));
     }
 
@@ -7616,28 +9121,88 @@ mod tests {
             (Value::Text("two".to_string()), Value::Int(2)),
         ]));
 
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::HugeInt(123456789012345678901234567890i128)), serde_json::json!("123456789012345678901234567890"));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::UHugeInt(u128::MAX)), serde_json::json!(u128::MAX.to_string()));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::UBigInt(u64::MAX)), serde_json::json!(u64::MAX.to_string()));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Decimal(decimal)), serde_json::json!("12.34"));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Timestamp(TimeUnit::Microsecond, 7)), serde_json::json!("timestamp(Microsecond, 7)"));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Time64(TimeUnit::Second, 9)), serde_json::json!("time64(Second, 9)"));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Date32(4)), serde_json::json!("date32(4)"));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Blob(vec![0xde, 0xad])), serde_json::json!("0xdead"));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Geometry(vec![0xbe, 0xef])), serde_json::json!("0xbeef"));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::List(vec![Value::Int(1), Value::Int(2)])), serde_json::json!([1, 2]));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Array(vec![Value::Text("x".to_string()), Value::Boolean(true)])), serde_json::json!(["x", true]));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(struct_value), serde_json::json!({"name": "Ada", "score": 7}));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(string_key_map), serde_json::json!({"left": 1, "right": 2}));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(mixed_key_map), serde_json::json!([
-            {"key": 1, "value": "one"},
-            {"key": "two", "value": 2},
-        ]));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Enum("green".to_string())), serde_json::json!("green"));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Union(Box::new(Value::Boolean(true)))), serde_json::json!(true));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Float(f32::NAN)), serde_json::json!("NaN"));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Double(f64::INFINITY)), serde_json::json!("Infinity"));
-        assert_eq!(DuckDbEngine::duckdb_value_to_json(Value::Double(f64::NEG_INFINITY)), serde_json::json!("-Infinity"));
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::HugeInt(123456789012345678901234567890i128)),
+            serde_json::json!("123456789012345678901234567890")
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::UHugeInt(u128::MAX)),
+            serde_json::json!(u128::MAX.to_string())
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::UBigInt(u64::MAX)),
+            serde_json::json!(u64::MAX.to_string())
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Decimal(decimal)),
+            serde_json::json!("12.34")
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Timestamp(TimeUnit::Microsecond, 7)),
+            serde_json::json!("timestamp(Microsecond, 7)")
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Time64(TimeUnit::Second, 9)),
+            serde_json::json!("time64(Second, 9)")
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Date32(4)),
+            serde_json::json!("date32(4)")
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Blob(vec![0xde, 0xad])),
+            serde_json::json!("0xdead")
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Geometry(vec![0xbe, 0xef])),
+            serde_json::json!("0xbeef")
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::List(vec![Value::Int(1), Value::Int(2)])),
+            serde_json::json!([1, 2])
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Array(vec![
+                Value::Text("x".to_string()),
+                Value::Boolean(true)
+            ])),
+            serde_json::json!(["x", true])
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(struct_value),
+            serde_json::json!({"name": "Ada", "score": 7})
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(string_key_map),
+            serde_json::json!({"left": 1, "right": 2})
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(mixed_key_map),
+            serde_json::json!([
+                {"key": 1, "value": "one"},
+                {"key": "two", "value": 2},
+            ])
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Enum("green".to_string())),
+            serde_json::json!("green")
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Union(Box::new(Value::Boolean(true)))),
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Float(f32::NAN)),
+            serde_json::json!("NaN")
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Double(f64::INFINITY)),
+            serde_json::json!("Infinity")
+        );
+        assert_eq!(
+            DuckDbEngine::duckdb_value_to_json(Value::Double(f64::NEG_INFINITY)),
+            serde_json::json!("-Infinity")
+        );
     }
 
     #[test]
@@ -7681,7 +9246,9 @@ mod tests {
         )
         .unwrap();
 
-        let err = db.transpose_table("target", "Bad/Name", "source").unwrap_err();
+        let err = db
+            .transpose_table("target", "Bad/Name", "source")
+            .unwrap_err();
         assert!(matches!(err, AppError::InvalidParam(_)));
         assert_eq!(metadata_row_count(&db, "target"), 0);
         assert!(!dataset_table_exists(&db, "dataset_target"));
@@ -7702,13 +9269,19 @@ mod tests {
     fn dataset_name_rejects_invalid_edge_characters_and_reserved_symbols() {
         let db = DuckDbEngine::new_in_memory().unwrap();
 
-        let leading_dot_error = db.create_empty_table("one", ".Sales", &[], &[]).unwrap_err();
+        let leading_dot_error = db
+            .create_empty_table("one", ".Sales", &[], &[])
+            .unwrap_err();
         assert!(matches!(leading_dot_error, AppError::InvalidParam(_)));
 
-        let trailing_space_error = db.create_empty_table("two", "Sales ", &[], &[]).unwrap_err();
+        let trailing_space_error = db
+            .create_empty_table("two", "Sales ", &[], &[])
+            .unwrap_err();
         assert!(matches!(trailing_space_error, AppError::InvalidParam(_)));
 
-        let reserved_char_error = db.create_empty_table("three", "Sales/2026", &[], &[]).unwrap_err();
+        let reserved_char_error = db
+            .create_empty_table("three", "Sales/2026", &[], &[])
+            .unwrap_err();
         assert!(matches!(reserved_char_error, AppError::InvalidParam(_)));
     }
 
@@ -7751,21 +9324,34 @@ mod tests {
             .execute_sql_query("SELECT region, revenue FROM Sales ORDER BY revenue", 1, 2)
             .unwrap();
 
-        assert_eq!(result.columns, vec!["region".to_string(), "revenue".to_string()]);
-        assert_eq!(result.column_types, vec!["VARCHAR".to_string(), "DOUBLE".to_string()]);
+        assert_eq!(
+            result.columns,
+            vec!["region".to_string(), "revenue".to_string()]
+        );
+        assert_eq!(
+            result.column_types,
+            vec!["VARCHAR".to_string(), "DOUBLE".to_string()]
+        );
         assert_eq!(result.total_rows, 5);
         assert_eq!(result.page, 1);
         assert_eq!(result.page_size, 2);
         assert_eq!(result.rows.len(), 2);
-        assert_eq!(result.rows[0], vec![serde_json::json!("East"), serde_json::json!(40.0)]);
-        assert_eq!(result.rows[1], vec![serde_json::json!("West"), serde_json::json!(80.0)]);
+        assert_eq!(
+            result.rows[0],
+            vec![serde_json::json!("East"), serde_json::json!(40.0)]
+        );
+        assert_eq!(
+            result.rows[1],
+            vec![serde_json::json!("West"), serde_json::json!(80.0)]
+        );
         assert_eq!(external_access_enabled(&db), before);
     }
 
     #[test]
     fn blank_dataset_does_not_block_queries_that_do_not_reference_it() {
         let db = DuckDbEngine::new_in_memory().unwrap();
-        db.create_empty_table("blank-id", "Blank", &[], &[]).unwrap();
+        db.create_empty_table("blank-id", "Blank", &[], &[])
+            .unwrap();
 
         let result = db.execute_sql_query("SELECT 1 AS value", 1, 10).unwrap();
 
@@ -7826,7 +9412,9 @@ mod tests {
         seed_sales_dataset(&db);
 
         let before = external_access_enabled(&db);
-        let error = db.execute_sql_query("SELECT CAST(region AS INTEGER) FROM Sales", 1, 2).unwrap_err();
+        let error = db
+            .execute_sql_query("SELECT CAST(region AS INTEGER) FROM Sales", 1, 2)
+            .unwrap_err();
         assert!(matches!(error, AppError::Database(_)));
         assert_eq!(external_access_enabled(&db), before);
     }
@@ -7842,11 +9430,15 @@ mod tests {
         assert!(!connection_external_access_enabled(&snapshot));
         assert_eq!(external_access_enabled(&db), live_before);
 
-        let success = db.execute_sql_query("SELECT region FROM Sales ORDER BY region", 1, 1).unwrap();
+        let success = db
+            .execute_sql_query("SELECT region FROM Sales ORDER BY region", 1, 1)
+            .unwrap();
         assert_eq!(success.columns, vec!["region".to_string()]);
         assert_eq!(external_access_enabled(&db), live_before);
 
-        let failure = db.execute_sql_query("SELECT CAST(region AS INTEGER) FROM Sales", 1, 1).unwrap_err();
+        let failure = db
+            .execute_sql_query("SELECT CAST(region AS INTEGER) FROM Sales", 1, 1)
+            .unwrap_err();
         assert!(matches!(failure, AppError::Database(_)));
         assert_eq!(external_access_enabled(&db), live_before);
     }
@@ -7858,14 +9450,35 @@ mod tests {
 
         let result = db.execute_sql_query(sql, 1, 10).unwrap();
 
-        assert_eq!(result.columns, vec!["amount".to_string(), "created_at".to_string(), "numbers".to_string(), "info".to_string()]);
-        assert_eq!(result.column_types, vec!["DECIMAL(12,2)".to_string(), "TIMESTAMP".to_string(), "INTEGER[]".to_string(), "STRUCT(\"label\" VARCHAR, score INTEGER)".to_string()]);
+        assert_eq!(
+            result.columns,
+            vec![
+                "amount".to_string(),
+                "created_at".to_string(),
+                "numbers".to_string(),
+                "info".to_string()
+            ]
+        );
+        assert_eq!(
+            result.column_types,
+            vec![
+                "DECIMAL(12,2)".to_string(),
+                "TIMESTAMP".to_string(),
+                "INTEGER[]".to_string(),
+                "STRUCT(\"label\" VARCHAR, score INTEGER)".to_string()
+            ]
+        );
         assert_eq!(result.total_rows, 1);
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], serde_json::json!("12.34"));
-        assert!(matches!(&result.rows[0][1], serde_json::Value::String(text) if text.starts_with("timestamp(")));
+        assert!(
+            matches!(&result.rows[0][1], serde_json::Value::String(text) if text.starts_with("timestamp("))
+        );
         assert_eq!(result.rows[0][2], serde_json::json!([1, 2]));
-        assert_eq!(result.rows[0][3], serde_json::json!({"label": "alpha", "score": 7}));
+        assert_eq!(
+            result.rows[0][3],
+            serde_json::json!({"label": "alpha", "score": 7})
+        );
     }
 
     #[test]
@@ -7884,7 +9497,14 @@ mod tests {
 
         let table = db.query_table("typed-query-id", 0, 10, None, None).unwrap();
         assert_eq!(table.columns.first().map(String::as_str), Some("_row_id"));
-        assert_eq!(table.column_types, vec!["INTEGER".to_string(), "VARCHAR".to_string(), "DECIMAL(12,2)".to_string()]);
+        assert_eq!(
+            table.column_types,
+            vec![
+                "INTEGER".to_string(),
+                "VARCHAR".to_string(),
+                "DECIMAL(12,2)".to_string()
+            ]
+        );
         assert_eq!(table.rows.len(), 2);
 
         let first_region: String = db
@@ -7952,7 +9572,9 @@ mod tests {
         assert_eq!(meta.row_count, 2);
         assert_eq!(meta.col_count, 2);
 
-        let table = db.query_table("regional-totals-id", 0, 10, None, None).unwrap();
+        let table = db
+            .query_table("regional-totals-id", 0, 10, None, None)
+            .unwrap();
         assert_eq!(table.columns.first().map(String::as_str), Some("_row_id"));
         assert_eq!(table.rows.len(), 2);
         assert_eq!(table.columns.len(), 3);
@@ -7986,7 +9608,10 @@ mod tests {
         assert!(matches!(error, AppError::Database(_)));
 
         db.conn()
-            .execute("DELETE FROM _meta_columns WHERE dataset_id = $1", params![dataset_id])
+            .execute(
+                "DELETE FROM _meta_columns WHERE dataset_id = $1",
+                params![dataset_id],
+            )
             .unwrap();
 
         assert!(db.get_dataset_meta(dataset_id).is_err());
@@ -8195,7 +9820,11 @@ mod tests {
 
         assert_eq!(
             result.row_members,
-            vec![vec![json!("East")], vec![json!("West")], vec![JsonValue::Null],]
+            vec![
+                vec![json!("East")],
+                vec![json!("West")],
+                vec![JsonValue::Null],
+            ]
         );
         assert_eq!(
             result.column_members,
@@ -8234,7 +9863,11 @@ mod tests {
 
         assert_eq!(
             result.row_members,
-            vec![vec![json!("East")], vec![json!("West")], vec![JsonValue::Null],]
+            vec![
+                vec![json!("East")],
+                vec![json!("West")],
+                vec![JsonValue::Null],
+            ]
         );
         assert_eq!(result.column_members, vec![Vec::<JsonValue>::new()]);
         assert_eq!(result.cells, vec![Some(2.0), Some(1.0), Some(1.0)]);
