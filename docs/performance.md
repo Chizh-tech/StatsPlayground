@@ -322,3 +322,11 @@ Notes:
   interpreted as measured desktop frame timings.
 - This run reports only fields emitted by the harness JSON and externally
   sampled process working-set data.
+- Harness operation parsing currently accepts `graph` and rejects
+  `graph_projection` as an unknown operation.
+- In this harness, `graph` executes one graph projection pass and emits the
+  projection telemetry fields (`selectedColumns`, `resultRows`,
+  `processedRows`, `transferredBytes`) for that pass.
+- Therefore `--operation graph` is the current projection benchmark command,
+  not a semantically different substitute for a separate `graph_projection`
+  mode.
