@@ -358,6 +358,74 @@ assert.deepEqual(Array.from(dynamicDecoded.facetXCodes ?? []), [1, 0]);
 assert.deepEqual(Array.from(dynamicDecoded.facetYCodes ?? []), [0, 1]);
 assert.deepEqual(Array.from(dynamicDecoded.facetZCodes ?? []), [1, 0]);
 assert.deepEqual(Array.from(dynamicDecoded.wrapCodes ?? []), [1, 1]);
+
+{
+  const request: GraphDataRequest = {
+    requestId: "req-line-only",
+    datasetId: "dataset-line-only",
+    generation: 3,
+    fields: [
+      { role: "x", column: "x" },
+      { role: "y", column: "y" },
+    ],
+    filters: [],
+    elements: [{ kind: "line", summaryStat: "none" }],
+    sampling: { mode: "full" },
+    viewport: { width: 1024, height: 768 },
+  };
+
+  const payload = new ArrayBuffer(88);
+  new Float64Array(payload, 0, 3).set([11, 22, 33]);
+  new Float64Array(payload, 24, 3).set([1.5, 2.5, 3.5]);
+  new BigInt64Array(payload, 48, 3).set([401n, 402n, 403n]);
+  new Uint8Array(payload, 72, 1).set([0b00000110]);
+  new Uint8Array(payload, 80, 1).set([0b00000110]);
+
+  const header: GraphChunkHeader = {
+    requestId: request.requestId,
+    generation: request.generation,
+    chunkIndex: 0,
+    rowOffset: 0,
+    rowCount: 3,
+    sourceRows: 3,
+    processedRows: 3,
+    dictionaries: {},
+    validityRanges: {
+      x: { type: "u8", offset: 72, byteLength: 1 },
+      y: { type: "u8", offset: 80, byteLength: 1 },
+    },
+    xValues: { type: "f64", offset: 0, byteLength: 24 },
+    yValues: { type: "f64", offset: 24, byteLength: 24 },
+    rowIds: { type: "i64", offset: 48, byteLength: 24 },
+    xEncoding: "numeric",
+    finalChunk: true,
+  };
+
+  const state0 = createInitialGraphStreamState();
+  const state1 = reduceGraphStream(state0, { type: "start", request });
+  const state2 = reduceGraphStream(state1, { type: "header", header });
+  const state3 = reduceGraphStream(state2, { type: "payload", payload });
+  const state4 = reduceGraphStream(state3, {
+    type: "complete",
+    completion: {
+      requestId: request.requestId,
+      datasetId: request.datasetId,
+      generation: request.generation,
+      sourceRows: 3,
+      processedRows: 3,
+      chunksSent: 1,
+      cancelled: false,
+    },
+  });
+
+  assert.equal(state4.status, "ready");
+  assert.equal(state4.error, null);
+  assert.ok(state4.committed);
+  assert.equal(state4.committed.rawChunks.length, 1);
+  assert.deepEqual(Array.from(state4.committed.rawChunks[0].rowIds), [401n, 402n, 403n]);
+  assert.deepEqual(state4.committed.extents.x, { min: 22, max: 33 });
+  assert.deepEqual(state4.committed.extents.y, { min: 2.5, max: 3.5 });
+}
 assert.deepEqual(Array.from(dynamicDecoded.rowIds), [901n, 902n]);
 
 assert.equal(isGraphAggregatePacket({ kind: "histogram" }), false);

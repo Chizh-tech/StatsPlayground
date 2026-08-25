@@ -13,6 +13,7 @@ Object.defineProperty(globalThis, "localStorage", {
 });
 
 const { build3DOption } = await import("../src/graphCore/threeD.ts");
+const { collectFrame3DPoints } = await import("../src/graphCore/threeDFrame.ts");
 
 const theme: GraphTheme = {
   fgPrimary: "#111111",
@@ -143,6 +144,42 @@ assert.ok(crossByteSeries);
 const crossBytePoints = crossByteSeries.data as number[][];
 assert.equal(crossBytePoints.length, 1);
 assert.deepEqual(crossBytePoints[0], [1, 11, 21]);
+
+const frameWithTruncatedRowIds: GraphDataFrame = {
+  requestId: "req-3d-truncated-rowids",
+  datasetId: "ds-3d-truncated-rowids",
+  generation: 1,
+  sourceRows: 3,
+  processedRows: 3,
+  sampling: { mode: "full" },
+  dictionaries: {},
+  extents: {},
+  aggregates: [],
+  rawChunks: [
+    {
+      chunkIndex: 0,
+      rowOffset: 0,
+      rowCount: 3,
+      xValues: new Float64Array([1, 2, 3]),
+      yValues: new Float64Array([10, 20, 30]),
+      zValues: new Float64Array([100, 200, 300]),
+      rowIds: new BigInt64Array([]),
+      validity: {
+        x: new Uint8Array([0b00000111]),
+        y: new Uint8Array([0b00000111]),
+        z: new Uint8Array([0b00000111]),
+      },
+    },
+  ],
+};
+
+const loose3dPoints = collectFrame3DPoints(frameWithTruncatedRowIds);
+assert.equal(loose3dPoints.length, 3);
+assert.deepEqual(loose3dPoints.map((point) => [point.x, point.y, point.z]), [
+  [1, 10, 100],
+  [2, 20, 200],
+  [3, 30, 300],
+]);
 
 const surfaceData: GraphData = {
   columns: ["x", "y", "z"],

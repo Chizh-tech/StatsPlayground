@@ -19,7 +19,13 @@ export function collectFrame3DPoints(frame: GraphDataFrame): Typed3DPoint[] {
   const points: Typed3DPoint[] = [];
   const groupDict = frame.dictionaries.group ?? [];
   for (const chunk of frame.rawChunks) {
-    const n = Math.min(chunk.xValues.length, chunk.yValues.length, chunk.rowIds.length);
+    const n = Math.min(
+      chunk.rowCount,
+      chunk.xValues.length,
+      chunk.yValues.length,
+      chunk.zValues?.length ?? chunk.rowCount,
+      chunk.groupCodes?.length ?? chunk.rowCount,
+    );
     for (let row = 0; row < n; row += 1) {
       if (!bitIsSet(chunk.validity.x, row)) continue;
       if (!bitIsSet(chunk.validity.y, row)) continue;
