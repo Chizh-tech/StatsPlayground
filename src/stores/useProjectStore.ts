@@ -158,6 +158,7 @@ export function createProjectStore(
 
     closeProject: () => {
       activeSaveGeneration = null;
+      graphTableDataCache.clear();
       set({
         project: null,
         dirty: false,

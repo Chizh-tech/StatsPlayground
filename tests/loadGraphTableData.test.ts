@@ -89,6 +89,31 @@ import { GraphTableDataCache } from "../src/utils/graphTableDataCache.ts";
 
 {
   const cache = new GraphTableDataCache();
+  const cached = { columns: ["value"], rows: [[1], [2]] };
+  cache.putIfCurrent(cache.captureEpoch(), "cached-aborted", 10, cached);
+  const controller = new AbortController();
+  controller.abort();
+  let requests = 0;
+
+  const result = await loadGraphTableData({
+    datasetId: "cached-aborted",
+    generation: 10,
+    signal: controller.signal,
+    cache,
+    cacheEpoch: cache.captureEpoch(),
+    queryWindow: async () => {
+      requests += 1;
+      throw new Error("pre-aborted cache hit must not query");
+    },
+  });
+
+  assert.equal(result, null);
+  assert.equal(requests, 0);
+  assert.equal(cache.get("cached-aborted", 10), cached);
+}
+
+{
+  const cache = new GraphTableDataCache();
   const cacheEpoch = cache.captureEpoch();
   let requests = 0;
 
@@ -240,6 +265,43 @@ import { GraphTableDataCache } from "../src/utils/graphTableDataCache.ts";
 
 {
   const cache = new GraphTableDataCache();
+  let requests = 0;
+
+  await assert.rejects(
+    loadGraphTableData({
+      datasetId: "empty-partial",
+      generation: 12,
+      signal: new AbortController().signal,
+      cache,
+      cacheEpoch: cache.captureEpoch(),
+      queryWindow: async (_datasetId, start) => {
+        requests += 1;
+        if (start === 0) {
+          return {
+            columns: ["value"],
+            rows: [[1]],
+            totalRows: 3,
+            generation: 12,
+          };
+        }
+        return {
+          columns: ["value"],
+          rows: [],
+          totalRows: 3,
+          generation: 12,
+        };
+      },
+      yieldToBrowser: async () => {},
+    }),
+    /incomplete/i,
+  );
+
+  assert.equal(requests, 2);
+  assert.equal(cache.get("empty-partial", 12), undefined);
+}
+
+{
+  const cache = new GraphTableDataCache();
   await assert.rejects(
     loadGraphTableData({
       datasetId: "changed",
@@ -373,6 +435,7 @@ import { GraphTableDataCache } from "../src/utils/graphTableDataCache.ts";
   assert.match(projectStoreSource, /initProject: async \(\) => \{[\s\S]*graphTableDataCache\.clear\(\)[\s\S]*deps\.projectService\.initProject\(/);
   assert.match(projectStoreSource, /createProject: async \(name, filePath\) => \{[\s\S]*graphTableDataCache\.clear\(\)[\s\S]*deps\.projectService\.createProject\(/);
   assert.match(projectStoreSource, /openProject: async \(filePath\) => \{[\s\S]*graphTableDataCache\.clear\(\)[\s\S]*deps\.projectService\.openProject\(/);
+  assert.match(projectStoreSource, /closeProject: \(\) => \{[\s\S]*graphTableDataCache\.clear\(\)[\s\S]*set\(\{/);
 
   const workspaceSource = readFileSync(
     new URL("../src/components/Workspace.tsx", import.meta.url),

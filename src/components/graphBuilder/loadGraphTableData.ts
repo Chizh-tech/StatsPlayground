@@ -63,6 +63,7 @@ function yieldToBrowser(): Promise<void> {
 export async function loadGraphTableData(
   options: LoadGraphTableDataOptions,
 ): Promise<GraphTableData | null> {
+  if (options.signal.aborted) return null;
   const cached = options.cache?.get(options.datasetId, options.generation);
   if (cached) return cached;
 
@@ -89,7 +90,23 @@ export async function loadGraphTableData(
       loadedRows: Math.min(rows.length, result.totalRows),
       totalRows: result.totalRows,
     });
-    if (rows.length >= result.totalRows || result.rows.length === 0) {
+    if (result.rows.length === 0) {
+      if (result.totalRows === 0) {
+        const data = { columns, rows };
+        if (options.cache) {
+          options.cache.putIfCurrent(
+            options.cacheEpoch,
+            options.datasetId,
+            options.generation,
+            data,
+          );
+        }
+        return data;
+      }
+      throw new Error("Incomplete graph table load: received an empty page before all rows loaded.");
+    }
+
+    if (rows.length >= result.totalRows) {
       const data = { columns, rows };
       if (options.cache) {
         options.cache.putIfCurrent(
