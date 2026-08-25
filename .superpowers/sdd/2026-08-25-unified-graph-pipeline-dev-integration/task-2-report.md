@@ -190,3 +190,61 @@ scatter progressive source regression passed
 - Scope control:
   - Stayed within requested tests plus report append.
   - Did not modify other task files or production behavior.
+
+## Task 2 Fix Round 2 of 5 (2026-08-25)
+
+### Scope
+- Replaced remaining identifier/text-shape assertions with TypeScript compiler-API AST structure checks.
+- Kept production code unchanged.
+
+### Files Changed
+- `tests/axisBinding.test.ts`
+- `tests/graphAnimation.test.ts`
+- `tests/scatterProgressive.test.ts`
+- `.superpowers/sdd/2026-08-25-unified-graph-pipeline-dev-integration/task-2-report.md`
+
+### What Changed (AST Structural Coverage)
+- `tests/axisBinding.test.ts`
+  - Parses `GraphBuilderView.tsx` using `typescript` AST instead of regex slicing.
+  - Structurally verifies `prepareAxisBinding` feeds a destructured contract (`bindingChanged`, `axisConfig`) used by an AND-gated conditional branch.
+  - Verifies the gated `updateItem` object payload includes:
+    - `encoding` with computed slot assignment,
+    - computed axis property sourced from `axisConfig`,
+    - computed matching multi-slot clear (`undefined`).
+  - Preserves structural fallback check that non-axis path updates encoding without forced axis/multi reset.
+- `tests/graphAnimation.test.ts`
+  - Parses `Graph.tsx` and `Chart3D.tsx` AST and inspects `setOption(...)` call nodes directly.
+  - Verifies final 2D full-boundary call is `setOption(withoutGraphAnimation(withInterleavedGraphLayers(...)), true)` structurally (wrapper nodes like `as`/parentheses tolerated).
+  - Verifies interaction-only patch call is unwrapped object-literal `setOption` with `animation: false` and options `{ lazyUpdate: true, silent: true }`, without requiring exact text layout.
+  - Verifies 3D boundary call structurally wraps first argument in `withoutGraphAnimation(..., true)`.
+- `tests/scatterProgressive.test.ts`
+  - Parses `Graph.tsx` AST to verify `RawPointsLayer` import and JSX render with `descriptor={rawPoints}`.
+  - Parses `transform.ts` AST to verify:
+    - existence of `buildFrameBackedRawDescriptor`,
+    - `frameSafeData` conditional using empty rows when frame-backed,
+    - panel object `rawPoints` properties call `buildFrameBackedRawDescriptor` across paths.
+  - Structurally verifies `case "points"` includes raw scatter production behavior:
+    - scatter series with `progressive: 0`,
+    - `__pick` metadata present,
+    - no `large: true` on that raw scatter series.
+
+### Exact Commands Run
+```powershell
+node --experimental-strip-types tests/axisBinding.test.ts
+node --experimental-strip-types tests/graphAnimation.test.ts
+node --experimental-strip-types tests/scatterProgressive.test.ts
+node --experimental-strip-types tests/rawPoints.test.ts
+npx tsc -b --pretty false
+```
+
+### Relevant Output
+```text
+axis binding helper checks passed
+graph animation policy checks passed
+scatter progressive source regression passed
+```
+
+(`tests/rawPoints.test.ts` and `npx tsc -b --pretty false` exited 0 with no stdout.)
+
+### Concerns
+1. AST checks are intentionally robust to formatting/local renames but still coupled to current control-flow topology (e.g., presence of a dedicated points switch case and explicit setOption boundaries). Major architectural rewrites may require test adaptation.
