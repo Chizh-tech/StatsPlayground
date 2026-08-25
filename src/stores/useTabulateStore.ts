@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import type { TabulateItem } from "../types/tabulate.ts";
+import { useProjectStore } from "@/stores/useProjectStore";
+import { assertProjectMutable } from "@/utils/saveReadOnly";
 
 interface TabulateStore {
   items: TabulateItem[];
@@ -29,27 +31,40 @@ export const useTabulateStore = create<TabulateStore>((set, get) => ({
   items: [],
   counter: 0,
   addItem: (item) =>
-    set((state) => ({
-      items: [...state.items, item],
-      counter: Math.max(state.counter, maxTabulateSuffix([item])),
-    })),
+    {
+      assertProjectMutable(useProjectStore.getState().readOnly);
+      set((state) => ({
+        items: [...state.items, item],
+        counter: Math.max(state.counter, maxTabulateSuffix([item])),
+      }));
+    },
   updateItem: (id, patch) =>
-    set((state) => {
-      const items = state.items.map((item) => (item.id === id ? { ...item, ...patch } : item));
-      return { items, counter: Math.max(state.counter, maxTabulateSuffix(items)) };
-    }),
+    {
+      assertProjectMutable(useProjectStore.getState().readOnly);
+      set((state) => {
+        const items = state.items.map((item) => (item.id === id ? { ...item, ...patch } : item));
+        return { items, counter: Math.max(state.counter, maxTabulateSuffix(items)) };
+      });
+    },
   renameItem: (id, name) =>
-    set((state) => {
-      const items = state.items.map((item) => (item.id === id ? { ...item, name } : item));
-      return { items, counter: Math.max(state.counter, maxTabulateSuffix(items)) };
-    }),
+    {
+      assertProjectMutable(useProjectStore.getState().readOnly);
+      set((state) => {
+        const items = state.items.map((item) => (item.id === id ? { ...item, name } : item));
+        return { items, counter: Math.max(state.counter, maxTabulateSuffix(items)) };
+      });
+    },
   deleteItem: (id) =>
-    set((state) => ({
-      items: state.items.filter((item) => item.id !== id),
-    })),
+    {
+      assertProjectMutable(useProjectStore.getState().readOnly);
+      set((state) => ({
+        items: state.items.filter((item) => item.id !== id),
+      }));
+    },
   loadFromProject: (items) => set({ items, counter: maxTabulateSuffix(items) }),
   reset: () => set({ items: [], counter: 0 }),
   nextName: () => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const nextCounter = get().counter + 1;
     set({ counter: nextCounter });
     return `Tabulate ${nextCounter}`;

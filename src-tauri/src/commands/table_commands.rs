@@ -5,6 +5,24 @@ use crate::models::table::DatasetMeta;
 use crate::services::data_service::DataService;
 use crate::state::AppState;
 
+pub(crate) fn acquire_mutation_permit(
+    state: &AppState,
+) -> Result<crate::services::save_coordinator::MutationPermit<'_>, AppError> {
+    state.save_coordinator.mutation_permit()
+}
+
+pub(crate) fn sort_table_entry(
+    state: &AppState,
+    source_id: &str,
+    sort_cols: &[String],
+    sort_orders: &[String],
+    new_name: &str,
+) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state)?;
+    let service = DataService::new(state);
+    service.sort_table(source_id, sort_cols, sort_orders, new_name)
+}
+
 #[tauri::command]
 pub fn get_columns(
     state: State<'_, AppState>,
@@ -22,8 +40,13 @@ pub fn sort_table(
     sort_orders: Vec<String>,
     new_name: String,
 ) -> Result<DatasetMeta, AppError> {
-    let service = DataService::new(&state);
-    service.sort_table(&source_id, &sort_cols, &sort_orders, &new_name)
+    sort_table_entry(
+        state.inner(),
+        &source_id,
+        &sort_cols,
+        &sort_orders,
+        &new_name,
+    )
 }
 
 #[tauri::command]
@@ -34,6 +57,7 @@ pub fn subset_table(
     row_filter: Option<String>,
     new_name: String,
 ) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.subset_table(&source_id, &columns, row_filter.as_deref(), &new_name)
 }
@@ -44,6 +68,7 @@ pub fn transpose_table(
     source_id: String,
     new_name: String,
 ) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.transpose_table(&source_id, &new_name)
 }
@@ -56,6 +81,7 @@ pub fn stack_table(
     id_cols: Vec<String>,
     new_name: String,
 ) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.stack_table(&source_id, &stack_cols, &id_cols, &new_name)
 }
@@ -69,6 +95,7 @@ pub fn split_table(
     id_cols: Vec<String>,
     new_name: String,
 ) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.split_table(&source_id, &split_col, &value_col, &id_cols, &new_name)
 }
@@ -82,6 +109,7 @@ pub fn summary_table(
     statistics: Vec<String>,
     new_name: String,
 ) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.summary_table(&source_id, &stat_cols, &group_cols, &statistics, &new_name)
 }
@@ -96,6 +124,7 @@ pub fn join_tables(
     right_key: String,
     new_name: String,
 ) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.join_tables(
         &left_id, &right_id, &join_type, &left_key, &right_key, &new_name,
@@ -110,6 +139,7 @@ pub fn update_table(
     match_col: String,
     update_cols: Vec<String>,
 ) -> Result<(), AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.update_table(&left_id, &right_id, &match_col, &update_cols)
 }
@@ -120,6 +150,7 @@ pub fn concatenate_tables(
     source_ids: Vec<String>,
     new_name: String,
 ) -> Result<DatasetMeta, AppError> {
+    let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
     service.concatenate_tables(&source_ids, &new_name)
 }

@@ -30,6 +30,7 @@ import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPalet
 import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
+import { prepareAxisBinding } from "./axisBinding";
 import { FilterPanel } from "@/components/filter";
 import { useGraphDataPipeline } from "./useGraphDataPipeline";
 
@@ -85,8 +86,17 @@ const DRAG_MIME = "text/plain";
 
 export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const { t } = useTranslation();
-  const updateItem = useGraphBuilderStore((s) => s.updateItem);
-  const markDirty = useProjectStore((s) => s.markDirty);
+  const updateItemRaw = useGraphBuilderStore((s) => s.updateItem);
+  const markDirtyRaw = useProjectStore((s) => s.markDirty);
+  const readOnly = useProjectStore((s) => s.readOnly);
+  const markDirty = useCallback(() => {
+    if (readOnly) return;
+    markDirtyRaw();
+  }, [readOnly, markDirtyRaw]);
+  const updateItem = useCallback((id: string, patch: Partial<GraphBuilderItem>) => {
+    if (readOnly) return;
+    updateItemRaw(id, patch);
+  }, [readOnly, updateItemRaw]);
   // Cross-view bridge: click a scatter point → highlight the matching
   // cell in the DataTableView for `dataset.id` next time it mounts.
   const pickCell = useTableSelectionStore((s) => s.pick);
@@ -994,26 +1004,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       const multiKey: "multiX" | "multiY" | null =
         slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
       const hadMulti = multiKey ? (item[multiKey]?.length ?? 0) > 0 : false;
-      const fieldChanged =
-        (slot === "x" || slot === "y") &&
-        prevField !== undefined &&
-        prevField.name !== field.name;
-      if (fieldChanged || hadMulti) {
-        const axisKey: "xAxis" | "yAxis" | null =
-          slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
-        const prevAxis = axisKey ? item[axisKey] : undefined;
-        const needsAxisReset =
-          axisKey !== undefined &&
-          prevAxis !== undefined &&
-          (prevAxis.min !== undefined ||
-            prevAxis.max !== undefined ||
-            prevAxis.tickInterval !== undefined);
-        const nextAxis = needsAxisReset
-          ? { ...prevAxis, min: undefined, max: undefined, tickInterval: undefined }
-          : prevAxis;
+      const axisKey: "xAxis" | "yAxis" | null =
+        slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
+      const prevAxis = axisKey ? item[axisKey] : undefined;
+      const { bindingChanged, axisConfig } = axisKey
+        ? prepareAxisBinding(prevField?.name, field.name, hadMulti, prevAxis)
+        : { bindingChanged: false, axisConfig: undefined };
+      if (bindingChanged) {
         updateItem(item.id, {
           encoding: { ...item.encoding, [slot]: field },
-          ...(needsAxisReset && axisKey ? { [axisKey]: nextAxis } : {}),
+          ...(axisKey ? { [axisKey]: axisConfig } : {}),
           ...(multiKey ? { [multiKey]: undefined } : {}),
         });
         markDirty();
@@ -1880,6 +1880,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           onOverlayContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
           width={rightWidth}
           threeD={!!item.threeD}
+          readOnly={readOnly}
         />
       </div>
 
@@ -3329,9 +3330,11 @@ interface LegendStylePanelProps {
   /** Whether the chart is in 3D mode — the Gradient mark only applies to
    *  (and is only shown for) 3D surfaces / scatter. */
   threeD: boolean;
+  /** Read-only while project save is in progress. */
+  readOnly: boolean;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD, readOnly }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // `data` and `elements` are still part of the public prop contract for
@@ -3606,7 +3609,9 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
                       style={{ background: bg }}
                       title={`${p.fill} / ${p.line} / ${p.point}`}
                       onClick={() => applyCustomTheme(selected, p)}
+                      disabled={readOnly}
                       onContextMenu={(e) => {
+                        if (readOnly) return;
                         e.preventDefault();
                         e.stopPropagation();
                         setPaletteCtxMenu({ id: p.id, x: e.clientX, y: e.clientY });
@@ -3618,7 +3623,11 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
                   type="button"
                   className="gb-style-color-swatch gb-style-theme-swatch gb-style-theme-add"
                   title={t("graph.style.addTheme")}
-                  onClick={() => setShowAddDialog(true)}
+                  onClick={() => {
+                    if (readOnly) return;
+                    setShowAddDialog(true);
+                  }}
+                  disabled={readOnly}
                   aria-label={t("graph.style.addTheme")}
                 >
                   +
@@ -3671,7 +3680,10 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           this panel's local stacking context. */}
       {showAddDialog && (
         <AddPaletteDialog
-          onSave={(p) => addPalette(p)}
+          onSave={(p) => {
+            if (readOnly) return;
+            addPalette(p);
+          }}
           onClose={() => setShowAddDialog(false)}
         />
       )}
@@ -3688,11 +3700,11 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div
-            className="sp-ctx-item sp-ctx-danger"
-            onClick={() => {
+            className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`}
+            onClick={readOnly ? undefined : (() => {
               removePalette(paletteCtxMenu.id);
               setPaletteCtxMenu(null);
-            }}
+            })}
           >
             {t("graph.style.removeTheme")}
           </div>

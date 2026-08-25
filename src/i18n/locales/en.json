@@ -159,6 +159,15 @@
     "importProgressTable": "Table {{i}}/{{total}}: {{name}}",
     "importProgressRows": "rows",
     "createSnapshotTitle": "Create snapshot",
+    "savingProject": "Saving project…",
+    "readOnlyWhileSaving": "Read-only while saving",
+    "savePhase": {
+      "preparing": "Preparing",
+      "table": "Saving tables",
+      "metadata": "Saving metadata",
+      "compressing": "Compressing",
+      "finalizing": "Finalizing"
+    },
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
     "zoomReset": "Reset to 100%",
@@ -631,6 +640,7 @@
       "fitStat": { "equation": "Equation", "rmse": "RMSE", "r2": "R²", "fTest": "F Test" }
     },
     "loading": "Loading data…",
+    "loadingProgress": "{{loaded}} / {{total}} rows",
     "noData": "No data",
     "dragHint": "Drag a column onto an axis slot to begin",
     "removeSlot": "Remove",

@@ -24,6 +24,7 @@ export function HistoryPanel({
   const { t } = useTranslation();
   const locale = useLocaleStore((s) => s.locale);
   const dirty = useProjectStore((s) => s.dirty);
+  const readOnly = useProjectStore((s) => s.readOnly);
   const {
     history,
     snapshots,
@@ -91,6 +92,10 @@ export function HistoryPanel({
   }, [historyPct]);
 
   const handleRenameSubmit = (id: string) => {
+    if (readOnly) {
+      setRenamingId(null);
+      return;
+    }
     const trimmed = renameValue.trim();
     if (trimmed) {
       const { renameSnapshot } = useHistoryStore.getState();
@@ -100,6 +105,7 @@ export function HistoryPanel({
   };
 
   const handleCreateSnapshot = async () => {
+    if (readOnly) return;
     setBusyMessage(t("workspace.creatingSnapshot"));
     const unlisten = await listen<{
       datasetIndex: number;
@@ -159,7 +165,7 @@ export function HistoryPanel({
                 key={entry.id}
                 className={`history-item${idx === currentIdx ? " history-current" : ""}${entry.afterState ? " history-clickable" : ""}`}
                 title={`${entry.description}\n${formatTime(entry.timestamp)}`}
-                onClick={() => entry.afterState && jumpTo(entry.id)}
+                onClick={() => entry.afterState && !readOnly && jumpTo(entry.id)}
                 style={entry.afterState ? { cursor: "pointer" } : undefined}
               >
                 <div className="history-item-icon">
@@ -194,6 +200,7 @@ export function HistoryPanel({
           <button
             className={`snapshot-add-btn${dirty ? " snapshot-add-btn-dirty" : ""}`}
             onClick={handleCreateSnapshot}
+            disabled={readOnly}
             title={t("history.createSnapshot")}
           >
             +

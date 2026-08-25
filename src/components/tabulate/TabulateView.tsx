@@ -40,8 +40,17 @@ interface TabulateViewProps {
 
 export function TabulateView({ item, dataset }: TabulateViewProps) {
   const { t } = useTranslation();
-  const updateItem = useTabulateStore((state) => state.updateItem);
-  const markDirty = useProjectStore((state) => state.markDirty);
+  const updateItemRaw = useTabulateStore((state) => state.updateItem);
+  const markDirtyRaw = useProjectStore((state) => state.markDirty);
+  const readOnly = useProjectStore((state) => state.readOnly);
+  const updateItem = (id: string, patch: Partial<TabulateItem>) => {
+    if (readOnly) return;
+    updateItemRaw(id, patch);
+  };
+  const markDirty = () => {
+    if (readOnly) return;
+    markDirtyRaw();
+  };
 
   const [fields, setFields] = useState<TabulateFieldInfo[]>([]);
   const [displayPropsByField, setDisplayPropsByField] = useState<Map<string, ColumnDisplayProps | undefined>>(

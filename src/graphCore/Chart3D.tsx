@@ -12,6 +12,7 @@ import * as echarts from "echarts";
 // 副作用导入：注册 3D 组件（grid3D、series-surface、series-scatter3D 等）。
 import "echarts-gl";
 import type { GraphSpec, GraphData } from "./types";
+import { withoutGraphAnimation } from "./animation";
 import { getGraphTheme } from "./theme";
 import { build3DOption } from "./threeD";
 import { useThemeStore } from "@/stores/useThemeStore";
@@ -55,7 +56,7 @@ export function Chart3D({ spec, data, frame }: Chart3DProps) {
     const inst = chartRef.current;
     if (!inst) return;
     if (built.option) {
-      inst.setOption(built.option as echarts.EChartsCoreOption, true);
+      inst.setOption(withoutGraphAnimation(built.option as echarts.EChartsCoreOption), true);
     } else {
       inst.clear();
     }

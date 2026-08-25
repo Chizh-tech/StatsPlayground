@@ -31,6 +31,7 @@ import { listen } from "@tauri-apps/api/event";
 import { modKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import type { NamedSnapshot } from "@/types/history";
+import { graphTableDataCache } from "@/utils/graphTableDataCache";
 
 function formatStat(n: number): string {
   if (Number.isInteger(n) && Math.abs(n) < 1e15) return n.toString();
@@ -140,7 +141,17 @@ function MenuDropdown({ label, children, openMenu, setOpenMenu }: {
 
 export function Workspace() {
   const { t } = useTranslation();
-  const { project, saveProject, initProject, dirty, markDirty } = useProjectStore();
+  const {
+    project,
+    saveProject,
+    initProject,
+    dirty,
+    markDirty,
+    readOnly,
+    saving,
+    saveProgress,
+    saveError,
+  } = useProjectStore();
   const { datasets, activeDatasetId, setActiveDataset, refreshDatasets, statusInfo } = useDataStore();
   const { openProject } = useProjectStore();
   const { record: recordHistory, createSnapshot, restoreSnapshot, deleteSnapshot, reset: resetHistory } = useHistoryStore();
@@ -339,6 +350,7 @@ export function Workspace() {
   }, [datasets]);
 
   const handleCreateTable = async () => {
+    if (readOnly) return;
     tableCounter.current += 1;
     const name = `Table${tableCounter.current}`;
     const meta = await dataService.createTable(name, [], []);
@@ -356,6 +368,7 @@ export function Workspace() {
 
   /** 新建一个图表构建器项，绑定到当前选中数据表 */
   const handleCreateGraphBuilder = () => {
+    if (readOnly) return;
     if (!activeDatasetId) {
       alert(t("alert.selectDatasetFirst"));
       return;
@@ -400,6 +413,7 @@ export function Workspace() {
   };
 
   const handleCreateTabulate = () => {
+    if (readOnly) return;
     if (!activeDatasetId) {
       return;
     }
@@ -428,6 +442,10 @@ export function Workspace() {
   };
 
   const handleRenameSubmit = async (id: string) => {
+    if (readOnly) {
+      setRenamingId(null);
+      return;
+    }
     const trimmed = renameValue.trim();
     if (!trimmed) {
       setRenamingId(null);
@@ -482,6 +500,7 @@ export function Workspace() {
 
   const handleDeleteDataset = async (id: string) => {
     const name = datasets.find((d) => d.id === id)?.name ?? id;
+    graphTableDataCache.invalidateDataset(id);
     await dataService.deleteDataset(id);
     if (activeDatasetId === id) setActiveDataset(null);
     // 联动删除引用此数据表的图表
@@ -657,6 +676,7 @@ export function Workspace() {
   };
 
   const handleImportGraphSpgh = async () => {
+    if (readOnly) return;
     const selected = await open({
       title: t("menu.importSpgh"),
       filters: [{ name: "StatsPlayground Graph", extensions: ["spgh"] }],
@@ -683,6 +703,7 @@ export function Workspace() {
   };
 
   const handleSave = async () => {
+    if (saving) return;
     const { snapshots } = useHistoryStore.getState();
     const gbItems = useGraphBuilderStore.getState().items;
     // History is session-only (not persisted); only snapshots are saved.
@@ -696,18 +717,41 @@ export function Workspace() {
       graphFolders,
       tabulateFolders,
     };
-    if (!project?.filePath) {
-      const filePath = await save({
-        title: t("welcome.saveProjectDialog"),
-        defaultPath: "Untitled Project.spprj",
-        filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
-      });
-      if (!filePath) return; // User cancelled
-      await saveProject(filePath, [], snapshots, gbItems, folderPayload, tabulates);
-    } else {
-      await saveProject(undefined, [], snapshots, gbItems, folderPayload, tabulates);
+    try {
+      if (!project?.filePath) {
+        const filePath = await save({
+          title: t("welcome.saveProjectDialog"),
+          defaultPath: "Untitled Project.spprj",
+          filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
+        });
+        if (!filePath) return; // User cancelled
+        await saveProject({
+          filePath: filePath as string,
+          history: [],
+          snapshots,
+          graphBuilders: gbItems,
+          tabulates,
+          folders: folderPayload.folders,
+          tableFolders: folderPayload.tableFolders,
+          graphFolders: folderPayload.graphFolders,
+          tabulateFolders: folderPayload.tabulateFolders,
+        });
+      } else {
+        await saveProject({
+          history: [],
+          snapshots,
+          graphBuilders: gbItems,
+          tabulates,
+          folders: folderPayload.folders,
+          tableFolders: folderPayload.tableFolders,
+          graphFolders: folderPayload.graphFolders,
+          tabulateFolders: folderPayload.tabulateFolders,
+        });
+      }
+      showToast(t("common.saved"), 1500);
+    } catch (error) {
+      alert(`${t("menu.save")}: ${String(error)}`);
     }
-    showToast(t("common.saved"), 1500);
   };
   handleSaveRef.current = handleSave;
 
@@ -1040,6 +1084,7 @@ export function Workspace() {
    *  default localized name; the user can immediately rename it via F2 or by
    *  double-clicking. */
   const handleCreateFolder = (parent: string | null) => {
+    if (readOnly) return;
     const baseName = t("folder.defaultName", { defaultValue: "New Folder" });
     const newPath = fsCreateFolder(parent, baseName);
     // Make sure the parent folder is expanded so the new child is visible.
@@ -1052,6 +1097,10 @@ export function Workspace() {
   };
 
   const handleFolderRenameSubmit = (oldPath: string) => {
+    if (readOnly) {
+      setRenamingFolder(null);
+      return;
+    }
     const newBase = folderRenameValue.trim();
     if (!newBase) {
       setRenamingFolder(null);
@@ -1068,6 +1117,7 @@ export function Workspace() {
   };
 
   const handleDeleteFolder = (folderPath: string) => {
+    if (readOnly) return;
     // Per user decision: child items are NEVER lost when a folder is deleted —
     // they get promoted to the parent folder. No confirmation prompt is needed
     // because nothing is actually destroyed.
@@ -1103,6 +1153,7 @@ export function Workspace() {
   const handleDropOnFolder = (e: React.DragEvent, target: string | null) => {
     e.preventDefault();
     e.stopPropagation();
+    if (readOnly) return;
     setDropTarget(null);
     const raw = e.dataTransfer.getData("application/x-sp-item");
     if (!raw) return;
@@ -1198,13 +1249,14 @@ export function Workspace() {
           <div
             className="sp-folder-row"
             style={{ paddingLeft: 8 + depth * 12 }}
-            draggable
+            draggable={!readOnly}
             onDragStart={(e) => handleDragStart(e, { kind: "folder", path: fp })}
             onDragOver={(e) => handleDragOverFolder(e, fp)}
             onDragLeave={() => setDropTarget((cur) => (cur === fp ? null : cur))}
             onDrop={(e) => handleDropOnFolder(e, fp)}
             onClick={() => fsToggleCollapsed(fp)}
             onDoubleClick={(e) => {
+              if (readOnly) return;
               e.stopPropagation();
               setRenamingFolder(fp);
               setFolderRenameValue(folderBaseName(fp));
@@ -1254,7 +1306,7 @@ export function Workspace() {
           key={`table:${ds.id}`}
           className={`dataset-item ${activeDatasetId === ds.id ? "active" : ""}`}
           style={{ paddingLeft: 8 + depth * 12 + 12 }}
-          draggable
+          draggable={!readOnly}
           onDragStart={(e) => handleDragStart(e, { kind: "table", id: ds.id })}
           onClick={() => {
             setActiveGraphBuilderId(null);
@@ -1262,6 +1314,7 @@ export function Workspace() {
             setActiveDataset(ds.id);
           }}
           onDoubleClick={() => {
+            if (readOnly) return;
             setRenamingId(ds.id);
             setRenameValue(ds.name);
           }}
@@ -1300,7 +1353,7 @@ export function Workspace() {
           key={`graph:${gb.id}`}
           className={`dataset-item ${activeGraphBuilderId === gb.id ? "active" : ""}`}
           style={{ paddingLeft: 8 + depth * 12 + 12 }}
-          draggable
+          draggable={!readOnly}
           onDragStart={(e) => handleDragStart(e, { kind: "graph", id: gb.id })}
           onClick={() => {
             setActiveDataset(null);
@@ -1308,6 +1361,7 @@ export function Workspace() {
             setActiveGraphBuilderId(gb.id);
           }}
           onDoubleClick={() => {
+            if (readOnly) return;
             setRenamingId(gb.id);
             setRenameValue(gb.name);
           }}
@@ -1349,7 +1403,7 @@ export function Workspace() {
           key={`tabulate:${item.id}`}
           className={`dataset-item ${activeTabulateId === item.id ? "active" : ""}`}
           style={{ paddingLeft: 8 + depth * 12 + 12 }}
-          draggable
+          draggable={!readOnly}
           onDragStart={(e) => handleDragStart(e, { kind: "tabulate", id: item.id })}
           onClick={() => {
             setActiveDataset(null);
@@ -1357,6 +1411,7 @@ export function Workspace() {
             setActiveTabulateId(item.id);
           }}
           onDoubleClick={() => {
+            if (readOnly) return;
             setRenamingId(item.id);
             setRenameValue(item.name);
           }}
@@ -1402,7 +1457,7 @@ export function Workspace() {
         <div className="menu-bar-menus">
           <MenuBar>
             <MenuDropdown label={t("menu.file")}>
-              <div className="menu-item" onClick={handleSave}>{t("menu.save")}<span className="menu-shortcut">{modKey}S</span></div>
+              <div className={`menu-item${saving ? " menu-item-disabled" : ""}`} onClick={saving ? undefined : handleSave}>{t("menu.save")}<span className="menu-shortcut">{modKey}S</span></div>
               <div className="menu-sep" />
               <div className="menu-item" onClick={() => setShowPrefs(true)}>{t("menu.preferences")}<span className="menu-shortcut">{modKey},</span></div>
               <div className="menu-sep" />
@@ -1410,30 +1465,30 @@ export function Workspace() {
               <div className="menu-item" onClick={handleCloseProject}>{t("menu.closeProject")}</div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.table")}>
-              <div className="menu-item" onClick={handleCreateTable}>{t("menu.newTable")}<span className="menu-shortcut">{modKey}N</span></div>
+              <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : handleCreateTable}>{t("menu.newTable")}<span className="menu-shortcut">{modKey}N</span></div>
               <div className="menu-sep" />
-              <div className="menu-item" onClick={handleImportCsv}>{t("menu.importCsv")}</div>
-              <div className="menu-item" onClick={handleImportSqlite}>{t("menu.importSqlite")}</div>
+              <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : handleImportCsv}>{t("menu.importCsv")}</div>
+              <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : handleImportSqlite}>{t("menu.importSqlite")}</div>
               <div className="menu-sep" />
               <div className="menu-item" onClick={handleExportSqlite}>{t("menu.exportSqlite")}</div>
               <div className="menu-item" onClick={handleExportCsvZip}>{t("menu.exportCsv")}</div>
               <div className="menu-sep" />
               <div className="menu-item" onClick={handleExportTableSptb}>{t("menu.exportSptb")}</div>
-              <div className="menu-item" onClick={handleImportTableSptb}>{t("menu.importSptb")}</div>
+              <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : handleImportTableSptb}>{t("menu.importSptb")}</div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.data")}>
               <div className="menu-item" onClick={() => setShowSqlQuery(true)}>{t("menu.sqlQuery")}</div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.graph")}>
-              <div className="menu-item" onClick={handleCreateGraphBuilder}>{t("menu.newGraph")}</div>
+              <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : handleCreateGraphBuilder}>{t("menu.newGraph")}</div>
               <div className="menu-sep" />
               <div className="menu-item" onClick={handleExportGraphSpgh}>{t("menu.exportSpgh")}</div>
-              <div className="menu-item" onClick={handleImportGraphSpgh}>{t("menu.importSpgh")}</div>
+              <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : handleImportGraphSpgh}>{t("menu.importSpgh")}</div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.analyze")}>
               <div
-                className={`menu-item${activeDatasetId ? "" : " menu-item-disabled"}`}
-                onClick={activeDatasetId ? handleCreateTabulate : undefined}
+                className={`menu-item${activeDatasetId && !readOnly ? "" : " menu-item-disabled"}`}
+                onClick={activeDatasetId && !readOnly ? handleCreateTabulate : undefined}
               >
                 {t("menu.tabulate")}
               </div>
@@ -1447,7 +1502,9 @@ export function Workspace() {
         <div className="menu-spacer" />
         <button
           className={`menu-bar-snapshot${dirty ? " menu-bar-snapshot-dirty" : ""}`}
+          disabled={readOnly}
           onClick={async () => {
+            if (readOnly) return;
             setBusyMessage(t("workspace.creatingSnapshot"));
             const unlisten = await listen<{
               datasetIndex: number;
@@ -1472,6 +1529,7 @@ export function Workspace() {
         </button>
         <button
           className={`menu-bar-save${dirty ? " menu-bar-save-dirty" : ""}`}
+          disabled={saving}
           onClick={handleSave}
           title={t("common.saveWith", { key: modKey })}
         >
@@ -1513,7 +1571,8 @@ export function Workspace() {
                   <button
                     className="panel-action-btn"
                     title={t("menu.newFolder", { defaultValue: "New Folder" })}
-                    onClick={() => handleCreateFolder(null)}
+                    onClick={readOnly ? undefined : (() => handleCreateFolder(null))}
+                    disabled={readOnly}
                   >
                     <i className="fa-solid fa-folder-plus" aria-hidden="true" />
                   </button>
@@ -1592,6 +1651,7 @@ export function Workspace() {
       <div className="status-bar">
         <span>{project?.name}</span>
         <span>{t("workspace.datasetCount", { n: datasets.length })}</span>
+        {readOnly && <span>{t("workspace.readOnlyWhileSaving", { defaultValue: "Read-only while saving" })}</span>}
         <span className="status-spacer" />
         {statusInfo?.selectionStats && (
           <span className="status-stats">
@@ -1611,6 +1671,28 @@ export function Workspace() {
         )}
         {statusInfo?.dimensions && <span>{statusInfo.dimensions}</span>}
         {activeDatasetId && <TableZoomControl />}
+        {saving && (
+          <span>
+            {t("workspace.savingProject", { defaultValue: "Saving project…" })}
+            {saveProgress?.phase
+              ? ` · ${t(`workspace.savePhase.${saveProgress.phase}`, { defaultValue: saveProgress.phase })}`
+              : ""}
+            {saveProgress?.tableTotal
+              ? ` · ${t("workspace.importProgressTable", {
+                  i: Math.min(saveProgress.tableIndex + 1, saveProgress.tableTotal),
+                  total: saveProgress.tableTotal,
+                  name: saveProgress.tableName ?? "",
+                })}`
+              : ""}
+            {saveProgress?.rowsTotal
+              ? ` · ${saveProgress.rowsDone.toLocaleString()}/${saveProgress.rowsTotal.toLocaleString()} ${t("workspace.importProgressRows")}`
+              : ""}
+            {typeof saveProgress?.overallProgress === "number"
+              ? ` · ${Math.round(saveProgress.overallProgress * 100)}%`
+              : ""}
+          </span>
+        )}
+        {!saving && saveError && <span>{saveError}</span>}
       </div>
 
       {showPrefs && <PreferencesDialog onClose={() => setShowPrefs(false)} />}
@@ -1717,20 +1799,20 @@ export function Workspace() {
             if (!ds) return null;
             return (
               <>
-                <div className="sp-ctx-item" onClick={() => {
+                <div className={`sp-ctx-item${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => {
                   setRenamingId(id);
                   setRenameValue(ds.name);
                   setActiveGraphBuilderId(null);
                   setActiveTabulateId(null);
                   setActiveDataset(id);
                   setCtxMenu(null);
-                }}>{t("common.rename")}</div>
+                })}>{t("common.rename")}</div>
                 <div className="sp-ctx-sep" />
                 <div className="sp-ctx-item" onClick={() => { handleExportTableSptbFromCtx(id); setCtxMenu(null); }}>{t("menu.exportSptb")}</div>
                 <div className="sp-ctx-item" onClick={() => { handleExportTableCsvFromCtx(id); setCtxMenu(null); }}>{t("table.exportCsvSingle", { defaultValue: "Export as CSV" })}</div>
                 <div className="sp-ctx-item" onClick={() => { handleExportTableSqliteFromCtx(id); setCtxMenu(null); }}>{t("table.exportSqliteSingle", { defaultValue: "Export as SQLite" })}</div>
                 <div className="sp-ctx-sep" />
-                <div className="sp-ctx-item sp-ctx-danger" onClick={() => { handleDeleteDataset(id); setCtxMenu(null); }}>{t("common.delete")}</div>
+                <div className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => { handleDeleteDataset(id); setCtxMenu(null); })}>{t("common.delete")}</div>
               </>
             );
           })()}
@@ -1740,16 +1822,16 @@ export function Workspace() {
             if (!gb) return null;
             return (
               <>
-                <div className="sp-ctx-item" onClick={() => {
+                <div className={`sp-ctx-item${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => {
                   setRenamingId(id);
                   setRenameValue(gb.name);
                   setActiveDataset(null);
                   setActiveTabulateId(null);
                   setActiveGraphBuilderId(id);
                   setCtxMenu(null);
-                }}>{t("common.rename")}</div>
+                })}>{t("common.rename")}</div>
                 <div className="sp-ctx-sep" />
-                <div className="sp-ctx-item sp-ctx-danger" onClick={() => { handleDeleteGraphBuilder(id); setCtxMenu(null); }}>{t("common.delete")}</div>
+                <div className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => { handleDeleteGraphBuilder(id); setCtxMenu(null); })}>{t("common.delete")}</div>
               </>
             );
           })()}
@@ -1759,16 +1841,16 @@ export function Workspace() {
             if (!item) return null;
             return (
               <>
-                <div className="sp-ctx-item" onClick={() => {
+                <div className={`sp-ctx-item${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => {
                   setRenamingId(id);
                   setRenameValue(item.name);
                   setActiveDataset(null);
                   setActiveGraphBuilderId(null);
                   setActiveTabulateId(id);
                   setCtxMenu(null);
-                }}>{t("common.rename")}</div>
+                })}>{t("common.rename")}</div>
                 <div className="sp-ctx-sep" />
-                <div className="sp-ctx-item sp-ctx-danger" onClick={() => { handleDeleteTabulate(id); setCtxMenu(null); }}>{t("common.delete")}</div>
+                <div className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => { handleDeleteTabulate(id); setCtxMenu(null); })}>{t("common.delete")}</div>
               </>
             );
           })()}
@@ -1776,23 +1858,23 @@ export function Workspace() {
             const fp = ctxMenu.path;
             return (
               <>
-                <div className="sp-ctx-item" onClick={() => { handleCreateFolder(fp); setCtxMenu(null); }}>{t("folder.newSubfolder", { defaultValue: "New Subfolder" })}</div>
-                <div className="sp-ctx-item" onClick={() => {
+                <div className={`sp-ctx-item${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => { handleCreateFolder(fp); setCtxMenu(null); })}>{t("folder.newSubfolder", { defaultValue: "New Subfolder" })}</div>
+                <div className={`sp-ctx-item${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => {
                   setRenamingFolder(fp);
                   setFolderRenameValue(folderBaseName(fp));
                   setCtxMenu(null);
-                }}>{t("common.rename")}</div>
+                })}>{t("common.rename")}</div>
                 <div className="sp-ctx-sep" />
                 <div className="sp-ctx-item" onClick={() => { handleExportFolderSptbZip(fp); setCtxMenu(null); }}>{t("folder.exportSptbZip", { defaultValue: "Export as .sptb (zip)" })}</div>
                 <div className="sp-ctx-item" onClick={() => { handleExportFolderCsvZip(fp); setCtxMenu(null); }}>{t("folder.exportCsvZip", { defaultValue: "Export as CSV (zip)" })}</div>
                 <div className="sp-ctx-item" onClick={() => { handleExportFolderSqlite(fp); setCtxMenu(null); }}>{t("folder.exportSqlite", { defaultValue: "Export as SQLite" })}</div>
                 <div className="sp-ctx-sep" />
-                <div className="sp-ctx-item sp-ctx-danger" onClick={() => { handleDeleteFolder(fp); setCtxMenu(null); }}>{t("common.delete")}</div>
+                <div className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => { handleDeleteFolder(fp); setCtxMenu(null); })}>{t("common.delete")}</div>
               </>
             );
           })()}
           {ctxMenu.kind === "empty" && (
-            <div className="sp-ctx-item" onClick={() => { handleCreateFolder(null); setCtxMenu(null); }}>{t("menu.newFolder", { defaultValue: "New Folder" })}</div>
+            <div className={`sp-ctx-item${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => { handleCreateFolder(null); setCtxMenu(null); })}>{t("menu.newFolder", { defaultValue: "New Folder" })}</div>
           )}
         </div>
       )}
@@ -1803,11 +1885,11 @@ export function Workspace() {
           style={{ left: snapMenu.x, top: snapMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="sp-ctx-item" onClick={() => {
+          <div className={`sp-ctx-item${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => {
             snapRenameRef.current?.(snapMenu.id);
             setSnapMenu(null);
-          }}>{t("common.rename")}</div>
-          <div className="sp-ctx-item" onClick={async () => {
+          })}>{t("common.rename")}</div>
+          <div className={`sp-ctx-item${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (async () => {
             const id = snapMenu.id;
             setSnapMenu(null);
             setBusyMessage(t("workspace.restoringSnapshot"));
@@ -1828,13 +1910,13 @@ export function Workspace() {
               unlisten();
               setBusyMessage(null);
             }
-          }}>{t("common.restore")}</div>
+          })}>{t("common.restore")}</div>
           <div className="sp-ctx-sep" />
           {confirmDeleteSnapId === snapMenu.id ? (
             <div className="snapshot-ctx-confirm" onMouseDown={(e) => e.stopPropagation()}>
               <span className="snapshot-ctx-confirm-text">{t("common.confirmDelete")}</span>
               <div className="snapshot-ctx-confirm-btns">
-                <button className="snapshot-ctx-confirm-yes" onClick={(e) => {
+                <button className="snapshot-ctx-confirm-yes" disabled={readOnly} onClick={(e) => {
                   e.stopPropagation();
                   deleteSnapshot(confirmDeleteSnapId);
                   setConfirmDeleteSnapId(null);
@@ -1847,10 +1929,10 @@ export function Workspace() {
               </div>
             </div>
           ) : (
-            <div className="sp-ctx-item sp-ctx-danger" onClick={(e) => {
+            <div className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : ((e) => {
               e.stopPropagation();
               setConfirmDeleteSnapId(snapMenu.id);
-            }}>{t("common.delete")}</div>
+            })}>{t("common.delete")}</div>
           )}
         </div>
       )}

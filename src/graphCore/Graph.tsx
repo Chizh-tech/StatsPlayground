@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
 import type { GraphSpec, GraphData } from "./types";
+import { withoutGraphAnimation } from "./animation";
 import { getGraphTheme } from "./theme";
 import { buildGraph, type ScatterPointPick } from "./transform";
 import { RawPointsLayer } from "./RawPointsLayer";
@@ -1016,7 +1017,12 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
   useEffect(() => {
     const inst = chartRef.current;
     if (!inst) return;
-    inst.setOption(withInterleavedGraphLayers(option) as echarts.EChartsCoreOption, true);
+    inst.setOption(
+      withoutGraphAnimation(
+        withInterleavedGraphLayers(option) as echarts.EChartsCoreOption,
+      ),
+      true,
+    );
     const painter = (inst as unknown as { getZr?: () => { painter?: { _layers?: Record<string, { dom?: { style?: { zIndex?: string } } }> } } })
       .getZr?.()
       ?.painter;

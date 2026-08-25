@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { useProjectStore } from "@/stores/useProjectStore";
+import { assertProjectMutable } from "@/utils/saveReadOnly";
 
 /**
  * A user-defined color theme that appears alongside the built-in
@@ -66,6 +68,7 @@ function newId(): string {
 export const useGraphPaletteStore = create<GraphPaletteState>((set) => ({
   palettes: load(),
   addPalette: (p) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
     const id = newId();
     set((s) => {
       const next = [...s.palettes, { ...p, id }];
@@ -75,9 +78,12 @@ export const useGraphPaletteStore = create<GraphPaletteState>((set) => ({
     return id;
   },
   removePalette: (id) =>
-    set((s) => {
-      const next = s.palettes.filter((p) => p.id !== id);
-      save(next);
-      return { palettes: next };
-    }),
+    {
+      assertProjectMutable(useProjectStore.getState().readOnly);
+      set((s) => {
+        const next = s.palettes.filter((p) => p.id !== id);
+        save(next);
+        return { palettes: next };
+      });
+    },
 }));
