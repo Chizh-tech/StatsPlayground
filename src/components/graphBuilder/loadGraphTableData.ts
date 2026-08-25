@@ -28,6 +28,15 @@ interface LoadGraphTableDataOptions {
     generation: number,
   ) => Promise<GraphTablePage>;
   yieldToBrowser?: () => Promise<void>;
+  /**
+   * Optional progress callback invoked synchronously immediately after a page
+   * has passed the loader's cancellation and generation validation and its
+   * rows have been appended to the accumulated result. Callers must keep this
+   * callback lightweight and avoid doing expensive synchronous work inside it.
+   * Do not queue the callback (for example with `queueMicrotask` or
+   * `setTimeout`) — queued callbacks can outlive cancellation and violate the
+   * loader's ordering guarantees.
+   */
   onProgress?: (progress: GraphTableLoadProgress) => void;
 }
 

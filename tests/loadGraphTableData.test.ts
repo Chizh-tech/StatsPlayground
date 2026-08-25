@@ -5,6 +5,7 @@ import {
   GRAPH_TABLE_PAGE_SIZE,
   loadGraphTableData,
   type GraphTablePage,
+  type GraphTableLoadProgress,
 } from "../src/components/graphBuilder/loadGraphTableData.ts";
 
 {
@@ -13,7 +14,7 @@ import {
     { columns: ["value"], rows: [[1], [2]], totalRows: 3, generation: 7 },
     { columns: ["value"], rows: [[3]], totalRows: 3, generation: 7 },
   ];
-  const progress: any[] = [];
+  const progress: GraphTableLoadProgress[] = [];
 
   const result = await loadGraphTableData({
     datasetId: "large",
@@ -44,7 +45,7 @@ import {
 {
   for (const rows of [[], Array.from({ length: 2000 }, (_, index) => [index])]) {
     let requests = 0;
-    const progress: any[] = [];
+    const progress: GraphTableLoadProgress[] = [];
     const result = await loadGraphTableData({
       datasetId: "boundary",
       generation: 3,
@@ -66,7 +67,7 @@ import {
 {
   const controller = new AbortController();
   const requestedPages: number[] = [];
-  const progress: any[] = [];
+  const progress: GraphTableLoadProgress[] = [];
   const result = await loadGraphTableData({
     datasetId: "abort-after-response",
     generation: 1,
