@@ -12,13 +12,15 @@ ECharts also receives options without a uniform animation policy. Some custom
 series disable animation, two complete options request a 250 ms animation, and
 axis drag patches disable update animation only while the pointer is moving.
 Unneeded initial and update tweens can consume extra frames after data and
-options are already ready.
+options are already ready. Separately, raw scatter series inherit ECharts'
+progressive rendering defaults, which draw large datasets over several frames
+even when animation is disabled and can look like points are still loading.
 
 ## Scope
 
 This change adds one session-only, generation-aware, completed-data cache shared
-by every Graph Builder and disables ECharts animation at the final 2D and 3D
-render boundaries.
+by every Graph Builder, disables ECharts animation at the final 2D and 3D render
+boundaries, and disables progressive rendering for raw scatter series.
 
 It does not persist cached rows, retain partial loads, reuse an in-flight load,
 sample data, change the current row-oriented JSON IPC contract, or implement the
@@ -139,6 +141,20 @@ between old and new visual states. The loss of animated transitions between
 series states is intentional. Interaction tests must confirm that zoom/pan and
 selection still update immediately rather than depending on a transition.
 
+Animation and progressive rendering are independent ECharts pipelines.
+`animation: false` prevents interpolation but does not prevent a large scatter
+series from being painted in frame-sized batches. Raw Full Data scatter series
+therefore set `progressive: 0` directly on the series so their complete point
+set appears in one render pass. This is intentionally scoped to raw scatter;
+small synthetic scatter overlays and non-scatter series retain their existing
+settings.
+
+The one-pass policy can concentrate more work into the first render frame and
+may cause a short pause on very large plots, but it removes the misleading
+appearance that data is still arriving. ECharts `large` mode is not enabled:
+its optimized representation can interfere with existing per-point metadata,
+click selection, symbol offsets, and style behavior.
+
 ## Expected Performance
 
 A completed cache hit removes all row-window IPC and row accumulation for the
@@ -147,10 +163,11 @@ remain so stale data is never displayed.
 
 Disabling animation removes avoidable initial/update tween frames and should
 reduce CPU/GPU peaks for medium-sized charts and animated histogram/boxplot
-options. It may produce a smaller improvement for very large scatter plots
-because ECharts can already suppress animation above its animation threshold.
-It does not reduce JSON payload size, `buildGraph` scans, per-point object
-creation, or the cost of drawing every Full Data observation.
+options. Disabling raw-scatter progressive rendering changes when the drawing
+work occurs rather than reducing that work: all points appear together, while
+the first visible frame may take longer. Neither policy reduces JSON payload
+size, `buildGraph` scans, per-point object creation, or the cost of drawing
+every Full Data observation.
 
 ## Error Handling
 
@@ -178,5 +195,7 @@ Loader/integration tests verify:
 5. both 2D and 3D full `setOption` paths apply the shared no-animation policy.
 
 The pure animation helper test verifies that source option fields are preserved
-while all three animation fields are overridden. TypeScript checking, Vite
-production build, and the existing graph/loader regressions remain required.
+while all three animation fields are overridden. A transform regression verifies
+that raw scatter series explicitly set `progressive: 0` while preserving point
+metadata and interaction configuration. TypeScript checking, Vite production
+build, and the existing graph/loader regressions remain required.
