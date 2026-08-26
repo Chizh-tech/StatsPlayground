@@ -12,6 +12,7 @@ export type {
 	DistributionColumnRefV1,
 	DistributionDocV1,
 	DistributionIssueV1,
+	DistributionLoadStatusV1,
 	DistributionModelingTypeV1,
 	DistributionReportBlockV1,
 	DistributionRequestV1,

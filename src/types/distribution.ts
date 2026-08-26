@@ -164,13 +164,18 @@ export interface BlackBoxCaseV1 {
 }
 
 export interface DistributionDocV1 {
-  schemaVersion: DistributionSchemaVersionV1;
+  schemaVersion: string;
   analysisId: string;
   name: string;
   sourceDatasetId: string;
   status: string;
+  loadStatus: DistributionLoadStatusV1;
   currentConfig: Record<string, unknown>;
+  rawEnvelope?: Record<string, unknown>;
+  rawText?: string;
 }
+
+export type DistributionLoadStatusV1 = "ready" | "unknownVersion" | "missingSource" | "corrupt";
 
 export interface DerivedFormulaDocV1 {
   formulaId: string;
@@ -185,7 +190,7 @@ export interface DerivedFormulaDocV1 {
 
 export interface DistributionIssueV1 {
   analysisId: string;
-  kind: string;
+  kind: DistributionLoadStatusV1;
   messageKey: string;
   schemaVersion: string;
   sourceDatasetId?: string;

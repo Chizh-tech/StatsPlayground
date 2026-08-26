@@ -55,7 +55,7 @@ pub fn save_project(
     tabulates: Option<Vec<serde_json::Value>>,
     distributions: Option<Vec<crate::services::spprj_archive::DistributionDocV1>>,
     derived_formulas: Option<Vec<crate::services::spprj_archive::DerivedFormulaDocV1>>,
-    distribution_issues: Option<Vec<serde_json::Value>>,
+    distribution_issues: Option<Vec<crate::models::distribution::DistributionIssueV1>>,
     folders: Option<Vec<String>>,
     table_folders: Option<std::collections::HashMap<String, String>>,
     graph_folders: Option<std::collections::HashMap<String, String>>,

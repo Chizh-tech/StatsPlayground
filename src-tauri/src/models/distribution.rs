@@ -352,6 +352,27 @@ pub struct LegalReviewRecordV1 {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DistributionLoadStatusV1 {
+    #[default]
+    Ready,
+    UnknownVersion,
+    MissingSource,
+    Corrupt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionIssueV1 {
+    pub analysis_id: String,
+    pub kind: DistributionLoadStatusV1,
+    pub message_key: String,
+    pub schema_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_dataset_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

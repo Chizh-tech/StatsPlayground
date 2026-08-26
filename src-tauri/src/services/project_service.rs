@@ -2,6 +2,9 @@ use crate::error::AppError;
 use duckdb::appender_params_from_iter;
 use duckdb::types::Value as DuckValue;
 use crate::models::project::{DatasetNameMigration, ProjectInfo};
+use crate::models::distribution::{
+    DistributionIssueV1, DistributionLoadStatusV1,
+};
 use crate::models::table::{ColumnDisplayProps, ColumnFormatInfo};
 use crate::services::spprj_archive::{
     self, DerivedFormulaArchiveEnvelopeV1, DerivedFormulaDocV1,
@@ -50,10 +53,19 @@ pub struct OpenProjectResult {
     #[serde(default)]
     pub derived_formulas: Vec<DerivedFormulaDocV1>,
     #[serde(default)]
-    pub distribution_issues: Vec<serde_json::Value>,
+    pub distribution_issues: Vec<DistributionIssueV1>,
 }
 
 const SPPRJ_VERSION: &str = "3.0.0";
+
+fn push_distribution_issue(
+    issues: &mut Vec<DistributionIssueV1>,
+    issue: DistributionIssueV1,
+) {
+    if !issues.contains(&issue) {
+        issues.push(issue);
+    }
+}
 
 impl<'a> ProjectService<'a> {
     pub fn new(state: &'a AppState) -> Self {
@@ -168,11 +180,108 @@ impl<'a> ProjectService<'a> {
         };
         let tabulate_folders = bundle.manifest.tabulate_folders.clone();
         let distribution_folders = bundle.manifest.distribution_folders.clone();
-        let distribution_issues = bundle.manifest.distribution_issues.clone();
+        let mut distribution_issues: Vec<DistributionIssueV1> = bundle
+            .manifest
+            .distribution_issues
+            .iter()
+            .filter_map(|issue| serde_json::from_value(issue.clone()).ok())
+            .collect();
+        let dataset_ids = {
+            let db = staged_state
+                .db
+                .lock()
+                .map_err(|error| AppError::Database(error.to_string()))?;
+            db.list_datasets()?
+                .into_iter()
+                .map(|dataset| dataset.id)
+                .collect::<std::collections::HashSet<_>>()
+        };
+        let distribution_entries = bundle
+            .manifest
+            .distributions
+            .iter()
+            .map(|entry| (entry.analysis_id.as_str(), entry))
+            .collect::<std::collections::HashMap<_, _>>();
         let distributions = bundle
             .distributions
             .iter()
-            .map(|envelope| envelope.body.clone())
+            .map(|record| match record {
+                spprj_archive::DistributionArchiveRecordV1::Parsed(envelope) => {
+                    let mut doc = envelope.body.clone();
+                    doc.load_status = DistributionLoadStatusV1::Ready;
+                    if !dataset_ids.contains(&doc.source_dataset_id) {
+                        doc.load_status = DistributionLoadStatusV1::MissingSource;
+                        doc.status = "unavailable".to_string();
+                        push_distribution_issue(&mut distribution_issues, DistributionIssueV1 {
+                            analysis_id: doc.analysis_id.clone(),
+                            kind: DistributionLoadStatusV1::MissingSource,
+                            message_key: "distribution.issue.missingSource".to_string(),
+                            schema_version: doc.schema_version.clone(),
+                            source_dataset_id: Some(doc.source_dataset_id.clone()),
+                        });
+                    }
+                    doc
+                }
+                spprj_archive::DistributionArchiveRecordV1::UnknownVersion {
+                    analysis_id,
+                    schema_version,
+                    raw_envelope,
+                } => {
+                    let entry = distribution_entries.get(analysis_id.as_str());
+                    let body = raw_envelope.get("body").unwrap_or(raw_envelope);
+                    let source_dataset_id = body
+                        .get("sourceDatasetId")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    push_distribution_issue(&mut distribution_issues, DistributionIssueV1 {
+                        analysis_id: analysis_id.clone(),
+                        kind: DistributionLoadStatusV1::UnknownVersion,
+                        message_key: "distribution.issue.unknownVersion".to_string(),
+                        schema_version: schema_version.clone(),
+                        source_dataset_id: (!source_dataset_id.is_empty())
+                            .then(|| source_dataset_id.clone()),
+                    });
+                    DistributionDocV1 {
+                        schema_version: schema_version.clone(),
+                        analysis_id: analysis_id.clone(),
+                        name: entry.map(|value| value.name.clone()).unwrap_or_default(),
+                        source_dataset_id,
+                        status: "unavailable".to_string(),
+                        current_config: body
+                            .get("currentConfig")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({})),
+                        load_status: DistributionLoadStatusV1::UnknownVersion,
+                        raw_envelope: Some(raw_envelope.clone()),
+                        raw_text: None,
+                    }
+                }
+                spprj_archive::DistributionArchiveRecordV1::Corrupt {
+                    analysis_id,
+                    raw_text,
+                } => {
+                    let entry = distribution_entries.get(analysis_id.as_str());
+                    push_distribution_issue(&mut distribution_issues, DistributionIssueV1 {
+                        analysis_id: analysis_id.clone(),
+                        kind: DistributionLoadStatusV1::Corrupt,
+                        message_key: "distribution.issue.corrupt".to_string(),
+                        schema_version: "unknown".to_string(),
+                        source_dataset_id: None,
+                    });
+                    DistributionDocV1 {
+                        schema_version: "unknown".to_string(),
+                        analysis_id: analysis_id.clone(),
+                        name: entry.map(|value| value.name.clone()).unwrap_or_default(),
+                        source_dataset_id: String::new(),
+                        status: "unavailable".to_string(),
+                        current_config: serde_json::json!({}),
+                        load_status: DistributionLoadStatusV1::Corrupt,
+                        raw_envelope: None,
+                        raw_text: Some(raw_text.clone()),
+                    }
+                }
+            })
             .collect();
         let derived_formulas = bundle
             .derived_formulas
@@ -249,7 +358,7 @@ impl<'a> ProjectService<'a> {
         tabulates_data: Option<Vec<serde_json::Value>>,
         distributions_data: Option<Vec<DistributionDocV1>>,
         derived_formulas_data: Option<Vec<DerivedFormulaDocV1>>,
-        distribution_issues: Option<Vec<serde_json::Value>>,
+        distribution_issues: Option<Vec<DistributionIssueV1>>,
         folders: Option<Vec<String>>,
         table_folders: Option<std::collections::HashMap<String, String>>,
         graph_folders: Option<std::collections::HashMap<String, String>>,
@@ -334,7 +443,11 @@ impl<'a> ProjectService<'a> {
             tabulates_data.unwrap_or_default(),
             distribution_docs,
             derived_formula_docs,
-            distribution_issues.unwrap_or_default(),
+            distribution_issues
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|issue| serde_json::to_value(issue).ok())
+                .collect(),
             folders.unwrap_or_default(),
             &table_folders_map,
             &graph_folders_map,
@@ -957,6 +1070,7 @@ fn normalize_duplicate_dataset_names(docs: &mut [TableDoc]) -> Vec<DatasetNameMi
 #[cfg(test)]
 mod tests {
     use super::{folder_from_entry_path, normalize_duplicate_dataset_names, ProjectService};
+    use crate::models::distribution::DistributionLoadStatusV1;
     use crate::models::project::ProjectInfo;
     use crate::services::spprj_archive::{self, TableColumn, TableDoc};
     use crate::state::AppState;
@@ -1343,6 +1457,9 @@ mod tests {
                 source_dataset_id: "ds-42".to_string(),
                 status: "ready".to_string(),
                 current_config: serde_json::json!({ "mode": "continuous" }),
+                load_status: DistributionLoadStatusV1::Ready,
+                raw_envelope: None,
+                raw_text: None,
             },
         };
         let formula = spprj_archive::DerivedFormulaArchiveEnvelopeV1 {
@@ -1387,9 +1504,98 @@ mod tests {
             .unwrap();
         let _ = std::fs::remove_file(file_path);
 
-        assert_eq!(result.distributions, vec![distribution.body]);
+        assert_eq!(result.distributions.len(), 1);
+        assert_eq!(result.distributions[0].analysis_id, distribution.body.analysis_id);
+        assert_eq!(
+            result.distributions[0].load_status,
+            DistributionLoadStatusV1::MissingSource
+        );
         assert_eq!(result.derived_formulas, vec![formula.body]);
         assert_eq!(result.distribution_folders, folders);
-        assert!(result.distribution_issues.is_empty());
+        assert_eq!(result.distribution_issues.len(), 1);
+        assert_eq!(
+            result.distribution_issues[0].kind,
+            DistributionLoadStatusV1::MissingSource
+        );
+    }
+
+    #[test]
+    fn open_project_preserves_healthy_distributions_when_one_entry_is_corrupt() {
+        let state = AppState::new().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "sp_distribution_isolation_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        let manifest = serde_json::json!({
+            "name": "Project",
+            "version": "3.0.0",
+            "createdAt": "now",
+            "tables": [],
+            "graphs": [],
+            "distributionIssues": [
+                {
+                    "analysisId": "dist-healthy",
+                    "kind": "missingSource",
+                    "messageKey": "distribution.issue.missingSource",
+                    "schemaVersion": "1",
+                    "sourceDatasetId": "missing-dataset"
+                }
+            ],
+            "distributions": [
+                {
+                    "analysisId": "dist-healthy",
+                    "name": "Healthy",
+                    "file": "distributions/dist-healthy.spdist"
+                },
+                {
+                    "analysisId": "dist-corrupt",
+                    "name": "Corrupt",
+                    "file": "distributions/dist-corrupt.spdist"
+                }
+            ]
+        });
+        let healthy_envelope = serde_json::json!({
+            "schemaVersion": "1",
+            "body": {
+                "schemaVersion": "1",
+                "analysisId": "dist-healthy",
+                "name": "Healthy",
+                "sourceDatasetId": "missing-dataset",
+                "status": "ready",
+                "currentConfig": {}
+            }
+        });
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        serde_json::to_writer(&mut zip, &manifest).unwrap();
+        zip.start_file("distributions/dist-healthy.spdist", opts)
+            .unwrap();
+        serde_json::to_writer(&mut zip, &healthy_envelope).unwrap();
+        zip.start_file("distributions/dist-corrupt.spdist", opts).unwrap();
+        std::io::Write::write_all(&mut zip, b"{broken").unwrap();
+        zip.finish().unwrap();
+
+        let result = ProjectService::new(&state)
+            .open_project(path.to_str().unwrap(), None)
+            .unwrap();
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(result.distributions.len(), 2);
+        let healthy = result
+            .distributions
+            .iter()
+            .find(|item| item.analysis_id == "dist-healthy")
+            .unwrap();
+        assert_eq!(healthy.load_status, DistributionLoadStatusV1::MissingSource);
+        let corrupt = result
+            .distributions
+            .iter()
+            .find(|item| item.analysis_id == "dist-corrupt")
+            .unwrap();
+        assert_eq!(corrupt.load_status, DistributionLoadStatusV1::Corrupt);
+        assert_eq!(result.distribution_issues.len(), 2);
     }
 }

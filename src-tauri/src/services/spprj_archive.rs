@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::AppError;
+use crate::models::distribution::DistributionLoadStatusV1;
 
 // ----------------------------------------------------------------------------
 // Public document types — these are the in-memory representation. The on-disk
@@ -136,6 +137,12 @@ pub struct DistributionDocV1 {
     pub source_dataset_id: String,
     pub status: String,
     pub current_config: Value,
+    #[serde(default)]
+    pub load_status: DistributionLoadStatusV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_envelope: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_text: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -156,6 +163,31 @@ pub struct DerivedFormulaDocV1 {
 pub struct DistributionArchiveEnvelopeV1 {
     pub schema_version: String,
     pub body: DistributionDocV1,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DistributionArchiveRecordV1 {
+    Parsed(DistributionArchiveEnvelopeV1),
+    UnknownVersion {
+        analysis_id: String,
+        schema_version: String,
+        raw_envelope: Value,
+    },
+    Corrupt {
+        analysis_id: String,
+        raw_text: String,
+    },
+}
+
+impl DistributionArchiveRecordV1 {
+    fn analysis_id(&self) -> &str {
+        match self {
+            Self::Parsed(envelope) => &envelope.body.analysis_id,
+            Self::UnknownVersion { analysis_id, .. } | Self::Corrupt { analysis_id, .. } => {
+                analysis_id
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -241,7 +273,7 @@ pub struct ProjectBundle {
     pub tables: Vec<TableDoc>,
     pub graphs: Vec<GraphDoc>,
     pub tabulates: Vec<Value>,
-    pub distributions: Vec<DistributionArchiveEnvelopeV1>,
+    pub distributions: Vec<DistributionArchiveRecordV1>,
     pub derived_formulas: Vec<DerivedFormulaArchiveEnvelopeV1>,
     pub history: Vec<Value>,
     pub snapshots: Vec<Value>,
@@ -339,13 +371,41 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
     let tabulates = manifest.tabulates.clone();
     let mut distributions = Vec::with_capacity(manifest.distributions.len());
     for entry in &manifest.distributions {
-        let bytes = read_entry_bytes(&mut zip, &entry.file).ok_or_else(|| {
-            AppError::FileIO(format!("Missing distribution entry: {}", entry.file))
-        })?;
-        let envelope = serde_json::from_slice(&bytes).map_err(|error| {
-            AppError::FileIO(format!("Invalid distribution file {}: {error}", entry.file))
-        })?;
-        distributions.push(envelope);
+        let Some(bytes) = read_entry_bytes(&mut zip, &entry.file) else {
+            distributions.push(DistributionArchiveRecordV1::Corrupt {
+                analysis_id: entry.analysis_id.clone(),
+                raw_text: String::new(),
+            });
+            continue;
+        };
+        let raw_text = String::from_utf8_lossy(&bytes).into_owned();
+        let Ok(raw_envelope) = serde_json::from_slice::<Value>(&bytes) else {
+            distributions.push(DistributionArchiveRecordV1::Corrupt {
+                analysis_id: entry.analysis_id.clone(),
+                raw_text,
+            });
+            continue;
+        };
+        let schema_version = raw_envelope
+            .get("schemaVersion")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        if schema_version != "1" {
+            distributions.push(DistributionArchiveRecordV1::UnknownVersion {
+                analysis_id: entry.analysis_id.clone(),
+                schema_version,
+                raw_envelope,
+            });
+            continue;
+        }
+        match serde_json::from_value::<DistributionArchiveEnvelopeV1>(raw_envelope) {
+            Ok(envelope) => distributions.push(DistributionArchiveRecordV1::Parsed(envelope)),
+            Err(_) => distributions.push(DistributionArchiveRecordV1::Corrupt {
+                analysis_id: entry.analysis_id.clone(),
+                raw_text,
+            }),
+        }
     }
     let mut derived_formulas = Vec::with_capacity(manifest.derived_formulas.len());
     for entry in &manifest.derived_formulas {
@@ -576,7 +636,25 @@ pub fn build_bundle(
         tables,
         graphs,
         tabulates,
-        distributions,
+        distributions: distributions
+            .into_iter()
+            .map(|envelope| {
+                if let Some(raw_envelope) = envelope.body.raw_envelope.clone() {
+                    return DistributionArchiveRecordV1::UnknownVersion {
+                        analysis_id: envelope.body.analysis_id.clone(),
+                        schema_version: envelope.body.schema_version.clone(),
+                        raw_envelope,
+                    };
+                }
+                if let Some(raw_text) = envelope.body.raw_text.clone() {
+                    return DistributionArchiveRecordV1::Corrupt {
+                        analysis_id: envelope.body.analysis_id.clone(),
+                        raw_text,
+                    };
+                }
+                DistributionArchiveRecordV1::Parsed(envelope)
+            })
+            .collect(),
         derived_formulas,
         history,
         snapshots,
@@ -638,10 +716,10 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
             bundle.tables.iter().map(|t| (t.id.as_str(), t)).collect();
         let graph_by_id: HashMap<&str, &GraphDoc> =
             bundle.graphs.iter().map(|g| (g.id.as_str(), g)).collect();
-        let distribution_by_id: HashMap<&str, &DistributionArchiveEnvelopeV1> = bundle
+        let distribution_by_id: HashMap<&str, &DistributionArchiveRecordV1> = bundle
             .distributions
             .iter()
-            .map(|envelope| (envelope.body.analysis_id.as_str(), envelope))
+            .map(|record| (record.analysis_id(), record))
             .collect();
         let formula_by_id: HashMap<&str, &DerivedFormulaArchiveEnvelopeV1> = bundle
             .derived_formulas
@@ -662,9 +740,18 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
             }
         }
         for entry in &bundle.manifest.distributions {
-            if let Some(envelope) = distribution_by_id.get(entry.analysis_id.as_str()) {
-                let bytes = serde_json::to_vec(envelope)
-                    .map_err(|error| AppError::FileIO(error.to_string()))?;
+            if let Some(record) = distribution_by_id.get(entry.analysis_id.as_str()) {
+                let bytes = match record {
+                    DistributionArchiveRecordV1::Parsed(envelope) => serde_json::to_vec(envelope)
+                        .map_err(|error| AppError::FileIO(error.to_string()))?,
+                    DistributionArchiveRecordV1::UnknownVersion { raw_envelope, .. } => {
+                        serde_json::to_vec(raw_envelope)
+                            .map_err(|error| AppError::FileIO(error.to_string()))?
+                    }
+                    DistributionArchiveRecordV1::Corrupt { raw_text, .. } => {
+                        raw_text.as_bytes().to_vec()
+                    }
+                };
                 write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
             }
         }
@@ -1047,6 +1134,9 @@ mod tests {
                         "fieldId": "region"
                     }
                 }),
+                load_status: DistributionLoadStatusV1::Ready,
+                raw_envelope: None,
+                raw_text: None,
             },
         };
         let formula = DerivedFormulaArchiveEnvelopeV1 {
@@ -1095,10 +1185,143 @@ mod tests {
             "derived-formulas/formula-001.spformula"
         );
         assert_eq!(loaded.manifest.distribution_folders, distribution_folders);
-        assert_eq!(loaded.distributions, vec![distribution]);
+        assert_eq!(
+            loaded.distributions,
+            vec![DistributionArchiveRecordV1::Parsed(distribution)]
+        );
         assert_eq!(loaded.derived_formulas, vec![formula]);
         assert!(loaded.manifest.distribution_issues.is_empty());
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn distribution_unknown_version_is_preserved_and_corruption_is_isolated() {
+        let path = temp_project_path("distribution-isolation");
+        let manifest = json!({
+            "name": "Isolation Project",
+            "version": "3.0.0",
+            "createdAt": "2026-08-26T00:00:00Z",
+            "tables": [],
+            "graphs": [],
+            "folders": ["Analyses"],
+            "distributions": [
+                {
+                    "analysisId": "dist-ready",
+                    "name": "Ready",
+                    "file": "distributions/dist-ready.spdist"
+                },
+                {
+                    "analysisId": "dist-future",
+                    "name": "Future",
+                    "file": "distributions/dist-future.spdist"
+                },
+                {
+                    "analysisId": "dist-corrupt",
+                    "name": "Corrupt",
+                    "file": "distributions/dist-corrupt.spdist"
+                }
+            ],
+            "distributionFolders": {
+                "dist-future": "Analyses"
+            }
+        });
+        let ready = json!({
+            "schemaVersion": "1",
+            "body": {
+                "schemaVersion": "1",
+                "analysisId": "dist-ready",
+                "name": "Ready",
+                "sourceDatasetId": "ds-ready",
+                "status": "ready",
+                "currentConfig": {}
+            }
+        });
+        let future = json!({
+            "schemaVersion": "99",
+            "body": {
+                "schemaVersion": "99",
+                "analysisId": "dist-future",
+                "name": "Future",
+                "sourceDatasetId": "ds-future",
+                "status": "ready",
+                "currentConfig": { "futureOption": true }
+            }
+        });
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        write_zip_entry(
+            &mut zip,
+            "manifest.json",
+            &serde_json::to_vec(&manifest).unwrap(),
+            opts,
+        )
+        .unwrap();
+        write_zip_entry(
+            &mut zip,
+            "distributions/dist-ready.spdist",
+            &serde_json::to_vec(&ready).unwrap(),
+            opts,
+        )
+        .unwrap();
+        write_zip_entry(
+            &mut zip,
+            "distributions/dist-future.spdist",
+            &serde_json::to_vec(&future).unwrap(),
+            opts,
+        )
+        .unwrap();
+        write_zip_entry(
+            &mut zip,
+            "distributions/dist-corrupt.spdist",
+            b"{not valid json",
+            opts,
+        )
+        .unwrap();
+        zip.finish().unwrap();
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert!(matches!(
+            &loaded.distributions[0],
+            DistributionArchiveRecordV1::Parsed(envelope)
+                if envelope.body.analysis_id == "dist-ready"
+        ));
+        assert!(matches!(
+            &loaded.distributions[1],
+            DistributionArchiveRecordV1::UnknownVersion { schema_version, raw_envelope, .. }
+                if schema_version == "99" && raw_envelope == &future
+        ));
+        assert!(matches!(
+            &loaded.distributions[2],
+            DistributionArchiveRecordV1::Corrupt { raw_text, .. }
+                if raw_text == "{not valid json"
+        ));
+        assert_eq!(
+            loaded.manifest.distribution_folders.get("dist-future"),
+            Some(&"Analyses".to_string())
+        );
+
+        let saved_path = temp_project_path("distribution-isolation-resaved");
+        write_project_archive(&loaded, saved_path.to_str().unwrap()).unwrap();
+        let saved_bytes = std::fs::read(&saved_path).unwrap();
+        let mut saved_zip = zip::ZipArchive::new(std::io::Cursor::new(saved_bytes)).unwrap();
+        let future_bytes = read_entry_bytes(
+            &mut saved_zip,
+            "distributions/dist-future.spdist",
+        )
+        .unwrap();
+        let corrupt_bytes = read_entry_bytes(
+            &mut saved_zip,
+            "distributions/dist-corrupt.spdist",
+        )
+        .unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&future_bytes).unwrap(), future);
+        assert_eq!(corrupt_bytes, b"{not valid json");
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(saved_path);
     }
 }

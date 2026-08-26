@@ -11,6 +11,7 @@ const distribution: DistributionDocV1 = {
   name: "Distribution 1",
   sourceDatasetId: "ds-42",
   status: "ready",
+  loadStatus: "ready",
   currentConfig: {
     mode: "continuous",
     filterExpr: { kind: "isNull", fieldId: "region" },
