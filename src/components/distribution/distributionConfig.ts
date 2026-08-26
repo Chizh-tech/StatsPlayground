@@ -13,6 +13,7 @@ export interface CapabilityOverrideValidatorV1 {
 
 export interface CapabilityOverrideRegistryV1 {
   hasCapability: (capabilityId: string) => boolean;
+  hasCapabilityVersion: (capabilityId: string, payloadSchemaVersion: string) => boolean;
   validate: (envelope: CapabilityOverrideEnvelopeV1) => DistributionConfigErrorV1[];
 }
 
@@ -37,18 +38,30 @@ export function createCapabilityOverrideRegistry(
   }
   return {
     hasCapability: (capabilityId) => capabilityIds.has(capabilityId),
+    hasCapabilityVersion: (capabilityId, payloadSchemaVersion) =>
+      byKey.has(`${capabilityId}\u0000${payloadSchemaVersion}`),
     validate: (envelope) => {
+      if (!capabilityIds.has(envelope.capabilityId)) {
+        return [error(
+          "distribution.config.unknownCapability",
+          "distribution.errors.unknownCapability",
+          "capabilityId",
+        )];
+      }
       const validator = byKey.get(
         `${envelope.capabilityId}\u0000${envelope.payloadSchemaVersion}`,
       );
       if (!validator) {
         return [error(
-          "distribution.config.unknownCapability",
-          "distribution.errors.unknownCapability",
-          "payload",
+          "distribution.config.unknownCapabilityVersion",
+          "distribution.errors.unknownCapabilityVersion",
+          "payloadSchemaVersion",
         )];
       }
-      return validator.validate(envelope.payload);
+      return validator.validate(envelope.payload).map((payloadError) => ({
+        ...payloadError,
+        fieldPath: `payload${payloadError.fieldPath ? `.${payloadError.fieldPath}` : ""}`,
+      }));
     },
   };
 }
@@ -205,9 +218,7 @@ export function validateDistributionConfig(
     for (const payloadError of payloadErrors) {
       errors.push({
         ...payloadError,
-        fieldPath: `capabilityOverrides[${index}].payload${
-          payloadError.fieldPath ? `.${payloadError.fieldPath}` : ""
-        }`,
+        fieldPath: `capabilityOverrides[${index}].${payloadError.fieldPath}`,
       });
     }
   });

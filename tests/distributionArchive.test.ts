@@ -13,8 +13,17 @@ const distribution: DistributionDocV1 = {
   status: "ready",
   loadStatus: "ready",
   currentConfig: {
-    mode: "continuous",
-    filterExpr: { kind: "isNull", fieldId: "region" },
+    schemaVersion: "1",
+    sourceDatasetId: "ds-42",
+    yColumns: [{ columnId: "sales-amount-id", modelingType: "continuous" }],
+    weightColumnId: null,
+    frequencyColumnId: null,
+    byColumnIds: [],
+    filterExpr: { kind: "isNull", fieldId: "region", negate: true },
+    confidenceLevel: 0.95,
+    histogramsOnly: false,
+    enabledCapabilityIds: [],
+    capabilityOverrides: [],
   },
 };
 const formula: DerivedFormulaDocV1 = {

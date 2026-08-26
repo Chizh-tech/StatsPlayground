@@ -23,6 +23,7 @@ pub enum DistributionModelingTypeV1 {
     Ordinal,
     Nominal,
     DiscreteNumeric,
+    #[serde(rename = "datetime")]
     DateTime,
 }
 
@@ -581,6 +582,11 @@ mod tests {
         assert_eq!(json["histogramsOnly"], false);
         assert_eq!(json["enabledCapabilityIds"][0], "capability.synthetic");
         assert_eq!(json["capabilityOverrides"][0]["payloadSchemaVersion"], "1");
+        assert_eq!(
+            serde_json::to_value(DistributionModelingTypeV1::DateTime)
+                .expect("serialize datetime modeling type"),
+            serde_json::json!("datetime")
+        );
     }
 
     #[test]

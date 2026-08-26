@@ -22,6 +22,7 @@ export interface DistributionColumnRefV1 {
 }
 
 export interface DistributionColumnInfoV1 {
+  /** Frontend validation projection only; it does not cross the IPC boundary. */
   columnId: string;
   sqlType: string;
   modelingType: DistributionModelingTypeV1;
@@ -228,17 +229,30 @@ export interface LegalReviewRecordV1 {
   notesHash: string;
 }
 
-export interface DistributionDocV1 {
+interface DistributionDocBaseV1 {
   schemaVersion: string;
   analysisId: string;
   name: string;
   sourceDatasetId: string;
   status: string;
-  loadStatus: DistributionLoadStatusV1;
+}
+
+export interface LoadedDistributionDocV1 extends DistributionDocBaseV1 {
+  schemaVersion: DistributionSchemaVersionV1;
+  loadStatus: "ready" | "missingSource";
+  currentConfig: DistributionAnalysisConfigV1;
+  rawEnvelope?: never;
+  rawText?: never;
+}
+
+export interface PreservedDistributionDocV1 extends DistributionDocBaseV1 {
+  loadStatus: "unknownVersion" | "corrupt";
   currentConfig: Record<string, unknown>;
   rawEnvelope?: Record<string, unknown>;
   rawText?: string;
 }
+
+export type DistributionDocV1 = LoadedDistributionDocV1 | PreservedDistributionDocV1;
 
 export type DistributionLoadStatusV1 = "ready" | "unknownVersion" | "missingSource" | "corrupt";
 

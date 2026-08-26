@@ -19,6 +19,8 @@ export type {
 	DistributionColumnInfoV1,
 	DistributionConfigErrorV1,
 	DistributionDocV1,
+	LoadedDistributionDocV1,
+	PreservedDistributionDocV1,
 	DistributionIssueV1,
 	DistributionLoadStatusV1,
 	DistributionProgressV1,

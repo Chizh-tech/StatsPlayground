@@ -21,7 +21,10 @@ interface DistributionStore {
     derivedFormulas: DerivedFormulaDocV1[],
     issues: DistributionIssueV1[],
   ) => void;
-  updateItem: (analysisId: string, patch: Partial<DistributionDocV1>) => void;
+  updateItem: (
+    analysisId: string,
+    patch: Partial<Pick<DistributionDocV1, "name" | "sourceDatasetId" | "status">>,
+  ) => void;
   deleteItem: (analysisId: string) => void;
   selectItem: (analysisId: string | null) => void;
   setBootstrap: (bootstrap: DistributionWorkspaceBootstrapV1 | null) => void;

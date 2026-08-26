@@ -123,6 +123,18 @@ const validOverride: CapabilityOverrideEnvelopeV1 = {
   payloadSchemaVersion: "1",
   payload: { enabled: true },
 };
+assert.equal(
+  validateDistributionConfig(
+    {
+      ...config,
+      enabledCapabilityIds: ["capability.synthetic"],
+      capabilityOverrides: [{ ...validOverride, payloadSchemaVersion: "99" }],
+    },
+    columns,
+    registry,
+  )[0]?.code,
+  "distribution.config.unknownCapabilityVersion",
+);
 assert.deepEqual(
   validateDistributionConfig(
     {
