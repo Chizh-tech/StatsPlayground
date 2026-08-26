@@ -24,7 +24,9 @@ import { TabulateView } from "./tabulate";
 import "./graphBuilder/graphBuilder.css";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";
+import { useDistributionStore } from "@/stores/useDistributionStore";
 import type { GraphBuilderItem } from "@/types/graphBuilder";
+import type { DistributionDocV1 } from "@/types/distribution";
 import type { TabulateItem } from "@/types/tabulate";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
@@ -146,6 +148,13 @@ export function Workspace() {
   const { record: recordHistory, createSnapshot, restoreSnapshot, deleteSnapshot, reset: resetHistory } = useHistoryStore();
   const graphBuilders = useGraphBuilderStore((s) => s.items);
   const tabulates = useTabulateStore((s) => s.items);
+  const distributions = useDistributionStore((s) => s.items);
+  const derivedFormulas = useDistributionStore((s) => s.derivedFormulas);
+  const distributionIssues = useDistributionStore((s) => s.issues);
+  const selectedDistributionId = useDistributionStore((s) => s.selectedAnalysisId);
+  const selectDistribution = useDistributionStore((s) => s.selectItem);
+  const resetDistributions = useDistributionStore((s) => s.reset);
+  const loadDistributionsFromProject = useDistributionStore((s) => s.loadFromProject);
   const addGraphBuilder = useGraphBuilderStore((s) => s.addItem);
   const renameGraphBuilder = useGraphBuilderStore((s) => s.renameItem);
   const deleteGraphBuilder = useGraphBuilderStore((s) => s.deleteItem);
@@ -177,6 +186,7 @@ export function Workspace() {
   const tableFolders = useFolderStore((s) => s.tableFolders);
   const graphFolders = useFolderStore((s) => s.graphFolders);
   const tabulateFolders = useFolderStore((s) => s.tabulateFolders);
+  const distributionFolders = useFolderStore((s) => s.distributionFolders);
   const collapsedFolders = useFolderStore((s) => s.collapsed);
   const fsCreateFolder = useFolderStore((s) => s.createFolder);
   const fsRenameFolder = useFolderStore((s) => s.renameFolder);
@@ -185,6 +195,7 @@ export function Workspace() {
   const fsSetTableFolder = useFolderStore((s) => s.setTableFolder);
   const fsSetGraphFolder = useFolderStore((s) => s.setGraphFolder);
   const fsSetTabulateFolder = useFolderStore((s) => s.setTabulateFolder);
+  const fsSetDistributionFolder = useFolderStore((s) => s.setDistributionFolder);
   const fsToggleCollapsed = useFolderStore((s) => s.toggleCollapsed);
   const fsCollapseAll = useFolderStore((s) => s.collapseAll);
   const fsLoadFromProject = useFolderStore((s) => s.loadFromProject);
@@ -288,8 +299,9 @@ export function Workspace() {
     const dsIds = new Set(datasets.map((d) => d.id));
     const gbIds = new Set(graphBuilders.map((g) => g.id));
     const tabulateIds = new Set(tabulates.map((item) => item.id));
-    fsPrune(dsIds, gbIds, tabulateIds);
-  }, [datasets, graphBuilders, tabulates, fsPrune]);
+    const distributionIds = new Set(distributions.map((item) => item.analysisId));
+    fsPrune(dsIds, gbIds, tabulateIds, distributionIds);
+  }, [datasets, graphBuilders, tabulates, distributions, fsPrune]);
 
   // Cmd/Ctrl+,: open preferences
   useEffect(() => {
@@ -695,6 +707,7 @@ export function Workspace() {
       tableFolders,
       graphFolders,
       tabulateFolders,
+      distributionFolders,
     };
     if (!project?.filePath) {
       const filePath = await save({
@@ -703,9 +716,29 @@ export function Workspace() {
         filters: [{ name: "StatsPlayground Project", extensions: ["spprj"] }],
       });
       if (!filePath) return; // User cancelled
-      await saveProject(filePath, [], snapshots, gbItems, folderPayload, tabulates);
+      await saveProject(
+        filePath,
+        [],
+        snapshots,
+        gbItems,
+        folderPayload,
+        tabulates,
+        distributions,
+        derivedFormulas,
+        distributionIssues,
+      );
     } else {
-      await saveProject(undefined, [], snapshots, gbItems, folderPayload, tabulates);
+      await saveProject(
+        undefined,
+        [],
+        snapshots,
+        gbItems,
+        folderPayload,
+        tabulates,
+        distributions,
+        derivedFormulas,
+        distributionIssues,
+      );
     }
     showToast(t("common.saved"), 1500);
   };
@@ -726,9 +759,11 @@ export function Workspace() {
     setActiveDataset(null);
     setActiveGraphBuilderId(null);
     setActiveTabulateId(null);
+    selectDistribution(null);
     resetHistory();
     resetGraphBuilders();
     resetTabulates();
+    resetDistributions();
     fsReset();
     await initProject();
     await refreshDatasets();
@@ -745,9 +780,11 @@ export function Workspace() {
       setActiveDataset(null);
       setActiveGraphBuilderId(null);
       setActiveTabulateId(null);
+      selectDistribution(null);
       resetHistory();
       resetGraphBuilders();
       resetTabulates();
+      resetDistributions();
       setBusyMessage(t("workspace.openingProject"));
       const unlisten = await listen<{
         datasetIndex: number;
@@ -770,6 +807,7 @@ export function Workspace() {
         resetHistory();
         resetGraphBuilders();
         resetTabulates();
+        resetDistributions();
         await refreshDatasets();
         tableCounter.current = 0;
         // Restore snapshots from project file (history is session-only)
@@ -785,6 +823,11 @@ export function Workspace() {
           loadGraphBuildersFromProject(result.graphBuilders as GraphBuilderItem[]);
         }
         loadTabulatesFromProject((result.tabulates ?? []) as TabulateItem[]);
+        loadDistributionsFromProject(
+          result.distributions ?? [],
+          result.derivedFormulas ?? [],
+          result.distributionIssues ?? [],
+        );
         // Restore folder tree + table/graph→folder assignments. We do this
         // after datasets/graphs are loaded so a subsequent prune pass keeps
         // assignments in sync with currently-existing items.
@@ -793,6 +836,7 @@ export function Workspace() {
           tableFolders: result.tableFolders ?? {},
           graphFolders: result.graphFolders ?? {},
           tabulateFolders: result.tabulateFolders ?? {},
+          distributionFolders: result.distributionFolders ?? {},
         });
         if (result.datasetNameMigrations.length > 0) {
           showToast(
@@ -1083,6 +1127,7 @@ export function Workspace() {
     | { kind: "table"; id: string }
     | { kind: "graph"; id: string }
     | { kind: "tabulate"; id: string }
+    | { kind: "distribution"; id: string }
     | { kind: "folder"; path: string };
 
   const handleDragStart = (e: React.DragEvent, payload: DragPayload) => {
@@ -1116,6 +1161,7 @@ export function Workspace() {
     if (payload.kind === "table") fsSetTableFolder(payload.id, target);
     else if (payload.kind === "graph") fsSetGraphFolder(payload.id, target);
     else if (payload.kind === "tabulate") fsSetTabulateFolder(payload.id, target);
+    else if (payload.kind === "distribution") fsSetDistributionFolder(payload.id, target);
     else if (payload.kind === "folder") fsMoveFolder(payload.path, target);
     markDirty();
   };
@@ -1175,8 +1221,32 @@ export function Workspace() {
       arr.push(item);
       tabulatesByParent.set(p, arr);
     }
-    return { ROOT, childFolders, tablesByParent, graphsByParent, tabulatesByParent };
-  }, [folders, tableFolders, graphFolders, tabulateFolders, datasets, graphBuilders, tabulates]);
+    const distributionsByParent = new Map<string, DistributionDocV1[]>();
+    for (const item of distributions) {
+      const parent = distributionFolders[item.analysisId] ?? ROOT;
+      const items = distributionsByParent.get(parent) ?? [];
+      items.push(item);
+      distributionsByParent.set(parent, items);
+    }
+    return {
+      ROOT,
+      childFolders,
+      tablesByParent,
+      graphsByParent,
+      tabulatesByParent,
+      distributionsByParent,
+    };
+  }, [
+    folders,
+    tableFolders,
+    graphFolders,
+    tabulateFolders,
+    distributionFolders,
+    datasets,
+    graphBuilders,
+    tabulates,
+    distributions,
+  ]);
 
   /** Recursively render one folder level. */
   const renderFolderLevel = (parent: string | null, depth: number): React.ReactNode[] => {
@@ -1187,6 +1257,7 @@ export function Workspace() {
     const tableChildren = tree.tablesByParent.get(key) ?? [];
     const graphChildren = tree.graphsByParent.get(key) ?? [];
     const tabulateChildren = tree.tabulatesByParent.get(key) ?? [];
+    const distributionChildren = tree.distributionsByParent.get(key) ?? [];
     // Folders first, then tables, then graphs, matching the prior visual order
     // (tables-then-graphs at the root level).
     for (const fp of folderChildren) {
@@ -1257,6 +1328,7 @@ export function Workspace() {
           draggable
           onDragStart={(e) => handleDragStart(e, { kind: "table", id: ds.id })}
           onClick={() => {
+            selectDistribution(null);
             setActiveGraphBuilderId(null);
             setActiveTabulateId(null);
             setActiveDataset(ds.id);
@@ -1303,6 +1375,7 @@ export function Workspace() {
           draggable
           onDragStart={(e) => handleDragStart(e, { kind: "graph", id: gb.id })}
           onClick={() => {
+            selectDistribution(null);
             setActiveDataset(null);
             setActiveTabulateId(null);
             setActiveGraphBuilderId(gb.id);
@@ -1352,6 +1425,7 @@ export function Workspace() {
           draggable
           onDragStart={(e) => handleDragStart(e, { kind: "tabulate", id: item.id })}
           onClick={() => {
+            selectDistribution(null);
             setActiveDataset(null);
             setActiveGraphBuilderId(null);
             setActiveTabulateId(item.id);
@@ -1387,6 +1461,37 @@ export function Workspace() {
           )}
           <span className="ds-info gb-source-tag">
             {sourceDs ? sourceDs.name : t("workspace.tabulateSourceMissing")}
+          </span>
+        </div>,
+      );
+    }
+    for (const item of distributionChildren) {
+      const sourceDataset = datasets.find((dataset) => dataset.id === item.sourceDatasetId);
+      out.push(
+        <div
+          key={`distribution:${item.analysisId}`}
+          className={`dataset-item ${selectedDistributionId === item.analysisId ? "active" : ""}`}
+          style={{ paddingLeft: 8 + depth * 12 + 12 }}
+          draggable
+          onDragStart={(event) =>
+            handleDragStart(event, { kind: "distribution", id: item.analysisId })
+          }
+          onClick={() => {
+            setActiveDataset(null);
+            setActiveGraphBuilderId(null);
+            setActiveTabulateId(null);
+            selectDistribution(item.analysisId);
+          }}
+          title={
+            sourceDataset
+              ? t("workspace.datasourceLabel", { name: sourceDataset.name })
+              : t("workspace.datasourceDeleted")
+          }
+        >
+          <i className="ds-icon fa-solid fa-chart-column" aria-hidden="true" />
+          <span className="ds-name">{item.name}</span>
+          <span className="ds-info gb-source-tag">
+            {sourceDataset ? sourceDataset.name : t("workspace.datasourceMissing")}
           </span>
         </div>,
       );
@@ -1541,7 +1646,7 @@ export function Workspace() {
                   }
                 }}
               >
-                {datasets.length === 0 && graphBuilders.length === 0 && tabulates.length === 0 && folders.length === 0 ? (
+                {datasets.length === 0 && graphBuilders.length === 0 && tabulates.length === 0 && distributions.length === 0 && folders.length === 0 ? (
                   <div className="empty-hint">{t("common.noContent")}</div>
                 ) : (
                   renderFolderLevel(null, 0)

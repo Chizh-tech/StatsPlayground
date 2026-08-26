@@ -53,10 +53,14 @@ pub fn save_project(
     snapshots: Option<Vec<serde_json::Value>>,
     graph_builders: Option<Vec<serde_json::Value>>,
     tabulates: Option<Vec<serde_json::Value>>,
+    distributions: Option<Vec<crate::services::spprj_archive::DistributionDocV1>>,
+    derived_formulas: Option<Vec<crate::services::spprj_archive::DerivedFormulaDocV1>>,
+    distribution_issues: Option<Vec<serde_json::Value>>,
     folders: Option<Vec<String>>,
     table_folders: Option<std::collections::HashMap<String, String>>,
     graph_folders: Option<std::collections::HashMap<String, String>>,
     tabulate_folders: Option<std::collections::HashMap<String, String>>,
+    distribution_folders: Option<std::collections::HashMap<String, String>>,
 ) -> Result<ProjectInfo, AppError> {
     let service = ProjectService::new(&state);
     service.save_project(
@@ -65,10 +69,14 @@ pub fn save_project(
         snapshots,
         graph_builders,
         tabulates,
+        distributions,
+        derived_formulas,
+        distribution_issues,
         folders,
         table_folders,
         graph_folders,
         tabulate_folders,
+        distribution_folders,
     )?;
     // Return updated project info
     service

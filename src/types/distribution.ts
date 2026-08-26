@@ -162,3 +162,31 @@ export interface BlackBoxCaseV1 {
   warningCodes: string[];
   provenance: BlackBoxProvenanceV1;
 }
+
+export interface DistributionDocV1 {
+  schemaVersion: DistributionSchemaVersionV1;
+  analysisId: string;
+  name: string;
+  sourceDatasetId: string;
+  status: string;
+  currentConfig: Record<string, unknown>;
+}
+
+export interface DerivedFormulaDocV1 {
+  formulaId: string;
+  schemaVersion: DistributionSchemaVersionV1;
+  analysisId: string;
+  sourceDatasetId: string;
+  sourceColumnIds: string[];
+  outputColumnName: string;
+  ast: Record<string, unknown>;
+  fingerprint: string;
+}
+
+export interface DistributionIssueV1 {
+  analysisId: string;
+  kind: string;
+  messageKey: string;
+  schemaVersion: string;
+  sourceDatasetId?: string;
+}

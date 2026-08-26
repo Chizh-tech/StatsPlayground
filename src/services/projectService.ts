@@ -1,4 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import type {
+  DerivedFormulaDocV1,
+  DistributionDocV1,
+  DistributionIssueV1,
+} from "@/types/distribution";
 import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
 
 /** Optional folder payload accepted by the save_project command.
@@ -14,6 +19,8 @@ export interface SaveProjectFolders {
   graphFolders: Record<string, string>;
   /** tabulateId → folder path. Root tabulates are simply absent. */
   tabulateFolders: Record<string, string>;
+  /** analysisId → folder path. Root distributions are simply absent. */
+  distributionFolders: Record<string, string>;
 }
 
 export const projectService = {
@@ -33,6 +40,9 @@ export const projectService = {
     graphBuilders?: unknown[],
     folders?: SaveProjectFolders,
     tabulates?: unknown[],
+    distributions?: DistributionDocV1[],
+    derivedFormulas?: DerivedFormulaDocV1[],
+    distributionIssues?: DistributionIssueV1[],
   ) =>
     invoke<ProjectInfo>("save_project", {
       filePath: filePath ?? null,
@@ -40,10 +50,14 @@ export const projectService = {
       snapshots: snapshots ?? null,
       graphBuilders: graphBuilders ?? null,
       tabulates: tabulates ?? null,
+      distributions: distributions ?? null,
+      derivedFormulas: derivedFormulas ?? null,
+      distributionIssues: distributionIssues ?? null,
       folders: folders?.folders ?? null,
       tableFolders: folders?.tableFolders ?? null,
       graphFolders: folders?.graphFolders ?? null,
       tabulateFolders: folders?.tabulateFolders ?? null,
+      distributionFolders: folders?.distributionFolders ?? null,
     }),
 
   getCurrentProject: () => invoke<ProjectInfo | null>("get_current_project"),

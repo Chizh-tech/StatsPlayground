@@ -8,3 +8,4 @@ export {
   validateFolderOrFileName,
 } from "./useFolderStore";
 export { useTabulateStore } from "./useTabulateStore";
+export { useDistributionStore } from "./useDistributionStore";

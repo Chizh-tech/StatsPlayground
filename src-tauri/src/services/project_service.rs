@@ -4,7 +4,9 @@ use duckdb::types::Value as DuckValue;
 use crate::models::project::{DatasetNameMigration, ProjectInfo};
 use crate::models::table::{ColumnDisplayProps, ColumnFormatInfo};
 use crate::services::spprj_archive::{
-    self, GraphDoc, ProjectBundle, TableColumn, TableColumnFormat, TableDoc,
+    self, DerivedFormulaArchiveEnvelopeV1, DerivedFormulaDocV1,
+    DistributionArchiveEnvelopeV1, DistributionDocV1, GraphDoc, ProjectBundle, TableColumn,
+    TableColumnFormat, TableDoc,
 };
 use crate::state::AppState;
 
@@ -41,6 +43,14 @@ pub struct OpenProjectResult {
     /// `tabulateId -> folder path`.
     #[serde(default)]
     pub tabulate_folders: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub distributions: Vec<DistributionDocV1>,
+    #[serde(default)]
+    pub distribution_folders: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub derived_formulas: Vec<DerivedFormulaDocV1>,
+    #[serde(default)]
+    pub distribution_issues: Vec<serde_json::Value>,
 }
 
 const SPPRJ_VERSION: &str = "3.0.0";
@@ -93,6 +103,10 @@ impl<'a> ProjectService<'a> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &empty_folders,
             &empty_folders,
             &empty_folders,
             &empty_folders,
@@ -153,6 +167,18 @@ impl<'a> ProjectService<'a> {
             None => derive_folders_from_entries(&bundle.manifest.graphs, "graphs"),
         };
         let tabulate_folders = bundle.manifest.tabulate_folders.clone();
+        let distribution_folders = bundle.manifest.distribution_folders.clone();
+        let distribution_issues = bundle.manifest.distribution_issues.clone();
+        let distributions = bundle
+            .distributions
+            .iter()
+            .map(|envelope| envelope.body.clone())
+            .collect();
+        let derived_formulas = bundle
+            .derived_formulas
+            .iter()
+            .map(|envelope| envelope.body.clone())
+            .collect();
         let folders = bundle.manifest.folders.clone();
 
         // Re-pack graph docs into the opaque JSON shape the frontend
@@ -202,6 +228,10 @@ impl<'a> ProjectService<'a> {
             graph_folders,
             dataset_name_migrations,
             tabulate_folders,
+            distributions,
+            distribution_folders,
+            derived_formulas,
+            distribution_issues,
         })
     }
 
@@ -217,10 +247,14 @@ impl<'a> ProjectService<'a> {
         snapshots_data: Option<Vec<serde_json::Value>>,
         graph_builders_data: Option<Vec<serde_json::Value>>,
         tabulates_data: Option<Vec<serde_json::Value>>,
+        distributions_data: Option<Vec<DistributionDocV1>>,
+        derived_formulas_data: Option<Vec<DerivedFormulaDocV1>>,
+        distribution_issues: Option<Vec<serde_json::Value>>,
         folders: Option<Vec<String>>,
         table_folders: Option<std::collections::HashMap<String, String>>,
         graph_folders: Option<std::collections::HashMap<String, String>>,
         tabulate_folders: Option<std::collections::HashMap<String, String>>,
+        distribution_folders: Option<std::collections::HashMap<String, String>>,
     ) -> Result<(), AppError> {
         let mut proj = self
             .state
@@ -264,6 +298,7 @@ impl<'a> ProjectService<'a> {
         let table_folders_map = table_folders.unwrap_or_default();
         let graph_folders_map = graph_folders.unwrap_or_default();
         let tabulate_folders_map = tabulate_folders.unwrap_or_default();
+        let distribution_folders_map = distribution_folders.unwrap_or_default();
         let mut table_docs = Vec::with_capacity(datasets.len());
         for ds in &datasets {
             let doc = self.compose_table_doc(&ds.id)?;
@@ -273,6 +308,22 @@ impl<'a> ProjectService<'a> {
         // Graph docs are folder-free too — `compose_graph_docs` strips any
         // legacy in-body `folder` field via `lift_graph_meta`.
         let graph_docs = compose_graph_docs(graph_builders_data.unwrap_or_default());
+        let distribution_docs = distributions_data
+            .unwrap_or_default()
+            .into_iter()
+            .map(|body| DistributionArchiveEnvelopeV1 {
+                schema_version: body.schema_version.clone(),
+                body,
+            })
+            .collect();
+        let derived_formula_docs = derived_formulas_data
+            .unwrap_or_default()
+            .into_iter()
+            .map(|body| DerivedFormulaArchiveEnvelopeV1 {
+                schema_version: body.schema_version.clone(),
+                body,
+            })
+            .collect();
 
         let bundle = spprj_archive::build_bundle(
             save_name,
@@ -281,10 +332,14 @@ impl<'a> ProjectService<'a> {
             table_docs,
             graph_docs,
             tabulates_data.unwrap_or_default(),
+            distribution_docs,
+            derived_formula_docs,
+            distribution_issues.unwrap_or_default(),
             folders.unwrap_or_default(),
             &table_folders_map,
             &graph_folders_map,
             &tabulate_folders_map,
+            &distribution_folders_map,
             history_data.unwrap_or_default(),
             snapshots_data.unwrap_or_default(),
         );
@@ -1072,6 +1127,10 @@ mod tests {
                 Some(Vec::new()),
                 Some(Vec::new()),
                 Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(Vec::new()),
+                Some(HashMap::new()),
                 Some(HashMap::new()),
                 Some(HashMap::new()),
                 Some(HashMap::new()),
@@ -1243,6 +1302,10 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            vec![],
+            vec![],
+            &folders,
             &folders,
             &folders,
             &folders,
@@ -1265,5 +1328,68 @@ mod tests {
         assert!(db.get_dataset_meta("valid-id").is_err());
         drop(db);
         assert_eq!(state.project.read().unwrap().as_ref().unwrap().name, "Original Project");
+    }
+
+    #[test]
+    fn open_project_restores_distribution_and_formula_folder_maps() {
+        let state = AppState::new().unwrap();
+        let folders = HashMap::from([("dist-001".to_string(), "Analyses".to_string())]);
+        let distribution = spprj_archive::DistributionArchiveEnvelopeV1 {
+            schema_version: "1".to_string(),
+            body: spprj_archive::DistributionDocV1 {
+                schema_version: "1".to_string(),
+                analysis_id: "dist-001".to_string(),
+                name: "Distribution 1".to_string(),
+                source_dataset_id: "ds-42".to_string(),
+                status: "ready".to_string(),
+                current_config: serde_json::json!({ "mode": "continuous" }),
+            },
+        };
+        let formula = spprj_archive::DerivedFormulaArchiveEnvelopeV1 {
+            schema_version: "1".to_string(),
+            body: spprj_archive::DerivedFormulaDocV1 {
+                formula_id: "formula-001".to_string(),
+                schema_version: "1".to_string(),
+                analysis_id: "dist-001".to_string(),
+                source_dataset_id: "ds-42".to_string(),
+                source_column_ids: vec!["sales-amount-id".to_string()],
+                output_column_name: "Standardized Sales".to_string(),
+                ast: serde_json::json!({ "kind": "column", "columnId": "sales-amount-id" }),
+                fingerprint: "sha256:formula-001".to_string(),
+            },
+        };
+        let bundle = spprj_archive::build_bundle(
+            "Project".into(),
+            "3.0.0".into(),
+            "now".into(),
+            vec![],
+            vec![],
+            vec![],
+            vec![distribution.clone()],
+            vec![formula.clone()],
+            vec![],
+            vec!["Analyses".to_string()],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &folders,
+            vec![],
+            vec![],
+        );
+        let file_path = std::env::temp_dir().join(format!(
+            "sp_distribution_open_{}.spprj",
+            uuid::Uuid::new_v4()
+        ));
+        spprj_archive::write_project_archive(&bundle, file_path.to_str().unwrap()).unwrap();
+
+        let result = ProjectService::new(&state)
+            .open_project(file_path.to_str().unwrap(), None)
+            .unwrap();
+        let _ = std::fs::remove_file(file_path);
+
+        assert_eq!(result.distributions, vec![distribution.body]);
+        assert_eq!(result.derived_formulas, vec![formula.body]);
+        assert_eq!(result.distribution_folders, folders);
+        assert!(result.distribution_issues.is_empty());
     }
 }

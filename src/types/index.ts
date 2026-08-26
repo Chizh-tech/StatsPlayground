@@ -10,6 +10,8 @@ export type {
 	DistributionChartDataV1,
 	DistributionChartKindV1,
 	DistributionColumnRefV1,
+	DistributionDocV1,
+	DistributionIssueV1,
 	DistributionModelingTypeV1,
 	DistributionReportBlockV1,
 	DistributionRequestV1,
@@ -17,4 +19,5 @@ export type {
 	FilterExprV1,
 	ObservationContributionPolicyV1,
 	ResourceBudgetV1,
+	DerivedFormulaDocV1,
 } from "./distribution";

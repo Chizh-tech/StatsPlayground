@@ -77,6 +77,14 @@ pub struct ProjectManifest {
     pub tabulates: Vec<serde_json::Value>,
     #[serde(default)]
     pub tabulate_folders: HashMap<String, String>,
+    #[serde(default)]
+    pub distributions: Vec<DistributionEntryRefV1>,
+    #[serde(default)]
+    pub distribution_folders: HashMap<String, String>,
+    #[serde(default)]
+    pub derived_formulas: Vec<DerivedFormulaEntryRefV1>,
+    #[serde(default)]
+    pub distribution_issues: Vec<Value>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -101,6 +109,60 @@ pub struct GraphEntryRef {
     /// Relative path inside the archive, e.g. `<folder>/<name>.spgh`.
     /// The folder is derived from `dirname(file)` on read; never duplicated here.
     pub file: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionEntryRefV1 {
+    pub analysis_id: String,
+    pub name: String,
+    pub file: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedFormulaEntryRefV1 {
+    pub formula_id: String,
+    pub analysis_id: String,
+    pub file: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionDocV1 {
+    pub schema_version: String,
+    pub analysis_id: String,
+    pub name: String,
+    pub source_dataset_id: String,
+    pub status: String,
+    pub current_config: Value,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedFormulaDocV1 {
+    pub formula_id: String,
+    pub schema_version: String,
+    pub analysis_id: String,
+    pub source_dataset_id: String,
+    pub source_column_ids: Vec<String>,
+    pub output_column_name: String,
+    pub ast: Value,
+    pub fingerprint: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionArchiveEnvelopeV1 {
+    pub schema_version: String,
+    pub body: DistributionDocV1,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedFormulaArchiveEnvelopeV1 {
+    pub schema_version: String,
+    pub body: DerivedFormulaDocV1,
 }
 
 /// One table file (`.sptb`). Self-contained: includes its own id/name so that
@@ -179,6 +241,8 @@ pub struct ProjectBundle {
     pub tables: Vec<TableDoc>,
     pub graphs: Vec<GraphDoc>,
     pub tabulates: Vec<Value>,
+    pub distributions: Vec<DistributionArchiveEnvelopeV1>,
+    pub derived_formulas: Vec<DerivedFormulaArchiveEnvelopeV1>,
     pub history: Vec<Value>,
     pub snapshots: Vec<Value>,
 }
@@ -273,12 +337,34 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         .map(|b| serde_json::from_slice::<Vec<Value>>(&b).unwrap_or_default())
         .unwrap_or_default();
     let tabulates = manifest.tabulates.clone();
+    let mut distributions = Vec::with_capacity(manifest.distributions.len());
+    for entry in &manifest.distributions {
+        let bytes = read_entry_bytes(&mut zip, &entry.file).ok_or_else(|| {
+            AppError::FileIO(format!("Missing distribution entry: {}", entry.file))
+        })?;
+        let envelope = serde_json::from_slice(&bytes).map_err(|error| {
+            AppError::FileIO(format!("Invalid distribution file {}: {error}", entry.file))
+        })?;
+        distributions.push(envelope);
+    }
+    let mut derived_formulas = Vec::with_capacity(manifest.derived_formulas.len());
+    for entry in &manifest.derived_formulas {
+        let bytes = read_entry_bytes(&mut zip, &entry.file).ok_or_else(|| {
+            AppError::FileIO(format!("Missing derived formula entry: {}", entry.file))
+        })?;
+        let envelope = serde_json::from_slice(&bytes).map_err(|error| {
+            AppError::FileIO(format!("Invalid derived formula file {}: {error}", entry.file))
+        })?;
+        derived_formulas.push(envelope);
+    }
 
     Ok(ProjectBundle {
         manifest,
         tables,
         graphs,
         tabulates,
+        distributions,
+        derived_formulas,
         history,
         snapshots,
     })
@@ -352,6 +438,10 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         graph_folders: None,
         tabulates: Vec::new(),
         tabulate_folders: HashMap::new(),
+        distributions: Vec::new(),
+        distribution_folders: HashMap::new(),
+        derived_formulas: Vec::new(),
+        distribution_issues: Vec::new(),
     };
 
     Ok(ProjectBundle {
@@ -359,6 +449,8 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         tables,
         graphs,
         tabulates: Vec::new(),
+        distributions: Vec::new(),
+        derived_formulas: Vec::new(),
         history: legacy.history.unwrap_or_default(),
         snapshots: legacy.snapshots.unwrap_or_default(),
     })
@@ -413,10 +505,14 @@ pub fn build_bundle(
     tables: Vec<TableDoc>,
     graphs: Vec<GraphDoc>,
     tabulates: Vec<Value>,
+    distributions: Vec<DistributionArchiveEnvelopeV1>,
+    derived_formulas: Vec<DerivedFormulaArchiveEnvelopeV1>,
+    distribution_issues: Vec<Value>,
     folders: Vec<String>,
     table_folders: &HashMap<String, String>,
     graph_folders: &HashMap<String, String>,
     tabulate_folders: &HashMap<String, String>,
+    distribution_folders: &HashMap<String, String>,
     history: Vec<Value>,
     snapshots: Vec<Value>,
 ) -> ProjectBundle {
@@ -438,6 +534,23 @@ pub fn build_bundle(
         });
     }
 
+    let distribution_refs = distributions
+        .iter()
+        .map(|envelope| DistributionEntryRefV1 {
+            analysis_id: envelope.body.analysis_id.clone(),
+            name: envelope.body.name.clone(),
+            file: format!("distributions/{}.spdist", envelope.body.analysis_id),
+        })
+        .collect();
+    let derived_formula_refs = derived_formulas
+        .iter()
+        .map(|envelope| DerivedFormulaEntryRefV1 {
+            formula_id: envelope.body.formula_id.clone(),
+            analysis_id: envelope.body.analysis_id.clone(),
+            file: format!("derived-formulas/{}.spformula", envelope.body.formula_id),
+        })
+        .collect();
+
     // Collapse `folders` to a sorted, deduplicated, normalized list. Includes
     // any implicit ancestor folders for completeness so an extractor sees the
     // full tree even if the user only created `a/b/c` directly.
@@ -455,10 +568,16 @@ pub fn build_bundle(
             graph_folders: Some(graph_folders.clone()),
             tabulates: tabulates.clone(),
             tabulate_folders: tabulate_folders.clone(),
+            distributions: distribution_refs,
+            distribution_folders: distribution_folders.clone(),
+            derived_formulas: derived_formula_refs,
+            distribution_issues,
         },
         tables,
         graphs,
         tabulates,
+        distributions,
+        derived_formulas,
         history,
         snapshots,
     }
@@ -519,6 +638,16 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
             bundle.tables.iter().map(|t| (t.id.as_str(), t)).collect();
         let graph_by_id: HashMap<&str, &GraphDoc> =
             bundle.graphs.iter().map(|g| (g.id.as_str(), g)).collect();
+        let distribution_by_id: HashMap<&str, &DistributionArchiveEnvelopeV1> = bundle
+            .distributions
+            .iter()
+            .map(|envelope| (envelope.body.analysis_id.as_str(), envelope))
+            .collect();
+        let formula_by_id: HashMap<&str, &DerivedFormulaArchiveEnvelopeV1> = bundle
+            .derived_formulas
+            .iter()
+            .map(|envelope| (envelope.body.formula_id.as_str(), envelope))
+            .collect();
 
         for entry in &bundle.manifest.tables {
             if let Some(doc) = table_by_id.get(entry.id.as_str()) {
@@ -529,6 +658,20 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
         for entry in &bundle.manifest.graphs {
             if let Some(doc) = graph_by_id.get(entry.id.as_str()) {
                 let bytes = serde_json::to_vec(doc).map_err(|e| AppError::FileIO(e.to_string()))?;
+                write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
+            }
+        }
+        for entry in &bundle.manifest.distributions {
+            if let Some(envelope) = distribution_by_id.get(entry.analysis_id.as_str()) {
+                let bytes = serde_json::to_vec(envelope)
+                    .map_err(|error| AppError::FileIO(error.to_string()))?;
+                write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
+            }
+        }
+        for entry in &bundle.manifest.derived_formulas {
+            if let Some(envelope) = formula_by_id.get(entry.formula_id.as_str()) {
+                let bytes = serde_json::to_vec(envelope)
+                    .map_err(|error| AppError::FileIO(error.to_string()))?;
                 write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
             }
         }
@@ -761,9 +904,13 @@ mod tests {
             vec![table],
             vec![graph],
             vec![],
+            vec![],
+            vec![],
+            vec![],
             vec!["Raw/2026".into(), "Reports".into()],
             &table_folders,
             &graph_folders,
+            &HashMap::new(),
             &HashMap::new(),
             vec![],
             vec![],
@@ -788,6 +935,10 @@ mod tests {
             graph_folders: Some(HashMap::new()),
             tabulates: vec![],
             tabulate_folders: HashMap::new(),
+            distributions: vec![],
+            distribution_folders: HashMap::new(),
+            derived_formulas: vec![],
+            distribution_issues: vec![],
         };
 
         let json = serde_json::to_vec(&manifest).expect("serialize manifest");
@@ -828,9 +979,13 @@ mod tests {
             Vec::new(),
             vec![tabulate.clone()],
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
             &HashMap::new(),
             &HashMap::new(),
             &folders,
+            &HashMap::new(),
             Vec::new(),
             Vec::new(),
         );
@@ -870,6 +1025,79 @@ mod tests {
         assert!(loaded.manifest.tabulates.is_empty());
         assert!(loaded.manifest.tabulate_folders.is_empty());
         assert!(loaded.tabulates.is_empty());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn distribution_manifest_round_trip_preserves_distribution_and_formula_folder_maps() {
+        let path = temp_project_path("distribution-round-trip");
+        let distribution = DistributionArchiveEnvelopeV1 {
+            schema_version: "1".to_string(),
+            body: DistributionDocV1 {
+                schema_version: "1".to_string(),
+                analysis_id: "dist-001".to_string(),
+                name: "Distribution 1".to_string(),
+                source_dataset_id: "ds-42".to_string(),
+                status: "ready".to_string(),
+                current_config: json!({
+                    "mode": "continuous",
+                    "filterExpr": {
+                        "kind": "isNull",
+                        "fieldId": "region"
+                    }
+                }),
+            },
+        };
+        let formula = DerivedFormulaArchiveEnvelopeV1 {
+            schema_version: "1".to_string(),
+            body: DerivedFormulaDocV1 {
+                formula_id: "formula-001".to_string(),
+                schema_version: "1".to_string(),
+                analysis_id: "dist-001".to_string(),
+                source_dataset_id: "ds-42".to_string(),
+                source_column_ids: vec!["sales-amount-id".to_string()],
+                output_column_name: "Standardized Sales".to_string(),
+                ast: json!({ "kind": "column", "columnId": "sales-amount-id" }),
+                fingerprint: "sha256:formula-001".to_string(),
+            },
+        };
+        let distribution_folders =
+            HashMap::from([("dist-001".to_string(), "Analyses/Revenue".to_string())]);
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-26T00:00:00Z".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![distribution.clone()],
+            vec![formula.clone()],
+            Vec::new(),
+            Vec::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &distribution_folders,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(loaded.manifest.distributions[0].analysis_id, "dist-001");
+        assert_eq!(loaded.manifest.distributions[0].file, "distributions/dist-001.spdist");
+        assert_eq!(loaded.manifest.derived_formulas[0].formula_id, "formula-001");
+        assert_eq!(
+            loaded.manifest.derived_formulas[0].file,
+            "derived-formulas/formula-001.spformula"
+        );
+        assert_eq!(loaded.manifest.distribution_folders, distribution_folders);
+        assert_eq!(loaded.distributions, vec![distribution]);
+        assert_eq!(loaded.derived_formulas, vec![formula]);
+        assert!(loaded.manifest.distribution_issues.is_empty());
 
         let _ = std::fs::remove_file(path);
     }

@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import type { ProjectInfo, OpenProjectResult } from "@/types/project";
 import { projectService, type SaveProjectFolders } from "@/services/projectService";
+import type {
+  DerivedFormulaDocV1,
+  DistributionDocV1,
+  DistributionIssueV1,
+} from "@/types/distribution";
 
 interface ProjectStore {
   /** 当前打开的项目 */
@@ -23,6 +28,9 @@ interface ProjectStore {
     graphBuilders?: unknown[],
     folders?: SaveProjectFolders,
     tabulates?: unknown[],
+    distributions?: DistributionDocV1[],
+    derivedFormulas?: DerivedFormulaDocV1[],
+    distributionIssues?: DistributionIssueV1[],
   ) => Promise<void>;
   /** 关闭项目 */
   closeProject: () => void;
@@ -61,7 +69,17 @@ export const useProjectStore = create<ProjectStore>((set) => ({
     }
   },
 
-  saveProject: async (filePath, history, snapshots, graphBuilders, folders, tabulates) => {
+  saveProject: async (
+    filePath,
+    history,
+    snapshots,
+    graphBuilders,
+    folders,
+    tabulates,
+    distributions,
+    derivedFormulas,
+    distributionIssues,
+  ) => {
     const project = await projectService.saveProject(
       filePath,
       history,
@@ -69,6 +87,9 @@ export const useProjectStore = create<ProjectStore>((set) => ({
       graphBuilders,
       folders,
       tabulates,
+      distributions,
+      derivedFormulas,
+      distributionIssues,
     );
     set({ project, dirty: false });
   },

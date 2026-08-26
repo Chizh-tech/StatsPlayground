@@ -94,6 +94,8 @@ interface FolderStore {
   graphFolders: Record<string, string>;
   /** tabulateId → 文件夹路径。 */
   tabulateFolders: Record<string, string>;
+  /** analysisId → 文件夹路径。 */
+  distributionFolders: Record<string, string>;
   /** 折叠态：`{path: true}` 表示该文件夹处于折叠。仅 UI 用。 */
   collapsed: Record<string, true>;
 
@@ -103,6 +105,7 @@ interface FolderStore {
     tableFolders: Record<string, string>;
     graphFolders: Record<string, string>;
     tabulateFolders: Record<string, string>;
+    distributionFolders: Record<string, string>;
   }) => void;
 
   /** 关闭项目时重置。 */
@@ -130,12 +133,15 @@ interface FolderStore {
   setGraphFolder: (graphId: string, folder: string | null) => void;
   /** 把单个 Tabulate 配置移动到指定文件夹。 */
   setTabulateFolder: (tabulateId: string, folder: string | null) => void;
+  /** 把单个 Distribution 分析移动到指定文件夹。 */
+  setDistributionFolder: (analysisId: string, folder: string | null) => void;
 
   /** 清理已删除项目的归属信息。 */
   pruneAssignments: (
     validDatasetIds: Set<string>,
     validGraphIds: Set<string>,
     validTabulateIds: Set<string>,
+    validDistributionIds: Set<string>,
   ) => void;
 
   /** 切换文件夹折叠态。 */
@@ -172,15 +178,23 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   tableFolders: {},
   graphFolders: {},
   tabulateFolders: {},
+  distributionFolders: {},
   collapsed: loadCollapsed(),
 
-  loadFromProject: ({ folders, tableFolders, graphFolders, tabulateFolders }) => {
+  loadFromProject: ({
+    folders,
+    tableFolders,
+    graphFolders,
+    tabulateFolders,
+    distributionFolders,
+  }) => {
     // Normalize incoming paths and rebuild assignment maps with the
     // normalized forms so subsequent lookups always agree.
     const allFolders = new Set<string>();
     const tbl: Record<string, string> = {};
     const grp: Record<string, string> = {};
     const tab: Record<string, string> = {};
+    const dist: Record<string, string> = {};
     for (const f of folders) {
       const n = normalizeFolderPath(f);
       if (n) for (const anc of folderAncestors(n)) allFolders.add(anc);
@@ -206,16 +220,30 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
         for (const anc of folderAncestors(n)) allFolders.add(anc);
       }
     }
+    for (const [id, f] of Object.entries(distributionFolders)) {
+      const n = normalizeFolderPath(f);
+      if (n) {
+        dist[id] = n;
+        for (const anc of folderAncestors(n)) allFolders.add(anc);
+      }
+    }
     set({
       folders: Array.from(allFolders).sort((a, b) => a.localeCompare(b)),
       tableFolders: tbl,
       graphFolders: grp,
       tabulateFolders: tab,
+      distributionFolders: dist,
     });
   },
 
   reset: () => {
-    set({ folders: [], tableFolders: {}, graphFolders: {}, tabulateFolders: {} });
+    set({
+      folders: [],
+      tableFolders: {},
+      graphFolders: {},
+      tabulateFolders: {},
+      distributionFolders: {},
+    });
   },
 
   createFolder: (parent, baseName) => {
@@ -236,7 +264,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     const finalPath = uniqueFolderPath(parent, cleaned, existing);
 
     // Replace every reference to oldPath (and its descendants) with the new prefix.
-    const { folders, tableFolders, graphFolders, tabulateFolders } = get();
+    const { folders, tableFolders, graphFolders, tabulateFolders, distributionFolders } = get();
     const remap = (p: string): string => {
       if (p === oldPath) return finalPath;
       if (p.startsWith(`${oldPath}/`)) return `${finalPath}${p.slice(oldPath.length)}`;
@@ -249,17 +277,22 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     for (const [id, f] of Object.entries(graphFolders)) newGraphFolders[id] = remap(f);
     const newTabulateFolders: Record<string, string> = {};
     for (const [id, f] of Object.entries(tabulateFolders)) newTabulateFolders[id] = remap(f);
+    const newDistributionFolders: Record<string, string> = {};
+    for (const [id, f] of Object.entries(distributionFolders)) {
+      newDistributionFolders[id] = remap(f);
+    }
     set({
       folders: newFolders,
       tableFolders: newTableFolders,
       graphFolders: newGraphFolders,
       tabulateFolders: newTabulateFolders,
+      distributionFolders: newDistributionFolders,
     });
     return finalPath;
   },
 
   deleteFolder: (path) => {
-    const { folders, tableFolders, graphFolders, tabulateFolders } = get();
+    const { folders, tableFolders, graphFolders, tabulateFolders, distributionFolders } = get();
     const parent = folderParent(path); // may be null (move to root)
     const movePrefix = (p: string): string => {
       // `<path>` and `<path>/sub` lose their leading segment.
@@ -291,11 +324,17 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
       const moved = movePrefix(f);
       if (moved) newTabulateFolders[id] = moved;
     }
+    const newDistributionFolders: Record<string, string> = {};
+    for (const [id, f] of Object.entries(distributionFolders)) {
+      const moved = movePrefix(f);
+      if (moved) newDistributionFolders[id] = moved;
+    }
     set({
       folders: newFolders,
       tableFolders: newTableFolders,
       graphFolders: newGraphFolders,
       tabulateFolders: newTabulateFolders,
+      distributionFolders: newDistributionFolders,
     });
   },
 
@@ -316,7 +355,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     );
     const finalPath = uniqueFolderPath(newParentNorm, baseName, existing);
 
-    const { folders, tableFolders, graphFolders, tabulateFolders } = get();
+    const { folders, tableFolders, graphFolders, tabulateFolders, distributionFolders } = get();
     const remap = (p: string): string => {
       if (p === path) return finalPath;
       if (p.startsWith(`${path}/`)) return `${finalPath}${p.slice(path.length)}`;
@@ -329,11 +368,16 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     for (const [id, f] of Object.entries(graphFolders)) newGraphFolders[id] = remap(f);
     const newTabulateFolders: Record<string, string> = {};
     for (const [id, f] of Object.entries(tabulateFolders)) newTabulateFolders[id] = remap(f);
+    const newDistributionFolders: Record<string, string> = {};
+    for (const [id, f] of Object.entries(distributionFolders)) {
+      newDistributionFolders[id] = remap(f);
+    }
     set({
       folders: newFolders,
       tableFolders: newTableFolders,
       graphFolders: newGraphFolders,
       tabulateFolders: newTabulateFolders,
+      distributionFolders: newDistributionFolders,
     });
     return finalPath;
   },
@@ -377,15 +421,42 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     });
   },
 
-  pruneAssignments: (validDatasetIds, validGraphIds, validTabulateIds) => {
-    const { tableFolders, graphFolders, tabulateFolders } = get();
+  setDistributionFolder: (analysisId, folder) => {
+    const norm = normalizeFolderPath(folder);
+    set((state) => {
+      const next = { ...state.distributionFolders };
+      if (norm) next[analysisId] = norm;
+      else delete next[analysisId];
+      const folders = norm
+        ? normalizeFolderList([...state.folders, ...folderAncestors(norm)])
+        : state.folders;
+      return { distributionFolders: next, folders };
+    });
+  },
+
+  pruneAssignments: (
+    validDatasetIds,
+    validGraphIds,
+    validTabulateIds,
+    validDistributionIds,
+  ) => {
+    const { tableFolders, graphFolders, tabulateFolders, distributionFolders } = get();
     const tbl: Record<string, string> = {};
     for (const [id, f] of Object.entries(tableFolders)) if (validDatasetIds.has(id)) tbl[id] = f;
     const grp: Record<string, string> = {};
     for (const [id, f] of Object.entries(graphFolders)) if (validGraphIds.has(id)) grp[id] = f;
     const tab: Record<string, string> = {};
     for (const [id, f] of Object.entries(tabulateFolders)) if (validTabulateIds.has(id)) tab[id] = f;
-    set({ tableFolders: tbl, graphFolders: grp, tabulateFolders: tab });
+    const dist: Record<string, string> = {};
+    for (const [id, f] of Object.entries(distributionFolders)) {
+      if (validDistributionIds.has(id)) dist[id] = f;
+    }
+    set({
+      tableFolders: tbl,
+      graphFolders: grp,
+      tabulateFolders: tab,
+      distributionFolders: dist,
+    });
   },
 
   toggleCollapsed: (path) => {
