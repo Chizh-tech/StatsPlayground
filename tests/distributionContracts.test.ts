@@ -82,16 +82,19 @@ assert.deepEqual(Object.keys(bootstrapResult.resourceBudget), [
 await distributionService.listCapabilities();
 const blackBoxCase: BlackBoxCaseV1 = {
   schemaVersion: "1",
-  caseId: "case-1",
+  caseId: "case.synthetic.1",
   actionId: "distribution.summary.v1",
-  parameters: {},
-  observations: [{ kind: "numeric", outputId: "mean", value: 1 }],
-  warningCodes: [],
+  inputs: {},
+  expected: [],
+  observed: [{ kind: "numeric", outputId: "result.mean", value: 1 }],
+  warnings: [],
   provenance: {
-    toolVersion: "1",
-    inputHash: "sha256:input",
-    outputHash: "sha256:output",
-    legalReviewStatus: "approved",
+    sourceLedgerHash: `sha256:${"1".repeat(64)}`,
+    inputHash: `sha256:${"2".repeat(64)}`,
+    outputHash: `sha256:${"3".repeat(64)}`,
+    toolVersion: "validator.v1",
+    seed: "seed.synthetic.1",
+    reviewArtifactHash: `sha256:${"4".repeat(64)}`,
   },
 };
 await distributionService.validateBlackBoxCase(blackBoxCase);

@@ -147,10 +147,11 @@ export interface DistributionReportBlockV1 {
 }
 
 export interface CapabilityDescriptorV1 {
-  schemaVersion: DistributionSchemaVersionV1;
-  capabilityId: string;
-  methodSpecVersion: string;
-  enabled: boolean;
+  id: string;
+  titleKey: string;
+  scope: string;
+  menuScope: string;
+  statusKey: string;
 }
 
 export interface DistributionWorkspaceBootstrapV1 {
@@ -178,20 +179,41 @@ export type BlackBoxObservationV1 =
   | { kind: "status"; outputId: string; value: BlackBoxStatusV1 };
 
 export interface BlackBoxProvenanceV1 {
-  toolVersion: string;
+  sourceLedgerHash: string;
   inputHash: string;
   outputHash: string;
-  legalReviewStatus: string;
+  toolVersion: string;
+  seed: string;
+  reviewArtifactHash: string;
 }
 
 export interface BlackBoxCaseV1 {
   schemaVersion: DistributionSchemaVersionV1;
   caseId: string;
   actionId: string;
-  parameters: Record<string, BlackBoxValueV1>;
-  observations: BlackBoxObservationV1[];
-  warningCodes: string[];
   provenance: BlackBoxProvenanceV1;
+  inputs: Record<string, BlackBoxValueV1>;
+  expected: BlackBoxObservationV1[];
+  observed: BlackBoxObservationV1[];
+  warnings: string[];
+}
+
+export interface SourceLedgerEntryV1 {
+  artifactId: string;
+  originKind: string;
+  allowedFieldKeys: string[];
+  inputHash: string;
+  outputHash: string;
+  reviewState: string;
+}
+
+export interface LegalReviewRecordV1 {
+  artifactId: string;
+  status: string;
+  requestedAt: string;
+  reviewerRole: string;
+  artifactHash: string;
+  notesHash: string;
 }
 
 export interface DistributionDocV1 {

@@ -136,27 +136,98 @@ impl<'a> DistributionService<'a> {
                 "unsupported black-box case schema version".to_string(),
             ));
         }
-        if case.case_id.trim().is_empty() || case.action_id.trim().is_empty() {
+        if !is_machine_id(&case.case_id) || !is_machine_id(&case.action_id) {
             return Err(AppError::InvalidParam(
-                "black-box case and action IDs must be provided".to_string(),
+                "black-box case and action IDs must be machine-readable".to_string(),
             ));
         }
-        if case.provenance.tool_version.trim().is_empty()
-            || case.provenance.input_hash.trim().is_empty()
-            || case.provenance.output_hash.trim().is_empty()
-            || case.provenance.legal_review_status.trim().is_empty()
+        let provenance = &case.provenance;
+        if !is_sha256(&provenance.source_ledger_hash)
+            || !is_sha256(&provenance.input_hash)
+            || !is_sha256(&provenance.output_hash)
+            || !is_sha256(&provenance.review_artifact_hash)
+            || !is_machine_id(&provenance.tool_version)
+            || !is_machine_id(&provenance.seed)
         {
             return Err(AppError::InvalidParam(
                 "black-box provenance is incomplete".to_string(),
+            ));
+        }
+        for (key, value) in &case.inputs {
+            if !is_machine_id(key) || !black_box_value_is_sanitized(value) {
+                return Err(AppError::InvalidParam(
+                    "black-box inputs must be structured machine values".to_string(),
+                ));
+            }
+        }
+        for observation in case.expected.iter().chain(&case.observed) {
+            if !black_box_observation_is_sanitized(observation) {
+                return Err(AppError::InvalidParam(
+                    "black-box observations must be structured machine values".to_string(),
+                ));
+            }
+        }
+        if case.warnings.iter().any(|warning| !is_machine_id(warning)) {
+            return Err(AppError::InvalidParam(
+                "black-box warnings must be machine-readable codes".to_string(),
             ));
         }
         Ok(())
     }
 }
 
+fn is_machine_id(value: &str) -> bool {
+    if value.is_empty() || std::path::Path::new(value).is_absolute() {
+        return false;
+    }
+    let segments = value.split('.').collect::<Vec<_>>();
+    segments.len() >= 2
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+        })
+}
+
+fn is_sha256(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|hash| hash.len() == 64 && hash.chars().all(|character| character.is_ascii_hexdigit()))
+}
+
+fn black_box_value_is_sanitized(value: &crate::models::distribution::BlackBoxValueV1) -> bool {
+    use crate::models::distribution::BlackBoxValueV1;
+    match value {
+        BlackBoxValueV1::Number(number) => number.is_finite(),
+        BlackBoxValueV1::Boolean(_) | BlackBoxValueV1::Null => true,
+        BlackBoxValueV1::Code(code) => is_machine_id(code),
+        BlackBoxValueV1::NumberList(values) => values.iter().all(|value| value.is_finite()),
+        BlackBoxValueV1::CodeList(values) => values.iter().all(|value| is_machine_id(value)),
+    }
+}
+
+fn black_box_observation_is_sanitized(
+    observation: &crate::models::distribution::BlackBoxObservationV1,
+) -> bool {
+    use crate::models::distribution::BlackBoxObservationV1;
+    match observation {
+        BlackBoxObservationV1::Numeric { output_id, value } => {
+            is_machine_id(output_id) && value.is_finite()
+        }
+        BlackBoxObservationV1::Enumeration { output_id, value } => {
+            is_machine_id(output_id) && is_machine_id(value)
+        }
+        BlackBoxObservationV1::Status { output_id, .. } => is_machine_id(output_id),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::distribution::{
+        BlackBoxObservationV1, BlackBoxProvenanceV1, BlackBoxStatusV1, BlackBoxValueV1,
+    };
     use crate::services::data_service::DataService;
 
     #[test]
@@ -255,5 +326,84 @@ mod tests {
         assert!(service
             .validate_snapshot_is_current(&snapshot, "filter:v2")
             .is_err());
+    }
+
+    fn synthetic_black_box_case() -> BlackBoxCaseV1 {
+        BlackBoxCaseV1 {
+            schema_version: "1".to_string(),
+            case_id: "case.synthetic.001".to_string(),
+            action_id: "distribution.synthetic.summary".to_string(),
+            provenance: BlackBoxProvenanceV1 {
+                source_ledger_hash: format!("sha256:{}", "1".repeat(64)),
+                input_hash: format!("sha256:{}", "2".repeat(64)),
+                output_hash: format!("sha256:{}", "3".repeat(64)),
+                tool_version: "validator.v1".to_string(),
+                seed: "seed.synthetic.001".to_string(),
+                review_artifact_hash: format!("sha256:{}", "4".repeat(64)),
+            },
+            inputs: std::collections::BTreeMap::from([(
+                "parameter.alpha".to_string(),
+                BlackBoxValueV1::Number(0.05),
+            )]),
+            expected: vec![BlackBoxObservationV1::Status {
+                output_id: "result.status".to_string(),
+                value: BlackBoxStatusV1::Available,
+            }],
+            observed: vec![BlackBoxObservationV1::Numeric {
+                output_id: "result.value".to_string(),
+                value: 1.25,
+            }],
+            warnings: vec!["warning.synthetic.none".to_string()],
+        }
+    }
+
+    #[test]
+    fn capability_registry_exposes_only_implemented_methods() {
+        let state = AppState::new().expect("test state");
+        let capabilities = DistributionService::new(&state)
+            .list_distribution_capabilities()
+            .expect("capabilities");
+
+        assert!(capabilities.is_empty());
+        assert!(!capabilities
+            .iter()
+            .any(|capability| capability.id.contains("future")));
+    }
+
+    #[test]
+    fn black_box_case_validator_rejects_free_text_and_paths() {
+        let state = AppState::new().expect("test state");
+        let service = DistributionService::new(&state);
+        let valid = synthetic_black_box_case();
+        service.validate_black_box_case(&valid).expect("valid case");
+
+        let mut free_text = valid.clone();
+        free_text.observed = vec![BlackBoxObservationV1::Enumeration {
+            output_id: "result.label".to_string(),
+            value: "a copied product sentence".to_string(),
+        }];
+        assert!(service.validate_black_box_case(&free_text).is_err());
+
+        let mut absolute_path = valid.clone();
+        absolute_path.action_id = "C:\\private\\capture.png".to_string();
+        assert!(service.validate_black_box_case(&absolute_path).is_err());
+
+        let mut missing_hash = valid;
+        missing_hash.provenance.output_hash.clear();
+        assert!(service.validate_black_box_case(&missing_hash).is_err());
+
+        let mut malformed_hash = synthetic_black_box_case();
+        malformed_hash.provenance.input_hash = "sha256:not-hex".to_string();
+        assert!(service.validate_black_box_case(&malformed_hash).is_err());
+
+        let mut relative_screenshot = synthetic_black_box_case();
+        relative_screenshot.action_id = "screenshots/capture.png".to_string();
+        assert!(service
+            .validate_black_box_case(&relative_screenshot)
+            .is_err());
+
+        let mut invalid_seed = synthetic_black_box_case();
+        invalid_seed.provenance.seed = "seed with spaces".to_string();
+        assert!(service.validate_black_box_case(&invalid_seed).is_err());
     }
 }

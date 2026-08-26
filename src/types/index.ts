@@ -7,6 +7,9 @@ export type {
 	DistributionCancelTokenV1,
 	BlackBoxCaseV1,
 	BlackBoxObservationV1,
+	BlackBoxProvenanceV1,
+	BlackBoxStatusV1,
+	BlackBoxValueV1,
 	CapabilityDescriptorV1,
 	DistributionChartDataV1,
 	DistributionChartKindV1,
@@ -25,4 +28,6 @@ export type {
 	ObservationContributionPolicyV1,
 	ResourceBudgetV1,
 	DerivedFormulaDocV1,
+	LegalReviewRecordV1,
+	SourceLedgerEntryV1,
 } from "./distribution";

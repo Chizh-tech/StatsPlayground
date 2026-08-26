@@ -306,10 +306,11 @@ pub struct DistributionReportBlockV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CapabilityDescriptorV1 {
-    pub schema_version: DistributionSchemaVersionV1,
-    pub capability_id: String,
-    pub method_spec_version: String,
-    pub enabled: bool,
+    pub id: String,
+    pub title_key: String,
+    pub scope: String,
+    pub menu_scope: String,
+    pub status_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -368,10 +369,12 @@ pub enum BlackBoxStatusV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BlackBoxProvenanceV1 {
-    pub tool_version: String,
+    pub source_ledger_hash: String,
     pub input_hash: String,
     pub output_hash: String,
-    pub legal_review_status: String,
+    pub tool_version: String,
+    pub seed: String,
+    pub review_artifact_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -380,28 +383,33 @@ pub struct BlackBoxCaseV1 {
     pub schema_version: DistributionSchemaVersionV1,
     pub case_id: String,
     pub action_id: String,
-    pub parameters: BTreeMap<String, BlackBoxValueV1>,
-    pub observations: Vec<BlackBoxObservationV1>,
-    pub warning_codes: Vec<String>,
     pub provenance: BlackBoxProvenanceV1,
+    pub inputs: BTreeMap<String, BlackBoxValueV1>,
+    pub expected: Vec<BlackBoxObservationV1>,
+    pub observed: Vec<BlackBoxObservationV1>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceLedgerEntryV1 {
-    pub schema_version: DistributionSchemaVersionV1,
-    pub source_id: String,
-    pub source_kind: String,
-    pub review_status: String,
+    pub artifact_id: String,
+    pub origin_kind: String,
+    pub allowed_field_keys: Vec<String>,
+    pub input_hash: String,
+    pub output_hash: String,
+    pub review_state: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LegalReviewRecordV1 {
-    pub schema_version: DistributionSchemaVersionV1,
-    pub record_id: String,
     pub artifact_id: String,
     pub status: String,
+    pub requested_at: String,
+    pub reviewer_role: String,
+    pub artifact_hash: String,
+    pub notes_hash: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
