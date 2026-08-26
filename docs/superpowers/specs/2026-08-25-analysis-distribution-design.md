@@ -19,7 +19,8 @@
 - 采用混合交互：先显示角色启动对话框，运行后创建可保存的项目分析项。
 - 角色包括一个或多个 Y，以及可选 Weight、Freq 和 By。
 - 操作顺序、报告层级、菜单作用域和计算行为按黑盒基准验收；外观遵循 StatsPlayground。
-- 默认使用全量精确数据。仅不改变统计结果的图形绘制点可以受控降采样，并明确标识。
+- Distribution 负责统计计算及图表所需的结构化数值数据；Graph Builder 负责全部图形渲染、坐标轴、主题、交互和导出。
+- 默认使用全量精确数据。仅 Graph Builder 的最终绘制点可以受控降采样，并明确标识；降采样不得改变 Distribution 统计结果或图表数据口径。
 - 分阶段交付，每阶段形成可运行、可保存、可测试的纵向能力。
 - `Save` 产生可重算公式列，不产生无来源的静态副本。
 - 平台工具提供主程序原生等价能力，不实现 JSL。
@@ -42,7 +43,7 @@ Run 后创建 `Distribution N`，绑定源数据集并进入 Directory。分析�
 
 1. By group，使用阶段 0 冻结的类型化稳定顺序。
 2. Y variable，按启动角色顺序。
-3. 图形和变量报告块，按 capability registry 顺序。
+3. 统计报告块及可选 Graph Builder 图表块，按 capability registry 顺序。
 
 By 排序必须明确数值、字符串、日期、声明的 value order、locale 和缺失值位置，不依赖 DuckDB 未声明的默认排序。
 
@@ -50,17 +51,20 @@ By 排序必须明确数值、字符串、日期、声明的 value order、local
 
 ### 3.3 持久化状态
 
-保存角色绑定、建模类型、过滤、统计与拟合选项、置信水平、图形选项、报告显示/折叠状态、名称、目录位置和公式定义。
+保存角色绑定、建模类型、过滤、统计与拟合选项、置信水平、Graph Builder 图表配置引用、报告显示/折叠状态、名称、目录位置和公式定义。
 
 不保存统计结果、绘图点、bootstrap 样本、优化中间状态和临时选择。项目打开后根据当前源数据重算。带 fingerprint 的公式列缓存可以用于快速显示，但验证失败必须重算。
 
 ## 4. 功能范围
 
-### 4.1 连续变量默认报告
+### 4.1 连续变量默认统计与图表数据
 
-- 全量精确 histogram 及频数/概率刻度。
-- Tukey outlier box plot、quantile box plot 和均值区间标记。
-- Quantiles、Summary Statistics、Stem-and-leaf 和 ECDF。
+- Quantiles、Summary Statistics 和 Stem-and-leaf 等统计结果。
+- 全量精确 histogram bins/counts/probabilities。
+- Tukey/quantile box 所需 quartiles、hinges、whiskers、outliers 和均值区间。
+- ECDF/CDF、Q-Q、P-P 和拟合曲线所需结构化坐标及置信界。
+
+Distribution 不生成 ECharts option，不拥有坐标轴、颜色、tooltip、缩放、平移、选择或图形导出。上述结构化数据通过稳定 chart-data contract 交给 Graph Builder 渲染。Graph Builder 不重新推导 quantiles、bins、whiskers、检验值或拟合参数。
 
 ### 4.2 摘要统计
 
@@ -68,9 +72,9 @@ By 排序必须明确数值、字符串、日期、声明的 value order、local
 
 阶段 0 必须先批准机器可读的《观测贡献语义表》，定义 `ObservationEligibility`、`WeightSemantics`、`FreqSemantics` 和 `ByMissingSemantics`。它至少覆盖有效行、逻辑样本量、N/N Missing/Sum Weight、统计分母、自由度、零/负/非有限值、缺失 By、Weight 与 Freq 同时存在以及 n=0/1/常数列。具体方法不能自行解释这些组合。
 
-### 4.3 图形、检验与区间
+### 4.3 检验、区间与诊断数据
 
-目标包括 Normal Q-Q、通用 Q-Q、P-P、适用置信界、Test Mean、Test Std Dev、Wilcoxon signed-rank、equivalence tests、mean/variance/proportion confidence intervals、prediction intervals 和 tolerance intervals。
+目标包括 Test Mean、Test Std Dev、Wilcoxon signed-rank、equivalence tests、mean/variance/proportion confidence intervals、prediction intervals 和 tolerance intervals。Normal Q-Q、通用 Q-Q、P-P 及适用置信界作为结构化诊断数据输出，由 Graph Builder 绘制。
 
 Test block 必须包含估计值、原假设、统计量、参考分布、自由度、单尾/双尾 p 值、区间、状态、警告和方法脚注。
 
@@ -103,10 +107,11 @@ Multiple Response 报告至少包含 Level、Count、Share of Responses、Rate P
 
 采用四层边界：
 
-1. **React Distribution Workspace**：启动对话框、报告树、菜单、图形和显示状态。
+1. **React Distribution Workspace**：启动对话框、统计报告树、菜单和显示状态。
 2. **Typed IPC Contract**：capabilities、请求、结果、进度、取消和公式保存。
 3. **Rust Statistics Kernel**：统计、区间、检验、拟合和 capability。
 4. **DuckDB Data Executor**：元数据解析、过滤、By 分区、Weight/Freq 准备、基础聚合和有序数据流。
+5. **Graph Builder Adapter**：将 Distribution 的 chart-data blocks 映射到主程序现有 Graph Builder/ECharts 渲染与交互，不执行统计推导。
 
 React 不重新计算统计量。DuckDB 原生函数只有在公式、参数化、边界和缺失语义经 method spec 与黄金结果确认后才能使用。
 
@@ -120,11 +125,11 @@ React 不重新计算统计量。DuckDB 原生函数只有在公式、参数化�
 
 ### 5.2 结果和报告块
 
-`DistributionResult` 至少包含 analysis ID、config revision、run ID、source data version、exact、plot sampling、provenance、运行统计、By groups、变量报告树、warnings 和公式保存 capabilities。
+`DistributionResult` 至少包含 analysis ID、config revision、run ID、source data version、exact、provenance、运行统计、By groups、变量报告树、chart-data blocks、warnings 和公式保存 capabilities。
 
-报告块采用 discriminated union。公共外壳包含稳定 ID、kind、i18n title key、显示/折叠能力、菜单 capabilities、状态和专用 payload。首批类型包括 histogram、box plot、quantiles table、summary table、test、interval、distribution fit、diagnostic plot 和 frequency table。
+报告块采用 discriminated union。公共外壳包含稳定 ID、kind、i18n title key、显示/折叠能力、菜单 capabilities、状态和专用 payload。统计类型包括 quantiles table、summary table、test、interval、distribution fit 和 frequency table。图表数据类型包括 histogram data、box-plot data、Q-Q/P-P data、CDF data、fitted-curve data 和 diagnostic-coordinate data。
 
-`exact` 仅表示统计计算未使用近似算法；图形简化由独立 `plotSampling` 描述。Provenance 至少包含 method/registry version、snapshot ID、schema/filter/parameter hashes、随机种子策略、平台和 build ID。
+`exact` 仅表示统计计算未使用近似算法。Distribution chart-data blocks 也是全量精确计算结果；Graph Builder 若为显示性能简化绘制点，使用自身独立 sampling metadata。Provenance 至少包含 method/registry version、snapshot ID、schema/filter/parameter hashes、随机种子策略、平台和 build ID。
 
 ### 5.3 快照、取消与错误
 
@@ -147,7 +152,7 @@ React 不重新计算统计量。DuckDB 原生函数只有在公式、参数化�
 
 Distribution quantile 基线使用 Hyndman-Fan Type 6：对非缺失排序样本使用 $r=(n+1)p$，执行边界截断及线性插值。当前 DuckDB `QUANTILE_CONT` 是 Type 7，不得用于该兼容路径。
 
-`quantile.type6`、`boxplot.tukey`、`boxplot.quantile` 和 `histogram` 是独立 method ID。箱线图规格另行冻结 hinge、whisker、outlier threshold、Weight/Freq、空组/单值组和结构化坐标。Histogram 规格另行冻结 bin width/count、edge inclusion、空 bin、归一化和 By 共享规则；bin 统计永远基于全量逻辑数据，不能先抽样原始观测。
+`quantile.type6`、`boxplot.tukey`、`boxplot.quantile` 和 `histogram` 是独立 calculation method ID。箱线图规格另行冻结 hinge、whisker、outlier threshold、Weight/Freq、空组/单值组和结构化坐标。Histogram 规格另行冻结 bin width/count、edge inclusion、空 bin、归一化和 By 共享规则；bin 统计永远基于全量逻辑数据。Graph Builder 只消费这些结果，不重新计算。
 
 可以采用经许可证审计的 Rust crate 作为分布函数、矩阵、优化和随机数原语，但第三方默认 quantile、moments、MLE、optimizer tolerance 或检验不能直接视为兼容实现。
 
@@ -181,7 +186,7 @@ Distribution 定义内联 manifest。每项至少包含稳定 analysis ID、名�
 - 运行前估算 groups × variables × fits × bootstrap 工作量。
 - 长任务提供进度、取消、内存/时间预算和明确失败。
 - 不得自动将 exact 改为 approximate。
-- 绘图抽样不影响表格、参数、检验、区间或 bin 统计。
+- Graph Builder 绘图抽样不影响表格、参数、检验、区间、bin、box、Q-Q/P-P 或 CDF 数据。
 - SQL 只由后端白名单模板及安全 identifier quoting 生成；数值参数使用 binding 或严格校验。
 - 文件读写经 Tauri dialog 和允许目录校验，绝对路径不进入前端或项目。
 - 未知 schema、算法版本和资源超限显式失败。
@@ -238,7 +243,7 @@ JMP/SAS 网站材料标注保留全部权利，其公开网站条款还对将网
 
 覆盖空数据、n=1/2、小样本、常数、重复、偏态、重尾、多峰、零膨胀、缺失、Weight、Freq、By、过滤、检测限、极端量级、近零方差和概率边界。
 
-每个拟合覆盖合成数据、固定参数、失败收敛和分数并列。图形验收使用结构化坐标；截图只用于隔离的人工 UI 验收，不进入公开仓库。
+每个拟合覆盖合成数据、固定参数、失败收敛和分数并列。图表验收分两层：Distribution 验证结构化 chart-data 数值，Graph Builder 验证渲染与交互。截图只用于隔离的人工 UI 验收，不进入公开仓库。
 
 ### 11.3 完成门槛
 
@@ -261,15 +266,15 @@ JMP/SAS 网站材料标注保留全部权利，其公开网站条款还对将网
 
 ### 阶段 1：平台骨架与连续描述
 
-交付启动角色、项目分析项、By/Weight/Freq、histogram、quantiles、summary、box plots、stem-and-leaf 和 ECDF；默认连续报告通过黄金对照。
+交付启动角色、项目分析项、By/Weight/Freq、quantiles、summary、stem-and-leaf，以及 histogram/box/ECDF 的结构化 chart-data；统计结果和 chart-data 通过黄金对照，图形由 Graph Builder 渲染。
 
 ### 阶段 2：连续推断
 
-交付 Q-Q、mean/std-dev/equivalence tests、confidence/prediction/tolerance intervals；统计量、DF、p 值和区间通过黄金对照。
+交付 mean/std-dev/equivalence tests、confidence/prediction/tolerance intervals，以及 Q-Q/P-P 结构化诊断数据；统计量、DF、p 值、区间和诊断坐标通过黄金对照。
 
 ### 阶段 3：分布拟合与过程能力
 
-逐个交付已冻结的 continuous/discrete registry entries、拟合优度、诊断、Fit All 和 capability；参数、评分、排序、诊断和警告通过黄金对照及法律检查点。
+逐个交付已冻结的 continuous/discrete registry entries、拟合优度、Fit All、capability、拟合曲线和诊断 chart-data；参数、评分、排序、坐标、警告通过黄金对照及法律检查点。
 
 ### 阶段 4：分类与多重响应
 
@@ -283,6 +288,7 @@ JMP/SAS 网站材料标注保留全部权利，其公开网站条款还对将网
 
 - JMP/JSL 源码、语言或脚本兼容。
 - JMP 像素级视觉复刻、商标、图标、截图或帮助文本复制。
+- 独立于 Graph Builder 的 Distribution 图表引擎、ECharts 配置系统或图形交互栈。
 - 任意用户代码或 SQL 公式执行。
 - 无标识近似统计。
 - 未经律师审查的认证、隶属或官方兼容声明。

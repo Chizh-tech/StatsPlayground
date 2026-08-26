@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 冻结 `Analyze > Distribution` 的 Phase 0 契约、项目持久化、空系统路径、并发/陈旧快照约束、clean-room 证据链和测试基础设施，让后续统计实现只能在已签名的边界内推进。
+**Goal:** 冻结 `Analyze > Distribution` 的 Phase 0 契约、项目持久化、统计结果与 chart-data 边界、Graph Builder adapter、并发/陈旧快照约束、clean-room 证据链和测试基础设施，让后续统计实现只能在已签名的边界内推进。
 
-**Architecture:** 先把 Distribution 的可序列化合同、项目归档格式和前端/Zustand 水平的保存和加载边界定死，再补空系统路径、能力注册表、黑盒验证结构和来源台账。Phase 0 不实现任何分布数学，也不引入第三方统计输出；它只建立可回放、可审查、可回滚的机器可读契约，并让旧项目、损坏条目、未知版本和缺失源数据都能被隔离成显式状态。
+**Architecture:** Distribution 后端负责统计和图表所需结构化数值数据，Graph Builder 负责统一渲染、坐标轴、主题、交互和导出。Phase 0 先冻结可序列化合同、chart-data discriminated union、Graph Builder adapter 输入、项目归档和前端/Zustand 边界，再补空系统路径、能力注册表、黑盒验证结构和来源台账；不实现任何统计公式或图形。
 
 **Tech Stack:** Rust 2021, Tauri v2, DuckDB 1.10505.0, serde, React 19, TypeScript 5.7, Zustand 5, `tsx` 4.20.5, `proptest` 1.7.0, Playwright Component Testing 1.55.0, `cargo test`.
 
@@ -18,6 +18,8 @@
 - `DistributionRequest` 至少包含 analysis ID、config revision、run ID、dataset ID、Y 和建模类型、Weight/Freq/By、`FilterExpr`、资源预算和 `exact` 模式。
 - 过滤使用版本化 `FilterExpr` AST，只允许稳定 column ID 和类型化 `and`、`or`、`not`、null、数值范围、类别集合和日期范围谓词。
 - `exact` 仅表示统计计算未使用近似算法；图形简化由独立 `plotSampling` 描述。
+- Distribution 计算结构化 histogram/box/Q-Q/P-P/CDF/fitted-curve 数据；Graph Builder 只负责渲染和交互，不重新推导统计量。
+- UI 排版、主题和控件遵循 StatsPlayground；Phase 0 不建立独立 Distribution 图表引擎。
 - 项目 manifest 正式新增 `distributions: []`、`distributionFolders: {}`、`derivedFormulas: []`；未知关键版本不静默降级。
 - `BlackBoxCase` 只允许自有/脱敏输入、抽象 action ID、类型化参数、数值/枚举/状态输出、允许的 warning code 和必要 provenance；禁止自由文本产品输出。
 - 阶段 0 必须固定 Rust unit/property tests、前端 test runner、Tauri/UI 自动化、版本化黄金 fixture runner、随机种子、artifact 格式和 Windows/macOS/Linux CI 矩阵及命令。
@@ -40,13 +42,14 @@
 - Modify: `src-tauri/src/services/spprj_archive.rs`
 - Modify: `src-tauri/src/services/project_service.rs`
 
-### Frontend contracts, store, and workspace skeleton
+### Frontend contracts, store, Graph Builder adapter, and statistical workspace skeleton
 
 - Create: `src/types/distribution.ts`
 - Modify: `src/types/filter.ts`
 - Modify: `src/types/project.ts`
 - Modify: `src/types/index.ts`
 - Create: `src/services/distributionService.ts`
+- Create: `src/graphCore/distributionAdapter.ts`
 - Modify: `src/services/projectService.ts`
 - Modify: `src/services/index.ts`
 - Create: `src/stores/useDistributionStore.ts`
@@ -61,6 +64,7 @@
 ### Tests, fixtures, CI, and process artifacts
 
 - Create: `tests/distributionContracts.test.ts`
+- Create: `tests/distributionGraphAdapter.test.ts`
 - Create: `tests/distributionArchive.test.ts`
 - Create: `tests/distributionSnapshot.test.ts`
 - Create: `tests/distributionIsolation.test.ts`
@@ -97,9 +101,10 @@
 - Test: `tests/distributionContracts.test.ts`
 
 **Interfaces:**
-- Produces Rust types: `DistributionSchemaVersionV1`, `DistributionModeV1`, `DistributionModelingTypeV1`, `DistributionColumnRefV1`, `AnalysisSnapshotV1`, `DistributionRequestV1`, `ResourceBudgetV1`, `FilterExprV1`, `ObservationContributionPolicyV1`, `CapabilityDescriptorV1`, `DistributionWorkspaceBootstrapV1`, `BlackBoxCaseV1`, `BlackBoxProvenanceV1`, `BlackBoxObservationV1`, `BlackBoxStatusV1`, `SourceLedgerEntryV1`, `LegalReviewRecordV1`.
+- Produces Rust types: `DistributionSchemaVersionV1`, `DistributionModeV1`, `DistributionModelingTypeV1`, `DistributionColumnRefV1`, `AnalysisSnapshotV1`, `DistributionRequestV1`, `ResourceBudgetV1`, `FilterExprV1`, `ObservationContributionPolicyV1`, `DistributionReportBlockV1`, `DistributionChartDataV1`, `DistributionChartKindV1`, `CapabilityDescriptorV1`, `DistributionWorkspaceBootstrapV1`, `BlackBoxCaseV1`, `BlackBoxProvenanceV1`, `BlackBoxObservationV1`, `BlackBoxStatusV1`, `SourceLedgerEntryV1`, `LegalReviewRecordV1`.
 - Produces Rust signatures: `pub fn bootstrap_distribution_workspace(&self) -> Result<DistributionWorkspaceBootstrapV1, AppError>`, `pub fn list_distribution_capabilities(&self) -> Result<Vec<CapabilityDescriptorV1>, AppError>`, `pub fn validate_black_box_case(&self, case: &BlackBoxCaseV1) -> Result<(), AppError>`.
-- Produces TS mirrors: `DistributionRequestV1`, `DistributionModelingTypeV1`, `DistributionColumnRefV1`, `FilterExprV1`, `AnalysisSnapshotV1`, `ObservationContributionPolicyV1`, `ResourceBudgetV1`, `CapabilityDescriptorV1`, `BlackBoxCaseV1`, `BlackBoxObservationV1`, `DistributionWorkspaceBootstrapV1`.
+- Produces TS mirrors: `DistributionRequestV1`, `DistributionModelingTypeV1`, `DistributionColumnRefV1`, `FilterExprV1`, `AnalysisSnapshotV1`, `ObservationContributionPolicyV1`, `ResourceBudgetV1`, `DistributionReportBlockV1`, `DistributionChartDataV1`, `DistributionChartKindV1`, `CapabilityDescriptorV1`, `BlackBoxCaseV1`, `BlackBoxObservationV1`, `DistributionWorkspaceBootstrapV1`.
+- Produces adapter signature: `toGraphBuilderInput(block: DistributionChartDataV1): DistributionGraphInputV1`, where the adapter performs structural mapping only and contains no quantile, bin, whisker, test, or fit calculations.
 - Produces TS service wrappers: `distributionService.bootstrapWorkspace()`, `distributionService.listCapabilities()`, `distributionService.validateBlackBoxCase(case)`, all via typed `invoke<T>()`.
 
 - [ ] **Step 1: Write the failing contract tests**
@@ -164,6 +169,8 @@ fn bootstrap_distribution_workspace_returns_empty_system_path() {
 
 The TS regression must assert that `distributionService.bootstrapWorkspace()` returns a `mode` of `emptySystem`, a `capabilities` array with zero entries, and a `resourceBudget` object with `maxTotalRows`, `maxTotalBytes`, and `cancelToken` keys in camelCase.
 
+Add a contract test asserting `DistributionChartKindV1` is a closed union of `histogramData`, `boxPlotData`, `qqData`, `ppData`, `cdfData`, `fittedCurveData`, and `diagnosticCoordinateData`. Payloads must contain already-computed coordinates/counts and provenance; they must not accept raw observations for adapter-side statistical calculation.
+
 - [ ] **Step 2: Run the focused RED checks**
 
 Run:
@@ -186,7 +193,7 @@ Expected: module resolution failure because `src/services/distributionService.ts
 
 - [ ] **Step 3: Implement the minimal contract layer**
 
-Implement the exact structs and enums above, with `#[serde(rename_all = "camelCase")]` on every public Rust contract and `export interface` / `export type` mirrors in TypeScript. Keep `FilterExprV1` versioned and closed over these variants only: `and`, `or`, `not`, `isNull`, `numericRange`, `categorySet`, `dateRange`.
+Implement the exact structs and enums above, with `#[serde(rename_all = "camelCase")]` on every public Rust contract and `export interface` / `export type` mirrors in TypeScript. Keep `FilterExprV1` versioned and closed over these variants only: `and`, `or`, `not`, `isNull`, `numericRange`, `categorySet`, `dateRange`. Keep `DistributionChartDataV1` versioned and closed over the seven chart-data kinds above.
 
 Implement `ObservationContributionPolicyV1::strict_v1()` by deserializing `contracts/distribution/observation-contribution-v1.json`; do not add statistical behavior. The artifact must enumerate these complete dimensions as codes, not prose: `yMissing`, `weightMissing`, `weightZero`, `weightNegative`, `weightNonFinite`, `frequencyMissing`, `frequencyZero`, `frequencyNegative`, `frequencyNonInteger`, `frequencyNonFinite`, `weightAndFrequency`, `byMissing`, `emptyGroup`, `singleObservation`, and `constantColumn`. The Rust test must compare the parsed dimension-key set to this exact set so omitted combinations fail Phase 0.
 
@@ -578,7 +585,7 @@ git commit -m "feat(distribution): add capability registry and black-box process
 
 ---
 
-## Task 6: Deterministic Seeds, Golden Infrastructure, and Minimal Workspace Skeleton
+## Task 6: Deterministic Seeds, Golden Infrastructure, Graph Adapter, and Statistical Workspace Skeleton
 
 **Files:**
 - Create: `tests/fixtures/distribution/seeds.json`
@@ -595,18 +602,23 @@ git commit -m "feat(distribution): add capability registry and black-box process
 - Create: `src/components/distribution/distribution.css`
 - Modify: `src/components/Workspace.tsx`
 - Modify: `src/stores/useDistributionStore.ts`
+- Create: `src/graphCore/distributionAdapter.ts`
+- Create: `tests/distributionGraphAdapter.test.ts`
 
 **Interfaces:**
 - Produces `distributionSeeds.json` with stable `seedId`, `seed`, `caseId`, `inputHash`, `expectedHash`, and `status` fields.
 - Produces a golden runner script that reads the seed corpus, runs only synthetic inputs, and compares hashes instead of third-party output text.
-- Produces a minimal `DistributionWorkspace` skeleton that can render an empty-system message, a capability list, a progress bar shell, and a cancel button shell without performing statistics.
-- Produces package scripts: `test:distribution`, `test:distribution:contracts`, `test:distribution:golden`, `test:distribution:blackbox`, and `test:distribution:ui`.
+- Produces a minimal `DistributionWorkspace` skeleton that renders an empty-system message, statistical capability count, progress shell, cancel shell, and empty statistical-results region without performing statistics or rendering charts.
+- Produces `toGraphBuilderInput()` as a structural adapter from precomputed chart-data blocks to Graph Builder inputs; it must not contain statistical formulas.
+- Produces package scripts: `test:distribution`, `test:distribution:contracts`, `test:distribution:adapter`, `test:distribution:golden`, `test:distribution:blackbox`, and `test:distribution:ui`.
 - Produces Rust dev dependency `proptest = "1.7.0"` and frontend dev dependencies `tsx = "4.20.5"`, `@playwright/experimental-ct-react = "1.55.0"`, and `@playwright/test = "1.55.0"`.
 - Produces a CI workflow with `windows-latest`, `macos-latest`, and `ubuntu-latest` matrix jobs that run the same fixed-seed commands.
 
 - [ ] **Step 1: Write the failing deterministic-fixture tests**
 
-Add a golden test that reads `tests/fixtures/distribution/seeds.json`, constructs only synthetic cases, and verifies identical hashes across two runs. Add `tests/e2e/DistributionWorkspace.spec.tsx` with Playwright Component Testing to assert the empty-system UI state shows a non-statistical message, capability count `0`, and a disabled run button when no dataset is active.
+Add a golden test that reads `tests/fixtures/distribution/seeds.json`, constructs only synthetic cases, and verifies identical hashes across two runs. Add `tests/e2e/DistributionWorkspace.spec.tsx` with Playwright Component Testing to assert the empty-system UI state shows a non-statistical message, capability count `0`, an empty statistical-results region, no canvas/ECharts instance, and a disabled run button when no dataset is active.
+
+Add `tests/distributionGraphAdapter.test.ts` with synthetic, already-computed histogram and Q-Q payloads. Assert the adapter preserves bin edges/counts and coordinates byte-for-byte, attaches Graph Builder display metadata, and never imports or calls quantile/bin/box/fit calculation helpers.
 
 Add a Rust `proptest!` that generates nested `FilterExprV1` values up to depth 4, serializes and deserializes them, and asserts equality. Use `TestRunner::new_with_rng(Config { cases: 128, ..Config::default() }, TestRng::deterministic_rng(RngAlgorithm::ChaCha))` so CI uses a deterministic property-test stream.
 
@@ -632,9 +644,11 @@ npm install --save-dev --save-exact tsx@4.20.5 @playwright/test@1.55.0 @playwrig
 
 Add `proptest = "1.7.0"` under `[dev-dependencies]` in `src-tauri/Cargo.toml`.
 
-Implement the golden runner with stable seeds and hash-based comparison only. Define `test:distribution:contracts` as the exact four contract/archive/isolation/snapshot TS files, `test:distribution:golden` as the golden runner, `test:distribution:blackbox` as the sanitizer runner, `test:distribution:ui` as `playwright test -c playwright-ct.config.ts`, and `test:distribution` as all four scripts in sequence.
+Implement the golden runner with stable seeds and hash-based comparison only. Define `test:distribution:contracts` as the exact four contract/archive/isolation/snapshot TS files, `test:distribution:adapter` as `tsx tests/distributionGraphAdapter.test.ts`, `test:distribution:golden` as the golden runner, `test:distribution:blackbox` as the sanitizer runner, `test:distribution:ui` as `playwright test -c playwright-ct.config.ts`, and `test:distribution` as all five scripts in sequence.
 
-Add the minimal `DistributionWorkspace` skeleton and wire it into `Workspace.tsx` only as a dormant, empty-system-capable shell; do not surface a real statistics menu item in Phase 0.
+Add the minimal statistical `DistributionWorkspace` skeleton and wire it into `Workspace.tsx` only as a dormant, empty-system-capable shell; do not surface a real statistics menu item or render a chart in Phase 0.
+
+Implement `toGraphBuilderInput()` as a pure structural adapter. It may map names, series roles, orientation, labels, and display metadata, but it must preserve all numeric values supplied by Distribution and must not import statistical transforms from Graph Builder.
 
 Keep the skeleton intentionally small: it should render the empty-system path, the registry count, a progress placeholder, and the cancel affordance, but it must not pretend to compute or display any statistical report.
 
@@ -665,7 +679,7 @@ The workflow matrix must use `os: [windows-latest, macos-latest, ubuntu-latest]`
 - [ ] **Step 5: Commit this slice**
 
 ```bash
-git add tests/fixtures/distribution/seeds.json tests/fixtures/distribution/README.md tests/distributionGolden.test.ts tests/e2e/DistributionWorkspace.spec.tsx playwright-ct.config.ts src-tauri/Cargo.toml package.json package-lock.json .github/workflows/distribution-phase0.yml src/components/distribution/DistributionWorkspace.tsx src/components/distribution/index.ts src/components/distribution/distribution.css src/components/Workspace.tsx src/stores/useDistributionStore.ts
+git add tests/fixtures/distribution/seeds.json tests/fixtures/distribution/README.md tests/distributionGolden.test.ts tests/distributionGraphAdapter.test.ts tests/e2e/DistributionWorkspace.spec.tsx playwright-ct.config.ts src-tauri/Cargo.toml package.json package-lock.json .github/workflows/distribution-phase0.yml src/components/distribution/DistributionWorkspace.tsx src/components/distribution/index.ts src/components/distribution/distribution.css src/components/Workspace.tsx src/stores/useDistributionStore.ts src/graphCore/distributionAdapter.ts
 git commit -m "feat(distribution): add deterministic fixtures and workspace skeleton"
 ```
 
@@ -676,7 +690,7 @@ git commit -m "feat(distribution): add deterministic fixtures and workspace skel
 - [ ] Spec coverage is complete: contracts, manifest, `AnalysisSnapshot`, stale/concurrency handling, versioned `FilterExpr`, observation policy schema, black-box schema, capability registry, process artifacts, deterministic seeds, and CI all map to a task above.
 - [ ] Incomplete-step scan is clean: every step includes concrete code, schema, command, or expected result.
 - [ ] Type consistency is clean: every later task only uses names introduced earlier in this plan, especially `DistributionRequestV1`, `FilterExprV1`, `AnalysisSnapshotV1`, `ObservationContributionPolicyV1`, `BlackBoxCaseV1`, `DistributionLoadStatusV1`, and `DistributionWorkspaceBootstrapV1`.
-- [ ] No phase-1 math slipped in: there is no histogram, fit, Q-Q, interval, or capability statistic implementation in this plan.
+- [ ] No phase-1 math slipped in: chart-data types and the Graph Builder adapter contain no histogram, quantile, fit, Q-Q, interval, or capability calculation.
 - [ ] No third-party output slipped in: the black-box path only stores hashes, enum codes, structured observations, and process metadata.
 
 ---
@@ -699,8 +713,8 @@ git commit -m "feat(distribution): add deterministic fixtures and workspace skel
 - Gate 3: 未知版本、损坏条目和缺失源数据都被隔离成显式状态，不会清空健康项目内容。
 - Gate 4: `AnalysisSnapshotV1` 能阻止陈旧结果和并发交叉写入，`DistributionProgressV1` 和 `DistributionCancelTokenV1` 只作为控制平面数据流动。
 - Gate 5: capability registry 只暴露已实现方法，`BlackBoxCaseV1` 不接受自由文本产品输出。
-- Gate 6: 固定种子 golden、Playwright component test、FilterExpr property test、`npm run build` 和 `cargo test` 全部通过，三平台 CI workflow 能复现本地结果。
+- Gate 6: 固定种子 golden、Graph Builder adapter preservation test、Playwright component test、FilterExpr property test、`npm run build` 和 `cargo test` 全部通过，三平台 CI workflow 能复现本地结果。
 
 ## Phase Exit Criteria
 
-Phase 0 完成时，仓库里必须已经有分布分析的版本化合同、空系统路径、项目归档 round-trip、unknown version preservation、corruption isolation、stale snapshot rejection、capability allowlist、sanitized black-box schema、来源台账、法律流程记录、固定种子 golden runner，以及可以在 CI 上复现的最小骨架。此时不允许出现任何统计实现、拟合实现、图形实现或第三方输出复制。
+Phase 0 完成时，仓库里必须已经有分布分析的版本化合同、chart-data union、无统计计算的 Graph Builder adapter、空系统路径、项目归档 round-trip、unknown version preservation、corruption isolation、stale snapshot rejection、capability allowlist、sanitized black-box schema、来源台账、法律流程记录、固定种子 golden runner，以及可以在 CI 上复现的统计工作区骨架。此时不允许出现任何统计公式、拟合算法、独立图表引擎或第三方输出复制。
