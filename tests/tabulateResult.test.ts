@@ -207,3 +207,80 @@ assert.deepEqual(useTabulateStore.getState().items, []);
 assert.equal(useTabulateStore.getState().counter, 0);
 
 console.log("tabulateResult helpers OK");
+
+// --- Export payload tests (Task 1) ---
+{
+  // Minimal item/result to exercise export builder
+  const exportItem = {
+    rowFields: ["Region"],
+    columnFields: ["Zone", "Channel"],
+    statistics: [
+      { id: "s1", kind: "mean", field: "Sales" },
+      { id: "s2", kind: "count", field: "Sales" },
+    ],
+  };
+
+  const exportResult = {
+    rowMembers: [["North"], ["South"]],
+    columnMembers: [["East", "Retail"], ["Missing", "Retail"]],
+    statistics: exportItem.statistics,
+    cells: [10, 2, null, 1, 20, 4, 30, 6],
+    rowTotals: [],
+    columnTotals: [],
+    grandTotals: [],
+  };
+
+  // require helpers to be exported; will fail until implemented
+  // dynamic import to avoid top-level alias resolution issues in some runners
+  const { buildTabulateExportRequest, canAssignTabulateField } = await import("../src/components/tabulate/tabulateResult.ts");
+
+  assert.deepEqual(buildTabulateExportRequest(exportItem, exportResult, {
+    tableName: "Sales Summary",
+    missingLabel: "Missing",
+    statisticLabel: (statistic: { kind: string }) => statistic.kind === "mean" ? "Mean" : "Count",
+  }), {
+    name: "Sales Summary",
+    columnNames: [
+      "Region",
+      "East - Retail - Mean - Sales",
+      "East - Retail - Count - Sales",
+      "Missing - Retail - Mean - Sales",
+      "Missing - Retail - Count - Sales",
+    ],
+    columnTypes: ["VARCHAR", "DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE"],
+    rows: [["North", 10, 2, null, 1], ["South", 20, 4, 30, 6]],
+  });
+
+  assert.equal(canAssignTabulateField("rows", ["Region"], "Store"), false);
+  assert.equal(canAssignTabulateField("columns", ["Region"], "Store"), true);
+
+  // no rows -> empty rows
+  const noRowResult = { ...exportResult, rowMembers: [] };
+  const noRowsPayload = buildTabulateExportRequest(exportItem, noRowResult, {
+    tableName: "T",
+    missingLabel: "Missing",
+    statisticLabel: () => "S",
+  });
+  assert.deepEqual(noRowsPayload.rows, []);
+
+  // no columns -> only row label column
+  const noColResult = { ...exportResult, columnMembers: [] };
+  const noColsPayload = buildTabulateExportRequest(exportItem, noColResult, {
+    tableName: "T",
+    missingLabel: "Missing",
+    statisticLabel: () => "S",
+  });
+  assert.deepEqual(noColsPayload.columnNames, ["Region"]);
+  assert.deepEqual(noColsPayload.rows, [["North"], ["South"]]);
+
+  // duplicate generated names receive stable suffixes
+  const dupColsResult = { ...exportResult, columnMembers: [["East", "Retail"], ["East", "Retail"]] };
+  const dupPayload = buildTabulateExportRequest(exportItem, dupColsResult, {
+    tableName: "T",
+    missingLabel: "Missing",
+    statisticLabel: (s: { kind: string }) => s.kind === "mean" ? "Mean" : "Count",
+  });
+  // Expect second generated column header to receive " (2)" for duplicates
+  assert.ok(dupPayload.columnNames[1].endsWith("Mean - Sales") );
+  assert.ok(dupPayload.columnNames[3].match(/\(2\)$/));
+}

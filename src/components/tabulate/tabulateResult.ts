@@ -114,3 +114,96 @@ function samePrefix(
   }
   return true;
 }
+
+// --- Tabulate export helpers (Task 1) ---
+import type { CreateTableFromRowsRequest } from "../../types/data";
+
+export function canAssignTabulateField(role: string, currentFields: readonly string[], fieldName: string): boolean {
+  if (role === "rows") {
+    // allow at most one row field
+    return currentFields.length === 0 && !currentFields.includes(fieldName);
+  }
+  if (role === "columns") {
+    // columns may accept multiple, but avoid duplicate assignment
+    return !currentFields.includes(fieldName);
+  }
+  return false;
+}
+
+export function buildTabulateExportRequest(
+  item: { rowFields?: readonly string[]; statistics?: readonly any[] },
+  result: { rowMembers?: readonly (readonly any[])[]; columnMembers?: readonly (readonly any[])[]; statistics?: readonly any[]; cells?: readonly any[] },
+  options: { tableName: string; missingLabel: string; statisticLabel: (statistic: any) => string },
+): CreateTableFromRowsRequest {
+  const rowFields = item.rowFields ?? [];
+  const statistics = result.statistics ?? item.statistics ?? [];
+  const columnMembers = result.columnMembers ?? [];
+  const rowMembers = result.rowMembers ?? [];
+  const cells = result.cells ?? [];
+
+  const dedupe = new Map<string, number>();
+  const columnNames: string[] = [];
+  const columnTypes: string[] = [];
+
+  function uniqueName(base: string): string {
+    const count = dedupe.get(base) ?? 0;
+    if (count === 0) {
+      dedupe.set(base, 1);
+      return base;
+    }
+    const next = count + 1;
+    dedupe.set(base, next);
+    return `${base} (${next})`;
+  }
+
+  // optional first column for row label
+  if (rowFields.length > 0) {
+    columnNames.push(rowFields[0]);
+    columnTypes.push("VARCHAR");
+  }
+
+  const columnCount = columnMembers.length;
+  const statisticCount = statistics.length;
+
+  for (let c = 0; c < columnCount; c += 1) {
+    const member = columnMembers[c] ?? [];
+    for (let s = 0; s < statisticCount; s += 1) {
+      const stat = statistics[s];
+      const memberLabels = member.map((m) => (m == null ? options.missingLabel : String(m)));
+      const parts = [...memberLabels, options.statisticLabel(stat), stat.field];
+      const base = parts.join(" - ");
+      columnNames.push(uniqueName(base));
+      columnTypes.push("DOUBLE");
+    }
+  }
+
+  const rows: Array<Array<string | number | boolean | null>> = [];
+
+  for (let r = 0; r < rowMembers.length; r += 1) {
+    const row: Array<string | number | boolean | null> = [];
+    if (rowFields.length > 0) {
+      const label = rowMembers[r]?.[0];
+      row.push(label == null ? null : String(label));
+    }
+
+    for (let c = 0; c < columnCount; c += 1) {
+      for (let s = 0; s < statisticCount; s += 1) {
+        const idx = cellIndex(r, c, s, columnCount, statisticCount);
+        let v = cells[idx];
+        if (v === undefined || (typeof v === "number" && Number.isNaN(v))) {
+          v = null;
+        }
+        row.push(v as string | number | boolean | null);
+      }
+    }
+
+    rows.push(row);
+  }
+
+  return {
+    name: options.tableName,
+    columnNames,
+    columnTypes,
+    rows,
+  };
+}
