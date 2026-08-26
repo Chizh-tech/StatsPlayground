@@ -222,4 +222,72 @@ const smoothVertices = smoothSeries.data as number[][];
 assert.ok(smoothVertices[4][2] < 100);
 assert.equal(Number.isNaN(smoothVertices[8][2]), true);
 
+const contourData: GraphData = {
+  columns: ["x", "y", "z"],
+  rows: [
+    [0, 0, 0], [1, 0, 1], [2, 0, 2],
+    [0, 1, 1], [1, 1, 2], [2, 1, 3],
+    [0, 2, 2], [1, 2, 3], [2, 2, 4],
+  ],
+};
+
+const contourResult = build3DOption({
+  encoding: spec.encoding,
+  elements: [{
+    kind: "contour3d",
+    options: { stat: "mean", smoothness: 0, levels: 3 },
+  }],
+}, contourData, theme);
+assert.ok(contourResult.option);
+const contourSeries = (contourResult.option.series as Array<Record<string, unknown>>)
+  .filter((item) => String(item.name).includes("__contour_"));
+assert.equal(contourSeries.length, 3);
+assert.ok(contourSeries.every((item) => item.type === "line3D"));
+assert.ok(contourSeries.every((item) => {
+  const points = item.data as number[][];
+  return points.length >= 2 && points.every((point) => point.every(Number.isFinite));
+}));
+const contourLevels = contourSeries.map((item) => Number(String(item.name).split("__contour_")[1]?.split("_")[0]));
+assert.deepEqual(contourLevels, [1, 2, 3]);
+assert.ok(contourSeries.every((item, index) => {
+  const points = item.data as number[][];
+  return points.every((point) => point[2] > contourLevels[index]);
+}));
+
+const groupedContourData: GraphData = {
+  columns: ["x", "y", "z", "group"],
+  rows: [
+    ...contourData.rows.map((row) => [...row, "A"]),
+    ...contourData.rows.map((row) => [row[0], row[1], Number(row[2]) + 10, "B"]),
+  ],
+};
+const groupedContourResult = build3DOption({
+  encoding: {
+    ...spec.encoding,
+    overlay: { name: "group", type: "nominal" },
+  },
+  elements: [
+    { kind: "surface", options: { stat: "mean", smoothness: 0 } },
+    { kind: "contour3d", options: { stat: "mean", smoothness: 0, levels: 3 } },
+  ],
+  styles: {
+    A: { gradient: { color: "#cc0000" } },
+    B: { gradient: { color: "#0000cc" } },
+  },
+  hiddenGroups: ["B"],
+}, groupedContourData, theme);
+assert.ok(groupedContourResult.option);
+const groupedSeries = groupedContourResult.option.series as Array<Record<string, unknown>>;
+const visibleContours = groupedSeries.filter((item) => String(item.name).includes("__contour_"));
+assert.equal(visibleContours.length, 3);
+assert.ok(visibleContours.every((item) => String(item.name).startsWith("A__contour_")));
+assert.ok(visibleContours.every((item) => (item.lineStyle as Record<string, unknown>).color === "#cc0000"));
+assert.equal(groupedSeries.filter((item) => item.type === "surface").length, 1);
+const contourIndexes = new Set(groupedSeries
+  .map((item, index) => String(item.name).includes("__contour_") ? index : -1)
+  .filter((index) => index >= 0));
+const visualMaps = groupedContourResult.option.visualMap as Array<Record<string, unknown>>;
+assert.ok(visualMaps.every((visualMap) =>
+  (visualMap.seriesIndex as number[]).every((index) => !contourIndexes.has(index))));
+
 console.log("threeD regressions passed");

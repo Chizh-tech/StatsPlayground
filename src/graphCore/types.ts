@@ -34,6 +34,7 @@ export type ElementKind =
   | "smoother"     // 平滑曲线
   | "fitline"      // 拟合线（多项式 / 稳健 Cauchy + 置信区间 + 统计量）
   | "surface"      // 3D 曲面（仅 3D 模式；由 X/Y/Z 三通道构建）
+  | "contour3d"    // 3D 等高线（仅 3D 模式；由 X/Y/Z 三通道构建）
   | "scatter3d";   // 3D 散点（仅 3D 模式；由 X/Y/Z 三通道构建）
 
 /** 平滑器配置 */
