@@ -22,6 +22,12 @@ interface Segment {
   points: [SegmentPoint, SegmentPoint];
 }
 
+interface Intersection {
+  point: SegmentPoint;
+  edge: number;
+  key: string;
+}
+
 const MIN_LEVELS = 3;
 const MAX_LEVELS = 20;
 const MAX_SEGMENTS = 20_000;
@@ -134,7 +140,7 @@ function extractCellSegments(
     return [];
   }
 
-  const intersections: Array<{ point: SegmentPoint; edge: number }> = [];
+  const intersections: Intersection[] = [];
   pushIntersection(intersections, intersectEdge(x0, y0, bottomLeft, x1, y0, bottomRight, level), 0, pointKey);
   pushIntersection(intersections, intersectEdge(x1, y0, bottomRight, x1, y1, topRight, level), 1, pointKey);
   pushIntersection(intersections, intersectEdge(x0, y1, topLeft, x1, y1, topRight, level), 2, pointKey);
@@ -144,30 +150,47 @@ function extractCellSegments(
     return [];
   }
 
-  const ordered = intersections
-    .slice()
-    .sort((left, right) => left.edge - right.edge)
-    .map((entry) => entry.point);
-
-  if (ordered.length === 2) {
-    return [{ points: [ordered[0], ordered[1]] }];
+  const ordered = intersections.slice().sort((left, right) => left.edge - right.edge);
+  const unique = new Map<string, Intersection>();
+  const counts = new Map<string, number>();
+  for (const intersection of ordered) {
+    if (!unique.has(intersection.key)) {
+      unique.set(intersection.key, intersection);
+    }
+    counts.set(intersection.key, (counts.get(intersection.key) ?? 0) + 1);
   }
 
-  if (ordered.length === 3) {
-    return [{ points: [ordered[0], ordered[2]] }];
+  const points = [...unique.values()].map((entry) => entry.point);
+
+  if (points.length === 2) {
+    return [{ points: [points[0], points[1]] }];
   }
 
-  if (ordered.length >= 4) {
+  if (points.length === 3) {
+    const repeated = ordered.find((entry) => (counts.get(entry.key) ?? 0) > 1);
+    if (!repeated) {
+      return [];
+    }
+
+    const nonVertex = ordered.filter((entry) => entry.key !== repeated.key);
+    if (nonVertex.length !== 2) {
+      return [];
+    }
+
+    return [{ points: [nonVertex[0].point, nonVertex[1].point] }];
+  }
+
+  if (points.length >= 4) {
     const centerValue = (bottomLeft + bottomRight + topLeft + topRight) / 4;
     if (centerValue >= level) {
       return [
-        { points: [ordered[0], ordered[1]] },
-        { points: [ordered[2], ordered[3]] },
+        { points: [ordered[0].point, ordered[1].point] },
+        { points: [ordered[2].point, ordered[3].point] },
       ];
     }
     return [
-      { points: [ordered[1], ordered[2]] },
-      { points: [ordered[3], ordered[0]] },
+      { points: [ordered[1].point, ordered[2].point] },
+      { points: [ordered[3].point, ordered[0].point] },
     ];
   }
 
@@ -175,7 +198,7 @@ function extractCellSegments(
 }
 
 function pushIntersection(
-  intersections: Array<{ point: SegmentPoint; edge: number }>,
+  intersections: Intersection[],
   point: SegmentPoint | null,
   edge: number,
   pointKey: (point: SegmentPoint) => string,
@@ -183,11 +206,7 @@ function pushIntersection(
   if (!point) {
     return;
   }
-  const key = pointKey(point);
-  if (intersections.some((entry) => pointKey(entry.point) === key)) {
-    return;
-  }
-  intersections.push({ point, edge });
+  intersections.push({ point, edge, key: pointKey(point) });
 }
 
 function intersectEdge(
@@ -347,11 +366,22 @@ function addAdjacency(adjacency: Map<string, number[]>, key: string, segmentInde
 }
 
 function createPointKeyer(xs: readonly number[], ys: readonly number[]): (point: SegmentPoint) => string {
-  const xOrigin = Math.min(...xs);
-  const yOrigin = Math.min(...ys);
+  const xOrigin = findMinimum(xs);
+  const yOrigin = findMinimum(ys);
   const xQuantum = chooseQuantum(xs);
   const yQuantum = chooseQuantum(ys);
   return (point: SegmentPoint) => `${Math.round((point.x - xOrigin) / xQuantum)}:${Math.round((point.y - yOrigin) / yQuantum)}`;
+}
+
+function findMinimum(values: readonly number[]): number {
+  let minimum = Number.POSITIVE_INFINITY;
+  for (const value of values) {
+    if (value < minimum) {
+      minimum = value;
+    }
+  }
+
+  return Number.isFinite(minimum) ? minimum : 0;
 }
 
 function chooseQuantum(values: readonly number[]): number {
