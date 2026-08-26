@@ -56,6 +56,7 @@ import {
 } from "./multivariateInteractions";
 import { GraphRuntime, type GraphRuntimeState } from "./GraphRuntime";
 import { buildGraphRuntimeModel, FILL_PALETTE, LINE_PALETTE, POINT_PALETTE, shade, SHADE_RATIO_FILL, SHADE_RATIO_LINE, SHADE_RATIO_POINT, STYLE_COLORS } from "./graphRuntimeModel";
+import { resolveStableGroupKeys } from "./graphGroupOrder";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -424,8 +425,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       }
     }
 
-    return out.length > 0 ? out : [DEFAULT_GROUP_KEY];
-  }, [encoding.overlay, frame]);
+    const stableKeys = resolveStableGroupKeys(
+      out,
+      frame.dictionaries.group ?? [],
+      valueOrders[encoding.overlay.name],
+    );
+    return stableKeys.length > 0 ? stableKeys : [DEFAULT_GROUP_KEY];
+  }, [encoding.overlay, frame, valueOrders]);
 
   const effectiveStyles = useMemo<GroupStyleMap>(
     () =>
