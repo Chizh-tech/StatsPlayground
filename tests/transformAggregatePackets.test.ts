@@ -29,7 +29,6 @@ Object.defineProperty(globalThis, "localStorage", {
 });
 
 const { buildGraph } = await import("../src/graphCore/transform.ts");
-const { drawRawPoints } = await import("../src/graphCore/rawPoints.ts");
 
 {
   const transformSource = readFileSync(resolve(TEST_FILE_DIR, "../src/graphCore/transform.ts"), "utf8");
@@ -236,10 +235,8 @@ for (const mode of ["uniform", "normal"] as const) {
   };
   const built = buildGraph(pointsSpec, data, theme, undefined, typedDateFrame());
   const panel = built.panels[0];
-  assert.ok(panel.rawPoints, "standalone date points must expose a Canvas descriptor");
   const xAxis = panel.option.xAxis as { type?: string; data?: string[] };
   assert.equal(xAxis.type, "time");
-  assert.deepEqual(panel.rawPoints?.xCategories, ["2026-01-01", "2026-01-02"]);
   assert.equal(xAxis.data, undefined);
   assert.ok(Number(xAxis.min) <= Date.parse("2026-01-01"));
   assert.ok(Number(xAxis.max) >= Date.parse("2026-01-02"));
@@ -377,8 +374,9 @@ for (const mode of ["uniform", "normal"] as const) {
     ],
   };
   const panel = buildGraph(spec, data, theme, undefined, typedDateFrame([boxPacket])).panels[0];
-  assert.ok(panel.rawPoints, "points + boxplot must retain the Canvas points layer");
-  assert.ok(panelSeries(panel.option as Record<string, unknown>).some((entry) => entry.type === "boxplot"));
+  const series = panelSeries(panel.option as Record<string, unknown>);
+  assert.ok(series.some((entry) => entry.type === "scatter" && Array.isArray(entry.data) && entry.data.length > 0));
+  assert.ok(series.some((entry) => entry.type === "boxplot"));
 }
 
 for (const element of [
@@ -444,11 +442,6 @@ for (const element of [
     undefined,
     typedGroupedNumericFrame(),
   ).panels[0];
-  assert.equal(panel.rawPoints?.groupColors?.[0], "rgba(18, 52, 86, 1)");
-  assert.match(panel.rawPoints?.groupColors?.[1] ?? "", /^rgba\(/);
-  assert.deepEqual(panel.rawPoints?.groupPointSizes, [8, 4]);
-  assert.deepEqual(Array.from(panel.rawPoints?.hiddenGroupCodes ?? []), [1]);
-  assert.ok(panel.rawPoints?.chunks.every((chunk) => chunk.groupCodes instanceof Uint32Array));
   const pointSeries = panelSeries(panel.option as Record<string, unknown>)
     .filter((entry) => entry.type === "scatter");
   assert.deepEqual(pointSeries.map((entry) => entry.name), ["East"]);
@@ -584,7 +577,11 @@ for (const element of [
     undefined,
     typedNumericFrame(),
   ).panels[0];
-  assert.deepEqual(panel.rawPoints?.jitter, { mode: "normal", limit: 0.75 });
+  const pointItems = panelSeries(panel.option as Record<string, unknown>)
+    .filter((entry) => entry.type === "scatter")
+    .flatMap((entry) => entry.data as Array<{ symbolOffset: [number, number] }>);
+  assert.ok(pointItems.length > 0);
+  assert.ok(pointItems.some((item) => item.symbolOffset[0] !== 0));
 }
 
 {
@@ -646,7 +643,12 @@ for (const element of [
       undefined,
       typedNumericFrame(),
     ).panels[0];
-    assert.ok(panel.rawPoints, `points + ${overlay.kind} must retain Canvas points`);
+    assert.ok(
+      panelSeries(panel.option as Record<string, unknown>).some(
+        (entry) => entry.type === "scatter" && Array.isArray(entry.data) && entry.data.length > 0,
+      ),
+      `points + ${overlay.kind} must retain ECharts points`,
+    );
     assert.ok(
       panelSeries(panel.option as Record<string, unknown>).some(
         (entry) => Array.isArray(entry.data) && entry.data.length > 0,
@@ -702,7 +704,6 @@ for (const element of [
       .find((entry) => entry.type === "scatter");
     assert.ok(scatter, `facet ${panel.title} must emit frame-backed scatter`);
     assert.equal((scatter.data as unknown[]).length, 3, `facet ${panel.title} must contain only its points`);
-    assert.ok(panel.rawPoints, `facet ${panel.title} must retain Canvas output until Task 3`);
   }
 }
 
@@ -727,11 +728,13 @@ for (const element of [
         binWidth: 6,
         totalCount: 6,
         bins: [
-          { binStart: 0, binEnd: 6, count: 3 },
-          { binStart: 6, binEnd: 12, count: 3 },
+          { category: "A", binStart: 0, binEnd: 6, count: 2 },
+          { category: "A", binStart: 6, binEnd: 12, count: 1 },
+          { category: "B", binStart: 0, binEnd: 6, count: 1 },
+          { category: "B", binStart: 6, binEnd: 12, count: 2 },
         ],
       },
-      seriesType: "bar",
+      seriesType: "custom",
     },
     {
       name: "heatmap",
@@ -764,9 +767,10 @@ for (const element of [
     },
   ];
   for (const overlay of packetOverlays) {
+    const histogramMode = overlay.name === "histogram";
     const spec: GraphSpec = {
       encoding: {
-        x: { name: "x", type: "continuous" },
+        x: { name: "x", type: histogramMode ? "nominal" : "continuous" },
         y: { name: "y", type: "continuous" },
       },
       elements: [
@@ -774,14 +778,32 @@ for (const element of [
         overlay.element,
       ],
     };
+    const numericFrame = typedNumericFrame([overlay.packet]);
+    const frame = histogramMode
+      ? {
+        ...numericFrame,
+        dictionaries: { ...numericFrame.dictionaries, x: ["A", "B"] },
+        rawChunks: numericFrame.rawChunks.map((chunk) => ({
+          ...chunk,
+          xValues: new Uint32Array([0, 0, 0, 1, 1, 1]),
+        })),
+      }
+      : numericFrame;
     const panel = buildGraph(
       spec,
       frameBackedAggregateData(["x", "y"], 6),
       theme,
       undefined,
-      typedNumericFrame([overlay.packet]),
+      frame,
     ).panels[0];
-    assert.ok(panel.rawPoints, `points + ${overlay.name} must retain Canvas points`);
+    assert.ok(
+      panelSeries(panel.option as Record<string, unknown>).some(
+        (entry) => entry.type === "scatter" && Array.isArray(entry.data) && entry.data.length > 0,
+      ),
+      `points + ${overlay.name} must retain ECharts points; emitted: ${panelSeries(panel.option as Record<string, unknown>)
+        .map((entry) => `${String(entry.type)}:${Array.isArray(entry.data) ? entry.data.length : "?"}`)
+        .join(", ")}`,
+    );
     assert.ok(
       panelSeries(panel.option as Record<string, unknown>).some(
         (entry) => entry.type === overlay.seriesType && Array.isArray(entry.data) && entry.data.length > 0,
@@ -790,11 +812,13 @@ for (const element of [
     );
     const xAxis = panel.option.xAxis as { min?: number; max?: number };
     const yAxis = panel.option.yAxis as { min?: number; max?: number };
-    assert.deepEqual(
-      { min: xAxis.min, max: xAxis.max },
-      { min: 1, max: 6 },
-      `points + ${overlay.name} must preserve the complete frame X extent`,
-    );
+    if (!histogramMode) {
+      assert.deepEqual(
+        { min: xAxis.min, max: xAxis.max },
+        { min: 1, max: 6 },
+        `points + ${overlay.name} must preserve the complete frame X extent`,
+      );
+    }
     if (overlay.name === "heatmap") {
       assert.deepEqual(
         { min: yAxis.min, max: yAxis.max },
@@ -862,13 +886,6 @@ for (const element of [
   const wrapPanel = built.panels.find((panel) => panel.title.includes("W2"));
   assert.ok(wrapPanel, "expected wrapped panel for W2 facet value");
 
-  const sourceByRowId = wrapPanel?.rawPoints?.sourceByRowId;
-  assert.equal(sourceByRowId?.get(101n), "m1");
-  assert.equal(sourceByRowId?.get(102n), undefined, "invalid source rows must not receive melt provenance");
-
-  const facetMask = wrapPanel?.rawPoints?.chunks[0]?.facetMask;
-  assert.ok(facetMask, "facet mask must be emitted for wrapped panel");
-  assert.equal(facetMask?.[0], 0b00000010);
   const scatter = panelSeries(wrapPanel?.option as Record<string, unknown>)
     .find((entry) => entry.type === "scatter");
   assert.ok(scatter);
@@ -935,13 +952,14 @@ for (const element of [
   const wrapPanel = built.panels.find((panel) => panel.title.includes("W2"));
   assert.ok(wrapPanel, "expected wrapped panel for cross-byte wrap value");
 
-  const sourceByRowId = wrapPanel?.rawPoints?.sourceByRowId;
-  assert.equal(sourceByRowId?.get(9n), "m2");
-  assert.equal(sourceByRowId?.get(10n), undefined);
-
-  const facetMask = wrapPanel?.rawPoints?.chunks[0]?.facetMask;
-  assert.ok(facetMask);
-  assert.equal(facetMask?.[1] & 0b00000001, 0b00000001);
+  const scatter = panelSeries(wrapPanel?.option as Record<string, unknown>)
+    .find((entry) => entry.type === "scatter");
+  assert.ok(scatter);
+  const picks = (scatter.data as Array<{ __pick?: { rowId: number; colName: string } }>)
+    .map((item) => item.__pick);
+  assert.deepEqual(picks, [
+    { rowId: 9, colName: "m2" },
+  ]);
 }
 
 {
@@ -1494,17 +1512,14 @@ for (const element of [
   };
 
   const built = buildGraph(spec, data, theme, undefined, frame);
-  const descriptor = built.panels[0].rawPoints;
-  assert.ok(descriptor, "raw descriptor should exist for non-summary points");
-
-  const drawn = drawRawPoints(descriptor!, {
-    plotRect: { x: 0, y: 0, width: 64, height: 64 },
-    x: { kind: "categorical", pixelsByCategory: new Float64Array([10]) },
-    y: { kind: "numeric", scale: -1, offset: 32 },
-  });
-
-  const colNames = new Set(drawn.points.map((point) => point.colName));
-  assert.deepEqual(colNames, new Set(["m1", "m2"]), "raw point picks must preserve typed melted source identity from source codes");
+  const scatter = panelSeries(built.panels[0].option as Record<string, unknown>)
+    .find((entry) => entry.type === "scatter");
+  assert.ok(scatter);
+  const colNames = new Set(
+    (scatter.data as Array<{ __pick?: { colName: string } }>)
+      .map((item) => item.__pick?.colName),
+  );
+  assert.deepEqual(colNames, new Set(["m1", "m2"]), "ECharts point picks must preserve typed melted source identity from source codes");
 }
 
 {
@@ -1578,14 +1593,10 @@ for (const element of [
   assert.equal(built.cols, 2);
   assert.equal(built.rows, 2);
   for (const panel of built.panels) {
-    assert.ok(panel.rawPoints, "frame-backed faceted panel should expose a panel-local raw descriptor");
-    const drawn = drawRawPoints(panel.rawPoints!, {
-      plotRect: { x: 0, y: 0, width: 64, height: 64 },
-      x: { kind: "categorical", pixelsByCategory: new Float64Array([10]) },
-      y: { kind: "numeric", scale: -1, offset: 32 },
-    });
-    assert.equal(drawn.points.length, 1, "each facet panel should keep only its local typed rows via facet mask");
     const series = panelSeries(panel.option as Record<string, unknown>);
     assert.ok(series.length > 0, "facet panel should render packet-backed series");
+    const scatter = series.find((entry) => entry.type === "scatter");
+    assert.ok(scatter);
+    assert.equal((scatter.data as unknown[]).length, 1, "each facet panel should keep only its local typed points");
   }
 }

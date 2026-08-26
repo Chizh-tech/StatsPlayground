@@ -11,7 +11,6 @@ import { DEFAULT_GROUP_KEY } from "./types.ts";
 import { buildAxisCommon, type GraphTheme } from "./theme.ts";
 import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand.ts";
 import type { BoxPlotPacket, GraphDataFrame, GraphAggregatePacket, HeatmapPacket, HistogramPacket, SummaryPacket } from "../types/graphData.ts";
-import type { RawPointJitter, RawPointPanelDescriptor } from "./rawPoints.ts";
 import { buildFrameScatterItems, type FrameScatterItem } from "./frameScatter.ts";
 import {
   computeJitterOffsets as computeStableJitterOffsets,
@@ -3199,6 +3198,19 @@ function buildSingleOption(
         });
       });
 
+      if (frame) {
+        const frameScatter = buildFrameBackedScatterSeries(
+          spec,
+          frame,
+          panelFacet,
+          theme,
+          valueOrders,
+          sharedRanges,
+          resolvedFrameScatterCoordinates,
+        );
+        series.push(...frameScatter.series);
+      }
+
       const refCarrierY = buildRefLinesCarrier(normalizeRefLinesY(spec.refLinesY), spec.autoSpecY, theme, "y");
       if (refCarrierY) series.push(refCarrierY);
       const refCarrierX = buildRefLinesCarrier(normalizeRefLinesX(spec.refLinesX), spec.autoSpecX, theme, "x");
@@ -6117,9 +6129,6 @@ export interface BuiltGraph {
   panels: {
     title: string;
     option: EChartsOption;
-    /** Optional typed-buffer raw-point payload for the panel-local canvas
-     *  layer. Null means "keep legacy ECharts scatter rendering only". */
-    rawPoints: RawPointPanelDescriptor | null;
     /** Per-panel facet labels (null when that axis isn't faceted). Used
      *  by the renderer to draw row / column header strips around the grid. */
     groupXValue: string | null;
@@ -6421,145 +6430,6 @@ function computeSharedRanges(
   return out;
 }
 
-function buildFrameBackedRawDescriptor(
-  spec: GraphSpec,
-  frame: GraphDataFrame | undefined,
-  panelFacet: PanelFacetContext | undefined,
-  theme: GraphTheme,
-  valueOrders?: Record<string, string[]>,
-): RawPointPanelDescriptor | null {
-  if (!frame || frame.rawChunks.length === 0) return null;
-  const yName = spec.encoding.y?.name;
-  if (!yName) return null;
-
-  const pointsElement = spec.elements.find(
-    (el) => el.kind === "points" && el.enabled !== false,
-  );
-  if (!pointsElement) return null;
-  const summaryStat = getOpt<string>(pointsElement.options, "summaryStat", "none");
-  if (summaryStat !== "none") return null;
-
-  const jitterModeRaw = getOpt<string>(pointsElement.options, "jitter", "stacked");
-  const jitterMode = jitterModeRaw === "auto" ? "stacked" : jitterModeRaw;
-  const jitterLimit = Math.max(
-    0,
-    Math.min(1, getOpt<number>(pointsElement.options, "jitterLimit", 0.5)),
-  );
-  const jitter: RawPointJitter = jitterMode === "uniform" || jitterMode === "normal"
-    ? { mode: jitterMode, limit: jitterLimit }
-    : { mode: "stacked" as const, limit: jitterLimit };
-
-  const grouping = spec.encoding.color || spec.encoding.overlay;
-  const groupDictionary = frame.dictionaries.group ?? [];
-  const orderedGroups = grouping
-    ? applyValueOrder([...groupDictionary], valueOrders?.[grouping.name])
-    : [];
-  const defaultStyle = resolveGroupStyle(
-    DEFAULT_GROUP_KEY,
-    theme.categorical[0],
-    false,
-    theme,
-    spec.styles,
-  );
-  const groupStyles = groupDictionary.map((group) => {
-    const orderedIndex = Math.max(0, orderedGroups.indexOf(group));
-    const color = theme.categorical[orderedIndex % theme.categorical.length];
-    return resolveGroupStyle(group, color, true, theme, spec.styles);
-  });
-  const hiddenLabels = new Set(spec.hiddenGroups ?? []);
-  const hiddenGroupCodes = new Set<number>();
-  groupDictionary.forEach((group, code) => {
-    if (hiddenLabels.has(group)) hiddenGroupCodes.add(code);
-  });
-
-  let sourceByRowId: Map<bigint, string> | undefined;
-  const sourceDict = frame.dictionaries.source;
-  if (sourceDict && sourceDict.length > 0) {
-    sourceByRowId = new Map<bigint, string>();
-    for (const chunk of frame.rawChunks) {
-      const sourceCodes = chunk.sourceCodes
-        ?? (chunk.roleVectors?.source instanceof Uint32Array ? chunk.roleVectors.source : undefined);
-      if (!sourceCodes) continue;
-      const n = Math.min(chunk.rowIds.length, sourceCodes.length);
-      for (let row = 0; row < n; row += 1) {
-        if (!bitIsSet(chunk.validity.source, row)) continue;
-        const sourceCode = sourceCodes[row] >>> 0;
-        const source = sourceDict[sourceCode] ?? "";
-        if (!source) continue;
-        sourceByRowId.set(chunk.rowIds[row], source);
-      }
-    }
-  }
-
-  const matchesFacet = (
-    chunk: GraphDataFrame["rawChunks"][number],
-    row: number,
-  ): boolean => {
-    if (!panelFacet) return true;
-    if (panelFacet.groupXValue !== null) {
-      const facetXCodes = chunk.facetXCodes
-        ?? (chunk.roleVectors?.groupX instanceof Uint32Array ? chunk.roleVectors.groupX : undefined);
-      if (!facetXCodes || !bitIsSet(chunk.validity.facetX, row)) return false;
-      const code = facetXCodes[row] >>> 0;
-      const label = frame.dictionaries.facetX?.[code];
-      if (label !== panelFacet.groupXValue) return false;
-    }
-    if (panelFacet.groupYValue !== null) {
-      const facetYCodes = chunk.facetYCodes
-        ?? (chunk.roleVectors?.groupY instanceof Uint32Array ? chunk.roleVectors.groupY : undefined);
-      if (!facetYCodes || !bitIsSet(chunk.validity.facetY, row)) return false;
-      const code = facetYCodes[row] >>> 0;
-      const label = frame.dictionaries.facetY?.[code];
-      if (label !== panelFacet.groupYValue) return false;
-    }
-    if (panelFacet.wrapValue != null) {
-      const wrapCodes = chunk.wrapCodes
-        ?? (chunk.roleVectors?.wrap instanceof Uint32Array ? chunk.roleVectors.wrap : undefined);
-      if (!wrapCodes || !bitIsSet(chunk.validity.wrap, row)) return false;
-      const code = wrapCodes[row] >>> 0;
-      const label = frame.dictionaries.wrap?.[code];
-      if (label !== panelFacet.wrapValue) return false;
-    }
-    return true;
-  };
-
-  const buildFacetMask = (
-    chunk: GraphDataFrame["rawChunks"][number],
-  ): Uint8Array | undefined => {
-    if (!panelFacet) return undefined;
-    const byteLength = Math.max(1, Math.ceil(chunk.rowCount / 8));
-    const out = new Uint8Array(byteLength);
-    for (let row = 0; row < chunk.rowCount; row += 1) {
-      if (!matchesFacet(chunk, row)) continue;
-      out[row >> 3] |= 1 << (row & 7);
-    }
-    return out;
-  };
-
-  return {
-    colName: yName,
-    sourceByRowId,
-    xCategories: frame.dictionaries.x,
-    defaultColor: withAlpha(defaultStyle.point.fillColor, defaultStyle.point.opacity),
-    defaultPointSize: defaultStyle.point.size,
-    groupColors: groupStyles.map((style) => withAlpha(style.point.fillColor, style.point.opacity)),
-    groupPointSizes: groupStyles.map((style) => style.point.size),
-    hiddenGroupCodes,
-    jitter,
-    chunks: frame.rawChunks.map((chunk) => ({
-      xValues: chunk.xValues,
-      yValues: chunk.yValues,
-      rowIds: chunk.rowIds,
-      xValidity: chunk.validity.x,
-      yValidity: chunk.validity.y,
-      groupCodes: chunk.groupCodes
-        ?? (chunk.roleVectors?.group instanceof Uint32Array ? chunk.roleVectors.group : undefined),
-      groupValidity: chunk.validity.group,
-      facetMask: buildFacetMask(chunk),
-    })),
-  };
-}
-
 interface FrameScatterSeriesBuild {
   series: any[];
   extents?: {
@@ -6845,7 +6715,6 @@ export function buildGraph(
         panels: [{
           title: spec.title || "",
           option: buildSingleOption(spec, frameSafeData, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates, undefined, frame),
-          rawPoints: buildFrameBackedRawDescriptor(spec, frame, undefined, theme, valueOrders),
           groupXValue: null,
           groupYValue: null,
         }],
@@ -6860,7 +6729,6 @@ export function buildGraph(
         panels: [{
           title: spec.title || "",
           option: buildSingleOption(spec, frameSafeData, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates, undefined, frame),
-          rawPoints: buildFrameBackedRawDescriptor(spec, frame, undefined, theme, valueOrders),
           groupXValue: null,
           groupYValue: null,
         }],
@@ -6906,7 +6774,6 @@ export function buildGraph(
       return {
         title: `${fw.name}=${key}`,
         option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates, panelFacet, frame),
-        rawPoints: buildFrameBackedRawDescriptor(subSpec, frame, panelFacet, theme, valueOrders),
         groupXValue: null,
         groupYValue: null,
       };
@@ -6993,7 +6860,6 @@ export function buildGraph(
       panels.push({
         title: facetTitle(xKey, yKey, encoding),
         option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates, panelFacet, frame),
-        rawPoints: buildFrameBackedRawDescriptor(subSpec, frame, panelFacet, theme, valueOrders),
         groupXValue: xKey,
         groupYValue: yKey,
       });
