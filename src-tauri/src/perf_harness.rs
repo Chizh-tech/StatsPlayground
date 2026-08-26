@@ -313,6 +313,7 @@ fn build_graph_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
         elements: vec![GraphElementRequest {
             kind: "points".to_string(),
             summary_stat: "none".to_string(),
+            correlation_method: None,
         }],
         sampling: GraphSampling::Full,
         viewport: GraphViewport {
