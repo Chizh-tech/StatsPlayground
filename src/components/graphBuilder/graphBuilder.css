@@ -173,6 +173,10 @@
   overflow: hidden;
 }
 
+.gb-body-correlation {
+  overflow: auto;
+}
+
 /* Vertical splitter between gb-body columns. Mirror sp-cols-panel-splitter
    so all draggable dividers across the workspace look identical. */
 .gb-splitter {
@@ -538,12 +542,21 @@
   gap: 4px;
 }
 
+.gb-center-correlation {
+  min-width: 560px;
+}
+
 .gb-canvas-row {
   display: grid;
   grid-template-columns: 28px 1fr 28px;
   gap: 6px;
   min-height: 0;
   min-width: 0;
+}
+
+.gb-canvas-row-correlation {
+  min-width: 520px;
+  min-height: 420px;
 }
 
 .gb-canvas {
@@ -557,6 +570,11 @@
   min-height: 0;
   overflow: hidden;
   position: relative;
+}
+
+.gb-canvas-correlation {
+  min-width: 520px;
+  min-height: 420px;
 }
 
 .gb-canvas-overlay {
@@ -574,6 +592,11 @@
 .gb-canvas-overlay-error {
   color: var(--fg-danger);
   border: 1px solid color-mix(in srgb, var(--fg-danger) 40%, transparent);
+}
+
+.gb-canvas-overlay-warn {
+  color: var(--fg-accent);
+  border: 1px solid color-mix(in srgb, var(--fg-accent) 40%, transparent);
 }
 
 .gb-empty {

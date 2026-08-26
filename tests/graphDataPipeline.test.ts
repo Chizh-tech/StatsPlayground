@@ -152,6 +152,46 @@ assert.equal(makeGraphRows(10).length, 10);
     false,
     "GraphBuilder pipeline view must not call dataService.queryTableWindow",
   );
+  assert.match(
+    graphBuilderViewSource,
+    /const CHART_TYPE_DEFS:[\s\S]*?correlationMatrix/,
+    "GraphBuilderView CHART_TYPE_DEFS must include correlationMatrix",
+  );
+  assert.match(
+    graphBuilderViewSource,
+    /const LAYER_DIM:[\s\S]*?correlationMatrix:\s*"2d"/,
+    "GraphBuilderView LAYER_DIM must include correlationMatrix as 2d",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("CorrelationMatrixOptions"),
+    true,
+    "LayerCard must render CorrelationMatrixOptions",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("isCorrelationMatrixItem(item)"),
+    true,
+    "GraphBuilderView must derive correlation mode from isCorrelationMatrixItem",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("!isCorrelationMode && ("),
+    true,
+    "Correlation mode must gate inapplicable controls",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("onYAxisDblClick={isCorrelationMode ? undefined :"),
+    true,
+    "Correlation mode must disable axis settings triggers",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("onPointClick={isCorrelationMode ? undefined :"),
+    true,
+    "Correlation mode must suppress point picking",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("onBrushSelect={isCorrelationMode ? undefined :"),
+    true,
+    "Correlation mode must suppress brush picking",
+  );
 
   for (const graphBuilderFile of graphBuilderFiles) {
     const relativeFile = graphBuilderFile.replace(resolve(TEST_FILE_DIR, "../"), "").replace(/\\/g, "/");
@@ -173,6 +213,13 @@ assert.equal(makeGraphRows(10).length, 10);
     "graph.rowStatus.pending",
     "graph.rowStatus.pendingRows",
     "graph.pipeline.progress",
+    "graph.type.correlationMatrix",
+    "graph.opt.correlationMethod",
+    "graph.opt.correlation.pearson",
+    "graph.opt.correlation.spearman",
+    "graph.opt.correlation.kendall",
+    "graph.correlation.requiresColumns",
+    "graph.correlation.tooManyColumns",
   ];
 
   for (const keyPath of requiredLocalePaths) {
