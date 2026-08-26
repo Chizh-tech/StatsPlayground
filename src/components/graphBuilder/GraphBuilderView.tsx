@@ -23,7 +23,7 @@ import { dataService } from "@/services/dataService";
 import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
 import { SCATTER_RENDER_BUDGET } from "@/graphCore/scatterBudget";
 import type { DatasetMeta } from "@/types/data";
-import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
+import { isCorrelationMatrixItem, type GraphBuilderItem, type GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useProjectStore } from "@/stores/useProjectStore";
@@ -38,7 +38,7 @@ import {
   getRawPointNotice,
 } from "./graphSamplingPolicy";
 import { FilterPanel } from "@/components/filter";
-import { defaultLayerOptions, GRAPH_LAYER_DEFS, LAYER_DIM } from "./graphLayerConfig";
+import { defaultLayerOptions, GRAPH_LAYER_DEFS } from "./graphLayerConfig";
 import { useGraphDataPipeline } from "./useGraphDataPipeline";
 
 interface GraphBuilderViewProps {
@@ -55,14 +55,53 @@ type SlotKey = GraphSlotKey;
 // Group X / Group Y are still exposed via the dedicated facet drop slots
 // surrounding the canvas, not via a side shelf.
 
+interface ChartTypeDef {
+  kind: ElementKind;
+  icon: string;
+}
+
+const CHART_TYPE_DEFS: ChartTypeDef[] = [
+  { kind: "points", icon: "●" },
+  { kind: "line", icon: "╱" },
+  { kind: "smoother", icon: "∿" },
+  { kind: "fitline", icon: "ƒ" },
+  { kind: "correlationMatrix", icon: "▦" },
+  { kind: "boxplot", icon: "⊟" },
+  { kind: "histogram", icon: "▥" },
+  { kind: "scatter3d", icon: "●" },
+  { kind: "surface", icon: "◪" },
+  { kind: "contour3d", icon: "≋" },
+];
+
 /** Per-layer dimensionality. 2D and 3D layers are fully separate sets:
  *  the layer panel + Add popover only show the set matching the current
  *  mode, and each layer card carries a 2D / 3D badge. Both sets persist
  *  on the item — switching mode just changes which subset is shown. */
+type LayerDim = "2d" | "3d";
+const LAYER_DIM: Record<ElementKind, LayerDim> = {
+  points: "2d",
+  line: "2d",
+  bar: "2d",
+  heatmap: "2d",
+  correlationMatrix: "2d",
+  histogram: "2d",
+  boxplot: "2d",
+  smoother: "2d",
+  fitline: "2d",
+  scatter3d: "3d",
+  surface: "3d",
+  contour3d: "3d",
+};
+const GRAPH_LAYER_DEFS_WITH_CORRELATION = GRAPH_LAYER_DEFS.some((def) => def.kind === "correlationMatrix")
+  ? GRAPH_LAYER_DEFS
+  : [...GRAPH_LAYER_DEFS, { kind: "correlationMatrix", icon: "▦" }];
 const DRAG_MIME = "text/plain";
+const CORRELATION_MIN_COLUMNS = 2;
+const CORRELATION_MAX_COLUMNS = 20;
 
 export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const { t } = useTranslation();
+  const isCorrelationMode = isCorrelationMatrixItem(item);
   const updateItemRaw = useGraphBuilderStore((s) => s.updateItem);
   const markDirtyRaw = useProjectStore((s) => s.markDirty);
   const readOnly = useProjectStore((s) => s.readOnly);
@@ -135,6 +174,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // or non-numeric appended in multi-mode). The Slot component reads
   // this and adds a CSS class for ~400 ms.
   const [rejectFlashSlot, setRejectFlashSlot] = useState<SlotKey | null>(null);
+  const [correlationNotice, setCorrelationNotice] = useState<"tooManyColumns" | null>(null);
   const rejectFlashTimerRef = useRef<number | null>(null);
   const flashRejectOnSlot = useCallback((slot: SlotKey) => {
     setRejectFlashSlot(slot);
@@ -153,6 +193,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       }
     };
   }, []);
+  useEffect(() => {
+    if (!isCorrelationMode && correlationNotice) {
+      setCorrelationNotice(null);
+    }
+  }, [isCorrelationMode, correlationNotice]);
   // Which slot's multi-mode manager popover is currently open. null
   // means no manager is open. Only one manager can be open at a time
   // (they're mutually exclusive — opening one closes the other).
@@ -1114,6 +1159,27 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       const existingMulti = multiKey ? item[multiKey] : undefined;
       const inMulti = !!existingMulti && existingMulti.length >= 2;
 
+      if (isCorrelationMode && isAxis && multiKey) {
+        if (!allNumeric(fields)) {
+          flashRejectOnSlot(slot);
+          return;
+        }
+        const seed = existingMulti && existingMulti.length > 0
+          ? existingMulti
+          : (item.encoding[slot] ? [item.encoding[slot] as FieldRef] : []);
+        const merged = [...seed, ...fields].filter((f, i, arr) =>
+          arr.findIndex((g) => g.name === f.name) === i,
+        );
+        if (merged.length > CORRELATION_MAX_COLUMNS) {
+          flashRejectOnSlot(slot);
+          setCorrelationNotice("tooManyColumns");
+          return;
+        }
+        setCorrelationNotice(null);
+        setMultiAtSlot(slot, merged);
+        return;
+      }
+
       // Already in multi-mode → all drops APPEND (single or multi).
       if (isAxis && inMulti && multiKey) {
         if (!allNumeric(fields)) {
@@ -1147,7 +1213,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       // Enter multi-mode with the dropped fields.
       setMultiAtSlot(slot, fields);
     },
-    [item.multiX, item.multiY, bindFieldToSlot, setMultiAtSlot, allNumeric, flashRejectOnSlot],
+    [item.multiX, item.multiY, item.encoding, isCorrelationMode, bindFieldToSlot, setMultiAtSlot, allNumeric, flashRejectOnSlot],
   );
 
   const clearSlot = (slot: SlotKey) => {
@@ -1171,13 +1237,31 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  Moving Average behaviour via the fallbacks in transform.ts. */
   const addElement = useCallback((kind: ElementKind) => {
     setElements((prev) => {
-      const idx = prev.findIndex((e) => e.kind === kind);
+      if (kind === "correlationMatrix") {
+        const preserved = prev.filter((e) => LAYER_DIM[e.kind] === "3d" || e.enabled === false);
+        return [
+          ...preserved.filter((e) => e.kind !== "correlationMatrix"),
+          {
+            kind: "correlationMatrix",
+            enabled: true,
+            options: { correlationMethod: "pearson" },
+          },
+        ];
+      }
+
+      const addingOrdinary2d = LAYER_DIM[kind] === "2d";
+      const correlationActive = prev.some((e) => e.enabled !== false && e.kind === "correlationMatrix");
+      const base = addingOrdinary2d && correlationActive
+        ? prev.filter((e) => e.kind !== "correlationMatrix")
+        : prev;
+
+      const idx = base.findIndex((e) => e.kind === kind);
       if (idx >= 0) {
-        return prev.map((e, i) => (i === idx ? { ...e, enabled: true } : e));
+        return base.map((e, i) => (i === idx ? { ...e, enabled: true } : e));
       }
       const next: ChartElement = { kind, enabled: true };
-      next.options = defaultLayerOptions(kind, prev);
-      return [...prev, next];
+      next.options = defaultLayerOptions(kind, base);
+      return [...base, next];
     });
   }, [setElements]);
 
@@ -1406,6 +1490,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     });
   }, [frame, pipelineStatus, progress, rawPointNotice, t]);
 
+  const correlationColumnCount = useMemo(() => {
+    const multiX = item.multiX ?? [];
+    const multiY = item.multiY ?? [];
+    if (multiX.length > 0) return multiX.length;
+    if (multiY.length > 0) return multiY.length;
+    if (item.encoding.x || item.encoding.y) return 1;
+    return 0;
+  }, [item.multiX, item.multiY, item.encoding.x, item.encoding.y]);
+  const correlationColumnsReady =
+    correlationColumnCount >= CORRELATION_MIN_COLUMNS &&
+    correlationColumnCount <= CORRELATION_MAX_COLUMNS;
+
   const progressPercent = progress?.percent ?? null;
   const progressAriaProps = progressPercent === null
     ? {}
@@ -1460,73 +1556,77 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               <span className="gb-tb-badge">{filters.length}</span>
             )}
           </button>
-          <div
-            className="gb-cursor-mode"
-            role="radiogroup"
-            aria-label={t("graph.cursorMode.label", { defaultValue: "Cursor mode" })}
-          >
-            <span
-              className={`gb-cursor-mode-thumb gb-cursor-mode-thumb-${cursorMode}`}
-              aria-hidden="true"
-            />
-            <button
-              type="button"
-              role="radio"
-              aria-checked={cursorMode === "pan"}
-              className={`gb-cursor-mode-opt${cursorMode === "pan" ? " is-active" : ""}`}
-              onClick={() => setCursorMode("pan")}
-              title={t("graph.cursorMode.panTitle", {
-                defaultValue: "Pan mode: drag axes to scroll/zoom the chart.",
-              })}
+          {!isCorrelationMode && (
+            <div
+              className="gb-cursor-mode"
+              role="radiogroup"
+              aria-label={t("graph.cursorMode.label", { defaultValue: "Cursor mode" })}
             >
-              <i className="fa-regular fa-hand" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={cursorMode === "select"}
-              className={`gb-cursor-mode-opt${cursorMode === "select" ? " is-active" : ""}`}
-              onClick={() => setCursorMode("select")}
-              title={t("graph.cursorMode.selectTitle", {
-                defaultValue: "Select mode: drag on the chart to rubber-band-select points (highlights matching cells in the linked table).",
-              })}
-            >
-              <i className="fa-solid fa-arrow-pointer" aria-hidden="true" />
-            </button>
-          </div>
+              <span
+                className={`gb-cursor-mode-thumb gb-cursor-mode-thumb-${cursorMode}`}
+                aria-hidden="true"
+              />
+              <button
+                type="button"
+                role="radio"
+                aria-checked={cursorMode === "pan"}
+                className={`gb-cursor-mode-opt${cursorMode === "pan" ? " is-active" : ""}`}
+                onClick={() => setCursorMode("pan")}
+                title={t("graph.cursorMode.panTitle", {
+                  defaultValue: "Pan mode: drag axes to scroll/zoom the chart.",
+                })}
+              >
+                <i className="fa-regular fa-hand" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={cursorMode === "select"}
+                className={`gb-cursor-mode-opt${cursorMode === "select" ? " is-active" : ""}`}
+                onClick={() => setCursorMode("select")}
+                title={t("graph.cursorMode.selectTitle", {
+                  defaultValue: "Select mode: drag on the chart to rubber-band-select points (highlights matching cells in the linked table).",
+                })}
+              >
+                <i className="fa-solid fa-arrow-pointer" aria-hidden="true" />
+              </button>
+            </div>
+          )}
           {/* 2D / 3D segmented toggle — styled like the cursor-mode pill. */}
-          <div
-            className="gb-dim-mode"
-            role="radiogroup"
-            aria-label={t("graph.dimMode.label", { defaultValue: "2D / 3D mode" })}
-          >
-            <span
-              className={`gb-dim-mode-thumb gb-dim-mode-thumb-${item.threeD ? "3d" : "2d"}`}
-              aria-hidden="true"
-            />
-            <button
-              type="button"
-              role="radio"
-              aria-checked={!item.threeD}
-              className={`gb-dim-mode-opt${!item.threeD ? " is-active" : ""}`}
-              onClick={() => { if (item.threeD) toggleThreeD(); }}
-              title={t("graph.dimMode.twoDTitle", { defaultValue: "2D mode" })}
+          {!isCorrelationMode && (
+            <div
+              className="gb-dim-mode"
+              role="radiogroup"
+              aria-label={t("graph.dimMode.label", { defaultValue: "2D / 3D mode" })}
             >
-              2D
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={!!item.threeD}
-              className={`gb-dim-mode-opt${item.threeD ? " is-active" : ""}`}
-              onClick={() => { if (!item.threeD) toggleThreeD(); }}
-              title={t("graph.dimMode.threeDTitle", {
-                defaultValue: "3D mode: adds Z and Group Z channels and renders a 3D surface from X / Y / Z.",
-              })}
-            >
-              3D
-            </button>
-          </div>
+              <span
+                className={`gb-dim-mode-thumb gb-dim-mode-thumb-${item.threeD ? "3d" : "2d"}`}
+                aria-hidden="true"
+              />
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!item.threeD}
+                className={`gb-dim-mode-opt${!item.threeD ? " is-active" : ""}`}
+                onClick={() => { if (item.threeD) toggleThreeD(); }}
+                title={t("graph.dimMode.twoDTitle", { defaultValue: "2D mode" })}
+              >
+                2D
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!!item.threeD}
+                className={`gb-dim-mode-opt${item.threeD ? " is-active" : ""}`}
+                onClick={() => { if (!item.threeD) toggleThreeD(); }}
+                title={t("graph.dimMode.threeDTitle", {
+                  defaultValue: "3D mode: adds Z and Group Z channels and renders a 3D surface from X / Y / Z.",
+                })}
+              >
+                3D
+              </button>
+            </div>
+          )}
         </div>
         <div className="gb-toolbar-spacer" />
         <div className="gb-toolbar-right">
@@ -1587,7 +1687,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         </div>
       </div>
 
-      <div className="gb-body">
+      <div className={`gb-body${isCorrelationMode ? " gb-body-correlation" : ""}`}>
         {/* Local Data Filter panel + splitter (leftmost, when toggled on). */}
         {showFilters && (
           <>
@@ -1679,7 +1779,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     />
                   ))}
                 <AddLayerCard
-                  availableKinds={GRAPH_LAYER_DEFS.map((c) => c.kind).filter(
+                  availableKinds={GRAPH_LAYER_DEFS_WITH_CORRELATION.map((c) => c.kind).filter(
                     (k) => !activeKinds.has(k) && LAYER_DIM[k] === (item.threeD ? "3d" : "2d"),
                   )}
                   onAdd={addElement}
@@ -1699,23 +1799,25 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         />
 
         {/* 中栏：画布 + X 轴槽 */}
-        <div className="gb-center">
+        <div className={`gb-center${isCorrelationMode ? " gb-center-correlation" : ""}`}>
           {/* 顶部分组槽 (Group X) — 横跨画布上方 */}
-          <Slot
-            slot="groupX"
-            label="Group X"
-            field={encoding.groupX}
-            onDrop={(e) => handleDropOnSlot("groupX", e)}
-            onClear={() => clearSlot("groupX")}
-            onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupX", x, y })}
-            orientation="horizontal-top"
-          />
+          {!isCorrelationMode && (
+            <Slot
+              slot="groupX"
+              label="Group X"
+              field={encoding.groupX}
+              onDrop={(e) => handleDropOnSlot("groupX", e)}
+              onClear={() => clearSlot("groupX")}
+              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupX", x, y })}
+              orientation="horizontal-top"
+            />
+          )}
 
           {/* 画布 + 左侧 Y 轴槽 + 右侧 Group Y 槽 */}
           <div
-            className="gb-canvas-row"
+            className={`gb-canvas-row${isCorrelationMode ? " gb-canvas-row-correlation" : ""}`}
             style={
-              item.threeD
+              item.threeD && !isCorrelationMode
                 ? // 3D: 追加 Z（最左）与 Group Z（最右）两条 28px 轨道，
                   // 保持 [Z][Y][canvas][GroupY][GroupZ] 五列布局。
                   { gridTemplateColumns: "28px 28px 1fr 28px 28px" }
@@ -1723,7 +1825,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             }
           >
             {/* Z 轴槽 — 仅 3D 模式，位于 Y 轴拖动区左侧 */}
-            {item.threeD && (
+            {item.threeD && !isCorrelationMode && (
               <Slot
                 slot="z"
                 label="Z"
@@ -1748,7 +1850,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               rejectFlash={rejectFlashSlot === "y"}
             />
             <div
-              className="gb-canvas"
+              className={`gb-canvas${isCorrelationMode ? " gb-canvas-correlation" : ""}`}
               ref={canvasRef}
               onDragOver={(e) => {
                 e.preventDefault();
@@ -1780,7 +1882,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 routeDropToSlot(slot, fields);
               }}
             >
-              {!item.threeD && !encoding.x && !encoding.y && !(item.multiX?.length) && !(item.multiY?.length) && !activeKinds.has("histogram") ? (
+              {isCorrelationMode && !correlationColumnsReady ? (
+                <div className="gb-empty">
+                  {t("graph.correlation.requiresColumns", {
+                    min: CORRELATION_MIN_COLUMNS,
+                    max: CORRELATION_MAX_COLUMNS,
+                    defaultValue: "Correlation matrix requires {{min}}-{{max}} columns.",
+                  })}
+                </div>
+              ) : !item.threeD && !encoding.x && !encoding.y && !(item.multiX?.length) && !(item.multiY?.length) && !activeKinds.has("histogram") ? (
                 // Drag-hint shows only when neither axis is bound (and
                 // there's no histogram). Y-only renders a vertical strip
                 // and X-only renders a horizontal strip (mirror), so the
@@ -1798,9 +1908,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     data={graphData}
                     frame={frame}
                     valueOrders={valueOrders}
-                    onYAxisDblClick={() => setYAxisDialogOpen(true)}
-                    onXAxisDblClick={() => setXAxisDialogOpen(true)}
-                    onAxisRangeChange={(axis, min, max) => {
+                    onYAxisDblClick={isCorrelationMode ? undefined : () => setYAxisDialogOpen(true)}
+                    onXAxisDblClick={isCorrelationMode ? undefined : () => setXAxisDialogOpen(true)}
+                    onAxisRangeChange={isCorrelationMode ? undefined : ((axis, min, max) => {
                       // JMP-style direct-manipulation drag-zoom / drag-pan
                       // on the axis strip. The renderer previews via
                       // setOption during the gesture; on mouseup it hands
@@ -1813,16 +1923,24 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                       } else {
                         setXAxisConfig({ ...(item.xAxis ?? {}), min, max });
                       }
-                    }}
-                    onAxisContextMenu={(axis, x, y) => setAxisCtxMenu({ axis, x, y })}
-                    onPointClick={(pick) => {
+                    })}
+                    onAxisContextMenu={isCorrelationMode ? undefined : ((axis, x, y) => setAxisCtxMenu({ axis, x, y }))}
+                    onPointClick={isCorrelationMode ? undefined : ((pick) => {
                       pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
-                    }}
-                    brushMode={cursorMode === "select"}
-                    onBrushSelect={(picks) => {
+                    })}
+                    brushMode={!isCorrelationMode && cursorMode === "select"}
+                    onBrushSelect={isCorrelationMode ? undefined : ((picks) => {
                       pickCells(dataset.id, picks);
-                    }}
+                    })}
                   />
+                  {isCorrelationMode && correlationNotice === "tooManyColumns" && (
+                    <div className="gb-canvas-overlay gb-canvas-overlay-warn">
+                      {t("graph.correlation.tooManyColumns", {
+                        max: CORRELATION_MAX_COLUMNS,
+                        defaultValue: "Correlation matrix supports up to {{max}} columns.",
+                      })}
+                    </div>
+                  )}
                   {pipelineStatus === "error" && pipelineError && (
                     <div className="gb-canvas-overlay gb-canvas-overlay-error">{pipelineError}</div>
                   )}
@@ -1852,17 +1970,19 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 </>
               )}
             </div>
-            <Slot
-              slot="groupY"
-              label="Group Y"
-              field={encoding.groupY}
-              onDrop={(e) => handleDropOnSlot("groupY", e)}
-              onClear={() => clearSlot("groupY")}
-              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupY", x, y })}
-              orientation="vertical-right"
-            />
+            {!isCorrelationMode && (
+              <Slot
+                slot="groupY"
+                label="Group Y"
+                field={encoding.groupY}
+                onDrop={(e) => handleDropOnSlot("groupY", e)}
+                onClear={() => clearSlot("groupY")}
+                onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupY", x, y })}
+                orientation="vertical-right"
+              />
+            )}
             {/* Group Z 槽 — 仅 3D 模式，位于 Group Y 右侧 */}
-            {item.threeD && (
+            {item.threeD && !isCorrelationMode && (
               <Slot
                 slot="groupZ"
                 label="Group Z"
@@ -1892,36 +2012,40 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         </div>
 
         {/* Splitter: center | right */}
-        <div
-          className="gb-splitter"
-          onMouseDown={startSideResize("right")}
-          onDoubleClick={() => setRightWidth(220)}
-          title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
-        />
+        {!isCorrelationMode && (
+          <div
+            className="gb-splitter"
+            onMouseDown={startSideResize("right")}
+            onDoubleClick={() => setRightWidth(220)}
+            title={t("graph.resizePanel", { defaultValue: "Drag to resize" })}
+          />
+        )}
 
         {/* Legend + Style editor:
             - 顶部 Overlay 槽：拖入分类列即按其值生成图例分组；
             - 中间图例列表：每行对应一个分组（无 Overlay 时显示 "All"）；
             - 底部样式编辑器：针对当前选中的图例条目，分别设置线/填充/点。
             无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
-        <LegendStylePanel
-          data={graphData}
-          encoding={encoding}
-          elements={elements}
-          groupStyles={item.groupStyles ?? {}}
-          groupKeys={groupKeys}
-          effectiveStyles={effectiveStyles}
-          hiddenGroups={item.hiddenGroups ?? []}
-          toggleGroupHidden={toggleGroupHidden}
-          setGroupStyle={setGroupStyle}
-          resetAllGroupStyles={resetAllGroupStyles}
-          onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
-          onClearOverlay={() => clearSlot("overlay")}
-          onOverlayContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
-          width={rightWidth}
-          threeD={!!item.threeD}
-          readOnly={readOnly}
-        />
+        {!isCorrelationMode && (
+          <LegendStylePanel
+            data={graphData}
+            encoding={encoding}
+            elements={elements}
+            groupStyles={item.groupStyles ?? {}}
+            groupKeys={groupKeys}
+            effectiveStyles={effectiveStyles}
+            hiddenGroups={item.hiddenGroups ?? []}
+            toggleGroupHidden={toggleGroupHidden}
+            setGroupStyle={setGroupStyle}
+            resetAllGroupStyles={resetAllGroupStyles}
+            onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
+            onClearOverlay={() => clearSlot("overlay")}
+            onOverlayContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
+            width={rightWidth}
+            threeD={!!item.threeD}
+            readOnly={readOnly}
+          />
+        )}
       </div>
 
       {/* Y-axis settings dialog. Opened by double-clicking the Y axis;
@@ -1931,7 +2055,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           addition. Today it has three categories: Axis (range / ticks /
           decimals / inverse), Tick Grid (major + minor gridlines),
           and Reference Lines. */}
-      {yAxisDialogOpen && (
+      {!isCorrelationMode && yAxisDialogOpen && (
         <AxisSettingsDialog
           axis="y"
           refLines={item.refLinesY ?? []}
@@ -1962,7 +2086,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           renderer silently skips X ref lines when the X axis is
           categorical (no meaningful position), so the editor stays
           available throughout. */}
-      {xAxisDialogOpen && (
+      {!isCorrelationMode && xAxisDialogOpen && (
         <AxisSettingsDialog
           axis="x"
           refLines={item.refLinesX ?? []}
@@ -2030,7 +2154,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           - Reset zoom: clears the pinned min/max on that axis, restoring
             automatic bounds while preserving other axis overrides. The
             item is disabled when no manual range is currently pinned. */}
-      {axisCtxMenu && (
+      {!isCorrelationMode && axisCtxMenu && (
         <div
           ref={ctxMenuRef}
           className="sp-ctx-menu"
@@ -2506,7 +2630,7 @@ function LayerCard({
   onRemove,
   t,
 }: LayerCardProps) {
-  const def = GRAPH_LAYER_DEFS.find((c) => c.kind === kind);
+  const def = GRAPH_LAYER_DEFS_WITH_CORRELATION.find((c) => c.kind === kind);
   return (
     <div className="gb-layer-card">
       <div className="gb-layer-head">
@@ -2547,6 +2671,9 @@ function LayerCard({
         )}
         {kind === "surface" && (
           <SurfaceOptions options={options} onChange={onChangeOptions} t={t} />
+        )}
+        {kind === "correlationMatrix" && (
+          <CorrelationMatrixOptions options={options} onChange={onChangeOptions} t={t} />
         )}
         {kind === "contour3d" && (
           <Contour3DOptions options={options} onChange={onChangeOptions} t={t} />
@@ -2978,6 +3105,23 @@ function SurfaceOptions({ options, onChange, t }: OptionsEditorProps) {
   );
 }
 
+function CorrelationMatrixOptions({ options, onChange, t }: OptionsEditorProps) {
+  const method = getOpt<string>(options, "correlationMethod", "pearson");
+  return (
+    <OptRow label={t("graph.opt.correlationMethod", { defaultValue: "Correlation Method" })}>
+      <select
+        className="gb-opt-select"
+        value={method}
+        onChange={(e) => onChange({ correlationMethod: e.target.value })}
+      >
+        <option value="pearson">{t("graph.opt.correlation.pearson", { defaultValue: "Pearson" })}</option>
+        <option value="spearman">{t("graph.opt.correlation.spearman", { defaultValue: "Spearman" })}</option>
+        <option value="kendall">{t("graph.opt.correlation.kendall", { defaultValue: "Kendall" })}</option>
+      </select>
+    </OptRow>
+  );
+}
+
 function Contour3DOptions({ options, onChange, t }: OptionsEditorProps) {
   const stat = getOpt<string>(options, "stat", "mean");
   const smoothness = getOpt<number>(options, "smoothness", 0);
@@ -3354,7 +3498,7 @@ function AddLayerCard({ availableKinds, onAdd, t }: AddLayerCardProps) {
           style={{ left: pos.left, top: pos.top, minWidth: pos.width }}
         >
           {availableKinds.map((k) => {
-            const def = GRAPH_LAYER_DEFS.find((c) => c.kind === k);
+            const def = GRAPH_LAYER_DEFS_WITH_CORRELATION.find((c) => c.kind === k);
             return (
               <button
                 key={k}

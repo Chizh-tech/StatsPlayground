@@ -130,3 +130,10 @@ export interface GraphBuilderItem {
    *  `undefined` 视为关闭。 */
   threeD?: boolean;
 }
+
+export function isCorrelationMatrixItem(item: GraphBuilderItem): boolean {
+  return item.elements.some(
+    (element: ChartElement) =>
+      element.enabled !== false && element.kind === "correlationMatrix",
+  );
+}

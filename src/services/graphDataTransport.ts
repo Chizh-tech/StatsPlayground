@@ -139,6 +139,10 @@ export function createGraphStreamTransport(
   request: GraphDataRequest,
   handlers: GraphStreamTransportHandlers,
 ): GraphStreamTransport {
+  const aggregateOnlyCorrelation =
+    request.elements.length > 0
+    && request.elements.every((element) => element.kind === "correlationMatrix");
+
   const seenChunkIndexes = new Set<number>();
   let nextChunkIndex = 0;
   let pendingHeader: GraphChunkHeader | null = null;
@@ -251,6 +255,14 @@ export function createGraphStreamTransport(
       if (isGraphAggregatePacket(structured)) {
         if (!pendingHeader) {
           if (!sawFinalChunkPayload) {
+            if (aggregateOnlyCorrelation) {
+              if (structured.kind !== "correlationMatrix") {
+                fail("graph aggregate packet kind does not match correlation-only request");
+                return;
+              }
+              handlers.onAggregate(structured);
+              return;
+            }
             pendingZeroChunkAggregates.push(structured);
           } else {
             handlers.onAggregate(structured);

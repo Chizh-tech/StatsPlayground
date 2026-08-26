@@ -8,6 +8,7 @@ export interface GraphFieldBinding {
 export interface GraphElementRequest {
   kind: string;
   summaryStat: string;
+  correlationMethod?: CorrelationMethod;
 }
 
 export type GraphSampling =
@@ -218,11 +219,31 @@ export interface SummaryPacket {
   summaries: SummaryEntry[];
 }
 
+export type CorrelationMethod = "pearson" | "spearman" | "kendall";
+
+export type CorrelationUnavailableReason = "insufficientData" | "zeroVariance";
+
+export interface CorrelationMatrixCell {
+  xIndex: number;
+  yIndex: number;
+  coefficient?: number | null;
+  sampleCount: number;
+  unavailableReason?: CorrelationUnavailableReason;
+}
+
+export interface CorrelationMatrixPacket {
+  kind: "correlationMatrix";
+  method: CorrelationMethod;
+  columns: string[];
+  cells: CorrelationMatrixCell[];
+}
+
 export type GraphAggregatePacket =
   | HistogramPacket
   | HeatmapPacket
   | BoxPlotPacket
-  | SummaryPacket;
+  | SummaryPacket
+  | CorrelationMatrixPacket;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";
@@ -242,6 +263,14 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= 0;
+}
+
+function isCorrelationMethod(value: unknown): value is CorrelationMethod {
+  return value === "pearson" || value === "spearman" || value === "kendall";
+}
+
+function isCorrelationUnavailableReason(value: unknown): value is CorrelationUnavailableReason {
+  return value === "insufficientData" || value === "zeroVariance";
 }
 
 function hasOwn(value: Record<string, unknown>, key: string): boolean {
@@ -339,6 +368,71 @@ function isSummaryEntry(value: unknown): value is SummaryEntry {
     && (value.intervalHigh === undefined || isFiniteNumber(value.intervalHigh));
 }
 
+function isCorrelationMatrixPacket(value: unknown): value is CorrelationMatrixPacket {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (!isCorrelationMethod(value.method)) {
+    return false;
+  }
+  if (!Array.isArray(value.columns) || value.columns.length < 2 || value.columns.length > 20) {
+    return false;
+  }
+
+  const seenColumns = new Set<string>();
+  for (const column of value.columns) {
+    if (!isString(column) || column.trim().length === 0 || seenColumns.has(column)) {
+      return false;
+    }
+    seenColumns.add(column);
+  }
+
+  if (!Array.isArray(value.cells)) {
+    return false;
+  }
+
+  const columnCount = value.columns.length;
+  if (value.cells.length !== columnCount ** 2) {
+    return false;
+  }
+
+  for (let index = 0; index < value.cells.length; index += 1) {
+    const cell = value.cells[index];
+    if (!isRecord(cell)) {
+      return false;
+    }
+
+    const expectedXIndex = index % columnCount;
+    const expectedYIndex = Math.floor(index / columnCount);
+    if (cell.xIndex !== expectedXIndex || cell.yIndex !== expectedYIndex) {
+      return false;
+    }
+    if (!isNonNegativeInteger(cell.xIndex) || !isNonNegativeInteger(cell.yIndex)) {
+      return false;
+    }
+    if (!isNonNegativeInteger(cell.sampleCount)) {
+      return false;
+    }
+
+    const coefficientIsMissing = cell.coefficient === undefined || cell.coefficient === null;
+    if (coefficientIsMissing) {
+      if (!isCorrelationUnavailableReason(cell.unavailableReason)) {
+        return false;
+      }
+      continue;
+    }
+
+    if (!isFiniteNumber(cell.coefficient) || cell.coefficient < -1 || cell.coefficient > 1) {
+      return false;
+    }
+    if (cell.unavailableReason !== undefined) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export function isGraphAggregatePacket(value: unknown): value is GraphAggregatePacket {
   if (!isRecord(value) || !isString(value.kind)) {
     return false;
@@ -390,6 +484,9 @@ export function isGraphAggregatePacket(value: unknown): value is GraphAggregateP
       && isOptionalString(value.sourceColumn)
       && Array.isArray(value.summaries)
       && value.summaries.every(isSummaryEntry);
+  }
+  if (value.kind === "correlationMatrix") {
+    return isCorrelationMatrixPacket(value);
   }
   return false;
 }

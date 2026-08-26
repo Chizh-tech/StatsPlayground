@@ -29,6 +29,7 @@ export type ElementKind =
   | "line"         // 折线
   | "bar"          // 柱状（含分组均值）
   | "heatmap"      // 热力图
+  | "correlationMatrix" // 相关矩阵热力图
   | "histogram"    // 直方图
   | "boxplot"      // 箱线
   | "smoother"     // 平滑曲线

@@ -314,6 +314,7 @@ fn build_graph_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
         elements: vec![GraphElementRequest {
             kind: "points".to_string(),
             summary_stat: "none".to_string(),
+            correlation_method: None,
         }],
         sampling: GraphSampling::Full,
         raw_point_budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,

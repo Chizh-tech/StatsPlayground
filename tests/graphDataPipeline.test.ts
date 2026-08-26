@@ -8,6 +8,7 @@ import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphDa
 import {
   createInitialGraphStreamState,
   createStreamStartCancellationCoordinator,
+  deriveElements,
   deriveFields,
   deriveGraphRequestParts,
   reduceGraphStream,
@@ -20,6 +21,7 @@ import type {
   GraphDataCompletion,
   GraphDataRequest,
   GraphDataFrame,
+  GraphElementRequest,
 } from "../src/types/graphData.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
 
@@ -150,6 +152,88 @@ assert.equal(makeGraphRows(10).length, 10);
     false,
     "GraphBuilder pipeline view must not call dataService.queryTableWindow",
   );
+  assert.match(
+    graphBuilderViewSource,
+    /const CHART_TYPE_DEFS:[\s\S]*?correlationMatrix/,
+    "GraphBuilderView CHART_TYPE_DEFS must include correlationMatrix",
+  );
+  assert.match(
+    graphBuilderViewSource,
+    /const LAYER_DIM:[\s\S]*?correlationMatrix:\s*"2d"/,
+    "GraphBuilderView LAYER_DIM must include correlationMatrix as 2d",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("CorrelationMatrixOptions"),
+    true,
+    "LayerCard must render CorrelationMatrixOptions",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("isCorrelationMatrixItem(item)"),
+    true,
+    "GraphBuilderView must derive correlation mode from isCorrelationMatrixItem",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("!isCorrelationMode && ("),
+    true,
+    "Correlation mode must gate inapplicable controls",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("{/* 2D / 3D segmented toggle — styled like the cursor-mode pill. */}"),
+    true,
+    "GraphBuilderView must keep the 2D/3D segmented control source marker",
+  );
+  assert.match(
+    graphBuilderViewSource,
+    /\{!isCorrelationMode && \([\s\S]*?className=\"gb-dim-mode\"/,
+    "Correlation mode must hide the global 2D/3D segmented control",
+  );
+  assert.match(
+    graphBuilderViewSource,
+    /item\.threeD\s*&&\s*!isCorrelationMode\s*\?/,
+    "Canvas row must only use 3D five-column layout when 3D is active outside correlation mode",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("onYAxisDblClick={isCorrelationMode ? undefined :"),
+    true,
+    "Correlation mode must disable axis settings triggers",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("onPointClick={isCorrelationMode ? undefined :"),
+    true,
+    "Correlation mode must suppress point picking",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("onBrushSelect={isCorrelationMode ? undefined :"),
+    true,
+    "Correlation mode must suppress brush picking",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes(
+      "const preserved = prev.filter((e) => LAYER_DIM[e.kind] === \"3d\" || e.enabled === false);",
+    ),
+    true,
+    "Adding correlation must preserve all 3D layers and disabled/inactive 2D layers",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("...preserved.filter((e) => e.kind !== \"correlationMatrix\")"),
+    true,
+    "Adding correlation must replace enabled ordinary 2D layers with a single active correlation layer",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("const addingOrdinary2d = LAYER_DIM[kind] === \"2d\";"),
+    true,
+    "addElement must identify ordinary 2D additions",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("const correlationActive = prev.some((e) => e.enabled !== false && e.kind === \"correlationMatrix\");"),
+    true,
+    "addElement must detect active correlation mode when adding non-correlation layers",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("? prev.filter((e) => e.kind !== \"correlationMatrix\")"),
+    true,
+    "Adding ordinary 2D while correlation is active must remove correlation layers",
+  );
 
   for (const graphBuilderFile of graphBuilderFiles) {
     const relativeFile = graphBuilderFile.replace(resolve(TEST_FILE_DIR, "../"), "").replace(/\\/g, "/");
@@ -171,6 +255,20 @@ assert.equal(makeGraphRows(10).length, 10);
     "graph.rowStatus.pending",
     "graph.rowStatus.pendingRows",
     "graph.pipeline.progress",
+    "graph.type.correlationMatrix",
+    "graph.opt.correlationMethod",
+    "graph.opt.correlation.pearson",
+    "graph.opt.correlation.spearman",
+    "graph.opt.correlation.kendall",
+    "graph.correlation.requiresColumns",
+    "graph.correlation.tooManyColumns",
+    "graph.correlation.pair",
+    "graph.correlation.coefficient",
+    "graph.correlation.unavailableLabel",
+    "graph.correlation.sampleCount",
+    "graph.correlation.unavailableReason.insufficientData",
+    "graph.correlation.unavailableReason.zeroVariance",
+    "graph.correlation.unavailableReason.unknown",
   ];
 
   for (const keyPath of requiredLocalePaths) {
@@ -484,6 +582,119 @@ assert.equal(isGraphAggregatePacket({
     },
   ],
 }), false);
+
+const validCorrelationPacket = {
+  kind: "correlationMatrix" as const,
+  method: "pearson",
+  columns: ["a", "b"],
+  cells: [
+    { xIndex: 0, yIndex: 0, coefficient: 1, sampleCount: 10 },
+    { xIndex: 1, yIndex: 0, coefficient: 0.5, sampleCount: 9 },
+    { xIndex: 0, yIndex: 1, coefficient: 0.5, sampleCount: 9 },
+    { xIndex: 1, yIndex: 1, coefficient: 1, sampleCount: 10 },
+  ],
+};
+
+assert.equal(isGraphAggregatePacket(validCorrelationPacket), true);
+assert.equal(isGraphAggregatePacket({ ...validCorrelationPacket, method: "distance" }), false);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: validCorrelationPacket.cells.slice(0, 3),
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    columns: ["a", "a"],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      validCorrelationPacket.cells[1],
+      validCorrelationPacket.cells[2],
+      { ...validCorrelationPacket.cells[3], xIndex: 0, yIndex: 0 },
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      validCorrelationPacket.cells[1],
+      validCorrelationPacket.cells[2],
+      { ...validCorrelationPacket.cells[3], xIndex: 2 },
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      validCorrelationPacket.cells[1],
+      { ...validCorrelationPacket.cells[2], coefficient: 1.01 },
+      validCorrelationPacket.cells[3],
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      { ...validCorrelationPacket.cells[1], sampleCount: -1 },
+      validCorrelationPacket.cells[2],
+      validCorrelationPacket.cells[3],
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      { ...validCorrelationPacket.cells[1], sampleCount: 2.5 },
+      validCorrelationPacket.cells[2],
+      validCorrelationPacket.cells[3],
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      { ...validCorrelationPacket.cells[1], coefficient: undefined },
+      validCorrelationPacket.cells[2],
+      validCorrelationPacket.cells[3],
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      { ...validCorrelationPacket.cells[1], unavailableReason: "zeroVariance" },
+      validCorrelationPacket.cells[2],
+      validCorrelationPacket.cells[3],
+    ],
+  }),
+  false,
+);
 
 assert.throws(
   () =>
@@ -1187,6 +1398,119 @@ function makeProgressedChunk(
 }
 
 {
+  let aggregate: GraphAggregatePacket | null = null;
+  let transportError: string | null = null;
+  const request = makeRequest("req-correlation-null-options", 23);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {},
+    onPayload: () => {},
+    onAggregate: (packet) => {
+      aggregate = packet;
+    },
+    onComplete: () => {},
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader(request.requestId, request.generation, 0, true),
+  });
+  transport.onChannelMessage(makePayload(0));
+  transport.onChannelMessage(JSON.stringify({
+    messageType: "aggregate",
+    kind: "correlationMatrix",
+    method: "pearson",
+    columns: ["a", "b"],
+    cells: [
+      { xIndex: 0, yIndex: 0, coefficient: 1, sampleCount: 10, unavailableReason: null },
+      { xIndex: 1, yIndex: 0, coefficient: null, sampleCount: 10, unavailableReason: "zeroVariance" },
+      { xIndex: 0, yIndex: 1, coefficient: null, sampleCount: 10, unavailableReason: "zeroVariance" },
+      { xIndex: 1, yIndex: 1, coefficient: 1, sampleCount: 10, unavailableReason: null },
+    ],
+  }));
+
+  assert.equal(transportError, null);
+  assert.equal(aggregate?.kind, "correlationMatrix");
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
+  const request: GraphDataRequest = {
+    ...makeRequest("req-correlation-aggregate-only", 27),
+    elements: [{ kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" }],
+  };
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {
+      events.push("header");
+    },
+    onPayload: () => {
+      events.push("payload");
+    },
+    onAggregate: (packet) => {
+      events.push(`aggregate:${packet.kind}`);
+    },
+    onComplete: () => {
+      events.push("complete");
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "aggregate",
+    ...validCorrelationPacket,
+  });
+  transport.onChannelMessage({
+    messageType: "complete",
+    ...makeCompletion(request.requestId, request.generation),
+    chunksSent: 0,
+  });
+
+  assert.equal(transportError, null);
+  assert.deepEqual(events, ["aggregate:correlationMatrix", "complete"]);
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
+  const request: GraphDataRequest = {
+    ...makeRequest("req-correlation-aggregate-only-wrong-kind", 28),
+    elements: [{ kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" }],
+  };
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {
+      events.push("header");
+    },
+    onPayload: () => {
+      events.push("payload");
+    },
+    onAggregate: () => {
+      events.push("aggregate");
+    },
+    onComplete: () => {
+      events.push("complete");
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "aggregate",
+    kind: "summary",
+    yColumn: "cost",
+    summaries: [],
+  });
+
+  assert.deepEqual(events, []);
+  assert.match(transportError ?? "", /aggregate/i);
+}
+
+{
   const events: string[] = [];
   let transportError: string | null = null;
   const request = makeRequest("req-omitted-aggregate", 27);
@@ -1431,6 +1755,102 @@ function makeProgressedChunk(
 }
 
 {
+  const correlationItem = makeGraphBuilderItem({
+    encoding: {},
+    multiX: [
+      { name: "a", type: "continuous" },
+      { name: "b", type: "continuous" },
+      { name: "c", type: "continuous" },
+    ],
+    elements: [
+      {
+        kind: "correlationMatrix",
+        enabled: true,
+        options: { correlationMethod: "spearman" },
+      },
+    ],
+  });
+
+  assert.deepEqual(deriveFields(correlationItem), [
+    { role: "multiX0", column: "a" },
+    { role: "multiX1", column: "b" },
+    { role: "multiX2", column: "c" },
+  ]);
+  const correlationElementsExpected: GraphElementRequest[] = [
+    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "spearman" },
+  ];
+  assert.deepEqual(deriveElements(correlationItem), correlationElementsExpected);
+  assert.deepEqual(
+    deriveFields(correlationItem).filter((field) => field.column === "__sp_variable__" || field.column === "__sp_value__"),
+    [],
+  );
+
+  const legacyCorrelationItem = makeGraphBuilderItem({
+    encoding: {},
+    multiY: [
+      { name: "m0", type: "continuous" },
+      { name: "m1", type: "continuous" },
+    ],
+    elements: [{ kind: "correlationMatrix", enabled: true }],
+  });
+
+  const legacyCorrelationElementsExpected: GraphElementRequest[] = [
+    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
+  ];
+  assert.deepEqual(deriveElements(legacyCorrelationItem), legacyCorrelationElementsExpected);
+
+  const invalidMethodItem = makeGraphBuilderItem({
+    encoding: {},
+    multiX: [
+      { name: "k0", type: "continuous" },
+      { name: "k1", type: "continuous" },
+    ],
+    elements: [
+      {
+        kind: "correlationMatrix",
+        enabled: true,
+        options: { correlationMethod: "distance" },
+      },
+    ],
+  });
+
+  const invalidCorrelationElementsExpected: GraphElementRequest[] = [
+    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
+  ];
+  assert.deepEqual(deriveElements(invalidMethodItem), invalidCorrelationElementsExpected);
+
+  const mixedCorrelationItem = makeGraphBuilderItem({
+    encoding: {},
+    multiX: [
+      { name: "mx0", type: "continuous" },
+      { name: "mx1", type: "continuous" },
+    ],
+    multiY: [
+      { name: "my0", type: "continuous" },
+      { name: "my1", type: "continuous" },
+      { name: "my2", type: "continuous" },
+    ],
+    filters: [
+      {
+        id: "corr-filter",
+        op: "AND",
+        rule: {
+          kind: "categorical",
+          field: { name: "segment", type: "nominal" },
+          selected: ["A"],
+          exclude: false,
+        },
+      },
+    ],
+    elements: [{ kind: "correlationMatrix", enabled: true }],
+  });
+
+  assert.deepEqual(deriveFields(mixedCorrelationItem), [
+    { role: "multiX0", column: "mx0" },
+    { role: "multiX1", column: "mx1" },
+    { role: "filter", column: "segment" },
+  ]);
+
   const rawItem = makeGraphBuilderItem({
     elements: [
       { kind: "points", enabled: true, options: { summaryStat: "none" } },

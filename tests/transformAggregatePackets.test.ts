@@ -1600,3 +1600,90 @@ for (const element of [
     assert.equal((scatter.data as unknown[]).length, 1, "each facet panel should keep only its local typed points");
   }
 }
+
+{
+  const data = frameBackedAggregateData(["alpha", "beta", "gamma"]);
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "alpha", type: "continuous" },
+      y: { name: "beta", type: "continuous" },
+    },
+    elements: [{ kind: "correlationMatrix", enabled: true }],
+  };
+
+  const frame = frameBackedAggregateFrame([
+    {
+      kind: "correlationMatrix",
+      method: "spearman",
+      columns: ["alpha", "beta", "gamma"],
+      cells: [
+        { xIndex: 0, yIndex: 0, coefficient: 1, sampleCount: 24 },
+        { xIndex: 1, yIndex: 0, coefficient: 0, sampleCount: 24 },
+        { xIndex: 2, yIndex: 0, coefficient: -0.4321, sampleCount: 24 },
+        { xIndex: 0, yIndex: 1, coefficient: 0, sampleCount: 24 },
+        { xIndex: 1, yIndex: 1, coefficient: 1, sampleCount: 24 },
+        { xIndex: 2, yIndex: 1, coefficient: null, sampleCount: 24, unavailableReason: "zeroVariance" },
+        { xIndex: 0, yIndex: 2, coefficient: -0.4321, sampleCount: 24 },
+        { xIndex: 1, yIndex: 2, coefficient: null, sampleCount: 24, unavailableReason: "insufficientData" },
+        { xIndex: 2, yIndex: 2, coefficient: 1, sampleCount: 24 },
+      ],
+    },
+  ]);
+
+  const built = buildGraph(spec, data, theme, undefined, frame);
+  assert.equal(built.panels.length, 1, "correlation matrix must render as a dedicated single panel");
+
+  const option = built.panels[0].option as Record<string, unknown>;
+  const xAxis = option.xAxis as Record<string, unknown>;
+  const yAxis = option.yAxis as Record<string, unknown>;
+  assert.deepEqual(xAxis.data, ["alpha", "beta", "gamma"]);
+  assert.deepEqual(yAxis.data, ["alpha", "beta", "gamma"]);
+
+  const series = panelSeries(option);
+  assert.equal(series.length > 0, true, "correlation matrix should emit at least one series");
+  const matrixSeries = series[0];
+  assert.equal(matrixSeries.type, "heatmap");
+
+  const visualMap = option.visualMap as Record<string, unknown>;
+  assert.deepEqual(visualMap.min, -1);
+  assert.deepEqual(visualMap.max, 1);
+
+  const matrixData = Array.isArray(matrixSeries.data)
+    ? (matrixSeries.data as Array<Record<string, unknown>>)
+    : [];
+  assert.equal(matrixData.length, 9);
+
+  const zeroCell = matrixData.find((entry) => {
+    const value = Array.isArray(entry.value) ? entry.value : [];
+    return Number(value[0]) === 1 && Number(value[1]) === 0;
+  });
+  assert.ok(zeroCell, "zero coefficient cell should exist");
+  assert.equal(Array.isArray(zeroCell?.value) ? Number((zeroCell?.value as unknown[])[2]) : NaN, 0);
+
+  const unavailableCell = matrixData.find((entry) => {
+    const value = Array.isArray(entry.value) ? entry.value : [];
+    return Number(value[0]) === 2 && Number(value[1]) === 1;
+  });
+  assert.ok(unavailableCell, "unavailable coefficient cell should exist");
+  assert.ok(
+    typeof unavailableCell?.itemStyle === "object" && unavailableCell?.itemStyle !== null,
+    "unavailable cell should carry explicit unavailable styling",
+  );
+  assert.equal(
+    (unavailableCell?.label as Record<string, unknown> | undefined)?.show,
+    false,
+    "unavailable cell label should be hidden",
+  );
+
+  const tooltip = option.tooltip as Record<string, unknown>;
+  const formatter = tooltip.formatter as ((params: unknown) => string);
+  assert.equal(typeof formatter, "function");
+
+  const tooltipText = formatter({ data: unavailableCell });
+  assert.match(tooltipText, /alpha|beta|gamma/);
+  assert.match(tooltipText, /Method\s*[:=]\s*Spearman/i);
+  assert.match(tooltipText, /n\s*[:=]\s*24/i);
+  assert.match(tooltipText, /Pair\s*[:=]\s*gamma\s*×\s*beta/i);
+  assert.match(tooltipText, /Unavailable\s*[:=]\s*Zero variance/i);
+  assert.doesNotMatch(tooltipText, /graph\.correlation\./i);
+}

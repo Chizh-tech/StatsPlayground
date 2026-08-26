@@ -574,6 +574,7 @@
       "points": "Scatter",
       "line": "Line",
       "bar": "Bar",
+      "correlationMatrix": "Correlation Matrix",
       "histogram": "Histogram",
       "boxplot": "Box plot",
       "smoother": "Smoother",
@@ -598,6 +599,12 @@
     "removeLayer": "Remove layer",
     "smootherLambda": "Smoothing",
     "opt": {
+      "correlationMethod": "Correlation Method",
+      "correlation": {
+        "pearson": "Pearson",
+        "spearman": "Spearman",
+        "kendall": "Kendall"
+      },
       "summaryStat": "Summary Statistic",
       "errorInterval": "Error Interval",
       "intervalStyle": "Interval Style",
@@ -649,6 +656,19 @@
     "loadingProgress": "{{loaded}} / {{total}} rows",
     "noData": "No data",
     "dragHint": "Drag a column onto an axis slot to begin",
+    "correlation": {
+      "requiresColumns": "Correlation matrix requires {{min}}-{{max}} numeric columns.",
+      "tooManyColumns": "Correlation matrix supports up to {{max}} columns.",
+      "pair": "Pair",
+      "coefficient": "Coefficient",
+      "unavailableLabel": "Unavailable",
+      "sampleCount": "n",
+      "unavailableReason": {
+        "insufficientData": "Insufficient data",
+        "zeroVariance": "Zero variance",
+        "unknown": "Unknown"
+      }
+    },
     "removeSlot": "Remove",
     "legend": {
       "title": "Legend",

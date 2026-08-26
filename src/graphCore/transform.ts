@@ -8,9 +8,10 @@
 
 import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerShape, RefLineY, RefLineX, RefLineStyle, BandRefLine, YAxisConfig, GridLineStyle, AutoSpec } from "./types.ts";
 import { DEFAULT_GROUP_KEY } from "./types.ts";
-import { buildAxisCommon, type GraphTheme } from "./theme.ts";
+import { buildAxisCommon, buildCorrelationDivergingPalette, type GraphTheme } from "./theme.ts";
 import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand.ts";
-import type { BoxPlotPacket, GraphDataFrame, GraphAggregatePacket, HeatmapPacket, HistogramPacket, SummaryPacket } from "../types/graphData.ts";
+import type { BoxPlotPacket, CorrelationMatrixPacket, GraphDataFrame, GraphAggregatePacket, HeatmapPacket, HistogramPacket, SummaryPacket } from "../types/graphData.ts";
+import type { RawPointPanelDescriptor } from "./rawPoints.ts";
 import { buildFrameScatterItems, type FrameScatterItem } from "./frameScatter.ts";
 import {
   computeJitterOffsets as computeStableJitterOffsets,
@@ -1501,6 +1502,199 @@ function findHeatmapPacket(
   };
 }
 
+function findCorrelationMatrixPacket(
+  aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+  _panelFacet?: PanelFacetContext,
+): CorrelationMatrixPacket | null {
+  if (!aggregatePackets || aggregatePackets.length === 0) return null;
+  const packet = aggregatePackets.find((candidate) => candidate.kind === "correlationMatrix");
+  if (!packet || packet.kind !== "correlationMatrix") return null;
+  return packet;
+}
+
+function formatCorrelationCoefficient(value: number): string {
+  if (!Number.isFinite(value)) return "";
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(value);
+}
+
+function fallbackCorrelationMethodLabel(method: string): string {
+  switch (method) {
+    case "pearson":
+      return "Pearson";
+    case "spearman":
+      return "Spearman";
+    case "kendall":
+      return "Kendall";
+    default:
+      return method;
+  }
+}
+
+function fallbackCorrelationUnavailableReasonLabel(reason: string): string {
+  switch (reason) {
+    case "insufficientData":
+      return "Insufficient data";
+    case "zeroVariance":
+      return "Zero variance";
+    default:
+      return "Unknown";
+  }
+}
+
+function tOr(key: string, fallback: string): string {
+  const resolved = i18next.t(key);
+  if (typeof resolved === "string" && resolved.trim().length > 0 && resolved !== key) return resolved;
+  return fallback;
+}
+
+function buildCorrelationMatrixOption(
+  packet: CorrelationMatrixPacket,
+  theme: GraphTheme,
+  axis: ReturnType<typeof buildAxisCommon>,
+  aggregateMode: "legacyRows" | "frameBacked",
+  spec: GraphSpec,
+): EChartsOption {
+  const { negative, neutral, positive, unavailable } = buildCorrelationDivergingPalette(theme);
+  const columns = packet.columns.slice();
+  const matrixSize = columns.length;
+  const cellByIndex = new Map<string, { coefficient?: number | null; sampleCount: number; unavailableReason?: string }>();
+  for (const cell of packet.cells) {
+    cellByIndex.set(`${cell.xIndex}:${cell.yIndex}`, {
+      coefficient: cell.coefficient,
+      sampleCount: cell.sampleCount,
+      unavailableReason: cell.unavailableReason,
+    });
+  }
+
+  const data = [] as Array<Record<string, unknown>>;
+  for (let yIndex = 0; yIndex < matrixSize; yIndex += 1) {
+    for (let xIndex = 0; xIndex < matrixSize; xIndex += 1) {
+      const xName = columns[xIndex] ?? "";
+      const yName = columns[yIndex] ?? "";
+      const entry = cellByIndex.get(`${xIndex}:${yIndex}`);
+      const coeff = Number.isFinite(entry?.coefficient) ? Number(entry?.coefficient) : undefined;
+      const unavailableReason = entry?.unavailableReason;
+      const sampleCount = Number.isFinite(entry?.sampleCount) ? Number(entry?.sampleCount) : 0;
+      const isDefined = Number.isFinite(coeff);
+
+      data.push({
+        value: [xIndex, yIndex, isDefined ? coeff : -2],
+        xName,
+        yName,
+        coefficient: isDefined ? coeff : undefined,
+        sampleCount,
+        unavailableReason,
+        label: isDefined
+          ? {
+            show: true,
+            formatter: formatCorrelationCoefficient(coeff!),
+            color: Math.abs(coeff!) >= 0.5 ? theme.bgCanvas : theme.fgPrimary,
+            fontSize: 10,
+          }
+          : { show: false },
+        ...(isDefined ? {} : { itemStyle: { color: unavailable } }),
+      });
+    }
+  }
+
+  const methodValueKey = `graph.opt.correlation.${packet.method}`;
+  const methodLabel = tOr("graph.opt.correlationMethod", "Method");
+  const methodName = tOr(methodValueKey, fallbackCorrelationMethodLabel(packet.method));
+  const pairLabel = tOr("graph.correlation.pair", "Pair");
+  const coefficientLabel = tOr("graph.correlation.coefficient", "Coefficient");
+  const unavailableLabel = tOr("graph.correlation.unavailableLabel", "Unavailable");
+  const sampleLabel = tOr("graph.correlation.sampleCount", "n");
+  const unknownReasonLabel = tOr("graph.correlation.unavailableReason.unknown", "Unknown");
+
+  return {
+    backgroundColor: "transparent",
+    textStyle: { color: theme.fgPrimary },
+    animation: false,
+    grid: {
+      left: 88,
+      right: 88,
+      top: 64,
+      bottom: 92,
+      width: "70%",
+      height: "70%",
+      show: true,
+      borderColor: theme.axisLine,
+      borderWidth: 0.5,
+      containLabel: true,
+    },
+    tooltip: {
+      trigger: "item",
+      confine: true,
+      appendToBody: true,
+      formatter: (params: any) => {
+        const cell = params?.data ?? {};
+        const xName = String(cell.xName ?? "");
+        const yName = String(cell.yName ?? "");
+        const coeffValue = Number(cell.coefficient);
+        const n = Number.isFinite(Number(cell.sampleCount)) ? Number(cell.sampleCount) : 0;
+        const unavailableReason = String(cell.unavailableReason ?? "unknown");
+        const reasonKey = `graph.correlation.unavailableReason.${unavailableReason}`;
+        const reasonLabel = tOr(
+          reasonKey,
+          unavailableReason === "unknown"
+            ? unknownReasonLabel
+            : fallbackCorrelationUnavailableReasonLabel(unavailableReason),
+        );
+        const coefficientLine = Number.isFinite(coeffValue)
+          ? `${coefficientLabel}: ${formatCorrelationCoefficient(coeffValue)}`
+          : `${unavailableLabel}: ${reasonLabel}`;
+        return [
+          `${pairLabel}: ${xName} × ${yName}`,
+          `${methodLabel}: ${methodName}`,
+          coefficientLine,
+          `${sampleLabel}: ${n}`,
+        ].join("<br/>");
+      },
+    },
+    xAxis: mergeAxis(
+      {
+        type: "category",
+        ...axis,
+        data: columns,
+        splitArea: { show: true },
+        axisLabel: { ...axis.axisLabel, interval: 0, rotate: columns.length > 8 ? 45 : 0, showMinLabel: true, showMaxLabel: true },
+      },
+      buildAxisOverrides(spec.xAxis, aggregateMode),
+    ),
+    yAxis: mergeAxis(
+      {
+        type: "category",
+        ...axis,
+        data: columns,
+        splitArea: { show: true },
+        inverse: true,
+        axisLabel: { ...axis.axisLabel, interval: 0, showMinLabel: true, showMaxLabel: true },
+      },
+      buildAxisOverrides(spec.yAxis, aggregateMode),
+    ),
+    visualMap: {
+      min: -1,
+      max: 1,
+      calculable: false,
+      orient: "horizontal",
+      left: "center",
+      bottom: 12,
+      inRange: { color: [negative, neutral, positive] },
+      textStyle: { color: theme.fgSecondary },
+    },
+    series: [
+      {
+        id: "__correlation_matrix",
+        type: "heatmap",
+        data,
+        animation: false,
+        progressive: 0,
+        emphasis: { itemStyle: { shadowBlur: 0 } },
+      },
+    ],
+  } as EChartsOption;
+}
+
 function summaryPointFromPacket(
   packet: SummaryPacket,
   xIsCategory: boolean,
@@ -2730,6 +2924,24 @@ function buildSingleOption(
   const colorField = encoding.color;
   const overlayField = encoding.overlay;
   const sizeField = encoding.size;
+  const enabledElements = elements.filter((e) => e.enabled !== false);
+  const frameBackedAggregateMode = aggregatePackets !== undefined;
+  const aggregateMode: "legacyRows" | "frameBacked" = frameBackedAggregateMode
+    ? "frameBacked"
+    : "legacyRows";
+  const hasCorrelationMatrix = enabledElements.some((element) => element.kind === "correlationMatrix");
+  const correlationMatrixPacket = findCorrelationMatrixPacket(aggregatePackets, panelFacet);
+
+  if (hasCorrelationMatrix && frameBackedAggregateMode && correlationMatrixPacket) {
+    return buildCorrelationMatrixOption(
+      correlationMatrixPacket,
+      theme,
+      buildAxisCommon(theme),
+      aggregateMode,
+      spec,
+    );
+  }
+
   const resolvedFrameScatterCoordinates = frameScatterCoordinates ?? {
     x: xField
       ? {
@@ -2925,7 +3137,6 @@ function buildSingleOption(
     useRowIdxX || hasBoxplot ||
     xField?.type === "nominal" || xField?.type === "ordinal";
   const xIsTime = !useRowIdxX && !hasBoxplot && xField?.type === "datetime";
-  const enabledElements = elements.filter((e) => e.enabled !== false);
   const framePointsOnly = !!frame
     && enabledElements.length === 1
     && enabledElements[0].kind === "points"
@@ -2973,10 +3184,6 @@ function buildSingleOption(
     x?: { min: number; max: number };
     y?: { min: number; max: number };
   } | undefined;
-  const frameBackedAggregateMode = aggregatePackets !== undefined;
-  const aggregateMode: "legacyRows" | "frameBacked" = frameBackedAggregateMode
-    ? "frameBacked"
-    : "legacyRows";
   const summaryPacket = findSummaryPacket(aggregatePackets, panelFacet);
   const boxPlotPacket = findBoxPlotPacket(aggregatePackets, panelFacet);
   const histogramPacket = findHistogramPacket(aggregatePackets, panelFacet);
@@ -6690,6 +6897,26 @@ export function buildGraph(
   const fx = encoding.groupX;
   const fy = encoding.groupY;
   const frameBacked = !!frame;
+
+  const correlationElementEnabled = spec.elements.some(
+    (element) => element.enabled !== false && element.kind === "correlationMatrix",
+  );
+  const correlationMatrixPacket = findCorrelationMatrixPacket(frame?.aggregates);
+
+  if (correlationElementEnabled && correlationMatrixPacket) {
+    const frameSafeData: GraphData = frameBacked ? { columns: data.columns, rows: [] } : data;
+    return {
+      panels: [{
+        title: spec.title || "",
+        option: buildSingleOption(spec, frameSafeData, theme, undefined, valueOrders, undefined, frame?.aggregates),
+        rawPoints: null,
+        groupXValue: null,
+        groupYValue: null,
+      }],
+      cols: 1,
+      rows: 1,
+    };
+  }
   const frameSafeData: GraphData = frame ? materializeFrameRows(spec, data, frame) : data;
 
   // Compute the global ordering of overlay/color groups across the FULL

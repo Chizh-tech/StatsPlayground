@@ -5,10 +5,12 @@ use std::time::Instant;
 use duckdb::types::{OrderedMap, TimeUnit, Value};
 use duckdb::{params, params_from_iter, Config, Connection};
 
+use crate::engine::correlation::{correlate, CorrelationFailure, StatisticalMethod};
 use crate::engine::sql_query::{normalize_identifier, validate_read_only_query};
 use crate::error::AppError;
 use crate::models::graph_data::{
-    BoxPlotEntry, BoxPlotOutlier, BoxPlotPacket, GraphAggregatePacket, GraphDataRequest,
+    BoxPlotEntry, BoxPlotOutlier, BoxPlotPacket, CorrelationMatrixCell, CorrelationMatrixPacket,
+    CorrelationMethod, CorrelationUnavailableReason, GraphAggregatePacket, GraphDataRequest,
     GraphSampling, HeatmapCell, HeatmapPacket, HistogramBin, HistogramPacket, SummaryEntry,
     SummaryPacket, GRAPH_VIRTUAL_SOURCE_COLUMN, GRAPH_VIRTUAL_VALUE_COLUMN,
 };
@@ -46,6 +48,35 @@ struct MaterializedQuery {
     rows: Vec<Vec<Value>>,
 }
 type GroupedStatisticValues = std::collections::HashMap<(String, String), Vec<Option<f64>>>;
+
+struct CorrelationRequestBinding {
+    suffix: u32,
+    column: String,
+}
+
+struct CorrelationRequestPlan {
+    method: CorrelationMethod,
+    columns: Vec<String>,
+}
+
+impl From<CorrelationMethod> for StatisticalMethod {
+    fn from(value: CorrelationMethod) -> Self {
+        match value {
+            CorrelationMethod::Pearson => Self::Pearson,
+            CorrelationMethod::Spearman => Self::Spearman,
+            CorrelationMethod::Kendall => Self::Kendall,
+        }
+    }
+}
+
+impl From<CorrelationFailure> for CorrelationUnavailableReason {
+    fn from(value: CorrelationFailure) -> Self {
+        match value {
+            CorrelationFailure::InsufficientData => Self::InsufficientData,
+            CorrelationFailure::ZeroVariance => Self::ZeroVariance,
+        }
+    }
+}
 
 fn role_column(request: &GraphDataRequest, role_name: &str) -> Option<String> {
     request
@@ -1750,11 +1781,62 @@ impl DuckDbEngine {
         &self,
         request: &GraphDataRequest,
     ) -> Result<Vec<GraphAggregatePacket>, AppError> {
+        let (packets, _cancelled) =
+            self.collect_graph_aggregate_packets_with_cancel(request, || Ok(false))?;
+        Ok(packets)
+    }
+
+    pub fn collect_graph_aggregate_packets_with_cancel<F>(
+        &self,
+        request: &GraphDataRequest,
+        mut should_cancel: F,
+    ) -> Result<(Vec<GraphAggregatePacket>, bool), AppError>
+    where
+        F: FnMut() -> Result<bool, AppError>,
+    {
+        if should_cancel()? {
+            return Ok((Vec::new(), true));
+        }
+
+        let current_generation = self.get_dataset_generation(&request.dataset_id)?;
+        if current_generation != request.generation {
+            return Err(AppError::InvalidParam(format!(
+                "stale dataset generation: expected {current_generation}, received {}",
+                request.generation
+            )));
+        }
+
         let user_columns = self.get_user_columns(&request.dataset_id)?;
         let allowed_columns = user_columns
             .iter()
             .map(|(name, column_type)| (name.as_str(), column_type.as_str()))
             .collect::<std::collections::HashMap<_, _>>();
+
+        let correlation_plan = self.resolve_correlation_request_plan(request, &allowed_columns)?;
+        let exclusive_correlation = correlation_plan.is_some()
+            && request
+                .elements
+                .iter()
+                .all(|element| element.kind.eq_ignore_ascii_case("correlationMatrix"));
+
+        if exclusive_correlation {
+            let correlation_plan = correlation_plan.as_ref().ok_or_else(|| {
+                AppError::InvalidParam(
+                    "correlation matrix request is missing resolved bindings".to_string(),
+                )
+            })?;
+            let packet = self.query_correlation_matrix_packet(
+                request,
+                &allowed_columns,
+                correlation_plan,
+                &mut should_cancel,
+            )?;
+            let Some(packet) = packet else {
+                return Ok((Vec::new(), true));
+            };
+            return Ok((vec![GraphAggregatePacket::CorrelationMatrix(packet)], false));
+        }
+
         let plan = self.compile_graph_query_plan(request, &allowed_columns)?;
 
         let mut want_histogram = false;
@@ -1773,7 +1855,19 @@ impl DuckDbEngine {
         }
 
         if !(want_histogram || want_heatmap || want_boxplot || want_summary) {
-            return Ok(Vec::new());
+            if let Some(correlation_plan) = &correlation_plan {
+                let packet = self.query_correlation_matrix_packet(
+                    request,
+                    &allowed_columns,
+                    correlation_plan,
+                    &mut should_cancel,
+                )?;
+                let Some(packet) = packet else {
+                    return Ok((Vec::new(), true));
+                };
+                return Ok((vec![GraphAggregatePacket::CorrelationMatrix(packet)], false));
+            }
+            return Ok((Vec::new(), false));
         }
 
         let mut packets = Vec::new();
@@ -1799,7 +1893,244 @@ impl DuckDbEngine {
             ));
         }
 
-        Ok(packets)
+        if let Some(correlation_plan) = &correlation_plan {
+            let packet = self.query_correlation_matrix_packet(
+                request,
+                &allowed_columns,
+                correlation_plan,
+                &mut should_cancel,
+            )?;
+            let Some(packet) = packet else {
+                return Ok((Vec::new(), true));
+            };
+            packets.push(GraphAggregatePacket::CorrelationMatrix(packet));
+        }
+
+        if should_cancel()? {
+            return Ok((Vec::new(), true));
+        }
+
+        Ok((packets, false))
+    }
+
+    fn resolve_correlation_request_plan(
+        &self,
+        request: &GraphDataRequest,
+        allowed_columns: &std::collections::HashMap<&str, &str>,
+    ) -> Result<Option<CorrelationRequestPlan>, AppError> {
+        let mut correlation_elements = request
+            .elements
+            .iter()
+            .filter(|element| element.kind.eq_ignore_ascii_case("correlationMatrix"));
+        let Some(correlation_element) = correlation_elements.next() else {
+            return Ok(None);
+        };
+        if correlation_elements.next().is_some() {
+            return Err(AppError::InvalidParam(
+                "graph request can include only one correlationMatrix element".to_string(),
+            ));
+        }
+
+        let mut prefix: Option<&str> = None;
+        let mut bindings = Vec::<CorrelationRequestBinding>::new();
+        for field in &request.fields {
+            let role = field.role.trim().to_ascii_lowercase();
+            let parsed_prefix = if role.starts_with("multix") {
+                Some("multix")
+            } else if role.starts_with("multiy") {
+                Some("multiy")
+            } else {
+                None
+            };
+            let Some(parsed_prefix) = parsed_prefix else {
+                continue;
+            };
+
+            match prefix {
+                None => prefix = Some(parsed_prefix),
+                Some(existing) if existing != parsed_prefix => {
+                    return Err(AppError::InvalidParam(
+                        "correlation matrix request cannot mix multiX* and multiY* roles"
+                            .to_string(),
+                    ));
+                }
+                _ => {}
+            }
+
+            let suffix_text = &role[parsed_prefix.len()..];
+            let suffix = suffix_text.parse::<u32>().map_err(|_| {
+                AppError::InvalidParam(format!(
+                    "correlation role {} must end with a numeric suffix",
+                    field.role
+                ))
+            })?;
+            let column = field.column.trim();
+            if column.is_empty() {
+                return Err(AppError::InvalidParam(format!(
+                    "graph field column must not be blank for role {}",
+                    field.role
+                )));
+            }
+            bindings.push(CorrelationRequestBinding {
+                suffix,
+                column: column.to_string(),
+            });
+        }
+
+        if bindings.is_empty() {
+            return Err(AppError::InvalidParam(
+                "correlation matrix request requires multiX* or multiY* field bindings".to_string(),
+            ));
+        }
+
+        bindings.sort_by_key(|binding| binding.suffix);
+
+        for index in 1..bindings.len() {
+            if bindings[index].suffix == bindings[index - 1].suffix {
+                return Err(AppError::InvalidParam(format!(
+                    "duplicate correlation binding index {}",
+                    bindings[index].suffix
+                )));
+            }
+        }
+
+        for (expected, binding) in bindings.iter().enumerate() {
+            let expected = u32::try_from(expected)
+                .map_err(|_| AppError::InvalidParam("too many correlation bindings".to_string()))?;
+            if binding.suffix != expected {
+                return Err(AppError::InvalidParam(format!(
+                    "correlation bindings must be contiguous starting at 0 (missing index {})",
+                    expected
+                )));
+            }
+        }
+
+        if bindings.len() < 2 {
+            return Err(AppError::InvalidParam(
+                "correlation matrix requires at least 2 selected columns".to_string(),
+            ));
+        }
+        if bindings.len() > 20 {
+            return Err(AppError::InvalidParam(
+                "correlation matrix supports at most 20 selected columns".to_string(),
+            ));
+        }
+
+        let mut columns = Vec::with_capacity(bindings.len());
+        let mut unique = std::collections::HashSet::with_capacity(bindings.len());
+        for binding in bindings {
+            if !unique.insert(binding.column.clone()) {
+                return Err(AppError::InvalidParam(format!(
+                    "duplicate correlation column binding: {}",
+                    binding.column
+                )));
+            }
+
+            let Some(column_type) = allowed_columns.get(binding.column.as_str()) else {
+                return Err(AppError::InvalidParam(format!(
+                    "unknown graph column: {}",
+                    binding.column
+                )));
+            };
+            if !is_numeric_type(column_type) {
+                return Err(AppError::InvalidParam(format!(
+                    "correlation matrix requires numeric columns: {}",
+                    binding.column
+                )));
+            }
+            columns.push(binding.column);
+        }
+
+        let method = correlation_element.correlation_method.ok_or_else(|| {
+            AppError::InvalidParam(
+                "correlationMatrix element must include correlationMethod".to_string(),
+            )
+        })?;
+
+        Ok(Some(CorrelationRequestPlan { method, columns }))
+    }
+
+    fn query_correlation_matrix_packet<F>(
+        &self,
+        request: &GraphDataRequest,
+        allowed_columns: &std::collections::HashMap<&str, &str>,
+        correlation_plan: &CorrelationRequestPlan,
+        should_cancel: &mut F,
+    ) -> Result<Option<CorrelationMatrixPacket>, AppError>
+    where
+        F: FnMut() -> Result<bool, AppError>,
+    {
+        let table_name = Self::quote_identifier(&Self::internal_table_name(&request.dataset_id));
+        let (where_clause, filter_values) =
+            Self::compile_table_window_filters(&request.filters, allowed_columns)?;
+
+        let select_columns = correlation_plan
+            .columns
+            .iter()
+            .map(|column| {
+                let quoted = Self::quote_identifier(column);
+                format!("CAST({quoted} AS DOUBLE) AS {quoted}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query_sql = format!(
+            "SELECT {select_columns} FROM {table_name} {where_clause} ORDER BY \"_row_id\" ASC"
+        );
+
+        let mut per_column = vec![Vec::<Option<f64>>::new(); correlation_plan.columns.len()];
+        let mut stmt = self.conn.prepare(&query_sql)?;
+        let mut rows = stmt.query(params_from_iter(filter_values.iter()))?;
+        while let Some(row) = rows.next()? {
+            if should_cancel()? {
+                return Ok(None);
+            }
+            for (index, values) in per_column.iter_mut().enumerate() {
+                let value = row.get::<_, Value>(index)?;
+                let numeric = numeric_cell_value(value)?;
+                values.push(numeric.filter(|value| value.is_finite()));
+            }
+        }
+
+        let method: StatisticalMethod = correlation_plan.method.into();
+        let column_count = correlation_plan.columns.len();
+        let mut pair_results = std::collections::HashMap::<
+            (usize, usize),
+            crate::engine::correlation::CorrelationResult,
+        >::new();
+        for left in 0..column_count {
+            for right in left..column_count {
+                if should_cancel()? {
+                    return Ok(None);
+                }
+                let result = correlate(&per_column[left], &per_column[right], method);
+                pair_results.insert((left, right), result);
+            }
+        }
+
+        let mut cells = Vec::with_capacity(column_count * column_count);
+        for y_index in 0..column_count {
+            for x_index in 0..column_count {
+                let key = (x_index.min(y_index), x_index.max(y_index));
+                let result = pair_results.get(&key).ok_or_else(|| {
+                    AppError::Database("missing pairwise correlation result".to_string())
+                })?;
+                cells.push(CorrelationMatrixCell {
+                    x_index: u32::try_from(x_index)
+                        .map_err(|_| AppError::InvalidParam("x index overflows u32".to_string()))?,
+                    y_index: u32::try_from(y_index)
+                        .map_err(|_| AppError::InvalidParam("y index overflows u32".to_string()))?,
+                    coefficient: result.coefficient,
+                    sample_count: result.sample_count,
+                    unavailable_reason: result.failure.map(Into::into),
+                });
+            }
+        }
+
+        Ok(Some(CorrelationMatrixPacket {
+            method: correlation_plan.method,
+            columns: correlation_plan.columns.clone(),
+            cells,
+        }))
     }
 
     fn query_histogram_packet(
@@ -6808,8 +7139,7 @@ impl DuckDbEngine {
             }
             let _ = row_id;
 
-            let row_releasable_bytes =
-                row_bytes.saturating_sub(mem::size_of::<ArchiveBatchRow>());
+            let row_releasable_bytes = row_bytes.saturating_sub(mem::size_of::<ArchiveBatchRow>());
             rows.reserve(1);
             let projected_retained_bytes = rows
                 .capacity()
@@ -6898,14 +7228,12 @@ fn estimate_retained_value_bytes(value: &Value) -> usize {
         Value::Date32(_) => base.saturating_add(mem::size_of::<i32>()),
         Value::Time64(_, _) => base.saturating_add(mem::size_of::<i64>()),
         Value::Interval { .. } => base.saturating_add(mem::size_of::<i64>() * 3),
-        Value::Text(text) | Value::Enum(text) => {
-            base.saturating_add(mem::size_of::<String>())
-                .saturating_add(text.capacity())
-        }
-        Value::Blob(bytes) | Value::Geometry(bytes) => {
-            base.saturating_add(mem::size_of::<Vec<u8>>())
-                .saturating_add(bytes.capacity())
-        }
+        Value::Text(text) | Value::Enum(text) => base
+            .saturating_add(mem::size_of::<String>())
+            .saturating_add(text.capacity()),
+        Value::Blob(bytes) | Value::Geometry(bytes) => base
+            .saturating_add(mem::size_of::<Vec<u8>>())
+            .saturating_add(bytes.capacity()),
         Value::List(items) | Value::Array(items) => {
             let mut total = base
                 .saturating_add(mem::size_of::<Vec<Value>>())
@@ -7386,12 +7714,12 @@ mod tests {
     use crate::models::graph_data::{
         GraphDataRequest, GraphElementRequest, GraphFieldBinding, GraphSampling, GraphViewport,
     };
-    use crate::services::archive_cell::{
-        archive_cell_to_json_call_count, reset_archive_cell_to_json_call_count,
-    };
     use crate::models::table::{
         CreateTableFromRowsRequest, TableWindowFilter, TableWindowFilterRule, TableWindowRequest,
         TableWindowSort,
+    };
+    use crate::services::archive_cell::{
+        archive_cell_to_json_call_count, reset_archive_cell_to_json_call_count,
     };
     use duckdb::types::Decimal;
 
@@ -7497,6 +7825,7 @@ mod tests {
             elements: vec![GraphElementRequest {
                 kind: "points".into(),
                 summary_stat: "none".into(),
+                correlation_method: None,
             }],
             sampling: GraphSampling::Sample { size: 32, seed: 7 },
             raw_point_budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
@@ -7582,6 +7911,7 @@ mod tests {
             elements: vec![GraphElementRequest {
                 kind: "points".into(),
                 summary_stat: "none".into(),
+                correlation_method: None,
             }],
             sampling: GraphSampling::Full,
             raw_point_budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
@@ -7655,6 +7985,141 @@ mod tests {
                 serde_json::json!(20)
             ]
         );
+    }
+
+    #[test]
+    fn correlation_matrix_cancellation_during_row_scan_returns_no_partial_packet() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "corr-cancel-row-scan",
+            "Correlation Cancel Row Scan",
+            &["a".into(), "b".into()],
+            &["DOUBLE".into(), "DOUBLE".into()],
+        )
+        .unwrap();
+
+        db.conn()
+            .execute(
+                "INSERT INTO \"dataset_corr_cancel_row_scan\" (_row_id, a, b)
+                 VALUES
+                 (1, 1.0, 2.0),
+                 (2, 2.0, 4.0),
+                 (3, 3.0, 6.0),
+                 (4, 4.0, 8.0)",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = 4 WHERE id = $1",
+                params!["corr-cancel-row-scan"],
+            )
+            .unwrap();
+
+        let request = GraphDataRequest {
+            request_id: "request-corr-cancel-row-scan".into(),
+            dataset_id: "corr-cancel-row-scan".into(),
+            generation: 0,
+            fields: vec![
+                GraphFieldBinding {
+                    role: "multiX0".into(),
+                    column: "a".into(),
+                },
+                GraphFieldBinding {
+                    role: "multiX1".into(),
+                    column: "b".into(),
+                },
+            ],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "correlationMatrix".into(),
+                summary_stat: "none".into(),
+                correlation_method: Some(crate::models::graph_data::CorrelationMethod::Pearson),
+            }],
+            sampling: GraphSampling::Full,
+            raw_point_budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
+            viewport: GraphViewport {
+                width: 1200,
+                height: 700,
+            },
+        };
+
+        let mut checks = 0usize;
+        let (packets, cancelled) = db
+            .collect_graph_aggregate_packets_with_cancel(&request, || {
+                checks = checks.saturating_add(1);
+                Ok(checks >= 2)
+            })
+            .unwrap();
+
+        assert!(cancelled);
+        assert!(packets.is_empty());
+    }
+
+    #[test]
+    fn collect_graph_aggregate_packets_with_cancel_rejects_stale_generation_for_correlation_only() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "corr-stale-aggregate-only",
+            "Correlation Stale Aggregate Only",
+            &["a".into(), "b".into()],
+            &["DOUBLE".into(), "DOUBLE".into()],
+        )
+        .unwrap();
+
+        db.conn()
+            .execute(
+                "INSERT INTO \"dataset_corr_stale_aggregate_only\" (_row_id, a, b)
+                 VALUES
+                 (1, 1.0, 2.0),
+                 (2, 2.0, 4.0),
+                 (3, 3.0, 6.0),
+                 (4, 4.0, 8.0)",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = 4, generation = 1 WHERE id = $1",
+                params!["corr-stale-aggregate-only"],
+            )
+            .unwrap();
+
+        let request = GraphDataRequest {
+            request_id: "request-corr-stale-aggregate-only".into(),
+            dataset_id: "corr-stale-aggregate-only".into(),
+            generation: 0,
+            fields: vec![
+                GraphFieldBinding {
+                    role: "multiX0".into(),
+                    column: "a".into(),
+                },
+                GraphFieldBinding {
+                    role: "multiX1".into(),
+                    column: "b".into(),
+                },
+            ],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "correlationMatrix".into(),
+                summary_stat: "none".into(),
+                correlation_method: Some(crate::models::graph_data::CorrelationMethod::Pearson),
+            }],
+            sampling: GraphSampling::Full,
+            raw_point_budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
+            viewport: GraphViewport {
+                width: 1200,
+                height: 700,
+            },
+        };
+
+        let error = db
+            .collect_graph_aggregate_packets_with_cancel(&request, || Ok(false))
+            .expect_err("stale generation must fail");
+        assert!(matches!(
+            error,
+            AppError::InvalidParam(message) if message.contains("stale dataset generation")
+        ));
     }
 
     #[test]

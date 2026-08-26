@@ -13,11 +13,21 @@ pub struct GraphFieldBinding {
     pub column: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrelationMethod {
+    Pearson,
+    Spearman,
+    Kendall,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphElementRequest {
     pub kind: String,
     pub summary_stat: String,
+    #[serde(default)]
+    pub correlation_method: Option<CorrelationMethod>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -392,6 +402,7 @@ pub enum GraphAggregatePacket {
     Heatmap(HeatmapPacket),
     BoxPlot(BoxPlotPacket),
     Summary(SummaryPacket),
+    CorrelationMatrix(CorrelationMatrixPacket),
 }
 
 pub const GRAPH_VIRTUAL_VALUE_COLUMN: &str = "__sp_value__";
@@ -544,4 +555,60 @@ pub struct SummaryEntry {
     pub max: f64,
     pub interval_low: Option<f64>,
     pub interval_high: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrelationUnavailableReason {
+    InsufficientData,
+    ZeroVariance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrelationMatrixCell {
+    pub x_index: u32,
+    pub y_index: u32,
+    pub coefficient: Option<f64>,
+    pub sample_count: u64,
+    pub unavailable_reason: Option<CorrelationUnavailableReason>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrelationMatrixPacket {
+    pub method: CorrelationMethod,
+    pub columns: Vec<String>,
+    pub cells: Vec<CorrelationMatrixCell>,
+}
+
+#[cfg(test)]
+mod correlation_matrix_tests {
+    use super::*;
+
+    #[test]
+    fn correlation_matrix_packet_serializes_with_camel_case_and_kind_tag() {
+        let packet = GraphAggregatePacket::CorrelationMatrix(CorrelationMatrixPacket {
+            method: CorrelationMethod::Spearman,
+            columns: vec!["a".to_string(), "b".to_string()],
+            cells: vec![CorrelationMatrixCell {
+                x_index: 0,
+                y_index: 1,
+                coefficient: None,
+                sample_count: 3,
+                unavailable_reason: Some(CorrelationUnavailableReason::ZeroVariance),
+            }],
+        });
+
+        let value = serde_json::to_value(packet).expect("serialize correlation packet");
+
+        assert_eq!(value["kind"], serde_json::json!("correlationMatrix"));
+        assert_eq!(value["method"], serde_json::json!("spearman"));
+        assert_eq!(value["cells"][0]["sampleCount"], serde_json::json!(3));
+        assert_eq!(value["cells"][0]["coefficient"], serde_json::Value::Null);
+        assert_eq!(
+            value["cells"][0]["unavailableReason"],
+            serde_json::json!("zeroVariance")
+        );
+    }
 }
