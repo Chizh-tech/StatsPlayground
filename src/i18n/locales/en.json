@@ -652,7 +652,16 @@
     "dragHint": "Drag a column onto an axis slot to begin",
     "correlation": {
       "requiresColumns": "Correlation matrix requires {{min}}-{{max}} numeric columns.",
-      "tooManyColumns": "Correlation matrix supports up to {{max}} columns."
+      "tooManyColumns": "Correlation matrix supports up to {{max}} columns.",
+      "pair": "Pair",
+      "coefficient": "Coefficient",
+      "unavailableLabel": "Unavailable",
+      "sampleCount": "n",
+      "unavailableReason": {
+        "insufficientData": "Insufficient data",
+        "zeroVariance": "Zero variance",
+        "unknown": "Unknown"
+      }
     },
     "removeSlot": "Remove",
     "legend": {

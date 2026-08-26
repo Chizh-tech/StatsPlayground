@@ -901,7 +901,9 @@ function frameBackedAggregateFrame(aggregates: GraphDataFrame["aggregates"], sou
 
   const tooltipText = formatter({ data: unavailableCell });
   assert.match(tooltipText, /alpha|beta|gamma/);
-  assert.match(tooltipText, /spearman|graph\.correlation\.method\.spearman/i);
+  assert.match(tooltipText, /Method\s*[:=]\s*Spearman/i);
   assert.match(tooltipText, /n\s*[:=]\s*24/i);
-  assert.match(tooltipText, /unavailable|zeroVariance|insufficientData/i);
+  assert.match(tooltipText, /Pair\s*[:=]\s*gamma\s*×\s*beta/i);
+  assert.match(tooltipText, /Unavailable\s*[:=]\s*Zero variance/i);
+  assert.doesNotMatch(tooltipText, /graph\.correlation\./i);
 }

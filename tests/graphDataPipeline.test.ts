@@ -262,6 +262,13 @@ assert.equal(makeGraphRows(10).length, 10);
     "graph.opt.correlation.kendall",
     "graph.correlation.requiresColumns",
     "graph.correlation.tooManyColumns",
+    "graph.correlation.pair",
+    "graph.correlation.coefficient",
+    "graph.correlation.unavailableLabel",
+    "graph.correlation.sampleCount",
+    "graph.correlation.unavailableReason.insufficientData",
+    "graph.correlation.unavailableReason.zeroVariance",
+    "graph.correlation.unavailableReason.unknown",
   ];
 
   for (const keyPath of requiredLocalePaths) {
@@ -1317,6 +1324,44 @@ function makeProgressedChunk(
   assert.equal(transportError, null);
   assert.deepEqual(events, ["header", "payload", "complete"]);
   assert.equal(completionCalls, 1);
+}
+
+{
+  let aggregate: GraphAggregatePacket | null = null;
+  let transportError: string | null = null;
+  const request = makeRequest("req-correlation-null-options", 23);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {},
+    onPayload: () => {},
+    onAggregate: (packet) => {
+      aggregate = packet;
+    },
+    onComplete: () => {},
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader(request.requestId, request.generation, 0, true),
+  });
+  transport.onChannelMessage(makePayload(0));
+  transport.onChannelMessage(JSON.stringify({
+    messageType: "aggregate",
+    kind: "correlationMatrix",
+    method: "pearson",
+    columns: ["a", "b"],
+    cells: [
+      { xIndex: 0, yIndex: 0, coefficient: 1, sampleCount: 10, unavailableReason: null },
+      { xIndex: 1, yIndex: 0, coefficient: null, sampleCount: 10, unavailableReason: "zeroVariance" },
+      { xIndex: 0, yIndex: 1, coefficient: null, sampleCount: 10, unavailableReason: "zeroVariance" },
+      { xIndex: 1, yIndex: 1, coefficient: 1, sampleCount: 10, unavailableReason: null },
+    ],
+  }));
+
+  assert.equal(transportError, null);
+  assert.equal(aggregate?.kind, "correlationMatrix");
 }
 
 {

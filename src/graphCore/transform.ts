@@ -1497,6 +1497,30 @@ function formatCorrelationCoefficient(value: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(value);
 }
 
+function fallbackCorrelationMethodLabel(method: string): string {
+  switch (method) {
+    case "pearson":
+      return "Pearson";
+    case "spearman":
+      return "Spearman";
+    case "kendall":
+      return "Kendall";
+    default:
+      return method;
+  }
+}
+
+function fallbackCorrelationUnavailableReasonLabel(reason: string): string {
+  switch (reason) {
+    case "insufficientData":
+      return "Insufficient data";
+    case "zeroVariance":
+      return "Zero variance";
+    default:
+      return "Unknown";
+  }
+}
+
 function tOr(key: string, fallback: string): string {
   const resolved = i18next.t(key);
   if (typeof resolved === "string" && resolved.trim().length > 0 && resolved !== key) return resolved;
@@ -1553,12 +1577,14 @@ function buildCorrelationMatrixOption(
     }
   }
 
-  const methodKey = `graph.correlation.method.${packet.method}`;
-  const methodLabel = tOr("graph.correlation.method", "Method");
-  const methodName = tOr(methodKey, packet.method);
+  const methodValueKey = `graph.opt.correlation.${packet.method}`;
+  const methodLabel = tOr("graph.opt.correlationMethod", "Method");
+  const methodName = tOr(methodValueKey, fallbackCorrelationMethodLabel(packet.method));
+  const pairLabel = tOr("graph.correlation.pair", "Pair");
   const coefficientLabel = tOr("graph.correlation.coefficient", "Coefficient");
-  const unavailableLabel = tOr("graph.correlation.unavailable", "Unavailable");
+  const unavailableLabel = tOr("graph.correlation.unavailableLabel", "Unavailable");
   const sampleLabel = tOr("graph.correlation.sampleCount", "n");
+  const unknownReasonLabel = tOr("graph.correlation.unavailableReason.unknown", "Unknown");
 
   return {
     backgroundColor: "transparent",
@@ -1586,14 +1612,20 @@ function buildCorrelationMatrixOption(
         const yName = String(cell.yName ?? "");
         const coeffValue = Number(cell.coefficient);
         const n = Number.isFinite(Number(cell.sampleCount)) ? Number(cell.sampleCount) : 0;
-        const reasonKey = `graph.correlation.unavailable.${String(cell.unavailableReason ?? "unknown")}`;
-        const reasonLabel = tOr(reasonKey, String(cell.unavailableReason ?? "unknown"));
+        const unavailableReason = String(cell.unavailableReason ?? "unknown");
+        const reasonKey = `graph.correlation.unavailableReason.${unavailableReason}`;
+        const reasonLabel = tOr(
+          reasonKey,
+          unavailableReason === "unknown"
+            ? unknownReasonLabel
+            : fallbackCorrelationUnavailableReasonLabel(unavailableReason),
+        );
         const coefficientLine = Number.isFinite(coeffValue)
           ? `${coefficientLabel}: ${formatCorrelationCoefficient(coeffValue)}`
           : `${unavailableLabel}: ${reasonLabel}`;
         return [
-          `${xName} × ${yName}`,
-          `${methodLabel}: ${methodName} (${methodKey})`,
+          `${pairLabel}: ${xName} × ${yName}`,
+          `${methodLabel}: ${methodName}`,
           coefficientLine,
           `${sampleLabel}: ${n}`,
         ].join("<br/>");

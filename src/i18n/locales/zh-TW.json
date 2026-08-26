@@ -652,7 +652,16 @@
     "dragHint": "將欄拖曳至座標槽以開始繪圖",
     "correlation": {
       "requiresColumns": "相關矩陣需要 {{min}}-{{max}} 個數值欄。",
-      "tooManyColumns": "相關矩陣最多支援 {{max}} 欄。"
+      "tooManyColumns": "相關矩陣最多支援 {{max}} 欄。",
+      "pair": "欄位配對",
+      "coefficient": "相關係數",
+      "unavailableLabel": "不可用",
+      "sampleCount": "樣本數",
+      "unavailableReason": {
+        "insufficientData": "樣本不足",
+        "zeroVariance": "零變異",
+        "unknown": "未知"
+      }
     },
     "removeSlot": "移除",
     "legend": {

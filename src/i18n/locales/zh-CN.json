@@ -652,7 +652,16 @@
     "dragHint": "将列拖至坐标槽以开始作图",
     "correlation": {
       "requiresColumns": "相关矩阵需要 {{min}}-{{max}} 个数值列。",
-      "tooManyColumns": "相关矩阵最多支持 {{max}} 列。"
+      "tooManyColumns": "相关矩阵最多支持 {{max}} 列。",
+      "pair": "列对",
+      "coefficient": "相关系数",
+      "unavailableLabel": "不可用",
+      "sampleCount": "样本数",
+      "unavailableReason": {
+        "insufficientData": "样本不足",
+        "zeroVariance": "零方差",
+        "unknown": "未知"
+      }
     },
     "removeSlot": "移除",
     "legend": {

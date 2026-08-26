@@ -652,7 +652,16 @@
     "dragHint": "Kéo cột vào ô trục để bắt đầu",
     "correlation": {
       "requiresColumns": "Ma trận tương quan cần {{min}}-{{max}} cột số.",
-      "tooManyColumns": "Ma trận tương quan hỗ trợ tối đa {{max}} cột."
+      "tooManyColumns": "Ma trận tương quan hỗ trợ tối đa {{max}} cột.",
+      "pair": "Cặp cột",
+      "coefficient": "Hệ số tương quan",
+      "unavailableLabel": "Không khả dụng",
+      "sampleCount": "n",
+      "unavailableReason": {
+        "insufficientData": "Không đủ dữ liệu",
+        "zeroVariance": "Phương sai bằng 0",
+        "unknown": "Không xác định"
+      }
     },
     "removeSlot": "Xóa",
     "legend": {

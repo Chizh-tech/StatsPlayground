@@ -506,6 +506,43 @@ impl<'a> GraphDataService<'a> {
                 return Ok(completion);
             }
 
+            if request_is_correlation_aggregate_only(request, &aggregate_packets) {
+                for packet in &aggregate_packets {
+                    let encode_started = if observed {
+                        Some(begin_timing_observation())
+                    } else {
+                        None
+                    };
+                    sink.send_aggregate(packet)
+                        .map_err(Self::map_sink_error_to_app_error)?;
+                    if let Some(encode_started) = encode_started {
+                        record_encode(encode_started);
+                    }
+                }
+
+                let completion = GraphDataCompletion {
+                    request_id: request.request_id.clone(),
+                    dataset_id: request.dataset_id.clone(),
+                    generation: request.generation,
+                    source_rows: 0,
+                    processed_rows: 0,
+                    chunks_sent: 0,
+                    cancelled: false,
+                };
+
+                let encode_started = if observed {
+                    Some(begin_timing_observation())
+                } else {
+                    None
+                };
+                sink.send_terminal(&completion)
+                    .map_err(Self::map_sink_error_to_app_error)?;
+                if let Some(encode_started) = encode_started {
+                    record_encode(encode_started);
+                }
+                return Ok(completion);
+            }
+
             let metadata: RefCell<Option<ProjectionMetadata>> = RefCell::new(None);
             let accumulator: RefCell<Option<ChunkAccumulator>> = RefCell::new(None);
             let mut chunk_index: u32 = 0;
@@ -784,6 +821,28 @@ impl<'a> GraphDataService<'a> {
         }
         Ok(())
     }
+}
+
+fn request_is_correlation_aggregate_only(
+    request: &GraphDataRequest,
+    aggregate_packets: &[GraphAggregatePacket],
+) -> bool {
+    if request.elements.is_empty() {
+        return false;
+    }
+
+    if !request
+        .elements
+        .iter()
+        .all(|element| element.kind.eq_ignore_ascii_case("correlationMatrix"))
+    {
+        return false;
+    }
+
+    !aggregate_packets.is_empty()
+        && aggregate_packets
+            .iter()
+            .all(|packet| matches!(packet, GraphAggregatePacket::CorrelationMatrix(_)))
 }
 
 struct ProjectionMetadata {
@@ -3937,6 +3996,39 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingSink {
+        header_count: usize,
+        payload_count: usize,
+        aggregate_packets: Vec<GraphAggregatePacket>,
+        terminal_completion: Option<GraphDataCompletion>,
+    }
+
+    impl GraphChunkSink for RecordingSink {
+        fn send_header(&mut self, _header: &GraphChunkHeader) -> Result<(), GraphSinkError> {
+            self.header_count = self.header_count.saturating_add(1);
+            Ok(())
+        }
+
+        fn send_payload(&mut self, _payload: Vec<u8>) -> Result<(), GraphSinkError> {
+            self.payload_count = self.payload_count.saturating_add(1);
+            Ok(())
+        }
+
+        fn send_aggregate(&mut self, packet: &GraphAggregatePacket) -> Result<(), GraphSinkError> {
+            self.aggregate_packets.push(packet.clone());
+            Ok(())
+        }
+
+        fn send_terminal(
+            &mut self,
+            completion: &GraphDataCompletion,
+        ) -> Result<(), GraphSinkError> {
+            self.terminal_completion = Some(completion.clone());
+            Ok(())
+        }
+    }
+
     struct ClosedSink;
 
     impl GraphChunkSink for ClosedSink {
@@ -4064,6 +4156,94 @@ mod tests {
         let aggregate_events = &sink.events[first_aggregate..terminal_index];
         assert!(!aggregate_events.is_empty());
         assert!(aggregate_events.iter().all(|event| *event == "aggregate"));
+    }
+
+    #[test]
+    fn stream_with_sink_correlation_only_request_skips_projection_and_commits_aggregate_terminal() {
+        let state = AppState::new().expect("state");
+        let dataset_id = "stream-correlation-only";
+        {
+            let db = state.db.lock().expect("db lock");
+            db.create_empty_table(
+                dataset_id,
+                "Stream Correlation Only",
+                &["a".into(), "b".into(), "c".into()],
+                &["DOUBLE".into(), "DOUBLE".into(), "DOUBLE".into()],
+            )
+            .expect("create correlation table");
+            let table = format!("dataset_{}", dataset_id.replace('-', "_"));
+            db.conn()
+                .execute(
+                    &format!(
+                        "INSERT INTO \"{table}\" (_row_id, a, b, c) VALUES
+                         (1, 1.0, 2.0, 3.0),
+                         (2, 2.0, 4.0, 2.0),
+                         (3, 3.0, 6.0, 1.0),
+                         (4, 4.0, 8.0, 0.0)"
+                    ),
+                    [],
+                )
+                .expect("insert correlation rows");
+            db.conn()
+                .execute(
+                    "UPDATE _meta_datasets SET row_count = 4 WHERE id = $1",
+                    params![dataset_id],
+                )
+                .expect("update row count");
+        }
+
+        let service = GraphDataService::new(&state);
+        let request = GraphDataRequest {
+            request_id: format!("request-{dataset_id}-correlation-only-stream"),
+            dataset_id: dataset_id.to_string(),
+            generation: 0,
+            fields: vec![
+                GraphFieldBinding {
+                    role: "multiY0".to_string(),
+                    column: "a".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "multiY1".to_string(),
+                    column: "b".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "multiY2".to_string(),
+                    column: "c".to_string(),
+                },
+            ],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "correlationMatrix".to_string(),
+                summary_stat: "none".to_string(),
+                correlation_method: Some(crate::models::graph_data::CorrelationMethod::Spearman),
+            }],
+            sampling: GraphSampling::Full,
+            viewport: GraphViewport {
+                width: 1200,
+                height: 700,
+            },
+        };
+
+        let mut sink = RecordingSink::default();
+        let completion = service
+            .stream_with_sink(&request, &mut sink)
+            .expect("correlation-only stream completion");
+
+        assert_eq!(sink.header_count, 0);
+        assert_eq!(sink.payload_count, 0);
+        assert_eq!(sink.aggregate_packets.len(), 1);
+        assert!(matches!(
+            sink.aggregate_packets.first(),
+            Some(GraphAggregatePacket::CorrelationMatrix(_))
+        ));
+
+        let terminal = sink
+            .terminal_completion
+            .clone()
+            .expect("terminal completion must be emitted");
+        assert!(!terminal.cancelled);
+        assert_eq!(terminal.chunks_sent, 0);
+        assert_eq!(completion, terminal);
     }
 
     #[test]
