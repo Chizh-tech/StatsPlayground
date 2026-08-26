@@ -479,16 +479,19 @@ impl<'a> GraphDataService<'a> {
         }
 
         let result = (|| -> Result<GraphDataCompletion, AppError> {
-                // Streamed raw chunks always carry row-aligned row ids so every mode
-                // (line/points/3D) preserves source-row provenance and interaction identity.
-                let include_row_id = true;
+            // Streamed raw chunks always carry row-aligned row ids so every mode
+            // (line/points/3D) preserves source-row provenance and interaction identity.
+            let include_row_id = true;
             let db = self
                 .state
                 .db
                 .lock()
                 .map_err(|error| AppError::Database(error.to_string()))?;
 
-            let aggregate_packets = db.collect_graph_aggregate_packets(request)?;
+            let (aggregate_packets, aggregates_cancelled) = db
+                .collect_graph_aggregate_packets_with_cancel(request, || {
+                    self.is_cancelled(&request.request_id, run.nonce)
+                })?;
 
             let metadata: RefCell<Option<ProjectionMetadata>> = RefCell::new(None);
             let accumulator: RefCell<Option<ChunkAccumulator>> = RefCell::new(None);
@@ -618,6 +621,9 @@ impl<'a> GraphDataService<'a> {
             }
 
             if !cancelled {
+                if aggregates_cancelled {
+                    cancelled = true;
+                }
                 for packet in &aggregate_packets {
                     let encode_started = if observed {
                         Some(begin_timing_observation())
@@ -1711,7 +1717,7 @@ mod tests {
 
     mod aggregate {
         use super::*;
-        use crate::models::graph_data::GraphAggregatePacket;
+        use crate::models::graph_data::{CorrelationMethod, GraphAggregatePacket};
 
         fn faceted_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
             GraphDataRequest {
@@ -1772,22 +1778,27 @@ mod tests {
                     GraphElementRequest {
                         kind: "points".to_string(),
                         summary_stat: "none".to_string(),
+                        correlation_method: None,
                     },
                     GraphElementRequest {
                         kind: "histogram".to_string(),
                         summary_stat: "none".to_string(),
+                        correlation_method: None,
                     },
                     GraphElementRequest {
                         kind: "heatmap".to_string(),
                         summary_stat: "none".to_string(),
+                        correlation_method: None,
                     },
                     GraphElementRequest {
                         kind: "boxplot".to_string(),
                         summary_stat: "none".to_string(),
+                        correlation_method: None,
                     },
                     GraphElementRequest {
                         kind: "summary".to_string(),
                         summary_stat: "mean".to_string(),
+                        correlation_method: None,
                     },
                 ],
                 sampling: GraphSampling::Full,
@@ -1856,14 +1867,17 @@ mod tests {
                 GraphElementRequest {
                     kind: "histogram".to_string(),
                     summary_stat: "none".to_string(),
+                    correlation_method: None,
                 },
                 GraphElementRequest {
                     kind: "boxplot".to_string(),
                     summary_stat: "none".to_string(),
+                    correlation_method: None,
                 },
                 GraphElementRequest {
                     kind: "points".to_string(),
                     summary_stat: "mean".to_string(),
+                    correlation_method: None,
                 },
             ];
             request.fields = vec![
@@ -1934,14 +1948,17 @@ mod tests {
                     GraphElementRequest {
                         kind: "histogram".to_string(),
                         summary_stat: "none".to_string(),
+                        correlation_method: None,
                     },
                     GraphElementRequest {
                         kind: "boxplot".to_string(),
                         summary_stat: "none".to_string(),
+                        correlation_method: None,
                     },
                     GraphElementRequest {
                         kind: "summary".to_string(),
                         summary_stat: "median".to_string(),
+                        correlation_method: None,
                     },
                 ],
                 sampling: GraphSampling::Full,
@@ -1968,6 +1985,180 @@ mod tests {
                 delta <= tol,
                 "{label} mismatch: actual={actual}, expected={expected}, |delta|={delta}, tol={tol}"
             );
+        }
+
+        fn seed_correlation_dataset(state: &AppState, dataset_id: &str) {
+            let db = state.db.lock().expect("db lock");
+            db.create_empty_table(
+                dataset_id,
+                "Correlation Matrix Dataset",
+                &[
+                    "a".into(),
+                    "b".into(),
+                    "c".into(),
+                    "label".into(),
+                    "batch".into(),
+                ],
+                &[
+                    "DOUBLE".into(),
+                    "DOUBLE".into(),
+                    "DOUBLE".into(),
+                    "VARCHAR".into(),
+                    "VARCHAR".into(),
+                ],
+            )
+            .expect("create correlation table");
+            let table = format!("dataset_{}", dataset_id.replace('-', "_"));
+            db.conn()
+                .execute(
+                    &format!(
+                        "INSERT INTO \"{table}\" (_row_id, a, b, c, label, batch) VALUES
+                         (1, 1.0, 2.0, 3.0, 'x', 'B0'),
+                         (2, 2.0, 4.0, 2.0, 'y', 'B0'),
+                         (3, 3.0, 6.0, 1.0, 'z', 'B1'),
+                         (4, 4.0, 8.0, NULL, 'w', 'B1'),
+                         (5, 5.0, 10.0, 5.0, 'v', 'B2'),
+                         (6, 6.0, 'Infinity'::DOUBLE, 7.0, 'u', 'B2')"
+                    ),
+                    [],
+                )
+                .expect("insert correlation rows");
+            db.conn()
+                .execute(
+                    "UPDATE _meta_datasets SET row_count = 6 WHERE id = $1",
+                    params![dataset_id],
+                )
+                .expect("update correlation row count");
+        }
+
+        fn correlation_request(
+            dataset_id: &str,
+            generation: u64,
+            method: Option<CorrelationMethod>,
+            count: usize,
+        ) -> GraphDataRequest {
+            let mut fields = Vec::new();
+            for index in 0..count {
+                let column = match index {
+                    0 => "a",
+                    1 => "b",
+                    2 => "c",
+                    _ => "a",
+                };
+                fields.push(GraphFieldBinding {
+                    role: format!("multiX{index}"),
+                    column: column.to_string(),
+                });
+            }
+            GraphDataRequest {
+                request_id: format!("request-{dataset_id}-correlation"),
+                dataset_id: dataset_id.to_string(),
+                generation,
+                fields,
+                filters: Vec::new(),
+                elements: vec![GraphElementRequest {
+                    kind: "correlationMatrix".to_string(),
+                    summary_stat: "none".to_string(),
+                    correlation_method: method,
+                }],
+                sampling: GraphSampling::Full,
+                viewport: GraphViewport {
+                    width: 1200,
+                    height: 700,
+                },
+            }
+        }
+
+        #[test]
+        fn correlation_matrix_packet_has_expected_shape_and_symmetry() {
+            let state = AppState::new().expect("state");
+            let dataset_id = "agg-correlation-matrix";
+            seed_correlation_dataset(&state, dataset_id);
+
+            let service = GraphDataService::new(&state);
+            let mut request =
+                correlation_request(dataset_id, 0, Some(CorrelationMethod::Pearson), 3);
+            request.filters = vec![TableWindowFilter {
+                op: "AND".to_string(),
+                rule: TableWindowFilterRule::Categorical {
+                    field: "batch".to_string(),
+                    selected: vec!["B0".to_string(), "B1".to_string(), "B2".to_string()],
+                    exclude: false,
+                },
+            }];
+
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("correlation aggregate packets");
+
+            assert_eq!(packets.len(), 1);
+            let packet = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::CorrelationMatrix(value) => Some(value),
+                    _ => None,
+                })
+                .expect("correlation matrix packet");
+
+            assert_eq!(packet.columns, vec!["a", "b", "c"]);
+            assert_eq!(packet.cells.len(), 9);
+            assert_eq!((packet.cells[0].x_index, packet.cells[0].y_index), (0, 0));
+            assert_eq!((packet.cells[8].x_index, packet.cells[8].y_index), (2, 2));
+            assert_eq!(packet.cells[1].coefficient, packet.cells[3].coefficient);
+            assert_eq!(packet.cells[1].sample_count, packet.cells[3].sample_count);
+        }
+
+        #[test]
+        fn correlation_matrix_rejects_invalid_binding_shapes_and_methods() {
+            let state = AppState::new().expect("state");
+            let dataset_id = "agg-correlation-invalid";
+            seed_correlation_dataset(&state, dataset_id);
+
+            let service = GraphDataService::new(&state);
+
+            let one_column =
+                correlation_request(dataset_id, 0, Some(CorrelationMethod::Spearman), 1);
+            assert!(matches!(
+                service.collect_aggregates_for_test(&one_column),
+                Err(AppError::InvalidParam(_))
+            ));
+
+            let twenty_one_columns =
+                correlation_request(dataset_id, 0, Some(CorrelationMethod::Spearman), 21);
+            assert!(matches!(
+                service.collect_aggregates_for_test(&twenty_one_columns),
+                Err(AppError::InvalidParam(_))
+            ));
+
+            let mut duplicate_bindings =
+                correlation_request(dataset_id, 0, Some(CorrelationMethod::Kendall), 2);
+            duplicate_bindings.fields[1].column = "a".to_string();
+            assert!(matches!(
+                service.collect_aggregates_for_test(&duplicate_bindings),
+                Err(AppError::InvalidParam(_))
+            ));
+
+            let mut non_numeric =
+                correlation_request(dataset_id, 0, Some(CorrelationMethod::Pearson), 2);
+            non_numeric.fields[1].column = "label".to_string();
+            assert!(matches!(
+                service.collect_aggregates_for_test(&non_numeric),
+                Err(AppError::InvalidParam(_))
+            ));
+
+            let mut mixed_prefixes =
+                correlation_request(dataset_id, 0, Some(CorrelationMethod::Pearson), 2);
+            mixed_prefixes.fields[1].role = "multiY1".to_string();
+            assert!(matches!(
+                service.collect_aggregates_for_test(&mixed_prefixes),
+                Err(AppError::InvalidParam(_))
+            ));
+
+            let missing_method = correlation_request(dataset_id, 0, None, 3);
+            assert!(matches!(
+                service.collect_aggregates_for_test(&missing_method),
+                Err(AppError::InvalidParam(_))
+            ));
         }
 
         #[test]
@@ -2003,6 +2194,7 @@ mod tests {
             request.elements.push(GraphElementRequest {
                 kind: "heatmap".to_string(),
                 summary_stat: "none".to_string(),
+                correlation_method: None,
             });
 
             let packets = service
@@ -2087,6 +2279,7 @@ mod tests {
                 elements: vec![GraphElementRequest {
                     kind: "heatmap".to_string(),
                     summary_stat: "none".to_string(),
+                    correlation_method: None,
                 }],
                 sampling: GraphSampling::Full,
                 viewport: GraphViewport {
@@ -2210,6 +2403,7 @@ mod tests {
             request.elements = vec![GraphElementRequest {
                 kind: "summary".to_string(),
                 summary_stat: "median".to_string(),
+                correlation_method: None,
             }];
 
             let packets = service
@@ -2719,6 +2913,7 @@ mod tests {
             request.elements = vec![GraphElementRequest {
                 kind: "boxplot".to_string(),
                 summary_stat: "none".to_string(),
+                correlation_method: None,
             }];
 
             let packets = service
@@ -2789,6 +2984,7 @@ mod tests {
             request.elements = vec![GraphElementRequest {
                 kind: "boxplot".to_string(),
                 summary_stat: "none".to_string(),
+                correlation_method: None,
             }];
 
             let packets = service
@@ -2985,6 +3181,7 @@ mod tests {
             request.elements = vec![GraphElementRequest {
                 kind: "points".to_string(),
                 summary_stat: "none".to_string(),
+                correlation_method: None,
             }];
 
             let first = service.collect_for_test(&request).expect("first sample");
@@ -3045,6 +3242,7 @@ mod tests {
             request.elements = vec![GraphElementRequest {
                 kind: "points".to_string(),
                 summary_stat: "none".to_string(),
+                correlation_method: None,
             }];
 
             let first = service.collect_for_test(&request).expect("first sample");
@@ -3081,6 +3279,7 @@ mod tests {
             elements: vec![GraphElementRequest {
                 kind: "points".to_string(),
                 summary_stat: "none".to_string(),
+                correlation_method: None,
             }],
             sampling: GraphSampling::Full,
             viewport: GraphViewport {
@@ -3216,33 +3415,34 @@ mod tests {
         assert_eq!(all_ids.len(), 300_000);
     }
 
-        #[test]
-        fn collect_for_test_line_only_request_emits_row_ids_for_every_row() {
-            let state = AppState::new().expect("state");
-            seed_dataset(&state, "line-row-ids", 12);
+    #[test]
+    fn collect_for_test_line_only_request_emits_row_ids_for_every_row() {
+        let state = AppState::new().expect("state");
+        seed_dataset(&state, "line-row-ids", 12);
 
-            let service = GraphDataService::new(&state);
-            let mut request = build_request("line-row-ids", 0);
-            request.elements = vec![GraphElementRequest {
-                kind: "line".to_string(),
-                summary_stat: "none".to_string(),
-            }];
+        let service = GraphDataService::new(&state);
+        let mut request = build_request("line-row-ids", 0);
+        request.elements = vec![GraphElementRequest {
+            kind: "line".to_string(),
+            summary_stat: "none".to_string(),
+            correlation_method: None,
+        }];
 
-            let chunks = service.collect_for_test(&request).expect("chunks");
-            let mut all_ids = HashSet::new();
-            let mut total_rows = 0usize;
-            for chunk in &chunks {
-                let row_ids = extract_i64_slice(chunk, &chunk.header.row_ids);
-                assert_eq!(row_ids.len(), chunk.header.row_count);
-                total_rows += chunk.header.row_count;
-                for row_id in row_ids {
-                    assert!(all_ids.insert(row_id));
-                }
+        let chunks = service.collect_for_test(&request).expect("chunks");
+        let mut all_ids = HashSet::new();
+        let mut total_rows = 0usize;
+        for chunk in &chunks {
+            let row_ids = extract_i64_slice(chunk, &chunk.header.row_ids);
+            assert_eq!(row_ids.len(), chunk.header.row_count);
+            total_rows += chunk.header.row_count;
+            for row_id in row_ids {
+                assert!(all_ids.insert(row_id));
             }
-
-            assert_eq!(total_rows, 12);
-            assert_eq!(all_ids.len(), 12);
         }
+
+        assert_eq!(total_rows, 12);
+        assert_eq!(all_ids.len(), 12);
+    }
 
     #[test]
     fn collect_for_test_applies_filters_before_encoding() {
@@ -3445,6 +3645,7 @@ mod tests {
             elements: vec![GraphElementRequest {
                 kind: "points".to_string(),
                 summary_stat: "none".to_string(),
+                correlation_method: None,
             }],
             sampling: GraphSampling::Full,
             viewport: GraphViewport {
@@ -3695,6 +3896,7 @@ mod tests {
         request.elements.push(GraphElementRequest {
             kind: "histogram".to_string(),
             summary_stat: "none".to_string(),
+            correlation_method: None,
         });
         let mut sink = OrderingSink::default();
 
