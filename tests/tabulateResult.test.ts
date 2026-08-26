@@ -125,11 +125,22 @@ assert.match(
   /onDrop=\{\(event\) => \{\s*event\.stopPropagation\(\);\s*const payload = readDragPayload/,
 );
 assert.match(tabulateResultTableSource, /style=\{\{ left: rowLabelIndex \* ROW_LABEL_WIDTH \}\}/);
+assert.match(tabulateViewSource, /onTableCreated/);
+assert.match(tabulateViewSource, /buildTabulateExportRequest/);
+assert.match(tabulateViewSource, /createTableFromRows/);
+assert.match(tabulateViewSource, /exporting/);
+assert.match(tabulateViewSource, /readOnly/);
+assert.match(tabulateResultTableSource, /fa-table-arrow-up/);
+assert.match(tabulateResultTableSource, /sp-tabulate-results-toolbar/);
 assert.equal(englishLocale.tabulate.fields, "Columns");
 assert.equal(englishLocale.tabulate.searchFields, "Search columns");
 assert.equal(englishLocale.tabulate.rowsEmptyHint, "Drag columns here to build row nesting.");
 assert.equal(englishLocale.tabulate.columnsEmptyHint, "Drag columns here to build column headers.");
 assert.equal(englishLocale.tabulate.statisticsEmptyHint, "Drag a column here to add a statistic.");
+assert.equal(englishLocale.tabulate.exportTable, "Export to Data Table");
+assert.equal(englishLocale.tabulate.exportingTable, "Exporting...");
+assert.equal(englishLocale.tabulate.exportTableFailed, "Failed to export Tabulate result to data table.");
+assert.equal(englishLocale.history.tabulateTableCreated, "Create data table \"{{name}}\" from tabulate result");
 const visibleTabulateCopy = Object.values(englishLocale.tabulate)
   .filter((value): value is string => typeof value === "string")
   .map((value) => value.replaceAll("{{field}}", ""))

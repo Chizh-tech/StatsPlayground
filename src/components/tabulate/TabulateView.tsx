@@ -26,6 +26,7 @@ import {
   formatStatisticLabel,
 } from "./TabulateStatisticEditor";
 import {
+  buildTabulateExportRequest,
   canShowReadyResult,
   canAssignTabulateField,
   isLatestSequence,
@@ -37,9 +38,10 @@ import "./tabulate.css";
 interface TabulateViewProps {
   item: TabulateItem;
   dataset: DatasetMeta | undefined;
+  onTableCreated: (dataset: DatasetMeta) => Promise<void>;
 }
 
-export function TabulateView({ item, dataset }: TabulateViewProps) {
+export function TabulateView({ item, dataset, onTableCreated }: TabulateViewProps) {
   const { t } = useTranslation();
   const updateItemRaw = useTabulateStore((state) => state.updateItem);
   const markDirtyRaw = useProjectStore((state) => state.markDirty);
@@ -62,6 +64,8 @@ export function TabulateView({ item, dataset }: TabulateViewProps) {
   const [result, setResult] = useState<TabulateResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [visibleRowDepth, setVisibleRowDepth] = useState(item.rowFields.length);
   const [visibleColumnDepth, setVisibleColumnDepth] = useState(item.columnFields.length);
   const [editingStatistic, setEditingStatistic] = useState<TabulateStatistic | null>(null);
@@ -76,6 +80,8 @@ export function TabulateView({ item, dataset }: TabulateViewProps) {
     requestSequence.current += 1;
     setResult(null);
     setError(null);
+    setExportError(null);
+    setExporting(false);
     setLoading(false);
     setVisibleRowDepth(item.rowFields.length);
     setVisibleColumnDepth(item.columnFields.length);
@@ -189,6 +195,22 @@ export function TabulateView({ item, dataset }: TabulateViewProps) {
     };
   }, [dataset, item, visibleColumnDepth, visibleRowDepth]);
 
+  const fullQueryRequest = useMemo<TabulateRequest | null>(() => {
+    if (!dataset || item.statistics.length === 0) {
+      return null;
+    }
+
+    return {
+      datasetId: dataset.id,
+      rowFields: item.rowFields,
+      columnFields: item.columnFields,
+      statistics: item.statistics,
+      includeRowTotals: item.includeRowTotals,
+      includeColumnTotals: item.includeColumnTotals,
+      maxResultCells: 10000,
+    };
+  }, [dataset, item]);
+
   useEffect(() => {
     if (!queryRequest) {
       requestSequence.current += 1;
@@ -270,6 +292,30 @@ export function TabulateView({ item, dataset }: TabulateViewProps) {
   const updateCurrentItem = (patch: Partial<TabulateItem>) => {
     updateItem(item.id, patch);
     markDirty();
+  };
+
+  const handleExport = async () => {
+    if (exporting || readOnly || !fullQueryRequest) {
+      return;
+    }
+
+    setExporting(true);
+    setExportError(null);
+
+    try {
+      const exportResult = await tabulateService.run(fullQueryRequest);
+      const request = buildTabulateExportRequest(item, exportResult, {
+        tableName: item.name,
+        missingLabel: t("tabulate.missing"),
+        statisticLabel: formatStatisticLabel,
+      });
+      const created = await dataService.createTableFromRows(request);
+      await onTableCreated(created);
+    } catch {
+      setExportError(t("tabulate.exportTableFailed"));
+    } finally {
+      setExporting(false);
+    }
   };
 
   const currentFieldsForRole = (role: TabulateAssignmentRole): readonly string[] => {
@@ -520,10 +566,14 @@ export function TabulateView({ item, dataset }: TabulateViewProps) {
                 visibleColumnDepth={visibleColumnDepth}
                 onVisibleRowDepthChange={setVisibleRowDepth}
                 onVisibleColumnDepthChange={setVisibleColumnDepth}
+                onExport={handleExport}
+                exporting={exporting}
+                exportDisabled={readOnly || exporting || result == null}
               />
               {loading ? <ResultBanner tone="info" message={t("tabulate.refreshingAggregate")} /> : null}
               {tooLargeError ? <ResultBanner tone="warning" message={error ?? t("tabulate.resultTooLargeTitle")} /> : null}
               {error != null && !tooLargeError ? <ResultBanner tone="error" message={error} /> : null}
+              {exportError ? <ResultBanner tone="error" message={exportError} /> : null}
             </>
           ) : resultsState ? (
             <ResultStateCard title={resultsState.title} detail={resultsState.detail} />
