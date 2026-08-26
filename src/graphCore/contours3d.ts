@@ -325,7 +325,7 @@ function walkPolyline(
     visited.add(nextIndex);
     const segment = segments[nextIndex];
     const nextPoint = pointKey(segment.points[0]) === currentKey ? segment.points[1] : segment.points[0];
-    points = points.concat(nextPoint);
+    points.push(nextPoint);
     if (pointKey(nextPoint) === pointKey(points[0])) {
       break;
     }

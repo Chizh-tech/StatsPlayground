@@ -333,9 +333,11 @@ assert.ok(frameContourResult.option);
 const frameContours = (frameContourResult.option.series as Array<Record<string, unknown>>)
   .filter((item) => String(item.name).includes("__contour_"));
 assert.equal(frameContours.length, 3);
+assert.ok(frameContours.every((item) => item.type === "line3D"));
 assert.ok(frameContours.every((item) => String(item.name).startsWith("A__contour_")));
 assert.ok(frameContours.every((item) => (item.lineStyle as Record<string, unknown>).color === "#cc0000"));
 assert.ok(frameContours.every((item) =>
-  (item.data as number[][]).every((point) => point.every(Number.isFinite))));
+  (item.data as number[][]).length >= 2
+    && (item.data as number[][]).every((point) => point.every(Number.isFinite))));
 
 console.log("threeD regressions passed");
