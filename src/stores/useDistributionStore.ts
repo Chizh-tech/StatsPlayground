@@ -89,7 +89,8 @@ function runMatches(
     run?.analysisId === identity.analysisId &&
     run.configRevision === identity.configRevision &&
     run.runId === identity.runId &&
-    run.snapshotId === identity.snapshotId;
+    run.snapshotId === identity.snapshotId &&
+    run.status === "running";
 }
 
 export const useDistributionStore = create<DistributionStore>((set, get) => ({

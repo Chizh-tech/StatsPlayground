@@ -6,6 +6,7 @@ import type {
   DistributionResultEnvelopeV1,
   DistributionRunStateV1,
   LoadedDistributionDocV1,
+  PreservedDistributionDocV1,
 } from "../src/types/distribution.ts";
 
 const config = (datasetId = "dataset-1"): DistributionAnalysisConfigV1 => ({
@@ -118,6 +119,52 @@ assert.equal(useDistributionStore.getState().failureByAnalysisId[first.analysisI
   "distribution.run.syntheticFailure");
 assert.deepEqual(useDistributionStore.getState().resultByAnalysisId[first.analysisId], result);
 
+const cancellableRun = {
+  ...run,
+  configRevision: 3,
+  runId: "run-4",
+  snapshotId: "snapshot-4",
+  cancelToken: "cancel-4",
+  status: "running" as const,
+};
+const secondRun = {
+  ...run,
+  analysisId: second.analysisId,
+  configRevision: 1,
+  runId: "run-second",
+  snapshotId: "snapshot-second",
+  cancelToken: "cancel-second",
+  status: "running" as const,
+};
+assert.equal(useDistributionStore.getState().beginRun(cancellableRun), true);
+assert.equal(useDistributionStore.getState().beginRun(secondRun), true);
+useDistributionStore.getState().updateProgress({
+  runId: "run-4",
+  phase: "prepare",
+  current: 1,
+  total: 2,
+  messageKey: "distribution.prepare",
+  percent: 50,
+});
+assert.equal(
+  useDistributionStore.getState().runStateByAnalysisId[first.analysisId]?.progress?.current,
+  1,
+);
+assert.equal(useDistributionStore.getState().runState?.runId, "run-second");
+useDistributionStore.getState().cancelRun("cancel-4");
+assert.equal(
+  useDistributionStore.getState().runStateByAnalysisId[first.analysisId]?.status,
+  "cancelled",
+);
+assert.equal(useDistributionStore.getState().runState?.runId, "run-second");
+assert.equal(useDistributionStore.getState().acceptResult({
+  ...result,
+  configRevision: 3,
+  runId: "run-4",
+  snapshotId: "snapshot-4",
+}), false);
+assert.deepEqual(useDistributionStore.getState().resultByAnalysisId[first.analysisId], result);
+
 useDistributionStore.getState().selectItem(first.analysisId);
 useDistributionStore.getState().deleteItem(first.analysisId);
 assert.equal(useDistributionStore.getState().selectedAnalysisId, null);
@@ -134,9 +181,22 @@ const loaded: LoadedDistributionDocV1 = {
   configRevision: 4,
   currentConfig: config(),
 };
-useDistributionStore.getState().loadFromProject([loaded], [], []);
+const preserved: PreservedDistributionDocV1 = {
+  schemaVersion: "99",
+  analysisId: "future-1",
+  name: "Future Distribution",
+  sourceDatasetId: "dataset-1",
+  status: "unavailable",
+  loadStatus: "unknownVersion",
+  currentConfig: {},
+  rawEnvelope: { schemaVersion: "99" },
+};
+useDistributionStore.getState().loadFromProject([loaded, preserved], [], []);
 assert.deepEqual(useDistributionStore.getState().runStateByAnalysisId, {});
 assert.deepEqual(useDistributionStore.getState().resultByAnalysisId, {});
+assert.equal(useDistributionStore.getState().copyItem(preserved.analysisId), null);
+assert.equal(useDistributionStore.getState().createItem(config(), "Custom Analysis").name,
+  "Custom Analysis");
 assert.equal(useDistributionStore.getState().createItem(config()).name, "Distribution 9");
 
 useDistributionStore.getState().reset();
