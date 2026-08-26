@@ -8,6 +8,7 @@ export interface GraphFieldBinding {
 export interface GraphElementRequest {
   kind: string;
   summaryStat: string;
+  correlationMethod?: CorrelationMethod;
 }
 
 export type GraphSampling =

@@ -566,7 +566,7 @@ export function deriveElements(item: GraphBuilderItem): GraphElementRequest[] {
         return {
           ...requestElement,
           correlationMethod: normalizeCorrelationMethod(element.options?.correlationMethod),
-        } as GraphElementRequest;
+        };
       }
 
       return requestElement;

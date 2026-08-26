@@ -19,6 +19,7 @@ import type {
   GraphDataCompletion,
   GraphDataRequest,
   GraphDataFrame,
+  GraphElementRequest,
 } from "../src/types/graphData.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
 
@@ -1401,9 +1402,10 @@ function makeProgressedChunk(
     { role: "multiX1", column: "b" },
     { role: "multiX2", column: "c" },
   ]);
-  assert.deepEqual(deriveElements(correlationItem), [
+  const correlationElementsExpected: GraphElementRequest[] = [
     { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "spearman" },
-  ]);
+  ];
+  assert.deepEqual(deriveElements(correlationItem), correlationElementsExpected);
   assert.deepEqual(
     deriveFields(correlationItem).filter((field) => field.column === "__sp_variable__" || field.column === "__sp_value__"),
     [],
@@ -1418,9 +1420,10 @@ function makeProgressedChunk(
     elements: [{ kind: "correlationMatrix", enabled: true }],
   });
 
-  assert.deepEqual(deriveElements(legacyCorrelationItem), [
+  const legacyCorrelationElementsExpected: GraphElementRequest[] = [
     { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
-  ]);
+  ];
+  assert.deepEqual(deriveElements(legacyCorrelationItem), legacyCorrelationElementsExpected);
 
   const invalidMethodItem = makeGraphBuilderItem({
     encoding: {},
@@ -1437,9 +1440,10 @@ function makeProgressedChunk(
     ],
   });
 
-  assert.deepEqual(deriveElements(invalidMethodItem), [
+  const invalidCorrelationElementsExpected: GraphElementRequest[] = [
     { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
-  ]);
+  ];
+  assert.deepEqual(deriveElements(invalidMethodItem), invalidCorrelationElementsExpected);
 }
 
 {
