@@ -912,6 +912,33 @@ impl DuckDbEngine {
             .map(|column_type| self.canonicalize_column_type(column_type))
             .collect::<Result<Vec<_>, _>>()?;
 
+        for (row_index, row) in request.rows.iter().enumerate() {
+            for (column_index, (value, column_type)) in
+                row.iter().zip(canonical_types.iter()).enumerate()
+            {
+                let duckdb_value = Self::json_scalar_to_duckdb_value(
+                    value,
+                    row_index + 1,
+                    column_index + 1,
+                )?;
+                let validation_sql = format!(
+                    "SELECT {}",
+                    Self::typed_parameter_expression(column_type)
+                );
+                self.conn
+                    .query_row(&validation_sql, params![duckdb_value], |_| Ok(()))
+                    .map_err(|error| {
+                        AppError::InvalidParam(format!(
+                            "row {} column {} is incompatible with {}: {}",
+                            row_index + 1,
+                            column_index + 1,
+                            column_type,
+                            error
+                        ))
+                    })?;
+            }
+        }
+
         self.conn.execute_batch("BEGIN TRANSACTION")?;
 
         let outcome = (|| -> Result<DatasetMeta, AppError> {
@@ -974,31 +1001,12 @@ impl DuckDbEngine {
                 })?;
                 let mut values = Vec::with_capacity(row.len() + 1);
                 values.push(Value::BigInt(row_id));
-                for value in row {
-                    let duckdb_value = match value {
-                        serde_json::Value::Null => Value::Null,
-                        serde_json::Value::Bool(v) => Value::Boolean(*v),
-                        serde_json::Value::Number(v) => {
-                            if let Some(integer) = v.as_i64() {
-                                Value::BigInt(integer)
-                            } else if let Some(integer) = v.as_u64() {
-                                Value::UBigInt(integer)
-                            } else if let Some(float) = v.as_f64() {
-                                Value::Double(float)
-                            } else {
-                                return Err(AppError::InvalidParam(
-                                    "number value is not representable".into(),
-                                ));
-                            }
-                        }
-                        serde_json::Value::String(v) => Value::Text(v.clone()),
-                        _ => {
-                            return Err(AppError::InvalidParam(
-                                "rows must contain only scalar JSON values".into(),
-                            ));
-                        }
-                    };
-                    values.push(duckdb_value);
+                for (column_index, value) in row.iter().enumerate() {
+                    values.push(Self::json_scalar_to_duckdb_value(
+                        value,
+                        row_index + 1,
+                        column_index + 1,
+                    )?);
                 }
                 insert_stmt.execute(params_from_iter(values))?;
             }
@@ -1032,6 +1040,34 @@ impl DuckDbEngine {
                 let _ = self.conn.execute_batch("ROLLBACK");
                 Err(error)
             }
+        }
+    }
+
+    fn json_scalar_to_duckdb_value(
+        value: &serde_json::Value,
+        row_index: usize,
+        column_index: usize,
+    ) -> Result<Value, AppError> {
+        match value {
+            serde_json::Value::Null => Ok(Value::Null),
+            serde_json::Value::Bool(value) => Ok(Value::Boolean(*value)),
+            serde_json::Value::Number(value) => {
+                if let Some(integer) = value.as_i64() {
+                    Ok(Value::BigInt(integer))
+                } else if let Some(integer) = value.as_u64() {
+                    Ok(Value::UBigInt(integer))
+                } else if let Some(float) = value.as_f64() {
+                    Ok(Value::Double(float))
+                } else {
+                    Err(AppError::InvalidParam(format!(
+                        "row {row_index} column {column_index} number is not representable"
+                    )))
+                }
+            }
+            serde_json::Value::String(value) => Ok(Value::Text(value.clone())),
+            _ => Err(AppError::InvalidParam(format!(
+                "row {row_index} column {column_index} must be a scalar JSON value"
+            ))),
         }
     }
 
@@ -9875,6 +9911,27 @@ mod tests {
         };
 
         let dataset_id = "rows-nested-reject-id";
+        let error = db.create_table_from_rows(dataset_id, &request).unwrap_err();
+
+        assert!(matches!(error, AppError::InvalidParam(_)));
+        assert_eq!(metadata_row_count(&db, dataset_id), 0);
+        assert!(!dataset_table_exists(
+            &db,
+            &format!("dataset_{}", dataset_id.replace('-', "_"))
+        ));
+    }
+
+    #[test]
+    fn create_table_from_rows_rejects_type_incompatible_scalar_without_metadata_residue() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        let request = CreateTableFromRowsRequest {
+            name: "Type Reject".to_string(),
+            column_names: vec!["value".to_string()],
+            column_types: vec!["DOUBLE".to_string()],
+            rows: vec![vec![json!("not-a-number")]],
+        };
+
+        let dataset_id = "rows-type-reject-id";
         let error = db.create_table_from_rows(dataset_id, &request).unwrap_err();
 
         assert!(matches!(error, AppError::InvalidParam(_)));
