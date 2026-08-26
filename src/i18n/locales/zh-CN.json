@@ -579,7 +579,8 @@
       "smoother": "平滑",
       "fitline": "拟合线",
       "scatter3d": "散点",
-      "surface": "曲面"
+      "surface": "曲面",
+      "contour3d": "等高线"
     },
     "frequency": "频次",
     "startOver": "重新开始",
@@ -624,6 +625,7 @@
       "histStyle": "直方图样式",
       "smoothness": "平滑度",
       "surfaceSmoothness": "平滑程度",
+      "contourLevels": "等高线层数",
       "histHeight": "直方图高度",
       "showCounts": "显示频数",
       "showPercents": "显示百分比",

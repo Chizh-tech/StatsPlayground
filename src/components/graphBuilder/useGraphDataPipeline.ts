@@ -617,7 +617,7 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
 
   addField("x", item.encoding.x?.name);
   addField("y", item.encoding.y?.name);
-  const has3DElement = enabledKinds.has("surface") || enabledKinds.has("scatter3d");
+  const has3DElement = enabledKinds.has("surface") || enabledKinds.has("contour3d") || enabledKinds.has("scatter3d");
   if (item.threeD && has3DElement) {
     addField("z", item.encoding.z?.name);
   }

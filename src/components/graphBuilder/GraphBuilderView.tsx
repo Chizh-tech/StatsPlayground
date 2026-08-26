@@ -38,6 +38,7 @@ import {
   getRawPointNotice,
 } from "./graphSamplingPolicy";
 import { FilterPanel } from "@/components/filter";
+import { defaultLayerOptions, GRAPH_LAYER_DEFS, LAYER_DIM } from "./graphLayerConfig";
 import { useGraphDataPipeline } from "./useGraphDataPipeline";
 
 interface GraphBuilderViewProps {
@@ -54,40 +55,10 @@ type SlotKey = GraphSlotKey;
 // Group X / Group Y are still exposed via the dedicated facet drop slots
 // surrounding the canvas, not via a side shelf.
 
-interface ChartTypeDef {
-  kind: ElementKind;
-  icon: string; // 简单文字/符号图标（暂用 SVG path 太重）
-}
-
-const CHART_TYPE_DEFS: ChartTypeDef[] = [
-  { kind: "points", icon: "●" },
-  { kind: "line", icon: "╱" },
-  { kind: "smoother", icon: "∿" },
-  { kind: "fitline", icon: "ƒ" },
-  { kind: "boxplot", icon: "⊟" },
-  { kind: "histogram", icon: "▥" },
-  { kind: "scatter3d", icon: "●" },
-  { kind: "surface", icon: "◪" },
-];
-
 /** Per-layer dimensionality. 2D and 3D layers are fully separate sets:
  *  the layer panel + Add popover only show the set matching the current
  *  mode, and each layer card carries a 2D / 3D badge. Both sets persist
  *  on the item — switching mode just changes which subset is shown. */
-type LayerDim = "2d" | "3d";
-const LAYER_DIM: Record<ElementKind, LayerDim> = {
-  points: "2d",
-  line: "2d",
-  bar: "2d",
-  heatmap: "2d",
-  histogram: "2d",
-  boxplot: "2d",
-  smoother: "2d",
-  fitline: "2d",
-  scatter3d: "3d",
-  surface: "3d",
-};
-
 const DRAG_MIME = "text/plain";
 
 export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
@@ -1205,16 +1176,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         return prev.map((e, i) => (i === idx ? { ...e, enabled: true } : e));
       }
       const next: ChartElement = { kind, enabled: true };
-      if (kind === "smoother") next.options = { algo: "spline" };
-      if (kind === "fitline") {
-        next.options = { fitType: "polynomial", degree: 1 };
-      }
-      if (kind === "surface") next.options = { stat: "mean", smoothness: 0 };
-      // 3D 散点先继承已有 2D 散点（points）的设置作为默认。
-      if (kind === "scatter3d") {
-        const pts = prev.find((e) => e.kind === "points");
-        next.options = { ...(pts?.options ?? {}) };
-      }
+      next.options = defaultLayerOptions(kind, prev);
       return [...prev, next];
     });
   }, [setElements]);
@@ -1717,7 +1679,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     />
                   ))}
                 <AddLayerCard
-                  availableKinds={CHART_TYPE_DEFS.map((c) => c.kind).filter(
+                  availableKinds={GRAPH_LAYER_DEFS.map((c) => c.kind).filter(
                     (k) => !activeKinds.has(k) && LAYER_DIM[k] === (item.threeD ? "3d" : "2d"),
                   )}
                   onAdd={addElement}
@@ -2544,7 +2506,7 @@ function LayerCard({
   onRemove,
   t,
 }: LayerCardProps) {
-  const def = CHART_TYPE_DEFS.find((c) => c.kind === kind);
+  const def = GRAPH_LAYER_DEFS.find((c) => c.kind === kind);
   return (
     <div className="gb-layer-card">
       <div className="gb-layer-head">
@@ -2585,6 +2547,9 @@ function LayerCard({
         )}
         {kind === "surface" && (
           <SurfaceOptions options={options} onChange={onChangeOptions} t={t} />
+        )}
+        {kind === "contour3d" && (
+          <Contour3DOptions options={options} onChange={onChangeOptions} t={t} />
         )}
       </div>
     </div>
@@ -3011,6 +2976,48 @@ function SurfaceOptions({ options, onChange, t }: OptionsEditorProps) {
   );
 }
 
+function Contour3DOptions({ options, onChange, t }: OptionsEditorProps) {
+  const stat = getOpt<string>(options, "stat", "mean");
+  const smoothness = getOpt<number>(options, "smoothness", 0);
+  const levels = getOpt<number>(options, "levels", 10);
+  return (
+    <>
+      <OptRow label={t("graph.opt.surfaceStat", { defaultValue: "Statistic" })}>
+        <select
+          className="gb-opt-select"
+          value={stat}
+          onChange={(e) => onChange({ stat: e.target.value })}
+        >
+          <option value="mean">{t("graph.opt.summary.mean", { defaultValue: "Mean" })}</option>
+          <option value="median">{t("graph.opt.summary.median", { defaultValue: "Median" })}</option>
+        </select>
+      </OptRow>
+      <OptRow label={t("graph.opt.surfaceSmoothness", { defaultValue: "Smoothness" })}>
+        <input
+          type="range"
+          className="gb-slider"
+          min={0}
+          max={1}
+          step={0.05}
+          value={smoothness}
+          onChange={(e) => onChange({ smoothness: parseFloat(e.target.value) })}
+        />
+      </OptRow>
+      <OptRow label={t("graph.opt.contourLevels", { defaultValue: "Levels" })}>
+        <input
+          type="range"
+          className="gb-slider"
+          min={3}
+          max={20}
+          step={1}
+          value={levels}
+          onChange={(e) => onChange({ levels: Math.max(3, Math.min(20, parseInt(e.target.value, 10))) })}
+        />
+      </OptRow>
+    </>
+  );
+}
+
 /** Smoother options panel — algorithm selector + per-algorithm
  *  parameters. The visible controls below the algo dropdown vary with
  *  the selected algorithm so the panel only ever shows the inputs that
@@ -3345,7 +3352,7 @@ function AddLayerCard({ availableKinds, onAdd, t }: AddLayerCardProps) {
           style={{ left: pos.left, top: pos.top, minWidth: pos.width }}
         >
           {availableKinds.map((k) => {
-            const def = CHART_TYPE_DEFS.find((c) => c.kind === k);
+            const def = GRAPH_LAYER_DEFS.find((c) => c.kind === k);
             return (
               <button
                 key={k}

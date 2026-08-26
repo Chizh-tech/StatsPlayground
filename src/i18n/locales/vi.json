@@ -575,7 +575,8 @@
       "smoother": "Làm mịn",
       "fitline": "Đường khớp",
       "scatter3d": "Điểm",
-      "surface": "Bề mặt"
+      "surface": "Bề mặt",
+      "contour3d": "Đường đồng mức"
     },
     "frequency": "Tần suất",
     "startOver": "Bắt đầu lại",
@@ -620,6 +621,7 @@
       "histStyle": "Kiểu biểu đồ",
       "smoothness": "Độ mịn",
       "surfaceSmoothness": "Độ mịn bề mặt",
+      "contourLevels": "Số mức",
       "histHeight": "Chiều cao biểu đồ",
       "showCounts": "Hiện số đếm",
       "showPercents": "Hiện phần trăm",
