@@ -5,16 +5,13 @@
  * 自动响应窗口尺寸变化与主题变化。
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as echarts from "echarts";
 import type { GraphSpec, GraphData } from "./types";
 import { withoutGraphAnimation } from "./animation";
 import { getGraphTheme } from "./theme";
 import { buildGraph, type ScatterPointPick } from "./transform";
-import { RawPointsLayer } from "./RawPointsLayer";
-import { hitTestBrush as hitTestRawBrush, hitTestPoint as hitTestRawPoint, type RawPointPixelIndex } from "./rawPoints";
-import { bigintToScatterPointPick } from "./rawPoints";
-import { applyZrenderCanvasZIndices, withInterleavedGraphLayers } from "./layers";
+import { withInterleavedGraphLayers } from "./layers";
 import { Chart3D } from "./Chart3D";
 import type { GraphDataFrame } from "@/types/graphData";
 import { useThemeStore } from "@/stores/useThemeStore";
@@ -154,7 +151,6 @@ export function Graph({ spec, data, frame, className, minPanelWidth = 320, minPa
           key={i}
           title={p.title}
           option={p.option}
-          rawPoints={p.rawPoints}
           minHeight={minPanelHeight}
           onYAxisDblClick={onYAxisDblClick}
           onXAxisDblClick={onXAxisDblClick}
@@ -172,7 +168,6 @@ export function Graph({ spec, data, frame, className, minPanelWidth = 320, minPa
 interface GraphPanelProps {
   title: string;
   option: Record<string, unknown>;
-  rawPoints: ReturnType<typeof buildGraph>["panels"][number]["rawPoints"];
   minHeight: number;
   onYAxisDblClick?: () => void;
   onXAxisDblClick?: () => void;
@@ -183,12 +178,10 @@ interface GraphPanelProps {
   onBrushSelect?: (picks: ScatterPointPick[]) => void;
 }
 
-function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onAxisContextMenu, onPointClick, brushMode, onBrushSelect }: GraphPanelProps) {
+function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onAxisContextMenu, onPointClick, brushMode, onBrushSelect }: GraphPanelProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const chartHostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
-  const rawIndexRef = useRef<RawPointPixelIndex | null>(null);
-  const [chart, setChart] = useState<echarts.ECharts | null>(null);
   // Keep the latest callbacks in refs so the Zrender dblclick handler
   // (which we register exactly once on mount) always sees the freshest
   // closure without forcing a re-bind on every prop change.
@@ -218,15 +211,8 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
     if (!panelRef.current || !chartHostRef.current) return;
     const inst = echarts.init(chartHostRef.current, undefined, { renderer: "canvas" });
     chartRef.current = inst;
-    setChart(inst);
     const ro = new ResizeObserver(() => inst.resize());
     ro.observe(panelRef.current);
-    const syncLayerZIndices = () => {
-      const painter = (inst as unknown as { getZr?: () => { painter?: { _layers?: Record<string, { dom?: { style?: { zIndex?: string } } }> } } })
-        .getZr?.()
-        ?.painter;
-      applyZrenderCanvasZIndices(painter?._layers);
-    };
 
     // ----- Rubber-band brush overlay ---------------------------------
     // A transparent abs-positioned div painted over the ECharts canvas
@@ -297,7 +283,6 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
     // first; only fall back to the geometric strip if both axis hit
     // tests fail — then prefer Y (the historical default).
     const zr = inst.getZr();
-    zr.on("rendered", syncLayerZIndices);
     const zrHandler = (e: { offsetX: number; offsetY: number }) => {
       const yCb = onYAxisDblClickRef.current;
       const xCb = onXAxisDblClickRef.current;
@@ -359,19 +344,6 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
     const onSeriesClick = (params: any) => {
       const cb = onPointClickRef.current;
       if (!cb) return;
-      const rawIndex = rawIndexRef.current;
-      const offsetX = Number(params?.event?.offsetX);
-      const offsetY = Number(params?.event?.offsetY);
-      if (rawIndex && Number.isFinite(offsetX) && Number.isFinite(offsetY)) {
-        const hit = hitTestRawPoint(rawIndex, offsetX, offsetY);
-        if (hit) {
-          const pick = bigintToScatterPointPick(hit.topmost.rowId, hit.topmost.colName);
-          if (pick) {
-            cb(pick);
-            return;
-          }
-        }
-      }
       if (params?.componentType !== "series") return;
       if (params?.seriesType !== "scatter") return;
       const item = params?.data as { __pick?: ScatterPointPick } | unknown;
@@ -851,22 +823,9 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
         const maxX = Math.max(st.startPx, st.curPx);
         const minY = Math.min(st.startPy, st.curPy);
         const maxY = Math.max(st.startPy, st.curPy);
-        let picks: ScatterPointPick[];
-        if (maxX - minX < 2 && maxY - minY < 2) {
-          picks = [];
-        } else if (rawIndexRef.current) {
-          const raw = hitTestRawBrush(rawIndexRef.current, {
-            x1: st.startPx,
-            y1: st.startPy,
-            x2: st.curPx,
-            y2: st.curPy,
-          });
-          picks = raw
-            .map((pick) => bigintToScatterPointPick(pick.rowId, pick.colName))
-            .filter((pick): pick is ScatterPointPick => !!pick);
-        } else {
-          picks = legacyHitTestBrush(st.startPx, st.startPy, st.curPx, st.curPy);
-        }
+        const picks = maxX - minX < 2 && maxY - minY < 2
+          ? []
+          : legacyHitTestBrush(st.startPx, st.startPy, st.curPx, st.curPy);
         onBrushSelectRef.current?.(picks);
         return;
       }
@@ -989,7 +948,6 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
     window.addEventListener("mouseup", onWindowMouseUpSafety);
 
     return () => {
-      zr.off("rendered", syncLayerZIndices);
       zr.off("dblclick", zrHandler);
       inst.off("click", onSeriesClick);
       el.removeEventListener("pointerdown", onPointerDown);
@@ -1008,8 +966,6 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
       ro.disconnect();
       inst.dispose();
       chartRef.current = null;
-      setChart(null);
-      rawIndexRef.current = null;
     };
   }, []);
 
@@ -1023,10 +979,6 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
       ),
       true,
     );
-    const painter = (inst as unknown as { getZr?: () => { painter?: { _layers?: Record<string, { dom?: { style?: { zIndex?: string } } }> } } })
-      .getZr?.()
-      ?.painter;
-    applyZrenderCanvasZIndices(painter?._layers);
   }, [option]);
 
   // Right-click on an axis strip → open the axis context menu. Handled
@@ -1098,13 +1050,6 @@ function GraphPanel({ title, option, rawPoints, minHeight, onYAxisDblClick, onXA
       )}
       <div ref={panelRef} style={{ flex: 1, minHeight: 0, position: "relative" }} onContextMenu={handleAxisContextMenu}>
         <div ref={chartHostRef} style={{ position: "absolute", inset: 0 }} />
-        <RawPointsLayer
-          chart={chart}
-          descriptor={rawPoints}
-          onIndexChange={(index) => {
-            rawIndexRef.current = index;
-          }}
-        />
       </div>
     </div>
   );

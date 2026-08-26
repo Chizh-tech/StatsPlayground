@@ -801,14 +801,18 @@
       "full": "全量",
       "sample": "采样",
       "size": "样本大小",
-      "seed": "采样种子"
+      "seed": "采样种子",
+      "pointsOmitted": "已省略原始数据点",
+      "pointBudgetCount": "{{valid}} 个有效行；点数预算为 {{budget}}",
+      "switchToSample": "切换到采样"
     },
     "rowStatus": {
       "empty": "尚无图形数据帧",
       "pending": "正在处理行数据...",
       "pendingRows": "处理中：{{processed}} / {{source}} 行",
       "full": "全量数据：{{processed}} 行",
-      "sampled": "采样：{{processed}} / {{source}} 行"
+      "sampled": "采样：{{processed}} / {{source}} 行",
+      "pointsOmitted": "已省略原始点：{{valid}} 个有效行超过 {{budget}} 点预算"
     },
     "pipeline": {
       "ready": "就绪",

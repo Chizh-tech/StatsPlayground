@@ -6,7 +6,8 @@ use serde::Serialize;
 use crate::engine::duckdb_engine::DuckDbEngine;
 use crate::error::AppError;
 use crate::models::graph_data::{
-    GraphDataRequest, GraphElementRequest, GraphFieldBinding, GraphSampling, GraphViewport,
+    GraphDataRequest, GraphElementRequest, GraphFieldBinding, GraphRawPointDisposition,
+    GraphSampling, GraphViewport,
 };
 use crate::services::graph_data_service::GraphDataService;
 #[cfg(test)]
@@ -315,6 +316,7 @@ fn build_graph_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
             summary_stat: "none".to_string(),
         }],
         sampling: GraphSampling::Full,
+        raw_point_budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
         viewport: GraphViewport {
             width: 1200,
             height: 700,
@@ -459,16 +461,25 @@ fn execute_graph(options: Options, total_started: Instant) -> Result<Performance
         )));
     }
     let selected_columns = capture.selected_columns;
-    if selected_columns != 3 {
+    let raw_points_included = matches!(
+        completion.raw_point_disposition,
+        GraphRawPointDisposition::Included { .. }
+    );
+    let expected_selected_columns = if raw_points_included { 3 } else { 0 };
+    if selected_columns != expected_selected_columns {
         return Err(AppError::InvalidParam(format!(
-            "graph service selected column mismatch: expected 3, got {selected_columns}"
+            "graph service selected column mismatch: expected {expected_selected_columns}, got {selected_columns}"
         )));
     }
-    if capture.projected_columns
-        != vec!["_row_id".to_string(), "region".to_string(), "cost".to_string()]
-    {
+    let expected_projected_columns = if raw_points_included {
+        vec!["_row_id".to_string(), "region".to_string(), "cost".to_string()]
+    } else {
+        Vec::new()
+    };
+    if capture.projected_columns != expected_projected_columns {
         return Err(AppError::InvalidParam(format!(
-            "graph projected columns mismatch: expected [_row_id, region, cost], got {:?}",
+            "graph projected columns mismatch: expected {:?}, got {:?}",
+            expected_projected_columns,
             capture.projected_columns
         )));
     }
@@ -844,7 +855,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.result_rows, 10_000);
-        assert_eq!(report.selected_columns, 3);
+        assert_eq!(report.selected_columns, 0);
         assert_eq!(report.processed_rows, Some(10_000));
     }
 
@@ -971,6 +982,11 @@ mod tests {
             processed_rows: 1,
             chunks_sent: 1,
             cancelled: false,
+            raw_point_disposition:
+                crate::models::graph_data::GraphRawPointDisposition::Included {
+                    valid_rows: 1,
+                    budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
+                },
         };
 
         let actual = measure_transferred_bytes(

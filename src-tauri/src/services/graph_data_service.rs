@@ -11,7 +11,8 @@ use crate::engine::duckdb_engine::GraphProjectionStats;
 use crate::error::AppError;
 use crate::models::graph_data::{
     GraphAggregatePacket, GraphAxisEncoding, GraphChunkHeader, GraphDataCompletion,
-    GraphDataRequest, GraphPayloadType, GraphTypedSliceDescriptor, GRAPH_VIRTUAL_SOURCE_COLUMN,
+    GraphDataRequest, GraphPayloadType, GraphRawPointDisposition, GraphRawPointOmissionReason,
+    GraphTypedSliceDescriptor, GRAPH_SCATTER_RENDER_BUDGET, GRAPH_VIRTUAL_SOURCE_COLUMN,
 };
 use crate::state::AppState;
 
@@ -461,6 +462,26 @@ impl<'a> GraphDataService<'a> {
                 "graph request must include at least one field".to_string(),
             ));
         }
+        if request.raw_point_budget == 0 || request.raw_point_budget > GRAPH_SCATTER_RENDER_BUDGET {
+            return Err(AppError::InvalidParam(format!(
+                "raw_point_budget must be between 1 and {GRAPH_SCATTER_RENDER_BUDGET}"
+            )));
+        }
+        if let crate::models::graph_data::GraphSampling::Sample { size, .. } = request.sampling {
+            if size == 0 || size > request.raw_point_budget {
+                return Err(AppError::InvalidParam(format!(
+                    "sample size must be between 1 and raw_point_budget ({})",
+                    request.raw_point_budget
+                )));
+            }
+        }
+        let buffer_raw_points = request.elements.iter().any(|element| {
+            element.kind.eq_ignore_ascii_case("points")
+                && element.summary_stat.eq_ignore_ascii_case("none")
+        }) && !request
+            .fields
+            .iter()
+            .any(|field| field.role.eq_ignore_ascii_case("z"));
         let run = self.begin_request_run(&request.request_id)?;
         if run.pre_cancelled {
             let completion = GraphDataCompletion {
@@ -471,6 +492,10 @@ impl<'a> GraphDataService<'a> {
                 processed_rows: 0,
                 chunks_sent: 0,
                 cancelled: true,
+                raw_point_disposition: GraphRawPointDisposition::Empty {
+                    valid_rows: 0,
+                    budget: request.raw_point_budget,
+                },
             };
             sink.send_terminal(&completion)
                 .map_err(Self::map_sink_error_to_app_error)?;
@@ -499,6 +524,9 @@ impl<'a> GraphDataService<'a> {
             let mut chunks_sent: u32 = 0;
             let mut cancelled = false;
             let mut projection_callbacks: u32 = 0;
+            let mut valid_rows: u64 = 0;
+            let mut raw_points_omitted = false;
+            let buffered_chunks: RefCell<Vec<GraphDataChunk>> = RefCell::new(Vec::new());
 
             let stats = db.stream_graph_projection_rows(
                 request,
@@ -539,10 +567,32 @@ impl<'a> GraphDataService<'a> {
                         AppError::Database("graph chunk accumulator not initialized".to_string())
                     })?;
 
-                    accumulator.push_row(metadata, row_id, &values)?;
+                    let renderable = is_renderable_xy(metadata, &values)?;
+                    if renderable {
+                        valid_rows = valid_rows.checked_add(1).ok_or_else(|| {
+                            AppError::InvalidParam("graph valid row count overflow".into())
+                        })?;
+                    }
                     processed_rows = processed_rows.checked_add(1).ok_or_else(|| {
                         AppError::InvalidParam("graph processed row count overflow".into())
                     })?;
+
+                    if buffer_raw_points
+                        && !raw_points_omitted
+                        && valid_rows > request.raw_point_budget as u64
+                    {
+                        raw_points_omitted = true;
+                        buffered_chunks.borrow_mut().clear();
+                        *accumulator = ChunkAccumulator::new(metadata);
+                    }
+                    if raw_points_omitted {
+                        return Ok(true);
+                    }
+                    if buffer_raw_points && !renderable {
+                        return Ok(true);
+                    }
+
+                    accumulator.push_row(metadata, row_id, &values)?;
 
                     if accumulator.row_count() >= accumulator.rows_per_chunk {
                         let chunk = accumulator.finish_chunk(
@@ -554,14 +604,18 @@ impl<'a> GraphDataService<'a> {
                             processed_rows,
                             false,
                         )?;
-                        if let Err(error) = self.send_chunk(sink, chunk) {
-                            if self.is_cancelled(&request.request_id, run.nonce)? {
-                                cancelled = true;
-                                return Ok(false);
+                        if buffer_raw_points {
+                            buffered_chunks.borrow_mut().push(chunk);
+                        } else {
+                            if let Err(error) = self.send_chunk(sink, chunk) {
+                                if self.is_cancelled(&request.request_id, run.nonce)? {
+                                    cancelled = true;
+                                    return Ok(false);
+                                }
+                                return Err(error);
                             }
-                            return Err(error);
+                            chunks_sent = chunks_sent.saturating_add(1);
                         }
-                        chunks_sent = chunks_sent.saturating_add(1);
                         chunk_index = chunk_index.saturating_add(1);
                         row_offset = processed_rows;
                     }
@@ -579,7 +633,7 @@ impl<'a> GraphDataService<'a> {
             }
 
             source_rows = stats.source_rows;
-            if !cancelled {
+            if !cancelled && !raw_points_omitted && (!buffer_raw_points || valid_rows > 0) {
                 let metadata_ref = metadata.borrow();
                 let metadata = metadata_ref.as_ref().ok_or_else(|| {
                     AppError::Database("graph projection metadata not initialized".to_string())
@@ -603,7 +657,13 @@ impl<'a> GraphDataService<'a> {
                 } else {
                     None
                 };
-                if let Err(error) = self.send_chunk(sink, chunk) {
+                if buffer_raw_points {
+                    buffered_chunks.borrow_mut().push(chunk);
+                    for chunk in buffered_chunks.borrow_mut().drain(..) {
+                        self.send_chunk(sink, chunk)?;
+                        chunks_sent = chunks_sent.saturating_add(1);
+                    }
+                } else if let Err(error) = self.send_chunk(sink, chunk) {
                     if self.is_cancelled(&request.request_id, run.nonce)? {
                         cancelled = true;
                     } else {
@@ -640,6 +700,23 @@ impl<'a> GraphDataService<'a> {
                 processed_rows,
                 chunks_sent,
                 cancelled,
+                raw_point_disposition: if buffer_raw_points && raw_points_omitted {
+                    GraphRawPointDisposition::Omitted {
+                        reason: GraphRawPointOmissionReason::PointBudgetExceeded,
+                        valid_rows,
+                        budget: request.raw_point_budget,
+                    }
+                } else if buffer_raw_points && valid_rows == 0 {
+                    GraphRawPointDisposition::Empty {
+                        valid_rows: 0,
+                        budget: request.raw_point_budget,
+                    }
+                } else {
+                    GraphRawPointDisposition::Included {
+                        valid_rows,
+                        budget: request.raw_point_budget,
+                    }
+                },
             };
 
             let encode_started = if observed {
@@ -740,6 +817,24 @@ impl<'a> GraphDataService<'a> {
         }
         Ok(())
     }
+}
+
+fn is_renderable_xy(
+    metadata: &ProjectionMetadata,
+    values: &[Value],
+) -> Result<bool, AppError> {
+    let x = values.get(metadata.x_index).ok_or_else(|| {
+        AppError::Database("x value missing from graph projection".to_string())
+    })?;
+    let x_valid = match metadata.x_payload_type {
+        GraphPayloadType::F64 => value_to_f64(x).is_some(),
+        GraphPayloadType::U32 => value_to_category(x).is_some(),
+        _ => false,
+    };
+    let y = values.get(metadata.y_index).ok_or_else(|| {
+        AppError::Database("y value missing from graph projection".to_string())
+    })?;
+    Ok(x_valid && value_to_f64(y).is_some())
 }
 
 struct ProjectionMetadata {
@@ -1791,6 +1886,7 @@ mod tests {
                     },
                 ],
                 sampling: GraphSampling::Full,
+                raw_point_budget: GRAPH_SCATTER_RENDER_BUDGET,
                 viewport: GraphViewport {
                     width: 1400,
                     height: 900,
@@ -1945,6 +2041,7 @@ mod tests {
                     },
                 ],
                 sampling: GraphSampling::Full,
+                raw_point_budget: GRAPH_SCATTER_RENDER_BUDGET,
                 viewport: GraphViewport {
                     width: 1280,
                     height: 720,
@@ -2089,6 +2186,7 @@ mod tests {
                     summary_stat: "none".to_string(),
                 }],
                 sampling: GraphSampling::Full,
+                raw_point_budget: GRAPH_SCATTER_RENDER_BUDGET,
                 viewport: GraphViewport {
                     width: 1200,
                     height: 700,
@@ -3083,6 +3181,7 @@ mod tests {
                 summary_stat: "none".to_string(),
             }],
             sampling: GraphSampling::Full,
+            raw_point_budget: GRAPH_SCATTER_RENDER_BUDGET,
             viewport: GraphViewport {
                 width: 1200,
                 height: 700,
@@ -3140,21 +3239,151 @@ mod tests {
 
             let service = GraphDataService::new(&state);
             let request = build_request(&dataset_id, 0);
-            let chunks = service.collect_for_test(&request).expect("chunks");
+            let (chunks, completion) = service.collect_for_harness(&request).expect("result");
 
-            assert_eq!(
-                chunks
-                    .iter()
-                    .map(|chunk| chunk.header.row_count)
-                    .sum::<usize>(),
-                row_count
-            );
-            assert_eq!(chunks.last().expect("final chunk").header.final_chunk, true);
-            assert_eq!(
-                chunks[0].header.projected_columns,
-                vec!["_row_id", "region", "cost"]
-            );
+            if row_count == 0 {
+                assert!(chunks.is_empty());
+                assert!(matches!(
+                    completion.raw_point_disposition,
+                    GraphRawPointDisposition::Empty { valid_rows: 0, .. }
+                ));
+            } else if row_count > GRAPH_SCATTER_RENDER_BUDGET {
+                assert!(chunks.is_empty());
+                assert!(matches!(
+                    completion.raw_point_disposition,
+                    GraphRawPointDisposition::Omitted {
+                        reason: GraphRawPointOmissionReason::PointBudgetExceeded,
+                        valid_rows,
+                        ..
+                    } if valid_rows == row_count as u64
+                ));
+            } else {
+                assert_eq!(
+                    chunks
+                        .iter()
+                        .map(|chunk| chunk.header.row_count)
+                        .sum::<usize>(),
+                    row_count
+                );
+                assert!(chunks.last().expect("final chunk").header.final_chunk);
+                assert_eq!(
+                    chunks[0].header.projected_columns,
+                    vec!["_row_id", "region", "cost"]
+                );
+                assert!(matches!(
+                    completion.raw_point_disposition,
+                    GraphRawPointDisposition::Included { valid_rows, .. }
+                        if valid_rows == row_count as u64
+                ));
+            }
         }
+    }
+
+    #[test]
+    fn full_points_above_budget_omit_raw_chunks_but_keep_exact_aggregates() {
+        let state = AppState::new().expect("state");
+        let row_count = GRAPH_SCATTER_RENDER_BUDGET + 1;
+        seed_dataset(&state, "points-over-budget", row_count);
+
+        let service = GraphDataService::new(&state);
+        let mut request = build_request("points-over-budget", 0);
+        request.elements.push(GraphElementRequest {
+            kind: "histogram".to_string(),
+            summary_stat: "none".to_string(),
+        });
+        let mut sink = CollectingChunkSink::default();
+        let completion = service
+            .stream_with_sink(&request, &mut sink)
+            .expect("stream result");
+
+        assert_eq!(completion.chunks_sent, 0);
+        assert!(sink.chunks.is_empty());
+        assert!(!sink.aggregate_packets.is_empty());
+        assert!(matches!(
+            completion.raw_point_disposition,
+            GraphRawPointDisposition::Omitted {
+                reason: GraphRawPointOmissionReason::PointBudgetExceeded,
+                valid_rows,
+                budget: GRAPH_SCATTER_RENDER_BUDGET,
+            } if valid_rows == row_count as u64
+        ));
+    }
+
+    #[test]
+    fn zero_valid_points_emit_empty_disposition_without_raw_chunks() {
+        let state = AppState::new().expect("state");
+        seed_dataset(&state, "points-empty", 3);
+        let db = state.db.lock().expect("db lock");
+        db.conn()
+            .execute("UPDATE \"dataset_points_empty\" SET cost = NULL", [])
+            .expect("clear point values");
+        drop(db);
+
+        let service = GraphDataService::new(&state);
+        let request = build_request("points-empty", 0);
+        let (chunks, completion) = service.collect_for_harness(&request).expect("result");
+
+        assert!(chunks.is_empty());
+        assert_eq!(completion.chunks_sent, 0);
+        assert!(matches!(
+            completion.raw_point_disposition,
+            GraphRawPointDisposition::Empty {
+                valid_rows: 0,
+                budget: GRAPH_SCATTER_RENDER_BUDGET,
+            }
+        ));
+    }
+
+    #[test]
+    fn sample_within_budget_includes_raw_chunks() {
+        let state = AppState::new().expect("state");
+        seed_dataset(
+            &state,
+            "points-sample-budget",
+            30_000,
+        );
+        let service = GraphDataService::new(&state);
+        let mut request = build_request("points-sample-budget", 0);
+        request.sampling = GraphSampling::Sample {
+            size: 3_000,
+            seed: 17,
+        };
+        let (chunks, completion) = service.collect_for_harness(&request).expect("result");
+
+        assert!(!chunks.is_empty());
+        assert!(matches!(
+            completion.raw_point_disposition,
+            GraphRawPointDisposition::Included {
+                valid_rows,
+                budget: GRAPH_SCATTER_RENDER_BUDGET,
+            } if valid_rows <= GRAPH_SCATTER_RENDER_BUDGET as u64
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_raw_point_and_sample_budgets() {
+        let state = AppState::new().expect("state");
+        seed_dataset(&state, "invalid-point-budget", 1);
+        let service = GraphDataService::new(&state);
+
+        for budget in [0, GRAPH_SCATTER_RENDER_BUDGET + 1] {
+            let mut request = build_request("invalid-point-budget", 0);
+            request.raw_point_budget = budget;
+            assert!(matches!(
+                service.collect_for_harness(&request),
+                Err(AppError::InvalidParam(message)) if message.contains("raw_point_budget")
+            ));
+        }
+
+        let mut request = build_request("invalid-point-budget", 0);
+        request.sampling = GraphSampling::Sample {
+            size: GRAPH_SCATTER_RENDER_BUDGET + 1,
+            seed: 7,
+        };
+        assert!(matches!(
+            service.collect_for_harness(&request),
+            Err(AppError::InvalidParam(message)) if message.contains("sample size")
+        ));
     }
 
     #[test]
@@ -3204,7 +3433,11 @@ mod tests {
         seed_dataset(&state, "chunk-ids", 300_000);
 
         let service = GraphDataService::new(&state);
-        let request = build_request("chunk-ids", 0);
+        let mut request = build_request("chunk-ids", 0);
+        request.elements = vec![GraphElementRequest {
+            kind: "line".to_string(),
+            summary_stat: "none".to_string(),
+        }];
         let chunks = service.collect_for_test(&request).expect("chunks");
 
         let mut all_ids = HashSet::new();
@@ -3447,6 +3680,7 @@ mod tests {
                 summary_stat: "none".to_string(),
             }],
             sampling: GraphSampling::Full,
+            raw_point_budget: GRAPH_SCATTER_RENDER_BUDGET,
             viewport: GraphViewport {
                 width: 1200,
                 height: 700,
@@ -3643,7 +3877,11 @@ mod tests {
         seed_dataset(&state, "bounded-stream", 300_000);
 
         let service = GraphDataService::new(&state);
-        let request = build_request("bounded-stream", 0);
+        let mut request = build_request("bounded-stream", 0);
+        request.elements = vec![GraphElementRequest {
+            kind: "line".to_string(),
+            summary_stat: "none".to_string(),
+        }];
         let mut sink = BoundedSink::default();
 
         let completion = service
@@ -3692,10 +3930,16 @@ mod tests {
 
         let service = GraphDataService::new(&state);
         let mut request = build_request("ordered-events", 0);
-        request.elements.push(GraphElementRequest {
-            kind: "histogram".to_string(),
-            summary_stat: "none".to_string(),
-        });
+        request.elements = vec![
+            GraphElementRequest {
+                kind: "line".to_string(),
+                summary_stat: "none".to_string(),
+            },
+            GraphElementRequest {
+                kind: "histogram".to_string(),
+                summary_stat: "none".to_string(),
+            },
+        ];
         let mut sink = OrderingSink::default();
 
         let completion = service

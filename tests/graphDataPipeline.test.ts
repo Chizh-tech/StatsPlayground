@@ -3,11 +3,13 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { SCATTER_RENDER_BUDGET } from "../src/graphCore/scatterBudget.ts";
 import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphData.ts";
 import {
   createInitialGraphStreamState,
   createStreamStartCancellationCoordinator,
   deriveFields,
+  deriveGraphRequestParts,
   reduceGraphStream,
   type GraphLoadProgress,
   type GraphStreamState,
@@ -110,8 +112,6 @@ assert.equal(makeGraphRows(10).length, 10);
 {
   const graphSource = readFileSync(resolve(TEST_FILE_DIR, "../src/graphCore/Graph.tsx"), "utf8");
   assert.equal(graphSource.includes("toScatterPick("), false, "Graph.tsx must not call undefined toScatterPick");
-  const helperUses = graphSource.match(/bigintToScatterPointPick\(/g) ?? [];
-  assert.ok(helperUses.length >= 2, "Graph.tsx click and brush conversion must share bigintToScatterPointPick helper");
 }
 
 {
@@ -371,6 +371,7 @@ assert.deepEqual(Array.from(dynamicDecoded.wrapCodes ?? []), [1, 1]);
     filters: [],
     elements: [{ kind: "line", summaryStat: "none" }],
     sampling: { mode: "full" },
+    rawPointBudget: 8_000,
     viewport: { width: 1024, height: 768 },
   };
 
@@ -415,6 +416,7 @@ assert.deepEqual(Array.from(dynamicDecoded.wrapCodes ?? []), [1, 1]);
       processedRows: 3,
       chunksSent: 1,
       cancelled: false,
+      rawPointDisposition: { status: "included", validRows: 3, budget: 8_000 },
     },
   });
 
@@ -600,6 +602,7 @@ function makeRequest(requestId: string, generation: number): GraphDataRequest {
     filters: [],
     elements: [{ kind: "points", summaryStat: "none" }],
     sampling: { mode: "full" },
+    rawPointBudget: 8_000,
     viewport: { width: 1280, height: 720 },
   };
 }
@@ -652,6 +655,7 @@ function makeCompletion(requestId: string, generation: number, cancelled = false
     processedRows: 4,
     chunksSent: 2,
     cancelled,
+    rawPointDisposition: { status: "included", validRows: 4, budget: 8_000 },
   };
 }
 
@@ -667,6 +671,7 @@ function makeCommittedFrame(): GraphDataFrame {
     extents: {},
     rawChunks: [],
     aggregates: [],
+    rawPointDisposition: { status: "empty", validRows: 0, budget: 8_000 },
   };
 }
 
@@ -914,6 +919,7 @@ function makeProgressedChunk(
         processedRows: 0,
         chunksSent: 0,
         cancelled: false,
+        rawPointDisposition: { status: "empty", validRows: 0, budget: 8_000 },
       },
     },
   );
@@ -926,6 +932,71 @@ function makeProgressedChunk(
     sourceRows: 0,
     percent: 100,
   });
+}
+
+{
+  const state = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request: makeRequest("req-points-omitted", 35) },
+    { type: "aggregate", packet: histogramPacket },
+    {
+      type: "complete",
+      completion: {
+        requestId: "req-points-omitted",
+        datasetId: "dataset-1",
+        generation: 35,
+        sourceRows: 8_001,
+        processedRows: 8_001,
+        chunksSent: 0,
+        cancelled: false,
+        rawPointDisposition: {
+          status: "omitted",
+          reason: "pointBudgetExceeded",
+          validRows: 8_001,
+          budget: 8_000,
+        },
+      },
+    },
+  );
+
+  assert.equal(state.status, "ready");
+  assert.equal(state.error, null);
+  assert.equal(state.committed?.rawChunks.length, 0);
+  assert.equal(state.committed?.aggregates.length, 1);
+  assert.deepEqual(state.committed?.rawPointDisposition, {
+    status: "omitted",
+    reason: "pointBudgetExceeded",
+    validRows: 8_001,
+    budget: 8_000,
+  });
+}
+
+{
+  const state = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request: makeRequest("req-included-without-chunks", 36) },
+    {
+      type: "complete",
+      completion: {
+        requestId: "req-included-without-chunks",
+        datasetId: "dataset-1",
+        generation: 36,
+        sourceRows: 1,
+        processedRows: 1,
+        chunksSent: 0,
+        cancelled: false,
+        rawPointDisposition: {
+          status: "included",
+          validRows: 1,
+          budget: 8_000,
+        },
+      },
+    },
+  );
+
+  assert.equal(state.pending, null);
+  assert.equal(state.committed?.requestId, "old-request");
+  assert.match(state.error ?? "", /inconsistent chunksSent/i);
 }
 
 {
@@ -1118,6 +1189,42 @@ function makeProgressedChunk(
 {
   const events: string[] = [];
   let transportError: string | null = null;
+  const request = makeRequest("req-omitted-aggregate", 27);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => events.push("header"),
+    onPayload: () => events.push("payload"),
+    onAggregate: () => events.push("aggregate"),
+    onComplete: () => events.push("complete"),
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({ messageType: "aggregate", ...histogramPacket });
+  transport.onChannelMessage({
+    messageType: "complete",
+    requestId: request.requestId,
+    datasetId: request.datasetId,
+    generation: request.generation,
+    sourceRows: 8_001,
+    processedRows: 8_001,
+    chunksSent: 0,
+    cancelled: false,
+    rawPointDisposition: {
+      status: "omitted",
+      reason: "pointBudgetExceeded",
+      validRows: 8_001,
+      budget: 8_000,
+    },
+  });
+
+  assert.equal(transportError, null);
+  assert.deepEqual(events, ["aggregate", "complete"]);
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
   const request = makeRequest("req-aggregate-before-raw", 25);
   const transport = createGraphStreamTransport(request, {
     onHeader: () => {
@@ -1143,9 +1250,66 @@ function makeProgressedChunk(
     yColumn: "cost",
     summaries: [],
   });
+  transport.onChannelMessage({
+    messageType: "complete",
+    ...makeCompletion(request.requestId, request.generation),
+    chunksSent: 0,
+  });
 
   assert.deepEqual(events, []);
   assert.match(transportError ?? "", /aggregate/i);
+}
+
+{
+  let aggregate: GraphAggregatePacket | null = null;
+  let transportError: string | null = null;
+  const request = makeRequest("req-aggregate-null-options", 27);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {},
+    onPayload: () => {},
+    onAggregate: (packet) => {
+      aggregate = packet;
+    },
+    onComplete: () => {},
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader("req-aggregate-null-options", 27, 0, true),
+  });
+  transport.onChannelMessage(makePayload(0));
+  transport.onChannelMessage(JSON.stringify({
+    messageType: "aggregate",
+    kind: "histogram",
+    xColumn: null,
+    yColumn: "cost",
+    groupColumn: null,
+    sourceColumn: null,
+    binCount: 1,
+    minValue: 0,
+    maxValue: 1,
+    missingCount: 0,
+    binWidth: 1,
+    totalCount: 1,
+    bins: [{
+      group: null,
+      category: null,
+      sourceColumn: null,
+      facetX: null,
+      facetY: null,
+      facetZ: null,
+      wrap: null,
+      binStart: 0,
+      binEnd: 1,
+      count: 1,
+    }],
+  }));
+
+  assert.equal(transportError, null);
+  assert.equal(aggregate?.kind, "histogram");
 }
 
 {
@@ -1190,6 +1354,7 @@ function makeProgressedChunk(
       processedRows: 10,
       chunksSent: 1,
       cancelled: false,
+      rawPointDisposition: { status: "included", validRows: 2, budget: 8_000 },
     } },
   );
 
@@ -1263,6 +1428,31 @@ function makeProgressedChunk(
 
   assert.equal(completed, false);
   assert.match(transportError ?? "", /inconsistent chunksSent/i);
+}
+
+{
+  const rawItem = makeGraphBuilderItem({
+    elements: [
+      { kind: "points", enabled: true, options: { summaryStat: "none" } },
+      { kind: "fitline", enabled: true, options: { degree: 1 } },
+    ],
+    sampling: { mode: "full" },
+  });
+  const rawParts = deriveGraphRequestParts(rawItem);
+
+  assert.deepEqual(rawParts.sampling, {
+    mode: "sample",
+    size: SCATTER_RENDER_BUDGET,
+    seed: 0,
+  });
+  assert.deepEqual(rawParts.elements.map((element) => element.kind), ["points", "fitline"]);
+
+  const boxItem = makeGraphBuilderItem({
+    elements: [{ kind: "boxplot", enabled: true }],
+    sampling: { mode: "full" },
+  });
+
+  assert.deepEqual(deriveGraphRequestParts(boxItem).sampling, { mode: "full" });
 }
 
 {

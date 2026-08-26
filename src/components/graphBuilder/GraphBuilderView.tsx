@@ -21,6 +21,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
 import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { SCATTER_RENDER_BUDGET } from "@/graphCore/scatterBudget";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -31,6 +32,11 @@ import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
 import { prepareAxisBinding } from "./axisBinding";
+import {
+  clampSampleSize,
+  DEFAULT_GRAPH_SAMPLE_SIZE,
+  getRawPointNotice,
+} from "./graphSamplingPolicy";
 import { FilterPanel } from "@/components/filter";
 import { useGraphDataPipeline } from "./useGraphDataPipeline";
 
@@ -1348,9 +1354,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
   const samplingMode = item.sampling?.mode === "sample" ? "sample" : "full";
   const sampleSize = useMemo(() => {
-    if (item.sampling?.mode !== "sample") return 20000;
-    const value = Math.trunc(item.sampling.size);
-    return Number.isFinite(value) && value > 0 ? value : 20000;
+    if (item.sampling?.mode !== "sample") return DEFAULT_GRAPH_SAMPLE_SIZE;
+    return clampSampleSize(item.sampling.size);
   }, [item.sampling]);
   const sampleSeed = useMemo(() => {
     if (item.sampling?.mode !== "sample") return 0;
@@ -1375,7 +1380,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   }, [item.id, updateItem, markDirty, sampleSize, sampleSeed]);
 
   const setSampleSize = useCallback((raw: number) => {
-    const size = Math.max(1, Math.trunc(raw) || sampleSize);
+    const size = clampSampleSize(Number.isFinite(raw) ? raw : sampleSize);
     updateItem(item.id, {
       sampling: {
         mode: "sample",
@@ -1385,6 +1390,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     });
     markDirty();
   }, [item.id, updateItem, markDirty, sampleSeed, sampleSize]);
+
+  const rawPointNotice = useMemo(
+    () => getRawPointNotice(frame?.rawPointDisposition),
+    [frame?.rawPointDisposition],
+  );
 
   const setSampleSeed = useCallback((raw: number) => {
     const seed = Math.max(0, Math.trunc(raw) || 0);
@@ -1421,11 +1431,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         defaultValue: "Sampled: {{processed}} / {{source}} rows",
       });
     }
+    if (rawPointNotice) {
+      return t("graph.rowStatus.pointsOmitted", {
+        valid: rawPointNotice.validRows.toLocaleString(),
+        budget: rawPointNotice.budget.toLocaleString(),
+        defaultValue: "Raw points omitted: {{valid}} valid rows exceed the {{budget}} point budget",
+      });
+    }
     return t("graph.rowStatus.full", {
       processed: progress.processedRows,
       defaultValue: "Full Data: {{processed}} rows",
     });
-  }, [frame, pipelineStatus, progress, t]);
+  }, [frame, pipelineStatus, progress, rawPointNotice, t]);
 
   const progressPercent = progress?.percent ?? null;
   const progressAriaProps = progressPercent === null
@@ -1572,6 +1589,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   className="gb-sampling-input"
                   type="number"
                   min={1}
+                  max={SCATTER_RENDER_BUDGET}
                   step={1}
                   value={sampleSize}
                   onChange={(e) => setSampleSize(Number(e.target.value))}
@@ -1845,6 +1863,29 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   />
                   {pipelineStatus === "error" && pipelineError && (
                     <div className="gb-canvas-overlay gb-canvas-overlay-error">{pipelineError}</div>
+                  )}
+                  {pipelineStatus === "ready" && rawPointNotice && (
+                    <div className="gb-point-budget-notice" role="status">
+                      <i className="fa-solid fa-circle-info" aria-hidden="true" />
+                      <span className="gb-point-budget-copy">
+                        <strong>{t("graph.sampling.pointsOmitted", {
+                          defaultValue: "Raw points were omitted",
+                        })}</strong>
+                        <span>{t("graph.sampling.pointBudgetCount", {
+                          valid: rawPointNotice.validRows.toLocaleString(),
+                          budget: rawPointNotice.budget.toLocaleString(),
+                          defaultValue: "{{valid}} valid rows; point budget {{budget}}",
+                        })}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="gb-point-budget-action"
+                        onClick={() => setSamplingMode("sample")}
+                      >
+                        <i className="fa-solid fa-shuffle" aria-hidden="true" />
+                        {t("graph.sampling.switchToSample", { defaultValue: "Switch to Sample" })}
+                      </button>
+                    </div>
                   )}
                 </>
               )}
