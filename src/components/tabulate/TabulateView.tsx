@@ -27,6 +27,7 @@ import {
 } from "./TabulateStatisticEditor";
 import {
   canShowReadyResult,
+  canAssignTabulateField,
   isLatestSequence,
   isNumericDuckDbType,
   reorderForDrop,
@@ -271,7 +272,21 @@ export function TabulateView({ item, dataset }: TabulateViewProps) {
     markDirty();
   };
 
+  const currentFieldsForRole = (role: TabulateAssignmentRole): readonly string[] => {
+    if (role === "rows") {
+      return item.rowFields;
+    }
+    if (role === "columns") {
+      return item.columnFields;
+    }
+    return item.statistics.map((statistic) => statistic.field);
+  };
+
   const assignField = (field: TabulateFieldInfo, role: TabulateAssignmentRole, insertIndex?: number | null) => {
+    if (!canAssignTabulateField(role, currentFieldsForRole(role), field.name)) {
+      return;
+    }
+
     if (role === "statistics") {
       const nextStatistic: TabulateStatistic = {
         id: crypto.randomUUID(),
@@ -318,7 +333,7 @@ export function TabulateView({ item, dataset }: TabulateViewProps) {
 
     if (payload.kind === "field") {
       const field = fieldsByName.get(payload.fieldName);
-      if (!field || target.includes(field.name)) {
+      if (!field || !canAssignTabulateField(zone, target, field.name)) {
         return;
       }
       target.splice(insertIndex ?? target.length, 0, field.name);
@@ -340,6 +355,9 @@ export function TabulateView({ item, dataset }: TabulateViewProps) {
     const sourceKey = payload.role === "rows" ? "rowFields" : "columnFields";
     const source = item[sourceKey].filter((fieldName) => fieldName !== payload.fieldName);
     const nextTarget = item[targetKey].filter((fieldName) => fieldName !== payload.fieldName);
+    if (!canAssignTabulateField(zone, nextTarget, payload.fieldName)) {
+      return;
+    }
     nextTarget.splice(insertIndex ?? nextTarget.length, 0, payload.fieldName);
     updateCurrentItem({
       [sourceKey]: source,

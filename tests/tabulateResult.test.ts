@@ -98,6 +98,9 @@ const englishLocale = JSON.parse(readFileSync(
   "utf8",
 ));
 
+assert.match(tabulateViewSource, /from "\.\/tabulateResult"[\s\S]*canAssignTabulateField/);
+assert.match(tabulateViewSource, /canAssignTabulateField\(/);
+assert.ok((tabulateViewSource.match(/canAssignTabulateField\(/g) ?? []).length >= 3);
 assert.match(tabulateViewSource, /workspace\.datasourceLabel/);
 assert.match(tabulateViewSource, /workspace\.datasourceDeleted/);
 assert.match(tabulateViewSource, /aria-expanded=\{!fieldsCollapsed\}/);
