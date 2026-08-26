@@ -2,3 +2,19 @@ export type { DatasetMeta, ColumnMeta, TableQueryParams, TableFilter, TableQuery
 export type { ColumnStats, DescriptiveResult } from "./stats";
 export type { ProjectInfo } from "./project";
 export type { TabulateRequest, TabulateResult, TabulateStatistic, TabulateStatisticKind } from "./tabulate";
+export type {
+	AnalysisSnapshotV1,
+	BlackBoxCaseV1,
+	BlackBoxObservationV1,
+	CapabilityDescriptorV1,
+	DistributionChartDataV1,
+	DistributionChartKindV1,
+	DistributionColumnRefV1,
+	DistributionModelingTypeV1,
+	DistributionReportBlockV1,
+	DistributionRequestV1,
+	DistributionWorkspaceBootstrapV1,
+	FilterExprV1,
+	ObservationContributionPolicyV1,
+	ResourceBudgetV1,
+} from "./distribution";

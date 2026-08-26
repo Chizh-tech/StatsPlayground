@@ -3,3 +3,4 @@ export { statsService } from "./statsService";
 export { ioService } from "./ioService";
 export { projectService } from "./projectService";
 export { tabulateService } from "./tabulateService";
+export { distributionService } from "./distributionService";
