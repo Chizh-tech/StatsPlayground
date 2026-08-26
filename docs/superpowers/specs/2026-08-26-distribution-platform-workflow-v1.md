@@ -1,7 +1,7 @@
 # Distribution Platform Workflow V1 Specification
 
 **版本：** 1.0.0
-**状态：** 待产品评审
+**状态：** 产品规格已批准，待实施
 **覆盖 ID：** BASE-01 至 BASE-08
 **范围权威：** [批准范围与验收台账](2026-08-26-analysis-distribution-approved-scope.md)
 **基础合同：** Phase 0 Rust `src-tauri/src/models/distribution.rs` 与 TypeScript `src/types/distribution.ts` 的 V1 mirrors；字段变更必须同步更新两端 contract tests 与 schema version

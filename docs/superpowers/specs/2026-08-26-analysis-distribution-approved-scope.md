@@ -1,10 +1,16 @@
 # Analyze Distribution 批准范围与验收台账
 
 **日期：** 2026-08-26
-**状态：** 产品范围已批准，统计 method specs 与实现尚未开始
+**状态：** 产品范围与首批 V1 specs 已批准，统计实现尚未开始
 **范围批准人：** 产品负责人
 **关联跟踪：** GitHub Issue #49（仅作为需求跟踪入口；其图片和第三方素材不属于实现资料）
 **总体设计：** [2026-08-25-analysis-distribution-design.md](2026-08-25-analysis-distribution-design.md)
+
+**已批准 V1 规格与计划：**
+
+- [Platform Workflow V1](2026-08-26-distribution-platform-workflow-v1.md) / [实施计划](../plans/2026-08-26-distribution-platform-workflow-v1.md)
+- [Continuous Descriptive Methods V1](2026-08-26-distribution-continuous-descriptive-methods-v1.md) / [实施计划](../plans/2026-08-26-distribution-continuous-descriptive-v1.md)
+- [Normal Process Capability V1](2026-08-26-distribution-normal-capability-method-v1.md) / [实施计划](../plans/2026-08-26-distribution-normal-capability-v1.md)
 
 ## 1. 文档权威与维护规则
 
@@ -81,43 +87,43 @@
 
 | ID | 功能 | developmentStatus | automationStatus | uiAcceptance | 验收重点 |
 | --- | --- | --- | --- | --- | --- |
-| BASE-01 | `Analyze > Distribution` 启动入口与角色对话框 | notStarted | notStarted | notReady | 仅活动数据集且项目可修改时启用 |
-| BASE-02 | 一个或多个 Y 与建模类型识别 | notStarted | notStarted | notReady | 稳定 column ID，不传 SQL/表达式 |
-| BASE-03 | 可选 Weight、Freq、By | notStarted | notStarted | notReady | 观测贡献语义必须一致 |
-| BASE-04 | 列搜索、Remove、Recall、Histograms Only | notStarted | notStarted | notReady | Cancel 不修改现有分析 |
-| BASE-05 | Run 创建 `Distribution N` Directory 项 | notStarted | notStarted | notReady | 原子保存配置并启动 revision |
-| BASE-06 | 重命名、移动、复制、删除、Edit Inputs、打开源表 | notStarted | notStarted | notReady | 项目 dirty 与 history 行为一致 |
-| BASE-07 | save/open 后恢复配置并按当前数据重算 | notStarted | notStarted | notReady | 不持久化统计结果 |
-| BASE-08 | progress、cancel、旧结果丢弃和旧有效报告保留 | notStarted | notStarted | notReady | UI 实际长任务场景 |
+| BASE-01 | `Analyze > Distribution` 启动入口与角色对话框 | specified | notStarted | notReady | 仅活动数据集且项目可修改时启用 |
+| BASE-02 | 一个或多个 Y 与建模类型识别 | specified | notStarted | notReady | 稳定 column ID，不传 SQL/表达式 |
+| BASE-03 | 可选 Weight、Freq、By | specified | notStarted | notReady | 观测贡献语义必须一致 |
+| BASE-04 | 列搜索、Remove、Recall、Histograms Only | specified | notStarted | notReady | Cancel 不修改现有分析 |
+| BASE-05 | Run 创建 `Distribution N` Directory 项 | specified | notStarted | notReady | 原子保存配置并启动 revision |
+| BASE-06 | 重命名、移动、复制、删除、Edit Inputs、打开源表 | specified | notStarted | notReady | 项目 dirty 与 history 行为一致 |
+| BASE-07 | save/open 后恢复配置并按当前数据重算 | specified | notStarted | notReady | 不持久化统计结果 |
+| BASE-08 | progress、cancel、旧结果丢弃和旧有效报告保留 | specified | notStarted | notReady | UI 实际长任务场景 |
 
 ### 4.2 连续描述统计与图表数据
 
 | ID | 功能 | developmentStatus | automationStatus | uiAcceptance | 验收重点 |
 | --- | --- | --- | --- | --- | --- |
-| DESC-01 | Histogram count、probability、density chart-data | notStarted | notStarted | notReady | 全量精确 bins；Graph Builder 只渲染 |
-| DESC-02 | Tukey box plot、outliers、均值区间 chart-data | notStarted | notStarted | notReady | quartiles/whiskers 在后端计算 |
-| DESC-03 | 批准概率点的 Quantiles | notStarted | notStarted | notReady | Hyndman-Fan Type 6 独立 method spec |
-| DESC-04 | Mean、sample Std Dev、Std Error、Mean CI、N、N Missing | notStarted | notStarted | notReady | Weight/Freq/n=0/1 语义 |
-| DESC-05 | Minimum、Maximum、Median、Mode、Range、IQR、MAD | notStarted | notStarted | notReady | 缺失、常数和重复值 |
-| DESC-09 | ECDF/CDF chart-data | notStarted | notStarted | notReady | 坐标由 Distribution 输出 |
+| DESC-01 | Histogram count、probability、density chart-data | specified | notStarted | notReady | 全量精确 bins；Graph Builder 只渲染 |
+| DESC-02 | Tukey box plot、outliers、均值区间 chart-data | specified | notStarted | notReady | quartiles/whiskers 在后端计算 |
+| DESC-03 | 批准概率点的 Quantiles | specified | notStarted | notReady | Hyndman-Fan Type 6 独立 method spec |
+| DESC-04 | Mean、sample Std Dev、Std Error、Mean CI、N、N Missing | specified | notStarted | notReady | Weight/Freq/n=0/1 语义 |
+| DESC-05 | Minimum、Maximum、Median、Mode、Range、IQR、MAD | specified | notStarted | notReady | 缺失、常数和重复值 |
+| DESC-09 | ECDF/CDF chart-data | specified | notStarted | notReady | 坐标由 Distribution 输出 |
 
 ### 4.3 Normal Process Capability
 
 | ID | 功能 | developmentStatus | automationStatus | uiAcceptance | 验收重点 |
 | --- | --- | --- | --- | --- | --- |
-| CAP-01 | 当前分析中手工输入 LSL/Target/USL | notStarted | notStarted | notReady | 有效 LSL 或 USL 才启用 |
-| CAP-02 | 自动读取 Table 列属性规格限 | notStarted | notStarted | notReady | 列属性为默认来源 |
-| CAP-03 | 手工值覆盖当前分析且不回写 Table | notStarted | notStarted | notReady | save/open 后保持覆盖来源 |
-| CAP-04 | 双侧、单侧、无 Target、无规格状态 | notStarted | notStarted | notReady | 无规格时不自动生成报告 |
-| CAP-05 | Process Summary：N、Mean、Within/Overall Sigma | notStarted | notStarted | notReady | Sigma method 必须版本化 |
-| CAP-06 | Within：Cp、Cpk、Cpl、Cpu、Cpm | notStarted | notStarted | notReady | 只显示定义成立的指标 |
-| CAP-07 | Overall：Pp、Ppk、Ppl、Ppu、Cpm | notStarted | notStarted | notReady | 与 Within 明确区分 |
-| CAP-08 | 能力指数置信区间 | notStarted | notStarted | notReady | 公式、DF、尾部与容差冻结 |
-| CAP-09 | Below LSL、Above USL、Total Outside | notStarted | notStarted | notReady | 单侧时仅输出适用字段 |
-| CAP-10 | Observed、Expected Within、Expected Overall | notStarted | notStarted | notReady | observed/expected 口径明确 |
-| CAP-11 | Expected PPM | notStarted | notStarted | notReady | 数值与比例换算一致 |
-| CAP-12 | Histogram、规格限线、Normal density chart-data | notStarted | notStarted | notReady | Graph Builder 渲染与导出 |
-| CAP-13 | Within Sigma：average moving range | notStarted | notStarted | notReady | MR 定义与短样本失败状态冻结 |
+| CAP-01 | 当前分析中手工输入 LSL/Target/USL | specified | notStarted | notReady | 有效 LSL 或 USL 才启用 |
+| CAP-02 | 自动读取 Table 列属性规格限 | specified | notStarted | notReady | 列属性为默认来源 |
+| CAP-03 | 手工值覆盖当前分析且不回写 Table | specified | notStarted | notReady | save/open 后保持覆盖来源 |
+| CAP-04 | 双侧、单侧、无 Target、无规格状态 | specified | notStarted | notReady | 无规格时不自动生成报告 |
+| CAP-05 | Process Summary：N、Mean、Within/Overall Sigma | specified | notStarted | notReady | Sigma method 必须版本化 |
+| CAP-06 | Within：Cp、Cpk、Cpl、Cpu、Cpm | specified | notStarted | notReady | 只显示定义成立的指标 |
+| CAP-07 | Overall：Pp、Ppk、Ppl、Ppu、Cpm | specified | notStarted | notReady | 与 Within 明确区分 |
+| CAP-08 | 能力指数置信区间 | specified | notStarted | notReady | 公式、DF、尾部与容差冻结 |
+| CAP-09 | Below LSL、Above USL、Total Outside | specified | notStarted | notReady | 单侧时仅输出适用字段 |
+| CAP-10 | Observed、Expected Within、Expected Overall | specified | notStarted | notReady | observed/expected 口径明确 |
+| CAP-11 | Expected PPM | specified | notStarted | notReady | 数值与比例换算一致 |
+| CAP-12 | Histogram、规格限线、Normal density chart-data | specified | notStarted | notReady | Graph Builder 渲染与导出 |
+| CAP-13 | Within Sigma：average moving range | specified | notStarted | notReady | MR 定义与短样本失败状态冻结 |
 
 ## 5. 暂缓功能清单
 

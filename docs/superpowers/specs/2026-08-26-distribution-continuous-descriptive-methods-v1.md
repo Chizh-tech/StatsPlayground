@@ -1,7 +1,7 @@
 # Distribution Continuous Descriptive Methods V1 Specification
 
 **版本：** 1.0.0
-**状态：** 待产品与方法评审
+**状态：** 产品与方法口径已批准，待实现验证与依赖审计
 **覆盖 ID：** DESC-01、DESC-02、DESC-03、DESC-04、DESC-05、DESC-09
 **依赖：** [Platform Workflow V1](2026-08-26-distribution-platform-workflow-v1.md)
 **范围权威：** [批准范围与验收台账](2026-08-26-analysis-distribution-approved-scope.md)
