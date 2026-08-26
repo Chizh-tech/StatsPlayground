@@ -315,6 +315,7 @@ fn build_graph_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
             summary_stat: "none".to_string(),
         }],
         sampling: GraphSampling::Full,
+        raw_point_budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
         viewport: GraphViewport {
             width: 1200,
             height: 700,
@@ -971,6 +972,11 @@ mod tests {
             processed_rows: 1,
             chunks_sent: 1,
             cancelled: false,
+            raw_point_disposition:
+                crate::models::graph_data::GraphRawPointDisposition::Included {
+                    valid_rows: 1,
+                    budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
+                },
         };
 
         let actual = measure_transferred_bytes(

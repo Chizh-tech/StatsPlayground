@@ -43,19 +43,6 @@ export interface SmootherOptions {
   lambda?: number;
 }
 
-/** Optional typed-buffer raw-point overlay jitter controls.
- *
- * Default is `none` so every valid row maps directly through the affine/
- * category projector with no implicit random perturbation. When enabled,
- * jitter must be explicit and deterministic (`seeded`) so redraws, hit tests,
- * and regression digests stay stable.
- */
-export interface RawPointJitterOptions {
-  rawPointJitter?: "none" | "seeded";
-  rawPointJitterSeed?: number;
-  rawPointJitterAmplitudePx?: number;
-}
-
 /** 点的符号形状 */
 export type MarkerShape =
   | "circle"
@@ -290,7 +277,7 @@ export interface ChartElement {
   /** 元素是否启用 */
   enabled?: boolean;
   /** 元素特有选项 */
-  options?: SmootherOptions & RawPointJitterOptions & Record<string, unknown>;
+  options?: SmootherOptions & Record<string, unknown>;
 }
 
 /** 编码通道：将数据字段映射到视觉属性 */
