@@ -11,10 +11,30 @@ import { DEFAULT_GROUP_KEY } from "./types.ts";
 import { buildAxisCommon, type GraphTheme } from "./theme.ts";
 import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand.ts";
 import type { BoxPlotPacket, GraphDataFrame, GraphAggregatePacket, HeatmapPacket, HistogramPacket, SummaryPacket } from "../types/graphData.ts";
-import type { RawPointPanelDescriptor } from "./rawPoints.ts";
+import type { RawPointJitter, RawPointPanelDescriptor } from "./rawPoints.ts";
+import { buildFrameScatterItems, type FrameScatterItem } from "./frameScatter.ts";
+import {
+  computeJitterOffsets as computeStableJitterOffsets,
+  estimateJitterXBandwidth,
+  type JitterPoint,
+} from "./jitter.ts";
 import i18next from "i18next";
 
 type EChartsOption = Record<string, unknown>;
+
+interface FrameScatterCoordinates {
+  x: {
+    vector: "x" | "y" | "constant";
+    column?: string;
+    type: "continuous" | "nominal" | "datetime";
+    categories?: readonly string[];
+    constant?: number | string;
+  };
+  y?: {
+    vector: "x" | "y";
+    column: string;
+  };
+}
 
 /** Resolved per-group style. Whichever element kinds are active in the
  *  group will pull styling from the matching sub-mark (line for line/
@@ -1523,155 +1543,6 @@ function summaryPointFromPacket(
   return points;
 }
 
-/** Compute per-point horizontal jitter offsets in CSS pixels.
- *
- *  - `auto` produces JMP-style "stack jitter": within each X category, Y
- *    values are binned at roughly one symbol height; the points sharing a
- *    bin are spread side by side around the X position, so every point is
- *    visible without overlap.
- *  - `uniform` / `normal` apply random pixel-space noise.
- *  - `none` returns null (caller should skip applying offsets).
- *
- *  Returns one [dx, 0] tuple per input point or null if no jitter requested.
- */
-/** Compute per-point horizontal jitter offsets in CSS pixels.
- *
- *  - `stacked` (preferred) — JMP-style stack jitter, a.k.a. beeswarm /
- *    stacked-dot plot:
- *      1. Group points by X category.
- *      2. Within each category, bin points by Y (~80 bins across the
- *         visible Y span).
- *      3. Points sharing a (category, Y-bin) bucket are spread
- *         side-by-side around the X center with a fixed minimum
- *         per-symbol pixel spacing, capped by the per-category band
- *         width × `limit`.
- *      Result: deterministic, no Y distortion, and every overlapping
- *      observation is individually visible.
- *
- *  - `auto` — legacy alias for `stacked`. Older saved specs may carry
- *    this value; treat it identically so existing projects still render.
- *
- *  - `uniform` / `normal` — random pixel-space horizontal noise scaled
- *    by `limit` (uniform = flat, normal = clamped Box-Muller).
- *
- *  Returns one [dx, 0] tuple per input point, or null when `mode` is
- *  unrecognized (so the caller skips applying any offsets).
- */
-function computeJitterOffsets(
-  points: Array<{ x: unknown; y: number }>,
-  mode: string,
-  limit: number,
-): Array<[number, number]> | null {
-  if (points.length === 0) return null;
-  // Pixel spacing between adjacent stacked symbols. ECharts default scatter
-  // is ~6px, give a little air around it so dots don't kiss.
-  const SYMBOL_PX = 6;
-  const SPACING = SYMBOL_PX + 1;
-  // Estimate the per-category band width in CSS pixels. The chart isn't
-  // rendered yet at option-build time so the real bandwidth is unknown;
-  // assume a reasonable plot-area width (~640px after axis margins) and
-  // divide by the number of distinct categories. Clamped so:
-  //   - Tiny chart areas / many categories don't collapse the spread to
-  //     a degenerate <60px (lower bound below SYMBOL_PX is useless).
-  //   - Huge wide-screen layouts with 1-2 categories don't blow the
-  //     spread out to >450px (where points start crossing into
-  //     neighboring bands).
-  // `limit` (0..1) then maps to "this fraction of one category band":
-  //   limit = 0   → no spread (single column at category center)
-  //   limit = 0.5 → ~half-band spread (matches the user's expectation
-  //                  "50%滑块 ≈ 50% of the category width")
-  //   limit = 1   → full-band spread (points fill the whole band)
-  const distinctX = new Set<string>();
-  for (const p of points) distinctX.add(toStr(p.x));
-  const nCats = Math.max(1, distinctX.size);
-  const ASSUMED_PLOT_WIDTH = 640;
-  const ESTIMATED_BAND = Math.max(80, Math.min(450, ASSUMED_PLOT_WIDTH / nCats));
-  // PRIOR BUG: `MAX_SPREAD = 60 * (limit > 0 ? limit : 1)` treated
-  // limit=0 as "fallback to 1", producing MAX spread at the slider's
-  // zero position. Plain `clamp01(limit)` is correct.
-  const MAX_SPREAD = ESTIMATED_BAND * Math.max(0, Math.min(1, limit));
-
-  if (mode === "uniform" || mode === "normal") {
-    const half = MAX_SPREAD / 2;
-    const offs: Array<[number, number]> = new Array(points.length);
-    for (let i = 0; i < points.length; i++) {
-      let r: number;
-      if (mode === "normal") {
-        // Box-Muller, clamp to [-1, 1].
-        const u = Math.random() || 1e-9;
-        const v = Math.random();
-        r = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) / 3;
-        r = Math.max(-1, Math.min(1, r));
-      } else {
-        r = Math.random() * 2 - 1;
-      }
-      offs[i] = [r * half, 0];
-    }
-    return offs;
-  }
-
-  // Default / "stacked" / legacy "auto" → deterministic stack jitter.
-  // Anything other than "uniform" / "normal" lands here, so unrecognized
-  // values render safely as the stacked default rather than silently
-  // disabling jitter (the "none" mode was removed because its renderer
-  // path failed to clear ECharts' cached per-point symbolOffset, leaving
-  // the previous mode's positions stuck on screen).
-  // 1) Group by category.
-  const groups = new Map<string, number[]>();
-  for (let i = 0; i < points.length; i++) {
-    const k = toStr(points[i].x);
-    let arr = groups.get(k);
-    if (!arr) { arr = []; groups.set(k, arr); }
-    arr.push(i);
-  }
-  // 2) Compute a Y bin width: target ~80 bins across the visible Y span.
-  let yMin = Infinity, yMax = -Infinity;
-  for (const p of points) {
-    if (p.y < yMin) yMin = p.y;
-    if (p.y > yMax) yMax = p.y;
-  }
-  const yRange = yMax - yMin || 1;
-  const binSize = yRange / 80;
-
-  const offs: Array<[number, number]> = new Array(points.length);
-  for (let i = 0; i < points.length; i++) offs[i] = [0, 0];
-
-  // Slider at 0 means "no horizontal spread" — leave every offset at
-  // [0, 0] and return early. Skipping the bucket loop also avoids the
-  // `MAX_SPREAD/(n-1)` divide-by-zero edge for single-point buckets.
-  if (MAX_SPREAD <= 0) return offs;
-
-  groups.forEach((idxs) => {
-    // Bin indices within this category.
-    const bins = new Map<number, number[]>();
-    for (const idx of idxs) {
-      const b = Math.round((points[idx].y - yMin) / binSize);
-      let arr = bins.get(b);
-      if (!arr) { arr = []; bins.set(b, arr); }
-      arr.push(idx);
-    }
-    bins.forEach((bucket) => {
-      const n = bucket.length;
-      // Spread the bucket across MAX_SPREAD. PRIOR BUG: this used
-      // `Math.min(SPACING, MAX_SPREAD/(n-1))` which capped spacing at
-      // 7px once the bucket was small enough — the slider had no
-      // effect above ~50% because `MAX_SPREAD/(n-1)` exceeded SPACING
-      // and the min() pinned spacing to the constant ceiling. Without
-      // the cap the slider scales continuously across the full range
-      // and a SYMBOL_PX-wide floor still keeps overlapping symbols
-      // visually distinct.
-      const total = n > 1 ? MAX_SPREAD : 0;
-      const spacing = n > 1 ? Math.max(SPACING, total / (n - 1)) : 0;
-      const widthOut = (n - 1) * spacing;
-      const center = widthOut / 2;
-      bucket.forEach((idx, k) => {
-        offs[idx] = [k * spacing - center, 0];
-      });
-    });
-  });
-  return offs;
-}
-
 /** Build (x, y[, lo, hi]) per X group. Used by points/line summary modes. */
 function aggregatePoints(
   rowIdxs: number[],
@@ -2851,6 +2722,8 @@ function buildSingleOption(
   sharedRanges?: SharedAxisRanges,
   aggregatePackets?: readonly GraphAggregatePacket[],
   panelFacet?: PanelFacetContext,
+  frame?: GraphDataFrame,
+  frameScatterCoordinates?: FrameScatterCoordinates,
 ): EChartsOption {
   const { encoding, elements } = spec;
   const xField = encoding.x;
@@ -2858,6 +2731,25 @@ function buildSingleOption(
   const colorField = encoding.color;
   const overlayField = encoding.overlay;
   const sizeField = encoding.size;
+  const resolvedFrameScatterCoordinates = frameScatterCoordinates ?? {
+    x: xField
+      ? {
+        vector: "x" as const,
+        column: xField.name,
+        type: xField.type === "datetime"
+          ? "datetime" as const
+          : xField.type === "continuous"
+            ? "continuous" as const
+            : "nominal" as const,
+        categories: frame?.dictionaries.x ?? valueOrders?.[xField.name],
+      }
+      : {
+        vector: "constant" as const,
+        type: "nominal" as const,
+        constant: "",
+      },
+    y: yField ? { vector: "y" as const, column: yField.name } : undefined,
+  };
 
   // ─── Horizontal-mode early exit ────────────────────────────────────────
   // See the `transposeOption` helper above for the full rationale. The
@@ -2983,6 +2875,28 @@ function buildSingleOption(
       autoSpecX: undefined,
     };
     const swappedShared = sharedRanges ? swapSharedRanges(sharedRanges) : undefined;
+    const swappedFrameScatterCoordinates: FrameScatterCoordinates = {
+      x: resolvedFrameScatterCoordinates.y
+        ? {
+          vector: resolvedFrameScatterCoordinates.y.vector,
+          column: yField?.name,
+          type: yField?.type === "datetime"
+            ? "datetime"
+            : yField?.type === "continuous"
+              ? "continuous"
+              : "nominal",
+          categories: resolvedFrameScatterCoordinates.y.vector === "x"
+            ? (frame?.dictionaries.x ?? valueOrders?.[yField?.name ?? ""])
+            : (frame?.dictionaries.y ?? valueOrders?.[yField?.name ?? ""]),
+        }
+        : { vector: "constant", type: "nominal", constant: "" },
+      y: resolvedFrameScatterCoordinates.x.vector === "constant"
+        ? undefined
+        : {
+          vector: resolvedFrameScatterCoordinates.x.vector,
+          column: resolvedFrameScatterCoordinates.x.column ?? xField?.name ?? "",
+        },
+    };
     const verticalOpt = buildSingleOption(
       swappedSpec,
       data,
@@ -2992,6 +2906,8 @@ function buildSingleOption(
       swappedShared,
       aggregatePackets,
       panelFacet,
+      frame,
+      swappedFrameScatterCoordinates,
     );
     return transposeOption(verticalOpt);
   }
@@ -3010,11 +2926,54 @@ function buildSingleOption(
     useRowIdxX || hasBoxplot ||
     xField?.type === "nominal" || xField?.type === "ordinal";
   const xIsTime = !useRowIdxX && !hasBoxplot && xField?.type === "datetime";
+  const enabledElements = elements.filter((e) => e.enabled !== false);
+  const framePointsOnly = !!frame
+    && enabledElements.length === 1
+    && enabledElements[0].kind === "points"
+    && getOpt<string>(enabledElements[0].options, "summaryStat", "none") === "none";
+
+  if (frame) {
+    const frameRanges: SharedAxisRanges = {};
+    const xVector = resolvedFrameScatterCoordinates.x.vector;
+    const yVector = resolvedFrameScatterCoordinates.y?.vector;
+    const xExtent = xVector === "constant" ? undefined : frame.extents[xVector];
+    const yExtent = yVector ? frame.extents[yVector] : undefined;
+    if (xIsCategory) {
+      if (resolvedFrameScatterCoordinates.x.categories?.length) {
+        frameRanges.xCats = [...resolvedFrameScatterCoordinates.x.categories];
+      }
+    } else if (!framePointsOnly && xIsTime && resolvedFrameScatterCoordinates.x.categories?.length) {
+      const times = resolvedFrameScatterCoordinates.x.categories
+        .map((value) => Date.parse(value))
+        .filter(Number.isFinite);
+      if (times.length > 0) {
+        let minTime = Infinity;
+        let maxTime = -Infinity;
+        for (const time of times) {
+          if (time < minTime) minTime = time;
+          if (time > maxTime) maxTime = time;
+        }
+        frameRanges.xMin = minTime;
+        frameRanges.xMax = maxTime;
+      }
+    } else if (!framePointsOnly && xExtent) {
+      frameRanges.xMin = xExtent.min;
+      frameRanges.xMax = xExtent.max;
+    }
+    if (!framePointsOnly && yExtent) {
+      frameRanges.yMin = yExtent.min;
+      frameRanges.yMax = yExtent.max;
+    }
+    sharedRanges = { ...frameRanges, ...sharedRanges };
+  }
 
   const axis = buildAxisCommon(theme);
 
   const series: any[] = [];
-  const enabledElements = elements.filter((e) => e.enabled !== false);
+  let framePointExtents: {
+    x?: { min: number; max: number };
+    y?: { min: number; max: number };
+  } | undefined;
   const frameBackedAggregateMode = aggregatePackets !== undefined;
   const aggregateMode: "legacyRows" | "frameBacked" = frameBackedAggregateMode
     ? "frameBacked"
@@ -3029,6 +2988,7 @@ function buildSingleOption(
     !!histogramPacket &&
     enabledElements.length === 1 &&
     histogramElementCount === 1;
+  const boxplotPacketMode = frameBackedAggregateMode && hasBoxplot && !!boxPlotPacket;
 
   // 按 color/overlay 分组
   const grouping = colorField || overlayField;
@@ -3036,18 +2996,30 @@ function buildSingleOption(
   const packetGroupKeys = histogramPacket
     ? Array.from(new Set(histogramPacket.bins.map((bin) => String(bin.group ?? DEFAULT_GROUP_KEY))))
     : [];
+  const boxplotPacketGroupKeys = boxPlotPacket
+    ? Array.from(new Set(boxPlotPacket.entries.map((entry) => String(entry.group ?? DEFAULT_GROUP_KEY))))
+    : [];
   let groups: Map<string, number[]>;
-  if (histogramOnlyPacketMode) {
+  if (histogramOnlyPacketMode || boxplotPacketMode) {
     groups = new Map<string, number[]>();
     if (grouping) {
-      const orderedPacketGroups = groupingOrder
-        ? applyValueOrder(packetGroupKeys, groupingOrder)
+      const ownedGroupKeys = boxplotPacketMode
+        ? boxplotPacketGroupKeys
         : packetGroupKeys;
+      const orderedPacketGroups = groupingOrder
+        ? applyValueOrder(ownedGroupKeys, groupingOrder)
+        : ownedGroupKeys;
       for (const key of orderedPacketGroups) {
         groups.set(key, []);
       }
     } else {
       groups.set(DEFAULT_GROUP_KEY, []);
+    }
+  } else if (frameBackedAggregateMode && grouping && globalGroupKeys) {
+    if (data.rows.length > 0) {
+      groups = reorderMapByValueOrder(groupBy(data, grouping), groupingOrder);
+    } else {
+      groups = new Map(globalGroupKeys.map((key) => [key, []]));
     }
   } else {
     const rawGroups = groupBy(data, grouping);
@@ -3065,7 +3037,7 @@ function buildSingleOption(
   // produces a dead legend swatch with nothing on the canvas.
   // We skip this prune when there is no grouping field (the lone
   // "__all__" bucket must survive even if rows are missing some channel).
-  if (grouping && !histogramOnlyPacketMode) {
+  if (grouping && !frameBackedAggregateMode) {
     const xIdxCheck = colIndex(data, xField?.name);
     const yIdxCheck = colIndex(data, yField?.name);
     const pruned = new Map<string, number[]>();
@@ -3141,11 +3113,23 @@ function buildSingleOption(
         ),
       )
       : [];
+  const boxplotPacketCats =
+    boxplotPacketMode && xIsCategory
+      ? Array.from(
+        new Set(
+          boxPlotPacket.entries
+            .map((entry) => (entry.category == null ? "" : String(entry.category)))
+            .filter((value) => value.length > 0),
+        ),
+      )
+      : [];
   const rawXCats =
     useRowIdxX
       ? [""]
       : xIsCategory
-        ? (histogramOnlyPacketMode ? histogramPacketCats : collectCategories(data, xIdx, yIdx))
+        ? boxplotPacketMode
+          ? boxplotPacketCats
+          : (histogramOnlyPacketMode ? histogramPacketCats : collectCategories(data, xIdx, yIdx))
         : [];
   const localXCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
   let xCats: string[] = xIsCategory && sharedRanges?.xCats
@@ -4892,6 +4876,48 @@ function buildSingleOption(
   }
 
   // —— 通用 X-Y 元素：points / line / bar / smoother ——
+  let panelJitterXBandwidth = 640;
+  if (!frame) {
+    const visibleXValues: Array<number | string> = [];
+    for (const row of data.rows) {
+      if (isRowHidden(row)) continue;
+      const y = yIdx >= 0 ? toNum(row[yIdx]) : NaN;
+      if (!Number.isFinite(y)) continue;
+      if (useRowIdxX) {
+        visibleXValues.push("");
+        continue;
+      }
+      const rawX = row[xIdx];
+      if (isMissing(rawX)) continue;
+      if (xIsTime) {
+        const timestamp = rawX instanceof Date ? rawX.getTime() : Date.parse(String(rawX));
+        if (Number.isFinite(timestamp)) visibleXValues.push(timestamp);
+      } else if (xIsCategory) {
+        visibleXValues.push(String(rawX));
+      } else {
+        const x = toNum(rawX);
+        if (Number.isFinite(x)) visibleXValues.push(x);
+      }
+    }
+    const jitterAxisMin = Number.isFinite(spec.xAxis?.min)
+      ? spec.xAxis!.min!
+      : sharedRanges?.xMin;
+    const jitterAxisMax = Number.isFinite(spec.xAxis?.max)
+      ? spec.xAxis!.max!
+      : sharedRanges?.xMax;
+    const xExtent = Number.isFinite(jitterAxisMin)
+      && Number.isFinite(jitterAxisMax)
+      ? { min: jitterAxisMin!, max: jitterAxisMax! }
+      : undefined;
+    panelJitterXBandwidth = estimateJitterXBandwidth(
+      visibleXValues,
+      xIsCategory ? "nominal" : xIsTime ? "datetime" : "continuous",
+      640,
+      xIsCategory ? xCats.length : undefined,
+      xExtent,
+    );
+  }
+
   groupKeys.forEach((gKey) => {
     // Skip groups hidden via the legend show/hide toggle.
     if (isHidden(gKey)) return;
@@ -4906,6 +4932,13 @@ function buildSingleOption(
     const resolvedStyle = resolveGroupStyle(styleKey, color, !!grouping, theme, spec.styles);
 
     enabledElements.forEach((el) => {
+      if (
+        frame &&
+        el.kind === "points" &&
+        getOpt<string>(el.options, "summaryStat", "none") === "none"
+      ) {
+        return;
+      }
       const built = buildElementSeries(el, rowIdxs, data, {
         xIdx,
         yIdx,
@@ -4920,10 +4953,25 @@ function buildSingleOption(
         summaryPacket,
         groupKey: grouping ? gKey : null,
         requireSummaryPacket: frameBackedAggregateMode,
+        jitterXBandwidth: panelJitterXBandwidth,
       });
       if (built) series.push(...built);
     });
   });
+
+  if (frame) {
+    const frameScatter = buildFrameBackedScatterSeries(
+      spec,
+      frame,
+      panelFacet,
+      theme,
+      valueOrders,
+      sharedRanges,
+      resolvedFrameScatterCoordinates,
+    );
+    series.push(...frameScatter.series);
+    framePointExtents = frameScatter.extents;
+  }
 
   // The X/Y slot chips outside the canvas already label the axes, so we
   // intentionally omit `name` on the ECharts axes to avoid duplication.
@@ -4993,15 +5041,20 @@ function buildSingleOption(
       // would re-introduce the Phase-4 drag bug where setOption merges
       // keep the old step alive after a drag changes min/max, making
       // tick values drift off the nice grid.
-    } else if (xIdx >= 0) {
+    } else {
       let dataMin = Infinity;
       let dataMax = -Infinity;
-      for (const r of data.rows) {
-        if (isRowHidden(r)) continue;
-        const v = toNum(r[xIdx]);
-        if (Number.isFinite(v)) {
-          if (v < dataMin) dataMin = v;
-          if (v > dataMax) dataMax = v;
+      if (framePointsOnly && framePointExtents?.x) {
+        dataMin = framePointExtents.x.min;
+        dataMax = framePointExtents.x.max;
+      } else if (xIdx >= 0) {
+        for (const r of data.rows) {
+          if (isRowHidden(r)) continue;
+          const v = toNum(r[xIdx]);
+          if (Number.isFinite(v)) {
+            if (v < dataMin) dataMin = v;
+            if (v > dataMax) dataMax = v;
+          }
         }
       }
       const fit = computeNiceBounds(
@@ -5028,10 +5081,9 @@ function buildSingleOption(
             max: fit.max + fit.interval / (AUTO_MINOR_SPLIT * 2),
           }
         : { scale: true };
-    } else {
-      xFinalBounds = { scale: true };
     }
   }
+  const frameTimeExtent = framePointsOnly ? framePointExtents?.x : undefined;
   const xAxisBase = xIsCategory
     ? {
         type: "category",
@@ -5094,8 +5146,12 @@ function buildSingleOption(
           minorTick: { ...(axis.minorTick as object | undefined), show: true, splitNumber: AUTO_MINOR_SPLIT },
           // Pin to shared bounds when faceted so every panel's time axis
           // covers the same span.
-          ...(sharedRanges?.xMin != null ? { min: sharedRanges.xMin } : {}),
-          ...(sharedRanges?.xMax != null ? { max: sharedRanges.xMax } : {}),
+          ...(sharedRanges?.xMin != null
+            ? { min: sharedRanges.xMin }
+            : frameTimeExtent ? { min: frameTimeExtent.min } : {}),
+          ...(sharedRanges?.xMax != null
+            ? { max: sharedRanges.xMax }
+            : frameTimeExtent ? { max: frameTimeExtent.max } : {}),
         }
       : {
           type: "value",
@@ -5205,7 +5261,10 @@ function buildSingleOption(
   } else {
     let dataMin = Infinity;
     let dataMax = -Infinity;
-    if (yIdx >= 0) {
+    if (framePointsOnly && framePointExtents?.y) {
+      dataMin = framePointExtents.y.min;
+      dataMax = framePointExtents.y.max;
+    } else if (yIdx >= 0) {
       for (const r of data.rows) {
         if (isRowHidden(r)) continue;
         const v = toNum(r[yIdx]);
@@ -5434,6 +5493,7 @@ interface BuildCtx {
   summaryPacket: SummaryPacket | null;
   groupKey: string | null;
   requireSummaryPacket: boolean;
+  jitterXBandwidth: number;
 }
 
 function buildElementSeries(
@@ -5442,7 +5502,18 @@ function buildElementSeries(
   data: GraphData,
   ctx: BuildCtx,
 ): any[] | null {
-  const { xIdx, yIdx, sizeIdx, xIsCategory, seriesName, style, summaryPacket, groupKey, requireSummaryPacket } = ctx;
+  const {
+    xIdx,
+    yIdx,
+    sizeIdx,
+    xIsCategory,
+    seriesName,
+    style,
+    summaryPacket,
+    groupKey,
+    requireSummaryPacket,
+    jitterXBandwidth,
+  } = ctx;
   if (yIdx < 0) return null;
 
   // When no X column is bound, collapse all points onto a single category
@@ -5466,7 +5537,14 @@ function buildElementSeries(
   const yColName = yIdx >= 0 ? data.columns[yIdx] : "";
 
   // 取 (x, y[, size]) 数组
-  const points: Array<{ x: unknown; y: number; size?: number; rowId: number; colName: string }> = [];
+  const points: Array<{
+    x: unknown;
+    y: number;
+    size?: number;
+    rowId: number;
+    jitterRowId: bigint;
+    colName: string;
+  }> = [];
   for (const i of rowIdxs) {
     const xv = useRowIdx ? SINGLE_X : data.rows[i][xIdx];
     // When a real X column is bound, drop rows whose X is missing so
@@ -5476,11 +5554,30 @@ function buildElementSeries(
     const yv = toNum(data.rows[i][yIdx]);
     if (!Number.isFinite(yv)) continue;
     const sv = sizeIdx >= 0 ? toNum(data.rows[i][sizeIdx]) : undefined;
-    const rid = rowIdColIdx >= 0 ? Number(data.rows[i][rowIdColIdx]) : -1;
+    const rawRowId = rowIdColIdx >= 0 ? data.rows[i][rowIdColIdx] : undefined;
+    const rid = Number(rawRowId);
+    const jitterRowId = typeof rawRowId === "bigint"
+      ? rawRowId
+      : Number.isFinite(rid)
+        ? BigInt(Math.trunc(rid))
+        : BigInt(i);
     const col = meltVarColIdx >= 0 ? String(data.rows[i][meltVarColIdx] ?? "") : yColName;
-    points.push({ x: xv, y: yv, size: sv, rowId: Number.isFinite(rid) ? rid : -1, colName: col });
+    points.push({
+      x: xv,
+      y: yv,
+      size: sv,
+      rowId: Number.isSafeInteger(rid) && rid >= 0 ? rid : -1,
+      jitterRowId,
+      colName: col,
+    });
   }
-  if (points.length === 0) return null;
+  const packetSummaryStat =
+    el.kind === "points" || el.kind === "line"
+      ? getOpt<string>(el.options, "summaryStat", el.kind === "line" ? "mean" : "none")
+      : "none";
+  const canUseSummaryPacket =
+    !!summaryPacket && packetSummaryStat !== "none" && !useRowIdx && xIdx >= 0;
+  if (points.length === 0 && !canUseSummaryPacket) return null;
 
   switch (el.kind) {
     case "points": {
@@ -5560,7 +5657,34 @@ function buildElementSeries(
       //   - "uniform"/"normal"  → random horizontal noise.
       const jitterMode = getOpt<string>(opts, "jitter", "stacked");
       const jitterLimit = Math.max(0, Math.min(1, getOpt<number>(opts, "jitterLimit", 0.5)));
-      const offsets = computeJitterOffsets(points, jitterMode, jitterLimit);
+      let yMin = Infinity;
+      let yMax = -Infinity;
+      const jitterPoints: JitterPoint[] = points.map((point) => {
+        if (point.y < yMin) yMin = point.y;
+        if (point.y > yMax) yMax = point.y;
+        return {
+          x: typeof point.x === "string" || typeof point.x === "number" ? point.x : String(point.x),
+          y: point.y,
+          rowId: point.jitterRowId,
+        };
+      });
+      const offsets = computeStableJitterOffsets(
+        jitterPoints,
+        {
+          mode: jitterMode === "uniform" || jitterMode === "normal" || jitterMode === "auto"
+            ? jitterMode
+            : "stacked",
+          limit: jitterLimit,
+          seed: 0,
+        },
+        {
+          plotWidth: 640,
+          plotHeight: 400,
+          xBandwidth: jitterXBandwidth,
+          yMin: Number.isFinite(yMin) ? yMin : 0,
+          yMax: Number.isFinite(yMax) && yMax !== yMin ? yMax : yMin + 1,
+        },
+      );
 
       const sym = markerToSymbol(style.point.marker);
       return [
@@ -5573,7 +5697,7 @@ function buildElementSeries(
           progressive: 0,
           data: points.map((p, i) => {
             const value = xIsCategory ? [toStr(p.x), p.y] : [toNum(p.x), p.y];
-            const off = offsets ? offsets[i] : null;
+            const off = offsets[i];
             // Always emit object form when we have a real source row to
             // attach — the GraphBuilder's onPointClick reads `__pick`
             // from `params.data`. Falling back to the tuple-only form
@@ -5581,10 +5705,10 @@ function buildElementSeries(
             // synthetic data identical to before.
             if (p.rowId >= 0) {
               const item: any = { value, __pick: { rowId: p.rowId, colName: p.colName } };
-              if (off) item.symbolOffset = off;
+              item.symbolOffset = off;
               return item;
             }
-            return off ? { value, symbolOffset: off } : value;
+            return { value, symbolOffset: off };
           }),
           z: 5,
         },
@@ -6299,8 +6423,10 @@ function computeSharedRanges(
 
 function buildFrameBackedRawDescriptor(
   spec: GraphSpec,
-  frame?: GraphDataFrame,
-  panelFacet?: PanelFacetContext,
+  frame: GraphDataFrame | undefined,
+  panelFacet: PanelFacetContext | undefined,
+  theme: GraphTheme,
+  valueOrders?: Record<string, string[]>,
 ): RawPointPanelDescriptor | null {
   if (!frame || frame.rawChunks.length === 0) return null;
   const yName = spec.encoding.y?.name;
@@ -6313,13 +6439,38 @@ function buildFrameBackedRawDescriptor(
   const summaryStat = getOpt<string>(pointsElement.options, "summaryStat", "none");
   if (summaryStat !== "none") return null;
 
-  const jitterMode = getOpt<string>(pointsElement.options, "rawPointJitter", "none");
-  const jitterSeed = Math.trunc(getOpt<number>(pointsElement.options, "rawPointJitterSeed", 0));
-  const jitterAmplitudePx = getOpt<number>(pointsElement.options, "rawPointJitterAmplitudePx", 0);
-  const jitter =
-    jitterMode === "seeded" && Number.isFinite(jitterAmplitudePx) && jitterAmplitudePx > 0
-      ? { mode: "seeded" as const, seed: jitterSeed, amplitudePx: Math.max(0, jitterAmplitudePx) }
-      : { mode: "none" as const };
+  const jitterModeRaw = getOpt<string>(pointsElement.options, "jitter", "stacked");
+  const jitterMode = jitterModeRaw === "auto" ? "stacked" : jitterModeRaw;
+  const jitterLimit = Math.max(
+    0,
+    Math.min(1, getOpt<number>(pointsElement.options, "jitterLimit", 0.5)),
+  );
+  const jitter: RawPointJitter = jitterMode === "uniform" || jitterMode === "normal"
+    ? { mode: jitterMode, limit: jitterLimit }
+    : { mode: "stacked" as const, limit: jitterLimit };
+
+  const grouping = spec.encoding.color || spec.encoding.overlay;
+  const groupDictionary = frame.dictionaries.group ?? [];
+  const orderedGroups = grouping
+    ? applyValueOrder([...groupDictionary], valueOrders?.[grouping.name])
+    : [];
+  const defaultStyle = resolveGroupStyle(
+    DEFAULT_GROUP_KEY,
+    theme.categorical[0],
+    false,
+    theme,
+    spec.styles,
+  );
+  const groupStyles = groupDictionary.map((group) => {
+    const orderedIndex = Math.max(0, orderedGroups.indexOf(group));
+    const color = theme.categorical[orderedIndex % theme.categorical.length];
+    return resolveGroupStyle(group, color, true, theme, spec.styles);
+  });
+  const hiddenLabels = new Set(spec.hiddenGroups ?? []);
+  const hiddenGroupCodes = new Set<number>();
+  groupDictionary.forEach((group, code) => {
+    if (hiddenLabels.has(group)) hiddenGroupCodes.add(code);
+  });
 
   let sourceByRowId: Map<bigint, string> | undefined;
   const sourceDict = frame.dictionaries.source;
@@ -6389,6 +6540,11 @@ function buildFrameBackedRawDescriptor(
     colName: yName,
     sourceByRowId,
     xCategories: frame.dictionaries.x,
+    defaultColor: withAlpha(defaultStyle.point.fillColor, defaultStyle.point.opacity),
+    defaultPointSize: defaultStyle.point.size,
+    groupColors: groupStyles.map((style) => withAlpha(style.point.fillColor, style.point.opacity)),
+    groupPointSizes: groupStyles.map((style) => style.point.size),
+    hiddenGroupCodes,
     jitter,
     chunks: frame.rawChunks.map((chunk) => ({
       xValues: chunk.xValues,
@@ -6396,11 +6552,252 @@ function buildFrameBackedRawDescriptor(
       rowIds: chunk.rowIds,
       xValidity: chunk.validity.x,
       yValidity: chunk.validity.y,
+      groupCodes: chunk.groupCodes
+        ?? (chunk.roleVectors?.group instanceof Uint32Array ? chunk.roleVectors.group : undefined),
+      groupValidity: chunk.validity.group,
       facetMask: buildFacetMask(chunk),
     })),
   };
 }
 
+interface FrameScatterSeriesBuild {
+  series: any[];
+  extents?: {
+    x?: { min: number; max: number };
+    y?: { min: number; max: number };
+  };
+}
+
+function buildFrameBackedScatterSeries(
+  spec: GraphSpec,
+  frame: GraphDataFrame,
+  panelFacet: PanelFacetContext | undefined,
+  theme: GraphTheme,
+  valueOrders: Record<string, string[]> | undefined,
+  sharedRanges: SharedAxisRanges | undefined,
+  coordinates: FrameScatterCoordinates,
+): FrameScatterSeriesBuild {
+  if (frame.rawChunks.length === 0) return { series: [] };
+  if (!coordinates.y) return { series: [] };
+  const yCoordinate = coordinates.y;
+
+  const pointsElement = spec.elements.find(
+    (element) => element.kind === "points" && element.enabled !== false,
+  );
+  if (!pointsElement) return { series: [] };
+  if (getOpt<string>(pointsElement.options, "summaryStat", "none") !== "none") {
+    return { series: [] };
+  }
+
+  const jitterModeRaw = getOpt<string>(pointsElement.options, "jitter", "stacked");
+  const jitterMode = jitterModeRaw === "uniform" || jitterModeRaw === "normal"
+    ? jitterModeRaw
+    : jitterModeRaw === "auto"
+      ? "auto"
+      : "stacked";
+  const jitterLimit = Math.max(
+    0,
+    Math.min(1, getOpt<number>(pointsElement.options, "jitterLimit", 0.5)),
+  );
+  const grouping = spec.encoding.color || spec.encoding.overlay;
+  const groupOrder = grouping
+    ? applyValueOrder(
+      [...(frame.dictionaries.group ?? [])],
+      valueOrders?.[grouping.name],
+    )
+    : [];
+  const hiddenGroups = grouping
+    ? new Set(spec.hiddenGroups ?? [])
+    : new Set<string>();
+  const yExtent = frame.extents[yCoordinate.vector];
+  const yMin = sharedRanges?.yMin ?? yExtent?.min ?? 0;
+  const yMax = sharedRanges?.yMax ?? yExtent?.max ?? (yMin + 1);
+  const frameGroups = buildFrameScatterItems({
+    frame,
+    xCoordinate: {
+      vector: coordinates.x.vector,
+      type: coordinates.x.type,
+      categories: coordinates.x.categories,
+      constant: coordinates.x.constant,
+    },
+    yCoordinate,
+    groupOrder,
+    hiddenGroups,
+    facet: panelFacet
+      ? {
+        ...(panelFacet.groupXValue === null ? {} : { facetX: panelFacet.groupXValue }),
+        ...(panelFacet.groupYValue === null ? {} : { facetY: panelFacet.groupYValue }),
+        ...(panelFacet.wrapValue == null ? {} : { wrap: panelFacet.wrapValue }),
+      }
+      : undefined,
+    jitter: {
+      mode: jitterMode,
+      limit: jitterLimit,
+      seed: frame.sampling.mode === "sample" ? frame.sampling.seed : 0,
+    },
+    plotGeometry: {
+      plotWidth: 640,
+      plotHeight: 400,
+      xMin: Number.isFinite(spec.xAxis?.min) ? spec.xAxis!.min : sharedRanges?.xMin,
+      xMax: Number.isFinite(spec.xAxis?.max) ? spec.xAxis!.max : sharedRanges?.xMax,
+      yMin,
+      yMax: yMax === yMin ? yMin + 1 : yMax,
+    },
+  });
+
+  let xMin = Infinity;
+  let xMax = -Infinity;
+  let pointYMin = Infinity;
+  let pointYMax = -Infinity;
+  for (const group of frameGroups) {
+    for (const item of group.items) {
+      const x = Number(item.value[0]);
+      const y = item.value[1];
+      if (coordinates.x.type !== "nominal" && Number.isFinite(x)) {
+        if (x < xMin) xMin = x;
+        if (x > xMax) xMax = x;
+      }
+      if (y < pointYMin) pointYMin = y;
+      if (y > pointYMax) pointYMax = y;
+    }
+  }
+
+  const scatterSeries = frameGroups.map((group) => {
+    const orderedIndex = grouping ? Math.max(0, groupOrder.indexOf(group.name)) : 0;
+    const color = theme.categorical[orderedIndex % theme.categorical.length];
+    const style = resolveGroupStyle(
+      grouping ? group.name : DEFAULT_GROUP_KEY,
+      color,
+      !!grouping,
+      theme,
+      spec.styles,
+    );
+    const symbol = markerToSymbol(style.point.marker);
+    let symbolSize: number | ((value: unknown, params: { dataIndex: number }) => number) = style.point.size;
+    if (spec.encoding.size) {
+      const finiteSizes = group.items
+        .map((item) => item.sizeValue)
+        .filter((value): value is number => Number.isFinite(value));
+      if (finiteSizes.length > 0) {
+        let min = Infinity;
+        let max = -Infinity;
+        for (const value of finiteSizes) {
+          if (value < min) min = value;
+          if (value > max) max = value;
+        }
+        const range = max - min || 1;
+        symbolSize = (_value, params) => {
+          const sizeValue = group.items[params.dataIndex]?.sizeValue;
+          return Number.isFinite(sizeValue) ? 6 + ((sizeValue! - min) / range) * 22 : 6;
+        };
+      }
+    }
+    return {
+      type: "scatter",
+      name: grouping ? group.name : yCoordinate.column,
+      symbol: symbol.symbol,
+      symbolSize,
+      itemStyle: pointItemStyle(style.point, symbol.hollow),
+      progressive: 0,
+      data: group.items as FrameScatterItem[],
+      z: 5,
+    };
+  });
+  return {
+    series: scatterSeries,
+    extents: {
+      ...(Number.isFinite(xMin) ? { x: { min: xMin, max: xMax } } : {}),
+      ...(Number.isFinite(pointYMin) ? { y: { min: pointYMin, max: pointYMax } } : {}),
+    },
+  };
+}
+
+
+function frameNeedsProjectedRows(spec: GraphSpec): boolean {
+  return spec.elements.some((element) => {
+    if (element.enabled === false) return false;
+    if (element.kind === "bar" || element.kind === "smoother" || element.kind === "fitline") {
+      return true;
+    }
+    if (element.kind === "line") {
+      return getOpt<string>(element.options, "summaryStat", "mean") === "none";
+    }
+    return false;
+  });
+}
+
+function materializeFrameRows(
+  spec: GraphSpec,
+  data: GraphData,
+  frame: GraphDataFrame,
+  panelFacet?: PanelFacetContext,
+): GraphData {
+  if (!frameNeedsProjectedRows(spec)) return { columns: data.columns, rows: [] };
+
+  const rows: unknown[][] = [];
+  const columnIndexes = new Map(data.columns.map((column, index) => [column, index]));
+  const setValue = (row: unknown[], field: FieldRef | undefined, value: unknown): void => {
+    if (!field) return;
+    const index = columnIndexes.get(field.name);
+    if (index !== undefined) row[index] = value;
+  };
+  const grouping = spec.encoding.color || spec.encoding.overlay;
+
+  for (const chunk of frame.rawChunks) {
+    const groupCodes = chunk.groupCodes
+      ?? (chunk.roleVectors?.group instanceof Uint32Array ? chunk.roleVectors.group : undefined);
+    const sizeValues = chunk.sizeValues
+      ?? (chunk.roleVectors?.size instanceof Float64Array ? chunk.roleVectors.size : undefined);
+    const facetXCodes = chunk.facetXCodes
+      ?? (chunk.roleVectors?.groupX instanceof Uint32Array ? chunk.roleVectors.groupX : undefined);
+    const facetYCodes = chunk.facetYCodes
+      ?? (chunk.roleVectors?.groupY instanceof Uint32Array ? chunk.roleVectors.groupY : undefined);
+    const wrapCodes = chunk.wrapCodes
+      ?? (chunk.roleVectors?.wrap instanceof Uint32Array ? chunk.roleVectors.wrap : undefined);
+    const rowCount = Math.min(chunk.rowCount, chunk.yValues.length, chunk.rowIds.length);
+    for (let index = 0; index < rowCount; index += 1) {
+      if (panelFacet && panelFacet.groupXValue !== null) {
+        if (!facetXCodes || !bitIsSet(chunk.validity.facetX, index)) continue;
+        if (frame.dictionaries.facetX?.[facetXCodes[index] >>> 0] !== panelFacet.groupXValue) continue;
+      }
+      if (panelFacet && panelFacet.groupYValue !== null) {
+        if (!facetYCodes || !bitIsSet(chunk.validity.facetY, index)) continue;
+        if (frame.dictionaries.facetY?.[facetYCodes[index] >>> 0] !== panelFacet.groupYValue) continue;
+      }
+      if (panelFacet?.wrapValue != null) {
+        if (!wrapCodes || !bitIsSet(chunk.validity.wrap, index)) continue;
+        if (frame.dictionaries.wrap?.[wrapCodes[index] >>> 0] !== panelFacet.wrapValue) continue;
+      }
+      const row = new Array<unknown>(data.columns.length).fill(null);
+      if (spec.encoding.x && bitIsSet(chunk.validity.x, index)) {
+        const rawX = chunk.xValues[index];
+        const xValue = chunk.xValues instanceof Uint32Array
+          ? frame.dictionaries.x?.[rawX >>> 0]
+          : rawX;
+        setValue(
+          row,
+          spec.encoding.x,
+          spec.encoding.x.type === "datetime" && typeof xValue === "string"
+            ? Date.parse(xValue)
+            : xValue,
+        );
+      }
+      if (bitIsSet(chunk.validity.y, index)) {
+        setValue(row, spec.encoding.y, chunk.yValues[index]);
+      }
+      if (grouping && groupCodes && bitIsSet(chunk.validity.group, index)) {
+        setValue(row, grouping, frame.dictionaries.group?.[groupCodes[index] >>> 0]);
+      }
+      if (spec.encoding.size && sizeValues && bitIsSet(chunk.validity.size, index)) {
+        setValue(row, spec.encoding.size, sizeValues[index]);
+      }
+      const rowIdIndex = columnIndexes.get(ROW_ID_COL);
+      if (rowIdIndex !== undefined) row[rowIdIndex] = Number(chunk.rowIds[index]);
+      rows.push(row);
+    }
+  }
+  return { columns: data.columns, rows };
+}
 function collectFacetKeysFromFrame(
   frame: GraphDataFrame | undefined,
   dictionaryKey: "facetX" | "facetY" | "wrap",
@@ -6423,7 +6820,7 @@ export function buildGraph(
   const fx = encoding.groupX;
   const fy = encoding.groupY;
   const frameBacked = !!frame;
-  const frameSafeData: GraphData = frameBacked ? { columns: data.columns, rows: [] } : data;
+  const frameSafeData: GraphData = frame ? materializeFrameRows(spec, data, frame) : data;
 
   // Compute the global ordering of overlay/color groups across the FULL
   // dataset so each panel can map its local group(s) back to the same
@@ -6447,8 +6844,8 @@ export function buildGraph(
       return {
         panels: [{
           title: spec.title || "",
-          option: buildSingleOption(spec, frameSafeData, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates),
-          rawPoints: buildFrameBackedRawDescriptor(spec, frame),
+          option: buildSingleOption(spec, frameSafeData, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates, undefined, frame),
+          rawPoints: buildFrameBackedRawDescriptor(spec, frame, undefined, theme, valueOrders),
           groupXValue: null,
           groupYValue: null,
         }],
@@ -6462,8 +6859,8 @@ export function buildGraph(
       return {
         panels: [{
           title: spec.title || "",
-          option: buildSingleOption(spec, frameSafeData, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates),
-          rawPoints: buildFrameBackedRawDescriptor(spec, frame),
+          option: buildSingleOption(spec, frameSafeData, theme, globalGroupKeys, valueOrders, undefined, frame?.aggregates, undefined, frame),
+          rawPoints: buildFrameBackedRawDescriptor(spec, frame, undefined, theme, valueOrders),
           groupXValue: null,
           groupYValue: null,
         }],
@@ -6493,8 +6890,6 @@ export function buildGraph(
     const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(effectiveWrapKeys.length))));
     const rows = Math.max(1, Math.ceil(effectiveWrapKeys.length / cols));
     const panels = effectiveWrapKeys.map((key) => {
-      const subRows = frameBacked ? [] : data.rows.filter((r) => toStr(r[wIdx]) === key);
-      const subData: GraphData = frameBacked ? frameSafeData : { columns: data.columns, rows: subRows };
       const subSpec: GraphSpec = {
         ...spec,
         encoding: { ...encoding, wrap: undefined },
@@ -6504,10 +6899,14 @@ export function buildGraph(
         groupYValue: null,
         wrapValue: key,
       };
+      const subRows = frameBacked ? [] : data.rows.filter((r) => toStr(r[wIdx]) === key);
+      const subData: GraphData = frame
+        ? materializeFrameRows(subSpec, data, frame, panelFacet)
+        : { columns: data.columns, rows: subRows };
       return {
         title: `${fw.name}=${key}`,
-        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates, panelFacet),
-        rawPoints: buildFrameBackedRawDescriptor(subSpec, frame, panelFacet),
+        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates, panelFacet, frame),
+        rawPoints: buildFrameBackedRawDescriptor(subSpec, frame, panelFacet, theme, valueOrders),
         groupXValue: null,
         groupYValue: null,
       };
@@ -6572,12 +6971,6 @@ export function buildGraph(
   // (left → right within each row). Matches the CSS grid in <Graph>.
   for (const yKey of effectiveYKeys) {
     for (const xKey of effectiveXKeys) {
-      const subRows = frameBacked ? [] : data.rows.filter((r) => {
-        if (fx && xKey !== null && toStr(r[fxIdx]) !== xKey) return false;
-        if (fy && yKey !== null && toStr(r[fyIdx]) !== yKey) return false;
-        return true;
-      });
-      const subData: GraphData = frameBacked ? frameSafeData : { columns: data.columns, rows: subRows };
       // Strip the facet encodings from the sub-spec so the inner builder
       // doesn't try to re-facet recursively, and drop `wrap` too — when
       // groupX / groupY are present, wrap is ignored (see header comment).
@@ -6589,10 +6982,18 @@ export function buildGraph(
         groupXValue: xKey,
         groupYValue: yKey,
       };
+      const subRows = frameBacked ? [] : data.rows.filter((r) => {
+        if (fx && xKey !== null && toStr(r[fxIdx]) !== xKey) return false;
+        if (fy && yKey !== null && toStr(r[fyIdx]) !== yKey) return false;
+        return true;
+      });
+      const subData: GraphData = frame
+        ? materializeFrameRows(subSpec, data, frame, panelFacet)
+        : { columns: data.columns, rows: subRows };
       panels.push({
         title: facetTitle(xKey, yKey, encoding),
-        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates, panelFacet),
-        rawPoints: buildFrameBackedRawDescriptor(subSpec, frame, panelFacet),
+        option: buildSingleOption(subSpec, subData, theme, globalGroupKeys, valueOrders, sharedRanges, frame?.aggregates, panelFacet, frame),
+        rawPoints: buildFrameBackedRawDescriptor(subSpec, frame, panelFacet, theme, valueOrders),
         groupXValue: xKey,
         groupYValue: yKey,
       });
