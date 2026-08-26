@@ -302,6 +302,15 @@
   background: var(--bg-menu-hover);
 }
 
+.menu-item-disabled {
+  color: var(--fg-disabled);
+  cursor: default;
+}
+
+.menu-item-disabled:hover {
+  background: transparent;
+}
+
 .menu-sep {
   height: 1px;
   background: var(--border-sep);
@@ -1531,6 +1540,18 @@
   line-height: calc(26px * var(--sp-zoom, 1));
   height: calc(26px * var(--sp-zoom, 1));
   box-sizing: border-box;
+}
+
+.sp-placeholder-row {
+  pointer-events: none;
+}
+
+.sp-placeholder-row .sp-row-hdr {
+  color: var(--fg-dim);
+}
+
+.sp-placeholder-cell {
+  background-color: var(--bg-main);
 }
 
 .sp-null {

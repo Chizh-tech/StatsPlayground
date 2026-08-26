@@ -1,10 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
 
-/** Optional folder payload accepted by the v2 save_project command.
- *  Per issue #7 the file bodies (.sptb / .spgh) carry no folder info; the
- *  folder a file lives in is encoded purely by its path inside the archive,
- *  which the backend derives from these maps. */
+/** Optional folder payload accepted by the save_project command.
+ *  Folder maps are manifest metadata now; they are not used to route archive
+ *  filenames. The backend persists them so UI folder layout stays separate
+ *  from the stable `tables/<id>.sptb` and `graphs/<id>.spgh` paths. */
 export interface SaveProjectFolders {
   /** All folder paths that exist in the project, including empty ones. */
   folders: string[];
@@ -12,6 +12,32 @@ export interface SaveProjectFolders {
   tableFolders: Record<string, string>;
   /** graphId → folder path. Root graphs are simply absent. */
   graphFolders: Record<string, string>;
+  /** tabulateId → folder path. Root tabulates are simply absent. */
+  tabulateFolders: Record<string, string>;
+}
+
+export interface SaveProjectRequest {
+  filePath?: string;
+  history: unknown[];
+  snapshots: unknown[];
+  graphBuilders: unknown[];
+  tabulates: unknown[];
+  folders: string[];
+  tableFolders: Record<string, string>;
+  graphFolders: Record<string, string>;
+  tabulateFolders: Record<string, string>;
+}
+
+export type SavePhase = "preparing" | "table" | "metadata" | "compressing" | "finalizing";
+
+export interface SaveProgress {
+  phase: SavePhase;
+  tableIndex: number;
+  tableTotal: number;
+  tableName?: string;
+  rowsDone: number;
+  rowsTotal: number;
+  overallProgress?: number;
 }
 
 export const projectService = {
@@ -25,21 +51,18 @@ export const projectService = {
     invoke<OpenProjectResult>("open_project", { filePath }),
 
   saveProject: (
-    filePath?: string,
-    history?: unknown[],
-    snapshots?: unknown[],
-    graphBuilders?: unknown[],
-    folders?: SaveProjectFolders,
-  ) =>
-    invoke<ProjectInfo>("save_project", {
-      filePath: filePath ?? null,
-      history: history ?? null,
-      snapshots: snapshots ?? null,
-      graphBuilders: graphBuilders ?? null,
-      folders: folders?.folders ?? null,
-      tableFolders: folders?.tableFolders ?? null,
-      graphFolders: folders?.graphFolders ?? null,
-    }),
+    request: SaveProjectRequest,
+    onProgress?: (progress: SaveProgress) => void,
+  ) => {
+    const progressChannel = new Channel<SaveProgress>();
+    if (onProgress) {
+      progressChannel.onmessage = onProgress;
+    }
+    return invoke<ProjectInfo>("save_project", {
+      request,
+      onProgress: progressChannel,
+    });
+  },
 
   getCurrentProject: () => invoke<ProjectInfo | null>("get_current_project"),
 

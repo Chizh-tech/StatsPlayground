@@ -27,11 +27,32 @@ export interface ProjectDataSnapshot {
   datasets: SnapshotDataset[];
 }
 
+export interface TableCellPatch {
+  rowId: number;
+  columnName: string;
+  before: unknown;
+  after: unknown;
+}
+
+export type TableHistoryAction =
+  | { kind: "cells"; datasetId: string; generation: number; cells: TableCellPatch[] }
+  | { kind: "addedRows"; datasetId: string; generation: number; rowIds: number[] }
+  | { kind: "reorderColumns"; datasetId: string; generation: number; from: number; to: number }
+  | { kind: "changeSet"; datasetId: string; changeSetId: string };
+
+export interface PendingHistoryAction {
+  entryId: string;
+  direction: "undo" | "redo";
+  action: TableHistoryAction;
+}
+
 /** A single history entry — stores the dataset state AFTER this operation */
 export interface HistoryEntry {
   id: string;
   timestamp: string;
   description: string;
+  /** Compact executable action for DataTable undo/redo. */
+  action?: TableHistoryAction;
   /** Opaque dataset state snapshot taken after this operation (for undo/redo) */
   afterState?: unknown;
 }

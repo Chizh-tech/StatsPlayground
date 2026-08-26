@@ -6,6 +6,7 @@
 
 import type { ChartElement, FieldRef, GroupStyleMap, RefLineY, RefLineX, YAxisConfig } from "@/graphCore";
 import type { FilterRuleItem } from "./filter";
+import type { GraphSampling } from "./graphData";
 
 export type GraphSlotKey =
   | "x"
@@ -51,6 +52,9 @@ export interface GraphBuilderItem {
   elements: ChartElement[];
   /** 平滑器 lambda 0~1 */
   smootherLambda: number;
+  /** Raw-point sampling mode persisted on the graph item. Missing
+   *  values from older project files are treated as full data. */
+  sampling?: GraphSampling;
   /** Per-group line/fill/point style overrides. Keys are the category
    *  values from the Color/Overlay encoding (or DEFAULT_GROUP_KEY). */
   groupStyles?: GroupStyleMap;

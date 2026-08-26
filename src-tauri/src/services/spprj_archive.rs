@@ -32,11 +32,83 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Seek, Write};
+use std::path::Path;
 
+use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::AppError;
+
+#[cfg(test)]
+type BeforeDestinationMutationHook = Box<dyn Fn(&str, &str) -> Result<(), AppError>>;
+
+#[cfg(test)]
+type ValidateTableEntryOpenHook = Box<dyn Fn(&str, u64, u64) -> Result<(), AppError>>;
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_DESTINATION_MUTATION_HOOK: std::cell::RefCell<Option<BeforeDestinationMutationHook>> =
+        std::cell::RefCell::new(None);
+    static VALIDATE_TABLE_ENTRY_OPEN_HOOK: std::cell::RefCell<Option<ValidateTableEntryOpenHook>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) fn install_test_before_destination_mutation_hook(
+    hook: Option<BeforeDestinationMutationHook>,
+) {
+    BEFORE_DESTINATION_MUTATION_HOOK.with(|slot| {
+        *slot.borrow_mut() = hook;
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn install_test_validate_table_entry_open_hook(
+    hook: Option<ValidateTableEntryOpenHook>,
+) {
+    VALIDATE_TABLE_ENTRY_OPEN_HOOK.with(|slot| {
+        *slot.borrow_mut() = hook;
+    });
+}
+
+#[cfg(test)]
+fn run_before_destination_mutation_hook(path: &str, tmp_path: &str) -> Result<(), AppError> {
+    BEFORE_DESTINATION_MUTATION_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow().as_ref() {
+            hook(path, tmp_path)?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+fn run_validate_table_entry_open_hook(
+    entry_name: &str,
+    entry_size: u64,
+    body_bytes_read: u64,
+) -> Result<(), AppError> {
+    VALIDATE_TABLE_ENTRY_OPEN_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow().as_ref() {
+            hook(entry_name, entry_size, body_bytes_read)?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(not(test))]
+fn run_validate_table_entry_open_hook(
+    _entry_name: &str,
+    _entry_size: u64,
+    _body_bytes_read: u64,
+) -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn run_before_destination_mutation_hook(_path: &str, _tmp_path: &str) -> Result<(), AppError> {
+    Ok(())
+}
 
 // ----------------------------------------------------------------------------
 // Public document types — these are the in-memory representation. The on-disk
@@ -65,6 +137,18 @@ pub struct ProjectManifest {
     /// Implicit ancestors (e.g. `a` for `a/b`) are still listed explicitly.
     #[serde(default)]
     pub folders: Vec<String>,
+    /// `tableId -> folder path` manifest metadata. Missing means a legacy
+    /// archive whose folder layout must be derived from entry paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_folders: Option<HashMap<String, String>>,
+    /// `graphId -> folder path` manifest metadata. Missing means a legacy
+    /// archive whose folder layout must be derived from entry paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_folders: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub tabulates: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub tabulate_folders: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -151,7 +235,9 @@ pub struct GraphDoc {
     pub body: serde_json::Map<String, Value>,
 }
 
-fn default_doc_version() -> String { "1".to_string() }
+fn default_doc_version() -> String {
+    "1".to_string()
+}
 
 // ----------------------------------------------------------------------------
 // Bundle = the in-memory shape of an entire project, ready to write or just
@@ -164,6 +250,7 @@ pub struct ProjectBundle {
     pub manifest: ProjectManifest,
     pub tables: Vec<TableDoc>,
     pub graphs: Vec<GraphDoc>,
+    pub tabulates: Vec<Value>,
     pub history: Vec<Value>,
     pub snapshots: Vec<Value>,
 }
@@ -218,6 +305,179 @@ pub fn read_project_file(path: &str) -> Result<ProjectBundle, AppError> {
     }
 }
 
+pub fn build_graph_docs(raw_graph_builders: Vec<Value>) -> Vec<GraphDoc> {
+    raw_graph_builders
+        .into_iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            let (id, name, body) = lift_id_name(raw, index);
+            GraphDoc {
+                id,
+                name,
+                version: default_doc_version(),
+                body,
+            }
+        })
+        .collect()
+}
+
+pub fn validate_archive_manifest_and_entries(
+    archive_path: &Path,
+    expected_manifest: &ProjectManifest,
+    expected_extra_entries: &[&str],
+) -> Result<(), AppError> {
+    let file = std::fs::File::open(archive_path)?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|e| AppError::FileIO(format!("Invalid project archive during validation: {e}")))?;
+
+    let mut manifest_entry = zip
+        .by_name("manifest.json")
+        .map_err(|e| AppError::FileIO(format!("Project archive missing manifest.json: {e}")))?;
+    let mut manifest_bytes = Vec::new();
+    manifest_entry
+        .read_to_end(&mut manifest_bytes)
+        .map_err(|e| AppError::FileIO(format!("Failed reading manifest.json: {e}")))?;
+    drop(manifest_entry);
+
+    let actual_manifest: ProjectManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| AppError::FileIO(format!("Invalid manifest.json during validation: {e}")))?;
+
+    let expected_json = serde_json::to_value(expected_manifest)
+        .map_err(|e| AppError::FileIO(format!("Failed to encode expected manifest: {e}")))?;
+    let actual_json = serde_json::to_value(&actual_manifest)
+        .map_err(|e| AppError::FileIO(format!("Failed to encode actual manifest: {e}")))?;
+    if expected_json != actual_json {
+        return Err(AppError::FileIO(
+            "Validated archive manifest differs from expected snapshot".to_string(),
+        ));
+    }
+
+    for table in &expected_manifest.tables {
+        let table_entry = zip.by_name(&table.file).map_err(|e| {
+            AppError::FileIO(format!("Archive missing table entry {}: {e}", table.file))
+        })?;
+        run_validate_table_entry_open_hook(&table.file, table_entry.size(), 0)?;
+        drop(table_entry);
+    }
+    for graph in &expected_manifest.graphs {
+        let mut graph_entry = zip.by_name(&graph.file).map_err(|e| {
+            AppError::FileIO(format!("Archive missing graph entry {}: {e}", graph.file))
+        })?;
+        serde_json::from_reader::<_, serde::de::IgnoredAny>(&mut graph_entry).map_err(|e| {
+            AppError::FileIO(format!(
+                "Archive graph entry {} is not valid JSON: {e}",
+                graph.file
+            ))
+        })?;
+    }
+    for entry in expected_extra_entries {
+        let mut extra_entry = zip
+            .by_name(entry)
+            .map_err(|e| AppError::FileIO(format!("Archive missing entry {}: {e}", entry)))?;
+        serde_json::from_reader::<_, serde::de::IgnoredAny>(&mut extra_entry).map_err(|e| {
+            AppError::FileIO(format!("Archive entry {} is not valid JSON: {e}", entry))
+        })?;
+    }
+
+    Ok(())
+}
+
+pub fn count_project_rows_streaming(path: &str) -> Result<usize, AppError> {
+    let bytes = std::fs::read(path)?;
+    if !is_zip(&bytes) {
+        let bundle = read_legacy_json(&bytes)?;
+        return Ok(bundle.tables.iter().map(|table| table.rows.len()).sum());
+    }
+
+    let cursor = Cursor::new(bytes);
+    let mut zip = zip::ZipArchive::new(cursor)
+        .map_err(|e| AppError::FileIO(format!("Invalid project archive: {e}")))?;
+
+    let manifest_bytes = read_entry_bytes(&mut zip, "manifest.json")
+        .ok_or_else(|| AppError::FileIO("Project archive missing manifest.json".into()))?;
+    let manifest: ProjectManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| AppError::FileIO(format!("Invalid manifest.json: {e}")))?;
+
+    let mut total_rows = 0usize;
+    for table in manifest.tables {
+        let mut table_entry = zip
+            .by_name(&table.file)
+            .map_err(|e| AppError::FileIO(format!("Missing table entry: {} ({e})", table.file)))?;
+        total_rows = total_rows.saturating_add(count_rows_in_table_json(&mut table_entry)?);
+    }
+
+    Ok(total_rows)
+}
+
+fn count_rows_in_table_json<R: Read>(reader: R) -> Result<usize, AppError> {
+    struct RowsCountSeed;
+
+    impl<'de> DeserializeSeed<'de> for RowsCountSeed {
+        type Value = usize;
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            struct RowsVisitor;
+
+            impl<'de> Visitor<'de> for RowsVisitor {
+                type Value = usize;
+
+                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    formatter.write_str("a JSON array of table rows")
+                }
+
+                fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                where
+                    A: SeqAccess<'de>,
+                {
+                    let mut count = 0usize;
+                    while seq.next_element::<IgnoredAny>()?.is_some() {
+                        count = count.saturating_add(1);
+                    }
+                    Ok(count)
+                }
+            }
+
+            deserializer.deserialize_seq(RowsVisitor)
+        }
+    }
+
+    struct TableVisitor;
+
+    impl<'de> Visitor<'de> for TableVisitor {
+        type Value = usize;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a table JSON object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut rows_count: Option<usize> = None;
+            while let Some(key) = map.next_key::<String>()? {
+                if key == "rows" {
+                    rows_count = Some(map.next_value_seed(RowsCountSeed)?);
+                } else {
+                    let _: IgnoredAny = map.next_value()?;
+                }
+            }
+            rows_count.ok_or_else(|| serde::de::Error::missing_field("rows"))
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let row_count = serde::de::Deserializer::deserialize_any(&mut deserializer, TableVisitor)
+        .map_err(|e| AppError::FileIO(format!("Invalid table JSON while counting rows: {e}")))?;
+    deserializer
+        .end()
+        .map_err(|e| AppError::FileIO(format!("Trailing table JSON content: {e}")))?;
+    Ok(row_count)
+}
+
 fn is_zip(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && &bytes[..2] == b"PK"
 }
@@ -257,14 +517,19 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         .or_else(|| read_entry_bytes(&mut zip, "snapshots.json"))
         .map(|b| serde_json::from_slice::<Vec<Value>>(&b).unwrap_or_default())
         .unwrap_or_default();
+    let tabulates = manifest.tabulates.clone();
 
-    Ok(ProjectBundle { manifest, tables, graphs, history, snapshots })
+    Ok(ProjectBundle {
+        manifest,
+        tables,
+        graphs,
+        tabulates,
+        history,
+        snapshots,
+    })
 }
 
-fn read_entry_bytes<R: Read + Seek>(
-    zip: &mut zip::ZipArchive<R>,
-    name: &str,
-) -> Option<Vec<u8>> {
+fn read_entry_bytes<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, name: &str) -> Option<Vec<u8>> {
     let mut entry = zip.by_name(name).ok()?;
     let mut out = Vec::with_capacity(entry.size() as usize);
     entry.read_to_end(&mut out).ok()?;
@@ -308,23 +573,37 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
                 name: name.clone(),
                 file: format!("{}.spgh", id),
             });
-            graphs.push(GraphDoc { id, name, version: default_doc_version(), body });
+            graphs.push(GraphDoc {
+                id,
+                name,
+                version: default_doc_version(),
+                body,
+            });
         }
     }
 
     let manifest = ProjectManifest {
         name: legacy.name,
-        version: if legacy.version.is_empty() { "0.1.0".into() } else { legacy.version },
+        version: if legacy.version.is_empty() {
+            "0.1.0".into()
+        } else {
+            legacy.version
+        },
         created_at: legacy.created_at,
         tables: table_refs,
         graphs: graph_refs,
         folders: Vec::new(),
+        table_folders: None,
+        graph_folders: None,
+        tabulates: Vec::new(),
+        tabulate_folders: HashMap::new(),
     };
 
     Ok(ProjectBundle {
         manifest,
         tables,
         graphs,
+        tabulates: Vec::new(),
         history: legacy.history.unwrap_or_default(),
         snapshots: legacy.snapshots.unwrap_or_default(),
     })
@@ -336,7 +615,10 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
 /// GraphDoc that flattens it won't emit duplicate keys on serialization, and
 /// so legacy in-body folder hints can never silently override the
 /// path-derived folder.
-fn lift_id_name(raw: Value, fallback_idx: usize) -> (String, String, serde_json::Map<String, Value>) {
+fn lift_id_name(
+    raw: Value,
+    fallback_idx: usize,
+) -> (String, String, serde_json::Map<String, Value>) {
     let mut map = match raw {
         Value::Object(m) => m,
         _ => serde_json::Map::new(),
@@ -344,7 +626,10 @@ fn lift_id_name(raw: Value, fallback_idx: usize) -> (String, String, serde_json:
     let id = map
         .remove("id")
         .and_then(|v| v.as_str().map(String::from))
-        .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
+        .or_else(|| {
+            map.remove("builderId")
+                .and_then(|v| v.as_str().map(String::from))
+        })
         .unwrap_or_else(|| format!("graph_{}", fallback_idx));
     let name = map
         .remove("name")
@@ -363,50 +648,38 @@ fn lift_id_name(raw: Value, fallback_idx: usize) -> (String, String, serde_json:
 ///
 /// Folder routing is supplied OUT-OF-BAND via `table_folders` and
 /// `graph_folders` (id → folder path); per issue #7 the file bodies
-/// themselves carry no folder information. The writer derives each entry's
-/// archive path from its display name and the supplied folder
-/// (`<folder>/<name>.<ext>`), sanitizing the name and auto-suffixing
-/// `" (2)"`, `" (3)"`, … on collisions within the same folder + extension.
+/// themselves carry no folder information. The writer now emits stable
+/// archive paths based only on ids: `tables/<dataset-id>.sptb` and
+/// `graphs/<graph-id>.spgh`.
 pub fn build_bundle(
     name: String,
     version: String,
     created_at: String,
     tables: Vec<TableDoc>,
     graphs: Vec<GraphDoc>,
+    tabulates: Vec<Value>,
     folders: Vec<String>,
     table_folders: &HashMap<String, String>,
     graph_folders: &HashMap<String, String>,
+    tabulate_folders: &HashMap<String, String>,
     history: Vec<Value>,
     snapshots: Vec<Value>,
 ) -> ProjectBundle {
-    // Track taken paths per-extension. `.sptb` and `.spgh` share the folder
-    // namespace, but their extensions are different so we let a table and a
-    // graph share the same display name without colliding.
-    let mut taken: HashSet<String> = HashSet::new();
-
     let mut table_refs: Vec<TableEntryRef> = Vec::with_capacity(tables.len());
     for t in tables.iter() {
-        let folder_norm = normalize_folder(table_folders.get(&t.id).map(|s| s.as_str()));
-        let base = sanitize_name(&t.name, &t.id);
-        let path = unique_archive_path(&folder_norm, &base, "sptb", &mut taken);
         table_refs.push(TableEntryRef {
             id: t.id.clone(),
             name: t.name.clone(),
-            file: path,
+            file: format!("tables/{}.sptb", t.id),
         });
     }
 
     let mut graph_refs: Vec<GraphEntryRef> = Vec::with_capacity(graphs.len());
     for g in graphs.iter() {
-        let folder_norm = normalize_folder(graph_folders.get(&g.id).map(|s| s.as_str()));
-        // Graph name may be empty (legacy / synthesized); fall back to id.
-        let display_name = if g.name.is_empty() { g.id.clone() } else { g.name.clone() };
-        let base = sanitize_name(&display_name, &g.id);
-        let path = unique_archive_path(&folder_norm, &base, "spgh", &mut taken);
         graph_refs.push(GraphEntryRef {
             id: g.id.clone(),
             name: g.name.clone(),
-            file: path,
+            file: format!("graphs/{}.spgh", g.id),
         });
     }
 
@@ -417,13 +690,20 @@ pub fn build_bundle(
 
     ProjectBundle {
         manifest: ProjectManifest {
-            name, version, created_at,
+            name,
+            version,
+            created_at,
             tables: table_refs,
             graphs: graph_refs,
             folders: normalized_folders,
+            table_folders: Some(table_folders.clone()),
+            graph_folders: Some(graph_folders.clone()),
+            tabulates: tabulates.clone(),
+            tabulate_folders: tabulate_folders.clone(),
         },
         tables,
         graphs,
+        tabulates,
         history,
         snapshots,
     }
@@ -443,25 +723,29 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
         let dir_opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
 
-        let manifest_bytes = serde_json::to_vec_pretty(&bundle.manifest)
-            .map_err(|e| AppError::FileIO(e.to_string()))?;
-        write_zip_entry(&mut zip, "manifest.json", &manifest_bytes, opts)?;
+        write_zip_json_entry_pretty(&mut zip, "manifest.json", &bundle.manifest, opts)?;
 
         // Emit explicit directory entries for every folder so extraction
         // produces the full tree (including empty folders the user created).
         // Also include implicit ancestors of any table/graph file path.
         let mut all_dirs: HashSet<String> = HashSet::new();
         for f in &bundle.manifest.folders {
-            for anc in folder_ancestors(f) { all_dirs.insert(anc); }
+            for anc in folder_ancestors(f) {
+                all_dirs.insert(anc);
+            }
         }
         for t in &bundle.manifest.tables {
             if let Some(parent) = parent_folder(&t.file) {
-                for anc in folder_ancestors(&parent) { all_dirs.insert(anc); }
+                for anc in folder_ancestors(&parent) {
+                    all_dirs.insert(anc);
+                }
             }
         }
         for g in &bundle.manifest.graphs {
             if let Some(parent) = parent_folder(&g.file) {
-                for anc in folder_ancestors(&parent) { all_dirs.insert(anc); }
+                for anc in folder_ancestors(&parent) {
+                    all_dirs.insert(anc);
+                }
             }
         }
         // Sort so the archive's central directory has a stable order.
@@ -481,30 +765,28 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
 
         for entry in &bundle.manifest.tables {
             if let Some(doc) = table_by_id.get(entry.id.as_str()) {
-                let bytes = serde_json::to_vec(doc)
-                    .map_err(|e| AppError::FileIO(e.to_string()))?;
-                write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
+                write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
             }
         }
         for entry in &bundle.manifest.graphs {
             if let Some(doc) = graph_by_id.get(entry.id.as_str()) {
-                let bytes = serde_json::to_vec(doc)
-                    .map_err(|e| AppError::FileIO(e.to_string()))?;
-                write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
+                write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
             }
         }
         if !bundle.history.is_empty() {
-            let bytes = serde_json::to_vec(&bundle.history)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
-            write_zip_entry(&mut zip, ".history.json", &bytes, opts)?;
+            write_zip_json_entry(&mut zip, ".history.json", &bundle.history, opts)?;
         }
         if !bundle.snapshots.is_empty() {
-            let bytes = serde_json::to_vec(&bundle.snapshots)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
-            write_zip_entry(&mut zip, ".snapshots.json", &bytes, opts)?;
+            write_zip_json_entry(&mut zip, ".snapshots.json", &bundle.snapshots, opts)?;
         }
         zip.finish().map_err(|e| AppError::FileIO(e.to_string()))?;
     }
+
+    if let Err(error) = run_before_destination_mutation_hook(path, &tmp_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(error);
+    }
+
     if std::path::Path::new(path).exists() {
         let _ = std::fs::remove_file(path);
     }
@@ -518,8 +800,34 @@ fn write_zip_entry<W: Write + Seek>(
     data: &[u8],
     opts: zip::write::SimpleFileOptions,
 ) -> Result<(), AppError> {
-    zip.start_file(name, opts).map_err(|e| AppError::FileIO(e.to_string()))?;
-    zip.write_all(data).map_err(|e| AppError::FileIO(e.to_string()))?;
+    zip.start_file(name, opts)
+        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    zip.write_all(data)
+        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    Ok(())
+}
+
+fn write_zip_json_entry<W: Write + Seek, T: Serialize>(
+    zip: &mut zip::ZipWriter<W>,
+    name: &str,
+    value: &T,
+    opts: zip::write::SimpleFileOptions,
+) -> Result<(), AppError> {
+    zip.start_file(name, opts)
+        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    serde_json::to_writer(&mut *zip, value).map_err(|e| AppError::FileIO(e.to_string()))?;
+    Ok(())
+}
+
+fn write_zip_json_entry_pretty<W: Write + Seek, T: Serialize>(
+    zip: &mut zip::ZipWriter<W>,
+    name: &str,
+    value: &T,
+    opts: zip::write::SimpleFileOptions,
+) -> Result<(), AppError> {
+    zip.start_file(name, opts)
+        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    serde_json::to_writer_pretty(&mut *zip, value).map_err(|e| AppError::FileIO(e.to_string()))?;
     Ok(())
 }
 
@@ -529,8 +837,7 @@ fn write_zip_entry<W: Write + Seek>(
 
 /// Write a single `TableDoc` to a `.sptb` file (just JSON on disk for now).
 pub fn write_table_file(doc: &TableDoc, path: &str) -> Result<(), AppError> {
-    let bytes = serde_json::to_vec_pretty(doc)
-        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    let bytes = serde_json::to_vec_pretty(doc).map_err(|e| AppError::FileIO(e.to_string()))?;
     std::fs::write(path, bytes)?;
     Ok(())
 }
@@ -545,8 +852,7 @@ pub fn read_table_file(path: &str) -> Result<TableDoc, AppError> {
 
 /// Write a single `GraphDoc` to a `.spgh` file.
 pub fn write_graph_file(doc: &GraphDoc, path: &str) -> Result<(), AppError> {
-    let bytes = serde_json::to_vec_pretty(doc)
-        .map_err(|e| AppError::FileIO(e.to_string()))?;
+    let bytes = serde_json::to_vec_pretty(doc).map_err(|e| AppError::FileIO(e.to_string()))?;
     std::fs::write(path, bytes)?;
     Ok(())
 }
@@ -554,8 +860,7 @@ pub fn write_graph_file(doc: &GraphDoc, path: &str) -> Result<(), AppError> {
 /// Read a `.spgh` file from disk into a `GraphDoc`.
 pub fn read_graph_file(path: &str) -> Result<GraphDoc, AppError> {
     let bytes = std::fs::read(path)?;
-    parse_graph_doc(&bytes, "")
-        .map_err(|e| AppError::FileIO(format!("Invalid .spgh file: {}", e)))
+    parse_graph_doc(&bytes, "").map_err(|e| AppError::FileIO(format!("Invalid .spgh file: {}", e)))
 }
 
 /// Tolerant `.spgh` parser. Reads the bytes into a generic `serde_json::Value`
@@ -576,7 +881,10 @@ fn parse_graph_doc(bytes: &[u8], fallback_id: &str) -> Result<GraphDoc, String> 
     let id = map
         .remove("id")
         .and_then(|v| v.as_str().map(String::from))
-        .or_else(|| map.remove("builderId").and_then(|v| v.as_str().map(String::from)))
+        .or_else(|| {
+            map.remove("builderId")
+                .and_then(|v| v.as_str().map(String::from))
+        })
         .unwrap_or_else(|| fallback_id.to_string());
     let name = map
         .remove("name")
@@ -589,7 +897,12 @@ fn parse_graph_doc(bytes: &[u8], fallback_id: &str) -> Result<GraphDoc, String> 
     // Pre-#7 files may have stuffed a `folder` field inside the body —
     // strip it so it can never override the path-derived folder.
     map.remove("folder");
-    Ok(GraphDoc { id, name, version, body: map })
+    Ok(GraphDoc {
+        id,
+        name,
+        version,
+        body: map,
+    })
 }
 
 // ----------------------------------------------------------------------------
@@ -608,7 +921,13 @@ const FORBIDDEN_NAME_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>',
 pub fn sanitize_name(name: &str, fallback: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if FORBIDDEN_NAME_CHARS.contains(&c) { '_' } else { c })
+        .map(|c| {
+            if FORBIDDEN_NAME_CHARS.contains(&c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let trimmed = cleaned.trim_matches(|c: char| c.is_whitespace() || c == '.');
     if trimmed.is_empty() {
@@ -622,13 +941,19 @@ pub fn sanitize_name(name: &str, fallback: &str) -> String {
 /// Splits on `/` and `\`, sanitizes each segment, and rejoins with `/`.
 pub fn normalize_folder(folder: Option<&str>) -> Option<String> {
     let raw = folder?.trim();
-    if raw.is_empty() { return None; }
+    if raw.is_empty() {
+        return None;
+    }
     let segs: Vec<String> = raw
         .split(|c| c == '/' || c == '\\')
         .filter(|s| !s.is_empty())
         .map(|s| sanitize_name(s, "_"))
         .collect();
-    if segs.is_empty() { None } else { Some(segs.join("/")) }
+    if segs.is_empty() {
+        None
+    } else {
+        Some(segs.join("/"))
+    }
 }
 
 /// Normalize a list of folder paths and add implicit ancestors so the writer
@@ -637,35 +962,14 @@ fn normalize_folder_list(folders: Vec<String>) -> Vec<String> {
     let mut out: HashSet<String> = HashSet::new();
     for f in folders {
         if let Some(norm) = normalize_folder(Some(&f)) {
-            for anc in folder_ancestors(&norm) { out.insert(anc); }
+            for anc in folder_ancestors(&norm) {
+                out.insert(anc);
+            }
         }
     }
     let mut sorted: Vec<String> = out.into_iter().collect();
     sorted.sort();
     sorted
-}
-
-/// Build a unique archive path of the form `<folder>/<base>.<ext>` (or just
-/// `<base>.<ext>` at the root), auto-suffixing `" (2)"`, `" (3)"`, … until
-/// no collision exists in `taken` for the given extension namespace.
-fn unique_archive_path(
-    folder: &Option<String>,
-    base: &str,
-    ext: &str,
-    taken: &mut HashSet<String>,
-) -> String {
-    let prefix = match folder {
-        Some(f) => format!("{}/", f),
-        None => String::new(),
-    };
-    let mut candidate = format!("{}{}.{}", prefix, base, ext);
-    let mut n: u32 = 2;
-    while taken.contains(&candidate) {
-        candidate = format!("{}{} ({}).{}", prefix, base, n, ext);
-        n += 1;
-    }
-    taken.insert(candidate.clone());
-    candidate
 }
 
 /// Parent folder of an archive entry path, or `None` if at root.
@@ -684,4 +988,389 @@ fn folder_ancestors(folder: &str) -> Vec<String> {
         out.push(parts[..i].join("/"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    fn table_doc(id: &str, name: &str) -> TableDoc {
+        TableDoc {
+            id: id.into(),
+            name: name.into(),
+            source_type: "manual".into(),
+            version: "1".into(),
+            columns: vec![],
+            rows: vec![],
+        }
+    }
+
+    fn graph_doc(id: &str, name: &str) -> GraphDoc {
+        GraphDoc {
+            id: id.into(),
+            name: name.into(),
+            version: "1".into(),
+            body: serde_json::Map::new(),
+        }
+    }
+
+    #[test]
+    fn build_bundle_uses_stable_id_paths_and_explicit_folder_maps() {
+        let table = table_doc("table-id", "Sales");
+        let graph = graph_doc("graph-id", "Revenue");
+        let table_folders = HashMap::from([(String::from("table-id"), String::from("Raw/2026"))]);
+        let graph_folders = HashMap::from([(String::from("graph-id"), String::from("Reports"))]);
+
+        let bundle = build_bundle(
+            "Project".into(),
+            "3.0.0".into(),
+            "now".into(),
+            vec![table],
+            vec![graph],
+            vec![],
+            vec!["Raw/2026".into(), "Reports".into()],
+            &table_folders,
+            &graph_folders,
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+
+        assert_eq!(bundle.manifest.tables[0].file, "tables/table-id.sptb");
+        assert_eq!(bundle.manifest.graphs[0].file, "graphs/graph-id.spgh");
+        assert_eq!(bundle.manifest.table_folders.as_ref(), Some(&table_folders));
+        assert_eq!(bundle.manifest.graph_folders.as_ref(), Some(&graph_folders));
+    }
+
+    #[test]
+    fn manifest_round_trip_preserves_empty_folder_maps() {
+        let manifest = ProjectManifest {
+            name: "Project".into(),
+            version: "3.0.0".into(),
+            created_at: "now".into(),
+            tables: vec![],
+            graphs: vec![],
+            folders: vec![],
+            table_folders: Some(HashMap::new()),
+            graph_folders: Some(HashMap::new()),
+            tabulates: vec![],
+            tabulate_folders: HashMap::new(),
+        };
+
+        let json = serde_json::to_vec(&manifest).expect("serialize manifest");
+        let round_trip: ProjectManifest =
+            serde_json::from_slice(&json).expect("deserialize manifest");
+
+        assert_eq!(round_trip.table_folders, Some(HashMap::new()));
+        assert_eq!(round_trip.graph_folders, Some(HashMap::new()));
+    }
+
+    use serde_json::json;
+
+    fn temp_project_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "statsplayground-spprj-{}-{}.spprj",
+            name,
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    #[test]
+    fn tabulate_round_trip_preserves_opaque_json_and_folder_map() {
+        let path = temp_project_path("tabulate-round-trip");
+        let tabulate = json!({
+            "id": "tab-1",
+            "name": "Tabulate 1",
+            "sourceDatasetId": "table-1",
+            "rowFields": ["Region"],
+            "columnFields": [],
+            "statistics": [],
+        });
+        let folders = HashMap::from([("tab-1".to_string(), "Reports".to_string())]);
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "2.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![tabulate.clone()],
+            Vec::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &folders,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(loaded.manifest.tabulates, vec![tabulate.clone()]);
+        assert_eq!(loaded.manifest.tabulate_folders, folders);
+        assert_eq!(loaded.tabulates, vec![tabulate]);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn tabulate_missing_manifest_fields_default_cleanly() {
+        let path = temp_project_path("tabulate-defaults");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let manifest = json!({
+            "name": "Compat Project",
+            "version": "2.0.0",
+            "createdAt": "2026-08-14T00:00:00Z",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+        });
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(&manifest_bytes).unwrap();
+        zip.finish().unwrap();
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert!(loaded.manifest.tabulates.is_empty());
+        assert!(loaded.manifest.tabulate_folders.is_empty());
+        assert!(loaded.tabulates.is_empty());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn validate_archive_accepts_table_entry_without_deep_table_body_validation() {
+        let path = temp_project_path("validate-table-open-only");
+
+        let mut table = table_doc("table-1", "Table 1");
+        table.rows = (0_i64..40_000_i64)
+            .map(|row| vec![json!(row), json!(row * 2), json!(format!("row-{row}"))])
+            .collect();
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen_clone = std::sync::Arc::clone(&seen);
+        install_test_validate_table_entry_open_hook(Some(Box::new(
+            move |entry_name, entry_size, body_bytes_read| {
+                if entry_name.ends_with(".sptb") {
+                    seen_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                    assert!(entry_size > 1_000_000);
+                    assert_eq!(body_bytes_read, 0);
+                }
+                Ok(())
+            },
+        )));
+
+        validate_archive_manifest_and_entries(&path, &bundle.manifest, &[]).unwrap();
+        install_test_validate_table_entry_open_hook(None);
+
+        assert!(seen.load(std::sync::atomic::Ordering::SeqCst));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn validate_archive_rejects_missing_expected_table_entry() {
+        let path = temp_project_path("validate-missing-entry");
+        let missing_path = temp_project_path("validate-missing-entry-out");
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let input = std::fs::File::open(&path).unwrap();
+        let mut input_zip = zip::ZipArchive::new(input).unwrap();
+        let output = std::fs::File::create(&missing_path).unwrap();
+        let mut output_zip = zip::ZipWriter::new(output);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for index in 0..input_zip.len() {
+            let mut entry = input_zip.by_index(index).unwrap();
+            if entry.name().ends_with(".sptb") {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            output_zip.start_file(entry.name(), opts).unwrap();
+            output_zip.write_all(&bytes).unwrap();
+        }
+        output_zip.finish().unwrap();
+
+        let error = validate_archive_manifest_and_entries(&missing_path, &bundle.manifest, &[])
+            .unwrap_err();
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("missing table entry"))
+        );
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(missing_path);
+    }
+
+    #[test]
+    fn validate_archive_rejects_truncated_archive_file() {
+        let path = temp_project_path("validate-truncated-archive");
+        let truncated_path = temp_project_path("validate-truncated-archive-out");
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.truncate(bytes.len().saturating_sub(24));
+        std::fs::write(&truncated_path, &bytes).unwrap();
+
+        let error = validate_archive_manifest_and_entries(&truncated_path, &bundle.manifest, &[])
+            .unwrap_err();
+        assert!(matches!(error, AppError::FileIO(_)));
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(truncated_path);
+    }
+
+    #[test]
+    fn validate_archive_rejects_missing_manifest() {
+        let path = temp_project_path("validate-missing-manifest");
+        let missing_manifest_path = temp_project_path("validate-missing-manifest-out");
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let input = std::fs::File::open(&path).unwrap();
+        let mut input_zip = zip::ZipArchive::new(input).unwrap();
+        let output = std::fs::File::create(&missing_manifest_path).unwrap();
+        let mut output_zip = zip::ZipWriter::new(output);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for index in 0..input_zip.len() {
+            let mut entry = input_zip.by_index(index).unwrap();
+            if entry.name() == "manifest.json" {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            output_zip.start_file(entry.name(), opts).unwrap();
+            output_zip.write_all(&bytes).unwrap();
+        }
+        output_zip.finish().unwrap();
+
+        let error =
+            validate_archive_manifest_and_entries(&missing_manifest_path, &bundle.manifest, &[])
+                .unwrap_err();
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("missing manifest.json"))
+        );
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(missing_manifest_path);
+    }
+
+    #[test]
+    fn validate_archive_rejects_invalid_manifest_json() {
+        let path = temp_project_path("validate-bad-manifest");
+        let bad_manifest_path = temp_project_path("validate-bad-manifest-out");
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "3.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let input = std::fs::File::open(&path).unwrap();
+        let mut input_zip = zip::ZipArchive::new(input).unwrap();
+        let output = std::fs::File::create(&bad_manifest_path).unwrap();
+        let mut output_zip = zip::ZipWriter::new(output);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for index in 0..input_zip.len() {
+            let mut entry = input_zip.by_index(index).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            output_zip.start_file(entry.name(), opts).unwrap();
+            if entry.name() == "manifest.json" {
+                output_zip.write_all(br#"{"name":"broken""#).unwrap();
+            } else {
+                output_zip.write_all(&bytes).unwrap();
+            }
+        }
+        output_zip.finish().unwrap();
+
+        let error =
+            validate_archive_manifest_and_entries(&bad_manifest_path, &bundle.manifest, &[])
+                .unwrap_err();
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("Invalid manifest.json"))
+        );
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(bad_manifest_path);
+    }
 }

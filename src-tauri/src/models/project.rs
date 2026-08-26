@@ -8,3 +8,11 @@ pub struct ProjectInfo {
     pub file_path: String,
     pub created_at: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DatasetNameMigration {
+    pub dataset_id: String,
+    pub old_name: String,
+    pub new_name: String,
+}

@@ -20,7 +20,8 @@ import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } fr
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type FieldType, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { SCATTER_RENDER_BUDGET } from "@/graphCore/scatterBudget";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -30,7 +31,15 @@ import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPalet
 import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
-import { FilterPanel, applyFilters } from "@/components/filter";
+import { prepareAxisBinding } from "./axisBinding";
+import {
+  clampSampleSize,
+  DEFAULT_GRAPH_SAMPLE_SIZE,
+  getRawPointNotice,
+} from "./graphSamplingPolicy";
+import { FilterPanel } from "@/components/filter";
+import { defaultLayerOptions, GRAPH_LAYER_DEFS, LAYER_DIM } from "./graphLayerConfig";
+import { useGraphDataPipeline } from "./useGraphDataPipeline";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -46,65 +55,25 @@ type SlotKey = GraphSlotKey;
 // Group X / Group Y are still exposed via the dedicated facet drop slots
 // surrounding the canvas, not via a side shelf.
 
-interface ChartTypeDef {
-  kind: ElementKind;
-  icon: string; // 简单文字/符号图标（暂用 SVG path 太重）
-}
-
-const CHART_TYPE_DEFS: ChartTypeDef[] = [
-  { kind: "points", icon: "●" },
-  { kind: "line", icon: "╱" },
-  { kind: "smoother", icon: "∿" },
-  { kind: "fitline", icon: "ƒ" },
-  { kind: "boxplot", icon: "⊟" },
-  { kind: "histogram", icon: "▥" },
-  { kind: "scatter3d", icon: "●" },
-  { kind: "surface", icon: "◪" },
-];
-
 /** Per-layer dimensionality. 2D and 3D layers are fully separate sets:
  *  the layer panel + Add popover only show the set matching the current
  *  mode, and each layer card carries a 2D / 3D badge. Both sets persist
  *  on the item — switching mode just changes which subset is shown. */
-type LayerDim = "2d" | "3d";
-const LAYER_DIM: Record<ElementKind, LayerDim> = {
-  points: "2d",
-  line: "2d",
-  bar: "2d",
-  histogram: "2d",
-  boxplot: "2d",
-  smoother: "2d",
-  fitline: "2d",
-  scatter3d: "3d",
-  surface: "3d",
-};
-
-/** 数据类型对应的小图标 */
-function fieldTypeIcon(t: FieldType): string {
-  switch (t) {
-    case "continuous": return "▰";
-    case "ordinal": return "≣";
-    case "datetime": return "◷";
-    case "id": return "#";
-    default: return "▤";
-  }
-}
-
-function fieldTypeColor(t: FieldType): string {
-  switch (t) {
-    case "continuous": return "#2ca678";
-    case "datetime": return "#9168d6";
-    case "id": return "#7f8c8d";
-    default: return "#ef8a3a";
-  }
-}
-
 const DRAG_MIME = "text/plain";
 
 export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const { t } = useTranslation();
-  const updateItem = useGraphBuilderStore((s) => s.updateItem);
-  const markDirty = useProjectStore((s) => s.markDirty);
+  const updateItemRaw = useGraphBuilderStore((s) => s.updateItem);
+  const markDirtyRaw = useProjectStore((s) => s.markDirty);
+  const readOnly = useProjectStore((s) => s.readOnly);
+  const markDirty = useCallback(() => {
+    if (readOnly) return;
+    markDirtyRaw();
+  }, [readOnly, markDirtyRaw]);
+  const updateItem = useCallback((id: string, patch: Partial<GraphBuilderItem>) => {
+    if (readOnly) return;
+    updateItemRaw(id, patch);
+  }, [readOnly, updateItemRaw]);
   // Cross-view bridge: click a scatter point → highlight the matching
   // cell in the DataTableView for `dataset.id` next time it mounts.
   const pickCell = useTableSelectionStore((s) => s.pick);
@@ -119,9 +88,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
   const [columns, setColumns] = useState<FieldRef[]>([]);
   const [colSqlTypes, setColSqlTypes] = useState<string[]>([]);
-  const [data, setData] = useState<GraphData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [metaLoading, setMetaLoading] = useState(true);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [viewport, setViewport] = useState({ width: 1280, height: 720 });
+  const canvasRef = useRef<HTMLDivElement | null>(null);
   // Y-axis settings dialog open state. Opened by double-clicking the Y
   // axis (or its label/title area) in <Graph>; closed via the dialog's
   // Done button or overlay click.
@@ -307,22 +277,36 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     [leftTopPct],
   );
 
+  useLayoutEffect(() => {
+    const host = canvasRef.current;
+    if (!host) return;
+
+    const commitSize = () => {
+      const rect = host.getBoundingClientRect();
+      const width = Math.max(1, Math.floor(rect.width));
+      const height = Math.max(1, Math.floor(rect.height));
+      setViewport((prev) => (
+        prev.width === width && prev.height === height
+          ? prev
+          : { width, height }
+      ));
+    };
+
+    commitSize();
+    const ro = new ResizeObserver(commitSize);
+    ro.observe(host);
+    return () => {
+      ro.disconnect();
+    };
+  }, []);
+
   // 编码状态从 store 派生
   const encoding = item.encoding;
   const elements = item.elements;
   const smootherLambda = item.smootherLambda;
   // Filter rules (JMP-style Local Data Filter). Persist on the item so
-  // they survive project save/load. `filteredData` below feeds the
-  // renderer instead of the raw `data`.
+  // they survive project save/load.
   const filters = useMemo(() => item.filters ?? [], [item.filters]);
-
-  // Apply the user's filter rules to the raw data once per change.
-  // Everything downstream (groupKeys, the spec, the rendered Graph and
-  // the legend's distinct-value enumeration) reads `filteredData`.
-  const filteredData = useMemo(
-    () => applyFilters(data, filters),
-    [data, filters],
-  );
 
   // ---- Multi-column melt (multi-mode rendering) ---------------------
   //
@@ -389,26 +373,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     };
   }, [item.multiX, item.multiY, item.encoding.x, item.encoding.y]);
 
-  // Build the melted dataset. Returns `filteredData` unchanged when
-  // not in multi-mode (zero-cost no-op). */
-  const effectiveData = useMemo<GraphData | null>(() => {
-    if (!filteredData) return filteredData;
-    if (!meltInfo) return filteredData;
-    const colIdx = meltInfo.cols.map((c) =>
-      filteredData.columns.indexOf(c.name),
-    );
-    const newCols = [...filteredData.columns, MELT_VAR, MELT_VAL];
-    const newRows: unknown[][] = [];
-    for (const row of filteredData.rows) {
-      for (let i = 0; i < meltInfo.cols.length; i++) {
-        const ci = colIdx[i];
-        const v = ci >= 0 ? row[ci] : null;
-        newRows.push([...row, meltInfo.cols[i].name, v]);
-      }
-    }
-    return { columns: newCols, rows: newRows };
-  }, [filteredData, meltInfo]);
-
   // Build the effective encoding for the renderer. In multi-mode the
   // synthetic FieldRefs replace the affected slot(s); other slots
   // (overlay, group X/Y, etc.) pass through untouched. */
@@ -435,48 +399,73 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     return enc;
   }, [item.encoding, meltInfo]);
 
+  const graphData = useMemo<GraphData>(() => {
+    const baseColumns = columns.map((c) => c.name);
+    if (!meltInfo) {
+      return { columns: baseColumns, rows: [] };
+    }
+    const out = [...baseColumns];
+    if (!out.includes(MELT_VAR)) out.push(MELT_VAR);
+    if (!out.includes(MELT_VAL)) out.push(MELT_VAL);
+    return { columns: out, rows: [] };
+  }, [columns, meltInfo]);
+
+  const {
+    frame,
+    status: pipelineStatus,
+    error: pipelineError,
+    progress,
+  } = useGraphDataPipeline(item, dataset, viewport);
+
   // User-saved CustomPalettes feed into legend default-color assignment:
   // when a group doesn't have an explicit style override yet, the renderer
   // walks these palettes first before falling back to GROUP_COLORS.
   const customPalettes = useGraphPaletteStore((s) => s.palettes);
 
-  // Distinct group values driving the legend. Lifted from LegendStylePanel
-  // so the parent can pre-compute effectiveStyles in the same single source
-  // of truth that gets handed both to the renderer (via spec.styles) and to
-  // the panel (for swatches and the editor's "default vs override" check).
-  //
-  // Two rules govern which group keys make the cut:
-  //   1. The group value itself must be non-missing (skip blanks/whitespace
-  //      so we don't surface a phantom "" legend entry).
-  //   2. After applying the user's filter rules the group must still have
-  //      at least one row that would actually plot something — i.e. every
-  //      encoded field in {x, y} is non-missing for that row. A group
-  //      whose Y is entirely null in the filtered region produces zero
-  //      marks and would otherwise leave a dead legend swatch behind.
   const groupKeys = useMemo<string[]>(() => {
-    const groupField = encoding.overlay;
-    if (!groupField || !filteredData) return [DEFAULT_GROUP_KEY];
-    const colIdx = filteredData.columns.indexOf(groupField.name);
-    if (colIdx < 0) return [DEFAULT_GROUP_KEY];
-    const xIdx = encoding.x ? filteredData.columns.indexOf(encoding.x.name) : -1;
-    const yIdx = encoding.y ? filteredData.columns.indexOf(encoding.y.name) : -1;
+    if (!encoding.overlay) return [DEFAULT_GROUP_KEY];
+    if (!frame) return [DEFAULT_GROUP_KEY];
+
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const r of filteredData.rows) {
-      const gv = r[colIdx];
-      if (isMissing(gv)) continue;
-      // Drop the row from the legend census if a bound encoding channel
-      // is missing on it — the renderer would skip it too, so it must
-      // not count toward "this group has data".
-      if (xIdx >= 0 && isMissing(r[xIdx])) continue;
-      if (yIdx >= 0 && isMissing(r[yIdx])) continue;
-      const k = String(gv);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(k);
+    const push = (value: unknown) => {
+      if (isMissing(value)) return;
+      const key = String(value);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(key);
+    };
+
+    for (const chunk of frame.rawChunks) {
+      if (!chunk.groupCodes) continue;
+      const dict = frame.dictionaries.group;
+      if (!dict || dict.length === 0) continue;
+      for (let i = 0; i < chunk.groupCodes.length; i += 1) {
+        const code = Number(chunk.groupCodes[i]);
+        if (!Number.isInteger(code) || code < 0 || code >= dict.length) continue;
+        push(dict[code]);
+      }
     }
+
+    for (const packet of frame.aggregates) {
+      switch (packet.kind) {
+        case "histogram":
+          for (const bin of packet.bins) push(bin.group);
+          break;
+        case "heatmap":
+          for (const cell of packet.cells) push(cell.group);
+          break;
+        case "boxPlot":
+          for (const entry of packet.entries) push(entry.group);
+          break;
+        case "summary":
+          for (const summary of packet.summaries) push(summary.group);
+          break;
+      }
+    }
+
     return out.length > 0 ? out : [DEFAULT_GROUP_KEY];
-  }, [encoding.overlay, encoding.x, encoding.y, filteredData]);
+  }, [encoding.overlay, frame]);
 
   const effectiveStyles = useMemo<GroupStyleMap>(
     () =>
@@ -533,11 +522,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     [item.id, updateItem, markDirty],
   );
 
-  // 加载列信息 + 全表数据
+  // 加载列信息和列显示属性（图形数据由 useGraphDataPipeline 提供）。
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+    setMetaLoading(true);
+    setMetaError(null);
     (async () => {
       try {
         const cols = await dataService.getColumns(dataset.id);
@@ -546,12 +535,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           type: inferFieldType(type),
         }));
         const sqlTypes = cols.map(([, type]) => type);
-        // 简化：一次性拉取全部数据（后续可流式优化）
-        const result = await dataService.queryTable({
-          datasetId: dataset.id,
-          page: 0,
-          pageSize: Math.max(1, dataset.rowCount || 100000),
-        });
         // Pull per-column display props in parallel with data so the
         // Value Order metadata is available on first render. Display
         // props can legitimately be missing (older projects, fresh
@@ -596,19 +579,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         }
         setColumns(fields);
         setColSqlTypes(sqlTypes);
-        setData({ columns: result.columns, rows: result.rows });
         setValueOrders(vo);
         setSpecByCol(sp);
       } catch (e) {
-        if (!cancelled) setError(String(e));
+        if (!cancelled) setMetaError(String(e));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setMetaLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [dataset.id, dataset.rowCount]);
+  }, [dataset.id]);
 
   /** Resolve final per-element options. The smoother layer used to be
    *  driven by a single workspace-level `smootherLambda` slider; that
@@ -1000,26 +982,20 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       const multiKey: "multiX" | "multiY" | null =
         slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
       const hadMulti = multiKey ? (item[multiKey]?.length ?? 0) > 0 : false;
-      const fieldChanged =
-        (slot === "x" || slot === "y") &&
-        prevField !== undefined &&
-        prevField.name !== field.name;
-      if (fieldChanged || hadMulti) {
-        const axisKey: "xAxis" | "yAxis" | null =
-          slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
-        const prevAxis = axisKey ? item[axisKey] : undefined;
-        const needsAxisReset =
-          axisKey !== undefined &&
-          prevAxis !== undefined &&
-          (prevAxis.min !== undefined ||
-            prevAxis.max !== undefined ||
-            prevAxis.tickInterval !== undefined);
-        const nextAxis = needsAxisReset
-          ? { ...prevAxis, min: undefined, max: undefined, tickInterval: undefined }
-          : prevAxis;
+      const axisKey: "xAxis" | "yAxis" | null =
+        slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
+      const prevAxis = axisKey ? item[axisKey] : undefined;
+      const prepared = prepareAxisBinding(
+        prevField?.name,
+        field.name,
+        hadMulti,
+        prevAxis,
+      );
+      const { bindingChanged, axisConfig } = prepared;
+      if (axisKey && bindingChanged) {
         updateItem(item.id, {
           encoding: { ...item.encoding, [slot]: field },
-          ...(needsAxisReset && axisKey ? { [axisKey]: nextAxis } : {}),
+          ...(axisKey ? { [axisKey]: axisConfig } : {}),
           ...(multiKey ? { [multiKey]: undefined } : {}),
         });
         markDirty();
@@ -1200,16 +1176,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         return prev.map((e, i) => (i === idx ? { ...e, enabled: true } : e));
       }
       const next: ChartElement = { kind, enabled: true };
-      if (kind === "smoother") next.options = { algo: "spline" };
-      if (kind === "fitline") {
-        next.options = { fitType: "polynomial", degree: 1 };
-      }
-      if (kind === "surface") next.options = { stat: "mean", smoothness: 0 };
-      // 3D 散点先继承已有 2D 散点（points）的设置作为默认。
-      if (kind === "scatter3d") {
-        const pts = prev.find((e) => e.kind === "points");
-        next.options = { ...(pts?.options ?? {}) };
-      }
+      next.options = defaultLayerOptions(kind, prev);
       return [...prev, next];
     });
   }, [setElements]);
@@ -1347,6 +1314,123 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     markDirty();
   }, [item.id, item.threeD, updateItem, markDirty]);
 
+  const samplingMode = item.sampling?.mode === "sample" ? "sample" : "full";
+  const sampleSize = useMemo(() => {
+    if (item.sampling?.mode !== "sample") return DEFAULT_GRAPH_SAMPLE_SIZE;
+    return clampSampleSize(item.sampling.size);
+  }, [item.sampling]);
+  const sampleSeed = useMemo(() => {
+    if (item.sampling?.mode !== "sample") return 0;
+    const value = Math.trunc(item.sampling.seed);
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  }, [item.sampling]);
+
+  const setSamplingMode = useCallback((mode: "full" | "sample") => {
+    if (mode === "full") {
+      updateItem(item.id, { sampling: { mode: "full" } });
+      markDirty();
+      return;
+    }
+    updateItem(item.id, {
+      sampling: {
+        mode: "sample",
+        size: sampleSize,
+        seed: sampleSeed,
+      },
+    });
+    markDirty();
+  }, [item.id, updateItem, markDirty, sampleSize, sampleSeed]);
+
+  const setSampleSize = useCallback((raw: number) => {
+    const size = clampSampleSize(Number.isFinite(raw) ? raw : sampleSize);
+    updateItem(item.id, {
+      sampling: {
+        mode: "sample",
+        size,
+        seed: sampleSeed,
+      },
+    });
+    markDirty();
+  }, [item.id, updateItem, markDirty, sampleSeed, sampleSize]);
+
+  const rawPointNotice = useMemo(
+    () => getRawPointNotice(frame?.rawPointDisposition),
+    [frame?.rawPointDisposition],
+  );
+
+  const setSampleSeed = useCallback((raw: number) => {
+    const seed = Math.max(0, Math.trunc(raw) || 0);
+    updateItem(item.id, {
+      sampling: {
+        mode: "sample",
+        size: sampleSize,
+        seed,
+      },
+    });
+    markDirty();
+  }, [item.id, updateItem, markDirty, sampleSize]);
+
+  const rowStatus = useMemo(() => {
+    if (!progress) {
+      return t("graph.rowStatus.empty", { defaultValue: "No graph frame yet" });
+    }
+    if (pipelineStatus === "pending") {
+      if (progress.sourceRows <= 0) {
+        return t("graph.rowStatus.pending", {
+          defaultValue: "Processing rows...",
+        });
+      }
+      return t("graph.rowStatus.pendingRows", {
+        processed: progress.processedRows,
+        source: progress.sourceRows,
+        defaultValue: "Processing: {{processed}} / {{source}} rows",
+      });
+    }
+    if (frame?.sampling.mode === "sample") {
+      return t("graph.rowStatus.sampled", {
+        processed: progress.processedRows,
+        source: progress.sourceRows,
+        defaultValue: "Sampled: {{processed}} / {{source}} rows",
+      });
+    }
+    if (rawPointNotice) {
+      return t("graph.rowStatus.pointsOmitted", {
+        valid: rawPointNotice.validRows.toLocaleString(),
+        budget: rawPointNotice.budget.toLocaleString(),
+        defaultValue: "Raw points omitted: {{valid}} valid rows exceed the {{budget}} point budget",
+      });
+    }
+    return t("graph.rowStatus.full", {
+      processed: progress.processedRows,
+      defaultValue: "Full Data: {{processed}} rows",
+    });
+  }, [frame, pipelineStatus, progress, rawPointNotice, t]);
+
+  const progressPercent = progress?.percent ?? null;
+  const progressAriaProps = progressPercent === null
+    ? {}
+    : {
+      "aria-valuemin": 0,
+      "aria-valuemax": 100,
+      "aria-valuenow": Math.round(progressPercent),
+    };
+
+  const pipelineStatusLabel = useMemo(() => {
+    if (pipelineStatus === "pending") {
+      return t("graph.pipeline.pending", { defaultValue: "Updating graph..." });
+    }
+    if (pipelineStatus === "error") {
+      return t("graph.pipeline.error", { defaultValue: "Update failed" });
+    }
+    if (metaError) {
+      return t("graph.pipeline.metaError", { defaultValue: "Column metadata unavailable" });
+    }
+    if (metaLoading) {
+      return t("graph.pipeline.metaLoading", { defaultValue: "Loading columns..." });
+    }
+    return t("graph.pipeline.ready", { defaultValue: "Ready" });
+  }, [pipelineStatus, metaError, metaLoading, t]);
+
   const activeKinds = new Set(
     finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
   );
@@ -1445,6 +1529,62 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           </div>
         </div>
         <div className="gb-toolbar-spacer" />
+        <div className="gb-toolbar-right">
+          <div className="gb-sampling" role="radiogroup" aria-label={t("graph.sampling.label", { defaultValue: "Sampling mode" })}>
+            <button
+              type="button"
+              className={`gb-sampling-btn${samplingMode === "full" ? " is-active" : ""}`}
+              onClick={() => setSamplingMode("full")}
+            >
+              {t("graph.sampling.full", { defaultValue: "Full" })}
+            </button>
+            <button
+              type="button"
+              className={`gb-sampling-btn${samplingMode === "sample" ? " is-active" : ""}`}
+              onClick={() => setSamplingMode("sample")}
+            >
+              {t("graph.sampling.sample", { defaultValue: "Sample" })}
+            </button>
+            {samplingMode === "sample" && (
+              <>
+                <input
+                  className="gb-sampling-input"
+                  type="number"
+                  min={1}
+                  max={SCATTER_RENDER_BUDGET}
+                  step={1}
+                  value={sampleSize}
+                  onChange={(e) => setSampleSize(Number(e.target.value))}
+                  title={t("graph.sampling.size", { defaultValue: "Sample size" })}
+                />
+                <input
+                  className="gb-sampling-input"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={sampleSeed}
+                  onChange={(e) => setSampleSeed(Number(e.target.value))}
+                  title={t("graph.sampling.seed", { defaultValue: "Sample seed" })}
+                />
+              </>
+            )}
+          </div>
+          <div className="gb-pipeline-status">
+            <span className={`gb-pipeline-state gb-pipeline-state-${pipelineStatus}`}>{pipelineStatusLabel}</span>
+            <div
+              className="gb-pipeline-progress sp-progress-bar"
+              role="progressbar"
+              aria-label={t("graph.pipeline.progress", { defaultValue: "Graph data loading progress" })}
+              {...progressAriaProps}
+            >
+              <div
+                className={`sp-progress-fill${progressPercent === null ? " sp-progress-indeterminate" : ""}`}
+                style={progressPercent === null ? undefined : { width: `${progressPercent}%` }}
+              />
+            </div>
+            <span className="gb-row-status">{rowStatus}</span>
+          </div>
+        </div>
       </div>
 
       <div className="gb-body">
@@ -1452,7 +1592,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         {showFilters && (
           <>
             <FilterPanel
-              data={data}
+              data={graphData}
               columns={columns}
               filters={filters}
               onChange={setFilters}
@@ -1539,7 +1679,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     />
                   ))}
                 <AddLayerCard
-                  availableKinds={CHART_TYPE_DEFS.map((c) => c.kind).filter(
+                  availableKinds={GRAPH_LAYER_DEFS.map((c) => c.kind).filter(
                     (k) => !activeKinds.has(k) && LAYER_DIM[k] === (item.threeD ? "3d" : "2d"),
                   )}
                   onAdd={addElement}
@@ -1609,6 +1749,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             />
             <div
               className="gb-canvas"
+              ref={canvasRef}
               onDragOver={(e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "copy";
@@ -1639,13 +1780,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 routeDropToSlot(slot, fields);
               }}
             >
-              {loading ? (
-                <div className="gb-empty">{t("graph.loading")}</div>
-              ) : error ? (
-                <div className="gb-empty gb-error">{error}</div>
-              ) : !data ? (
-                <div className="gb-empty">{t("graph.noData")}</div>
-              ) : !item.threeD && !encoding.x && !encoding.y && !(item.multiX?.length) && !(item.multiY?.length) && !activeKinds.has("histogram") ? (
+              {!item.threeD && !encoding.x && !encoding.y && !(item.multiX?.length) && !(item.multiY?.length) && !activeKinds.has("histogram") ? (
                 // Drag-hint shows only when neither axis is bound (and
                 // there's no histogram). Y-only renders a vertical strip
                 // and X-only renders a horizontal strip (mirror), so the
@@ -1657,40 +1792,64 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 // melt fields at render time.
                 <div className="gb-empty">{t("graph.dragHint")}</div>
               ) : (
-                // `effectiveData` is null iff `data` is null; the `!data`
-                // branch above already handled that, so the fallback to
-                // `data` is unreachable and just satisfies the type
-                // checker. `effectiveData` carries the melted view in
-                // multi-mode and equals `filteredData` otherwise.
-                <Graph
-                  spec={spec}
-                  data={effectiveData ?? data}
-                  valueOrders={valueOrders}
-                  onYAxisDblClick={() => setYAxisDialogOpen(true)}
-                  onXAxisDblClick={() => setXAxisDialogOpen(true)}
-                  onAxisRangeChange={(axis, min, max) => {
-                    // JMP-style direct-manipulation drag-zoom / drag-pan
-                    // on the axis strip. The renderer previews via
-                    // setOption during the gesture; on mouseup it hands
-                    // back the final numeric bounds, which we pin onto
-                    // the per-builder yAxis / xAxis config. Other
-                    // overrides (decimals / inverse / grid styling) are
-                    // preserved by spreading the existing config first.
-                    if (axis === "y") {
-                      setYAxisConfig({ ...(item.yAxis ?? {}), min, max });
-                    } else {
-                      setXAxisConfig({ ...(item.xAxis ?? {}), min, max });
-                    }
-                  }}
-                  onAxisContextMenu={(axis, x, y) => setAxisCtxMenu({ axis, x, y })}
-                  onPointClick={(pick) => {
-                    pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
-                  }}
-                  brushMode={cursorMode === "select"}
-                  onBrushSelect={(picks) => {
-                    pickCells(dataset.id, picks);
-                  }}
-                />
+                <>
+                  <Graph
+                    spec={spec}
+                    data={graphData}
+                    frame={frame}
+                    valueOrders={valueOrders}
+                    onYAxisDblClick={() => setYAxisDialogOpen(true)}
+                    onXAxisDblClick={() => setXAxisDialogOpen(true)}
+                    onAxisRangeChange={(axis, min, max) => {
+                      // JMP-style direct-manipulation drag-zoom / drag-pan
+                      // on the axis strip. The renderer previews via
+                      // setOption during the gesture; on mouseup it hands
+                      // back the final numeric bounds, which we pin onto
+                      // the per-builder yAxis / xAxis config. Other
+                      // overrides (decimals / inverse / grid styling) are
+                      // preserved by spreading the existing config first.
+                      if (axis === "y") {
+                        setYAxisConfig({ ...(item.yAxis ?? {}), min, max });
+                      } else {
+                        setXAxisConfig({ ...(item.xAxis ?? {}), min, max });
+                      }
+                    }}
+                    onAxisContextMenu={(axis, x, y) => setAxisCtxMenu({ axis, x, y })}
+                    onPointClick={(pick) => {
+                      pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
+                    }}
+                    brushMode={cursorMode === "select"}
+                    onBrushSelect={(picks) => {
+                      pickCells(dataset.id, picks);
+                    }}
+                  />
+                  {pipelineStatus === "error" && pipelineError && (
+                    <div className="gb-canvas-overlay gb-canvas-overlay-error">{pipelineError}</div>
+                  )}
+                  {pipelineStatus === "ready" && rawPointNotice && (
+                    <div className="gb-point-budget-notice" role="status">
+                      <i className="fa-solid fa-circle-info" aria-hidden="true" />
+                      <span className="gb-point-budget-copy">
+                        <strong>{t("graph.sampling.pointsOmitted", {
+                          defaultValue: "Raw points were omitted",
+                        })}</strong>
+                        <span>{t("graph.sampling.pointBudgetCount", {
+                          valid: rawPointNotice.validRows.toLocaleString(),
+                          budget: rawPointNotice.budget.toLocaleString(),
+                          defaultValue: "{{valid}} valid rows; point budget {{budget}}",
+                        })}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="gb-point-budget-action"
+                        onClick={() => setSamplingMode("sample")}
+                      >
+                        <i className="fa-solid fa-shuffle" aria-hidden="true" />
+                        {t("graph.sampling.switchToSample", { defaultValue: "Switch to Sample" })}
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
             <Slot
@@ -1746,7 +1905,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             - 底部样式编辑器：针对当前选中的图例条目，分别设置线/填充/点。
             无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
         <LegendStylePanel
-          data={data}
+          data={graphData}
           encoding={encoding}
           elements={elements}
           groupStyles={item.groupStyles ?? {}}
@@ -1758,8 +1917,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           resetAllGroupStyles={resetAllGroupStyles}
           onDropOverlay={(e) => handleDropOnSlot("overlay", e)}
           onClearOverlay={() => clearSlot("overlay")}
+          onOverlayContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
           width={rightWidth}
           threeD={!!item.threeD}
+          readOnly={readOnly}
         />
       </div>
 
@@ -2345,7 +2506,7 @@ function LayerCard({
   onRemove,
   t,
 }: LayerCardProps) {
-  const def = CHART_TYPE_DEFS.find((c) => c.kind === kind);
+  const def = GRAPH_LAYER_DEFS.find((c) => c.kind === kind);
   return (
     <div className="gb-layer-card">
       <div className="gb-layer-head">
@@ -2386,6 +2547,9 @@ function LayerCard({
         )}
         {kind === "surface" && (
           <SurfaceOptions options={options} onChange={onChangeOptions} t={t} />
+        )}
+        {kind === "contour3d" && (
+          <Contour3DOptions options={options} onChange={onChangeOptions} t={t} />
         )}
       </div>
     </div>
@@ -2814,6 +2978,48 @@ function SurfaceOptions({ options, onChange, t }: OptionsEditorProps) {
   );
 }
 
+function Contour3DOptions({ options, onChange, t }: OptionsEditorProps) {
+  const stat = getOpt<string>(options, "stat", "mean");
+  const smoothness = getOpt<number>(options, "smoothness", 0);
+  const levels = getOpt<number>(options, "levels", 10);
+  return (
+    <>
+      <OptRow label={t("graph.opt.surfaceStat", { defaultValue: "Statistic" })}>
+        <select
+          className="gb-opt-select"
+          value={stat}
+          onChange={(e) => onChange({ stat: e.target.value })}
+        >
+          <option value="mean">{t("graph.opt.summary.mean", { defaultValue: "Mean" })}</option>
+          <option value="median">{t("graph.opt.summary.median", { defaultValue: "Median" })}</option>
+        </select>
+      </OptRow>
+      <OptRow label={t("graph.opt.surfaceSmoothness", { defaultValue: "Smoothness" })}>
+        <input
+          type="range"
+          className="gb-slider"
+          min={0}
+          max={1}
+          step={0.05}
+          value={smoothness}
+          onChange={(e) => onChange({ smoothness: parseFloat(e.target.value) })}
+        />
+      </OptRow>
+      <OptRow label={t("graph.opt.contourLevels", { defaultValue: "Levels" })}>
+        <input
+          type="range"
+          className="gb-slider"
+          min={3}
+          max={20}
+          step={1}
+          value={levels}
+          onChange={(e) => onChange({ levels: Math.max(3, Math.min(20, parseInt(e.target.value, 10))) })}
+        />
+      </OptRow>
+    </>
+  );
+}
+
 /** Smoother options panel — algorithm selector + per-algorithm
  *  parameters. The visible controls below the algo dropdown vary with
  *  the selected algorithm so the panel only ever shows the inputs that
@@ -3148,7 +3354,7 @@ function AddLayerCard({ availableKinds, onAdd, t }: AddLayerCardProps) {
           style={{ left: pos.left, top: pos.top, minWidth: pos.width }}
         >
           {availableKinds.map((k) => {
-            const def = CHART_TYPE_DEFS.find((c) => c.kind === k);
+            const def = GRAPH_LAYER_DEFS.find((c) => c.kind === k);
             return (
               <button
                 key={k}
@@ -3206,13 +3412,16 @@ interface LegendStylePanelProps {
   resetAllGroupStyles: () => void;
   onDropOverlay: (e: React.DragEvent) => void;
   onClearOverlay: () => void;
+  onOverlayContextMenu: (x: number, y: number) => void;
   width: number;
   /** Whether the chart is in 3D mode — the Gradient mark only applies to
    *  (and is only shown for) 3D surfaces / scatter. */
   threeD: boolean;
+  /** Read-only while project save is in progress. */
+  readOnly: boolean;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, width, threeD }: LegendStylePanelProps) {
+function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD, readOnly }: LegendStylePanelProps) {
   const { t } = useTranslation();
 
   // `data` and `elements` are still part of the public prop contract for
@@ -3345,7 +3554,7 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           field={encoding.overlay}
           onDrop={onDropOverlay}
           onClear={onClearOverlay}
-          onContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
+          onContextMenu={onOverlayContextMenu}
           orientation="shelf"
         />
 
@@ -3487,7 +3696,9 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
                       style={{ background: bg }}
                       title={`${p.fill} / ${p.line} / ${p.point}`}
                       onClick={() => applyCustomTheme(selected, p)}
+                      disabled={readOnly}
                       onContextMenu={(e) => {
+                        if (readOnly) return;
                         e.preventDefault();
                         e.stopPropagation();
                         setPaletteCtxMenu({ id: p.id, x: e.clientX, y: e.clientY });
@@ -3499,7 +3710,11 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
                   type="button"
                   className="gb-style-color-swatch gb-style-theme-swatch gb-style-theme-add"
                   title={t("graph.style.addTheme")}
-                  onClick={() => setShowAddDialog(true)}
+                  onClick={() => {
+                    if (readOnly) return;
+                    setShowAddDialog(true);
+                  }}
+                  disabled={readOnly}
                   aria-label={t("graph.style.addTheme")}
                 >
                   +
@@ -3552,7 +3767,10 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           this panel's local stacking context. */}
       {showAddDialog && (
         <AddPaletteDialog
-          onSave={(p) => addPalette(p)}
+          onSave={(p) => {
+            if (readOnly) return;
+            addPalette(p);
+          }}
           onClose={() => setShowAddDialog(false)}
         />
       )}
@@ -3569,11 +3787,11 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div
-            className="sp-ctx-item sp-ctx-danger"
-            onClick={() => {
+            className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`}
+            onClick={readOnly ? undefined : (() => {
               removePalette(paletteCtxMenu.id);
               setPaletteCtxMenu(null);
-            }}
+            })}
           >
             {t("graph.style.removeTheme")}
           </div>
@@ -3594,49 +3812,67 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
 // shape is identical between them; only the dialog title, the absence
 // of the Y-only auto-spec block, and the X/Y value-field name differ.
 
-interface AxisSettingsDialogProps {
-  /** Which axis this dialog edits. Controls the title, the i18n key
-   *  prefix for category labels, and whether the auto-spec block is
-   *  present (Y only — spec extras live on the response variable). */
-  axis: "x" | "y";
-  /** Existing manual reference lines on this axis. Y dialog passes
-   *  `RefLineY[]`, X dialog passes `RefLineX[]`. The dialog itself
-   *  never reads the value field — it just forwards the array to
-   *  `RefLinesEditor`, which knows which field to address based on
-   *  the `axis` prop. */
-  refLines?: RefLineY[] | RefLineX[];
-  setRefLines?: (next: RefLineY[] | RefLineX[]) => void;
-  /** Whether the auto-spec-limits overlay is currently enabled. The
-   *  toggle is global (one flag covers both axes) — the renderer
-   *  contributes spec lines on whichever axis has a value-type column
-   *  with `extras.spec` metadata. Passed down to the RefLinesEditor so
-   *  its header checkbox renders the correct state without round-
-   *  tripping through the project store. */
-  autoSpecLines?: boolean;
-  setAutoSpecLines?: (next: boolean) => void;
-  /** Pre-resolved AutoSpec snapshot for the column currently bound to
-   *  THIS axis — already filtered to finite values by
-   *  GraphBuilderView. `undefined` means either the overlay is off,
-   *  this axis has no bound column, or the bound column has no spec
-   *  extras. */
-  resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
-  /** Name of the column currently bound to THIS axis, purely for the
-   *  editor's hint copy ("Reading limits from <col>"). */
-  autoSpecColName?: string | undefined;
-  /** When > 0, this axis is carrying a multi-column melt and the
-   *  auto-spec overlay (if enabled) will draw per-column ref lines
-   *  instead of a single overlay. Used purely to clarify the hint
-   *  copy so users understand WHY the toggle is producing lines even
-   *  though no single column is bound. `0` (or `undefined`) means
-   *  not in multi-mode. */
-  multiValueColCount?: number;
-  /** Current axis-override config (range / ticks / decimals / inverse /
-   *  axis line / tick position / minor ticks / grid). Both axes use
-   *  the same `YAxisConfig` shape. */
-  axisConfig: YAxisConfig | undefined;
-  setAxisConfig: (next: YAxisConfig | undefined) => void;
-  onClose: () => void;
-}
+type AxisSettingsDialogProps =
+  | {
+      /** Which axis this dialog edits. Controls the title, the i18n key
+       *  prefix for category labels, and whether the auto-spec block is
+       *  present (Y only — spec extras live on the response variable). */
+      axis: "y";
+      /** Existing manual reference lines on this axis. */
+      refLines?: RefLineY[];
+      setRefLines?: (next: RefLineY[]) => void;
+      /** Whether the auto-spec-limits overlay is currently enabled. */
+      autoSpecLines?: boolean;
+      setAutoSpecLines?: (next: boolean) => void;
+      /** Pre-resolved AutoSpec snapshot for the column currently bound to
+       *  THIS axis — already filtered to finite values by
+       *  GraphBuilderView. `undefined` means either the overlay is off,
+       *  this axis has no bound column, or the bound column has no spec
+       *  extras. */
+      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
+      /** Name of the column currently bound to THIS axis, purely for the
+       *  editor's hint copy ("Reading limits from <col>"). */
+      autoSpecColName?: string | undefined;
+      /** When > 0, this axis is carrying a multi-column melt and the
+       *  auto-spec overlay (if enabled) will draw per-column ref lines
+       *  instead of a single overlay. */
+      multiValueColCount?: number;
+      /** Current axis-override config (range / ticks / decimals / inverse /
+       *  axis line / tick position / minor ticks / grid). */
+      axisConfig: YAxisConfig | undefined;
+      setAxisConfig: (next: YAxisConfig | undefined) => void;
+      onClose: () => void;
+    }
+  | {
+      /** Which axis this dialog edits. Controls the title, the i18n key
+       *  prefix for category labels, and whether the auto-spec block is
+       *  present (Y only — spec extras live on the response variable). */
+      axis: "x";
+      /** Existing manual reference lines on this axis. */
+      refLines?: RefLineX[];
+      setRefLines?: (next: RefLineX[]) => void;
+      /** Whether the auto-spec-limits overlay is currently enabled. */
+      autoSpecLines?: boolean;
+      setAutoSpecLines?: (next: boolean) => void;
+      /** Pre-resolved AutoSpec snapshot for the column currently bound to
+       *  THIS axis — already filtered to finite values by
+       *  GraphBuilderView. `undefined` means either the overlay is off,
+       *  this axis has no bound column, or the bound column has no spec
+       *  extras. */
+      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
+      /** Name of the column currently bound to THIS axis, purely for the
+       *  editor's hint copy ("Reading limits from <col>"). */
+      autoSpecColName?: string | undefined;
+      /** When > 0, this axis is carrying a multi-column melt and the
+       *  auto-spec overlay (if enabled) will draw per-column ref lines
+       *  instead of a single overlay. */
+      multiValueColCount?: number;
+      /** Current axis-override config (range / ticks / decimals / inverse /
+       *  axis line / tick position / minor ticks / grid). */
+      axisConfig: YAxisConfig | undefined;
+      setAxisConfig: (next: YAxisConfig | undefined) => void;
+      onClose: () => void;
+    };
 
 type AxisCategoryKey = "axis" | "tickGrid" | "refLines";
 
@@ -3710,16 +3946,29 @@ function AxisSettingsDialog({
               <GridSettingsEditor config={axisConfig} setConfig={setAxisConfig} />
             )}
             {active === "refLines" && refLines && setRefLines && (
-              <RefLinesEditor
-                axis={axis}
-                refLines={refLines}
-                setRefLines={setRefLines}
-                autoSpecLines={!!autoSpecLines}
-                setAutoSpecLines={setAutoSpecLines}
-                resolvedAutoSpec={resolvedAutoSpec}
-                autoSpecColName={autoSpecColName}
-                multiValueColCount={multiValueColCount}
-              />
+              axis === "x" ? (
+                <RefLinesEditor
+                  axis="x"
+                  refLines={refLines as RefLineX[]}
+                  setRefLines={setRefLines as (next: RefLineX[]) => void}
+                  autoSpecLines={!!autoSpecLines}
+                  setAutoSpecLines={setAutoSpecLines}
+                  resolvedAutoSpec={resolvedAutoSpec}
+                  autoSpecColName={autoSpecColName}
+                  multiValueColCount={multiValueColCount}
+                />
+              ) : (
+                <RefLinesEditor
+                  axis="y"
+                  refLines={refLines as RefLineY[]}
+                  setRefLines={setRefLines as (next: RefLineY[]) => void}
+                  autoSpecLines={!!autoSpecLines}
+                  setAutoSpecLines={setAutoSpecLines}
+                  resolvedAutoSpec={resolvedAutoSpec}
+                  autoSpecColName={autoSpecColName}
+                  multiValueColCount={multiValueColCount}
+                />
+              )
             )}
           </div>
         </div>
@@ -4456,30 +4705,51 @@ function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
 // lines are preserved in the spec and reappear when the axis becomes
 // value-type again, e.g. after a Swap X & Y).
 
-interface RefLinesEditorProps {
-  /** Which axis this editor targets. Picks the value-field name
-   *  (`y` or `x`) used to read / write each card, the i18n copy
-   *  (horizontal vs. vertical marker), and whether the Y-only
-   *  auto-spec-limits block is rendered. */
-  axis: "x" | "y";
-  refLines: RefLineY[] | RefLineX[];
-  setRefLines: (next: RefLineY[] | RefLineX[]) => void;
-  /** When true, the chart auto-draws red (LSL/USL) and green (Target)
-   *  reference lines based on the bound column's `spec` extras. The
-   *  toggle is global — enabling it surfaces spec lines on whichever
-   *  axis (or both) has a value-type column carrying spec metadata. */
-  autoSpecLines?: boolean;
-  setAutoSpecLines?: (next: boolean) => void;
-  /** Pre-resolved spec snapshot for the column bound to THIS axis. */
-  resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
-  /** Name of the column bound to THIS axis — used in the helper hint. */
-  autoSpecColName?: string | undefined;
-  /** Number of source columns contributing per-column spec lines on
-   *  THIS axis when a multi-column melt is active. > 0 switches the
-   *  auto-spec hint into multi-column mode; 0 / undefined means the
-   *  axis carries at most one bound column. */
-  multiValueColCount?: number;
-}
+type RefLinesEditorProps =
+  | {
+      /** Which axis this editor targets. Picks the value-field name
+       *  (`y` or `x`) used to read / write each card, the i18n copy
+       *  (horizontal vs. vertical marker), and whether the Y-only
+       *  auto-spec-limits block is rendered. */
+      axis: "y";
+      refLines: RefLineY[];
+      setRefLines: (next: RefLineY[]) => void;
+      /** When true, the chart auto-draws red (LSL/USL) and green (Target)
+       *  reference lines based on the bound column's `spec` extras. The
+       *  toggle is global — enabling it surfaces spec lines on whichever
+       *  axis (or both) has a value-type column carrying spec metadata. */
+      autoSpecLines?: boolean;
+      setAutoSpecLines?: (next: boolean) => void;
+      /** Pre-resolved spec snapshot for the column bound to THIS axis. */
+      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
+      /** Name of the column bound to THIS axis — used in the helper hint. */
+      autoSpecColName?: string | undefined;
+      /** Number of source columns contributing per-column spec lines on
+       *  THIS axis when a multi-column melt is active. */
+      multiValueColCount?: number;
+    }
+  | {
+      /** Which axis this editor targets. Picks the value-field name
+       *  (`y` or `x`) used to read / write each card, the i18n copy
+       *  (horizontal vs. vertical marker), and whether the Y-only
+       *  auto-spec-limits block is rendered. */
+      axis: "x";
+      refLines: RefLineX[];
+      setRefLines: (next: RefLineX[]) => void;
+      /** When true, the chart auto-draws red (LSL/USL) and green (Target)
+       *  reference lines based on the bound column's `spec` extras. The
+       *  toggle is global — enabling it surfaces spec lines on whichever
+       *  axis (or both) has a value-type column carrying spec metadata. */
+      autoSpecLines?: boolean;
+      setAutoSpecLines?: (next: boolean) => void;
+      /** Pre-resolved spec snapshot for the column bound to THIS axis. */
+      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
+      /** Name of the column bound to THIS axis — used in the helper hint. */
+      autoSpecColName?: string | undefined;
+      /** Number of source columns contributing per-column spec lines on
+       *  THIS axis when a multi-column melt is active. */
+      multiValueColCount?: number;
+    };
 
 /** Saturated / primary-color palette for reference lines. The chart's
  *  GROUP_COLORS palette intentionally uses *muted* hues so data series
@@ -4514,66 +4784,72 @@ function nextRefLineId(): string {
   return `rl-${Date.now().toString(36)}-${_refLineSeq}`;
 }
 
-function RefLinesEditor({
-  axis,
-  refLines,
-  setRefLines,
-  autoSpecLines,
-  setAutoSpecLines,
-  resolvedAutoSpec,
-  autoSpecColName,
-  multiValueColCount,
-}: RefLinesEditorProps) {
+function RefLinesEditor(props: RefLinesEditorProps) {
   const { t } = useTranslation();
-  // Axis indirection: `valueField` picks which field on each card we
-  // read / write. Kept as a single source of truth so the rest of this
-  // component never branches on `axis` for data access — only for copy
-  // (horizontal vs. vertical marker) and for the Y-only auto-spec block.
-  const valueField: "x" | "y" = axis === "x" ? "x" : "y";
-  // Cast helpers: at runtime each line is either RefLineY (axis="y")
-  // or RefLineX (axis="x"); we treat them uniformly via the indirection.
-  // The cast keeps the read/write call sites concise without leaking
-  // `any` through the public API surface.
+  const axis = props.axis;
+  const autoSpecLines = props.autoSpecLines;
+  const setAutoSpecLines = props.setAutoSpecLines;
+  const resolvedAutoSpec = props.resolvedAutoSpec;
+  const autoSpecColName = props.autoSpecColName;
+  const multiValueColCount = props.multiValueColCount;
   const readValue = (r: RefLineY | RefLineX): number =>
-    (r as Record<string, number>)[valueField];
-  const writeValue = (n: number): Record<string, number> => ({ [valueField]: n });
+    "x" in r ? r.x : r.y;
+  const writeValue = (n: number): Partial<RefLineY> | Partial<RefLineX> =>
+    axis === "x" ? { x: n } : { y: n };
 
   const addLine = useCallback(() => {
-    // Build the new line using the axis-appropriate value field so
-    // RefLineY gets `{y:0}` and RefLineX gets `{x:0}`. Cast to the
-    // declared union after construction.
-    const next = {
+    if (props.axis === "x") {
+      const next: RefLineX = {
+        id: nextRefLineId(),
+        x: 0,
+        label: "",
+        style: "dashed",
+        color: REF_LINE_DEFAULT_COLOR,
+        width: 1,
+      };
+      props.setRefLines?.([...(props.refLines ?? []), next]);
+      return;
+    }
+    const next: RefLineY = {
       id: nextRefLineId(),
-      [valueField]: 0,
+      y: 0,
       label: "",
-      style: "dashed" as RefLineStyle,
+      style: "dashed",
       color: REF_LINE_DEFAULT_COLOR,
       width: 1,
-    } as RefLineY | RefLineX;
-    setRefLines([...(refLines ?? []), next] as RefLineY[] | RefLineX[]);
-  }, [refLines, setRefLines, valueField]);
+    };
+    props.setRefLines?.([...(props.refLines ?? []), next]);
+  }, [props.axis, props.refLines, props.setRefLines]);
 
   const updateLine = useCallback(
     (id: string, patch: Partial<RefLineY> | Partial<RefLineX>) => {
-      setRefLines(
-        ((refLines ?? []) as (RefLineY | RefLineX)[]).map((r) =>
-          r.id === id ? ({ ...r, ...patch } as RefLineY | RefLineX) : r,
-        ) as RefLineY[] | RefLineX[],
+      if (props.axis === "x") {
+        const next = (props.refLines ?? []).map((r) =>
+          r.id === id ? { ...r, ...(patch as Partial<RefLineX>) } : r,
+        );
+        props.setRefLines?.(next);
+        return;
+      }
+      const next = (props.refLines ?? []).map((r) =>
+        r.id === id ? { ...r, ...(patch as Partial<RefLineY>) } : r,
       );
+      props.setRefLines?.(next);
     },
-    [refLines, setRefLines],
+    [props.axis, props.refLines, props.setRefLines],
   );
 
   const removeLine = useCallback(
     (id: string) => {
-      setRefLines(
-        ((refLines ?? []) as (RefLineY | RefLineX)[]).filter((r) => r.id !== id) as RefLineY[] | RefLineX[],
-      );
+      if (props.axis === "x") {
+        props.setRefLines?.((props.refLines ?? []).filter((r) => r.id !== id));
+        return;
+      }
+      props.setRefLines?.((props.refLines ?? []).filter((r) => r.id !== id));
     },
-    [refLines, setRefLines],
+    [props.axis, props.refLines, props.setRefLines],
   );
 
-  const lines = (refLines ?? []) as (RefLineY | RefLineX)[];
+  const lines = (props.refLines ?? []) as (RefLineY | RefLineX)[];
 
   // Auto-spec preview state. We render up to three chips (LSL / Target
   // / USL) mirroring the colors the chart will use. When the toggle is

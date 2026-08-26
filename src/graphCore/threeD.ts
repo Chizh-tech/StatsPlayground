@@ -10,15 +10,27 @@
  * 交给 setOption 时按 echarts 的 core option 处理。
  */
 
-import type { GraphSpec, GraphData } from "./types";
-import type { GraphTheme } from "./theme";
-import { isMissing } from "./transform";
-import { DEFAULT_GROUP_KEY } from "./types";
+import type { GraphSpec, GraphData } from "./types.ts";
+import type { GraphTheme } from "./theme.ts";
+import { DEFAULT_GROUP_KEY } from "./types.ts";
+import { buildContourPolylines } from "./contours3d.ts";
+import { collectFrame3DPoints, type Typed3DPoint } from "./threeDFrame.ts";
+import type { GraphDataFrame } from "@/types/graphData";
 
 /** 3D 散点上限。 */
 const POINT_CAP = 8000;
 
 type SurfaceStat = "mean" | "median";
+
+interface SurfaceGrid {
+  xs: number[];
+  ys: number[];
+  values: Float64Array;
+  verts: number[][];
+  dataShape: [number, number];
+  zmin: number;
+  zmax: number;
+}
 
 /** 将 #rrggbb 向黑（ratio<0）或白（ratio>0）混合，ratio∈[-1,1]。 */
 function shade(hex: string, ratio: number): string {
@@ -35,6 +47,10 @@ function shade(hex: string, ratio: number): string {
 }
 
 interface XYZ { xi: number; yi: number; zi: number }
+
+function isMissingValue(v: unknown): boolean {
+  return v == null || (typeof v === "string" && v.trim() === "");
+}
 
 function colIndices(data: GraphData, x?: string, y?: string, z?: string): XYZ {
   return {
@@ -83,7 +99,8 @@ function buildSurfaceData(
   yName: string,
   zName: string,
   stat: SurfaceStat,
-): { verts: number[][]; dataShape: [number, number]; zmin: number; zmax: number } | null {
+  smoothness: number,
+): SurfaceGrid | null {
   const { xi, yi, zi } = colIndices(data, xName, yName, zName);
   if (xi < 0 || yi < 0 || zi < 0) return null;
 
@@ -138,9 +155,34 @@ function buildSurfaceData(
     }
   }
   if (!hasCompleteQuad) return null;
-
-  // NOTE: visual smoothing is applied via lighting only. Preserve raw
-  // aggregated values here and emit them unchanged.
+  const blend = Math.max(0, Math.min(1, smoothness));
+  if (blend > 0) {
+    const neighbors = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
+    for (let pass = 0; pass < 4; pass++) {
+      const next = new Float64Array(values.length);
+      next.fill(NaN);
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const idx = j * nx + i;
+          const current = values[idx];
+          if (!Number.isFinite(current)) continue;
+          let sum = 0;
+          let count = 0;
+          for (const [di, dj] of neighbors) {
+            const ni = i + di;
+            const nj = j + dj;
+            if (ni < 0 || ni >= nx || nj < 0 || nj >= ny) continue;
+            const neighbor = values[nj * nx + ni];
+            if (!Number.isFinite(neighbor)) continue;
+            sum += neighbor;
+            count++;
+          }
+          next[idx] = count > 0 ? current * (1 - blend) + (sum / count) * blend : current;
+        }
+      }
+      values = next;
+    }
+  }
 
   const verts: number[][] = [];
   let zmin = Infinity, zmax = -Infinity;
@@ -154,7 +196,7 @@ function buildSurfaceData(
       }
     }
   }
-  return { verts, dataShape: [ny, nx], zmin, zmax };
+  return { xs, ys, values, verts, dataShape: [ny, nx], zmin, zmax };
 }
 
 /** 抽取 3D 散点 [x,y,z]（Z 缺省时 z=0）。 */
@@ -191,6 +233,135 @@ function buildScatterData(
   return { pts: out, zmin, zmax };
 }
 
+function buildSurfaceDataFromPoints(
+  points: readonly Typed3DPoint[],
+  stat: SurfaceStat,
+  smoothness: number,
+): SurfaceGrid | null {
+  const xSet = new Set<number>();
+  const ySet = new Set<number>();
+  const observations: { x: number; y: number; z: number }[] = [];
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z ?? NaN)) continue;
+    const z = point.z as number;
+    xSet.add(point.x);
+    ySet.add(point.y);
+    observations.push({ x: point.x, y: point.y, z });
+  }
+  const xs = [...xSet].sort((a, b) => a - b);
+  const ys = [...ySet].sort((a, b) => a - b);
+  const nx = xs.length;
+  const ny = ys.length;
+  if (nx < 2 || ny < 2) return null;
+
+  const xIndex = new Map(xs.map((x, i) => [x, i]));
+  const yIndex = new Map(ys.map((y, i) => [y, i]));
+  const cells: (number[] | undefined)[] = new Array(nx * ny);
+  for (const observation of observations) {
+    const i = xIndex.get(observation.x);
+    const j = yIndex.get(observation.y);
+    if (i === undefined || j === undefined) continue;
+    (cells[j * nx + i] ??= []).push(observation.z);
+  }
+
+  let values = new Float64Array(nx * ny);
+  values.fill(NaN);
+  for (let idx = 0; idx < cells.length; idx++) {
+    const cell = cells[idx];
+    if (cell?.length) values[idx] = aggZ(cell, stat);
+  }
+
+  let hasCompleteQuad = false;
+  for (let j = 0; j < ny - 1 && !hasCompleteQuad; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      if (
+        Number.isFinite(values[j * nx + i])
+        && Number.isFinite(values[j * nx + i + 1])
+        && Number.isFinite(values[(j + 1) * nx + i])
+        && Number.isFinite(values[(j + 1) * nx + i + 1])
+      ) {
+        hasCompleteQuad = true;
+        break;
+      }
+    }
+  }
+  if (!hasCompleteQuad) return null;
+
+  const blend = Math.max(0, Math.min(1, smoothness));
+  if (blend > 0) {
+    const neighbors = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
+    for (let pass = 0; pass < 4; pass++) {
+      const next = new Float64Array(values.length);
+      next.fill(NaN);
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const idx = j * nx + i;
+          const current = values[idx];
+          if (!Number.isFinite(current)) continue;
+          let sum = 0;
+          let count = 0;
+          for (const [di, dj] of neighbors) {
+            const ni = i + di;
+            const nj = j + dj;
+            if (ni < 0 || ni >= nx || nj < 0 || nj >= ny) continue;
+            const neighbor = values[nj * nx + ni];
+            if (!Number.isFinite(neighbor)) continue;
+            sum += neighbor;
+            count++;
+          }
+          next[idx] = count > 0 ? current * (1 - blend) + (sum / count) * blend : current;
+        }
+      }
+      values = next;
+    }
+  }
+
+  const verts: number[][] = [];
+  let zmin = Infinity;
+  let zmax = -Infinity;
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const z = values[j * nx + i];
+      verts.push([xs[i], ys[j], z]);
+      if (Number.isFinite(z)) {
+        if (z < zmin) zmin = z;
+        if (z > zmax) zmax = z;
+      }
+    }
+  }
+  return { xs, ys, values, verts, dataShape: [ny, nx], zmin, zmax };
+}
+
+function buildScatterDataFromPoints(
+  points: readonly Typed3DPoint[],
+  requireZ: boolean,
+): { pts: number[][]; zmin: number; zmax: number } | null {
+  const pts: number[][] = [];
+  let zmin = Infinity;
+  let zmax = -Infinity;
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+    let z = 0;
+    if (requireZ) {
+      if (!Number.isFinite(point.z ?? NaN)) continue;
+      z = point.z as number;
+    }
+    pts.push([point.x, point.y, z]);
+    if (z < zmin) zmin = z;
+    if (z > zmax) zmax = z;
+  }
+  if (pts.length === 0) return null;
+  if (!requireZ) {
+    zmin = 0;
+    zmax = 0;
+  }
+  if (pts.length <= POINT_CAP) return { pts, zmin, zmax };
+  const capped: number[][] = [];
+  const step = pts.length / POINT_CAP;
+  for (let i = 0; i < POINT_CAP; i++) capped.push(pts[Math.floor(i * step)]);
+  return { pts: capped, zmin, zmax };
+}
+
 export interface Build3DResult {
   /** echarts-gl option（宽松类型）。空表示还不足以渲染。 */
   option: Record<string, unknown> | null;
@@ -199,27 +370,39 @@ export interface Build3DResult {
 }
 
 /** 构建 3D option。当绑定不足时返回 hint。 */
-export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphTheme): Build3DResult {
+export function build3DOption(
+  spec: GraphSpec,
+  data: GraphData,
+  theme: GraphTheme,
+  frame?: GraphDataFrame,
+): Build3DResult {
   const xf = spec.encoding.x;
   const yf = spec.encoding.y;
   const zf = spec.encoding.z;
   const els = spec.elements ?? [];
   const surfaceEl = els.find((e) => e.kind === "surface" && e.enabled !== false);
+  const contourEl = els.find((e) => e.kind === "contour3d" && e.enabled !== false);
   const pointsEl = els.find((e) => e.kind === "scatter3d" && e.enabled !== false);
-  const stat: SurfaceStat = surfaceEl?.options?.stat === "median" ? "median" : "mean";
+  const surfaceStat: SurfaceStat = surfaceEl?.options?.stat === "median" ? "median" : "mean";
   const rawSurfaceSmoothness = Number(surfaceEl?.options?.smoothness ?? 0);
   const surfaceSmoothness = Number.isFinite(rawSurfaceSmoothness)
     ? Math.max(0, Math.min(1, rawSurfaceSmoothness))
     : 0;
+  const contourStat: SurfaceStat = contourEl?.options?.stat === "median" ? "median" : "mean";
+  const rawContourSmoothness = Number(contourEl?.options?.smoothness ?? 0);
+  const contourSmoothness = Number.isFinite(rawContourSmoothness)
+    ? Math.max(0, Math.min(1, rawContourSmoothness))
+    : 0;
+  const contourLevels = Number(contourEl?.options?.levels ?? 10);
 
-  if (!surfaceEl && !pointsEl) {
-    return { option: null, hint: { key: "graph.threeD.addSurface", def: "Add a Surface or Scatter layer to render in 3D." } };
+  if (!surfaceEl && !contourEl && !pointsEl) {
+    return { option: null, hint: { key: "graph.threeD.addSurface", def: "Add a Surface, Contour, or Scatter layer to render in 3D." } };
   }
   if (!xf || !yf) {
     return { option: null, hint: { key: "graph.threeD.dragXY", def: "Drag columns onto X and Y (and Z) to build a 3D chart." } };
   }
-  if (surfaceEl && !zf) {
-    return { option: null, hint: { key: "graph.threeD.dragHint", def: "Drag a column onto Z to build a 3D surface." } };
+  if ((surfaceEl || contourEl) && !zf) {
+    return { option: null, hint: { key: "graph.threeD.dragHint", def: "Drag a column onto Z to build a 3D surface or contour plot." } };
   }
 
   // 分组：当绑定了 Overlay（图例）列时，按其值把数据切成多组，
@@ -251,32 +434,64 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   const errInterval = String(scOpts.errorInterval ?? "auto");
   const intStyle = String(scOpts.intervalStyle ?? "errorBar") === "band" ? "band" : "errorBar";
   const summarize = summaryStat !== "none" && !!zf;
+  const framePoints = frame ? collectFrame3DPoints(frame) : [];
+  const useFramePoints = framePoints.length > 0;
 
-  const addLayers = (gdata: GraphData, name: string, color: string) => {
+  const addLayers = (gdata: GraphData | null, gpoints: readonly Typed3DPoint[] | null, name: string, color: string) => {
     const indices: number[] = [];
-    if (surfaceEl && xf && yf && zf) {
-      const s = buildSurfaceData(gdata, xf.name, yf.name, zf.name, stat);
-      if (s) {
+    const buildGrid = (stat: SurfaceStat, smoothness: number): SurfaceGrid | null => (
+      gpoints
+        ? buildSurfaceDataFromPoints(gpoints, stat, smoothness)
+        : (gdata && zf ? buildSurfaceData(gdata, xf.name, yf.name, zf.name, stat, smoothness) : null)
+    );
+    const surfaceGrid = surfaceEl && xf && yf && zf
+      ? buildGrid(surfaceStat, 0)
+      : null;
+    if (surfaceEl && surfaceGrid) {
         series.push({
           type: "surface",
           name,
-          data: s.verts,
-          dataShape: s.dataShape,
-          // Surface uses Lambert shading; visual smoothing is done via lighting.
+          data: surfaceGrid.verts,
+          dataShape: surfaceGrid.dataShape,
           shading: "lambert",
           itemStyle: { color },
           wireframe: { show: false },
         });
         hasSurfaceSeries = true;
         indices.push(series.length - 1);
-        if (s.zmin < smin) smin = s.zmin;
-        if (s.zmax > smax) smax = s.zmax;
+        if (surfaceGrid.zmin < smin) smin = surfaceGrid.zmin;
+        if (surfaceGrid.zmax > smax) smax = surfaceGrid.zmax;
+    }
+    if (contourEl && xf && yf && zf) {
+      const contourGrid = surfaceGrid
+        && surfaceStat === contourStat
+        && contourSmoothness === 0
+        ? surfaceGrid
+        : buildGrid(contourStat, contourSmoothness);
+      if (contourGrid) {
+        const zOffset = (contourGrid.zmax - contourGrid.zmin) / 1_000_000;
+        const contours = buildContourPolylines(contourGrid, contourLevels);
+        for (let contourIndex = 0; contourIndex < contours.length; contourIndex += 1) {
+          const contour = contours[contourIndex];
+          series.push({
+            type: "line3D",
+            coordinateSystem: "cartesian3D",
+            name: `${name}__contour_${contour.level}_${contourIndex}`,
+            data: contour.points.map(([x, y, z]) => [x, y, z + zOffset]),
+            lineStyle: { color, width: 2, opacity: 0.9 },
+            silent: true,
+          });
+        }
+        if (contourGrid.zmin < smin) smin = contourGrid.zmin;
+        if (contourGrid.zmax > smax) smax = contourGrid.zmax;
       }
     }
     if (pointsEl && xf && yf) {
       if (!summarize) {
         // 原始散点：全部点，参与深度渐变着色。
-        const sc = buildScatterData(gdata, xf.name, yf.name, zf?.name);
+        const sc = gpoints
+          ? buildScatterDataFromPoints(gpoints, !!zf)
+          : (gdata ? buildScatterData(gdata, xf.name, yf.name, zf?.name) : null);
         if (sc) {
           series.push({
             type: "scatter3D",
@@ -292,19 +507,32 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       } else {
         // 汇总：按 (X, Y) 坐标分箱，每个位置画一个点 (x, y, agg(Z))；
         // 误差沿 Z 方向绘制（误差棒 / 色带），跟 2D 选项一致。
-        const xi = gdata.columns.indexOf(xf.name);
-        const yi = gdata.columns.indexOf(yf.name);
-        const zi = gdata.columns.indexOf(zf!.name);
         const cells = new Map<string, { x: number; y: number; zs: number[] }>();
-        for (const r of gdata.rows) {
-          const x = Number(r[xi]);
-          const y = Number(r[yi]);
-          const z = Number(r[zi]);
-          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-          const key = `${x}|${y}`;
-          let c = cells.get(key);
-          if (!c) { c = { x, y, zs: [] }; cells.set(key, c); }
-          c.zs.push(z);
+        if (gpoints) {
+          for (const point of gpoints) {
+            const x = point.x;
+            const y = point.y;
+            const z = Number(point.z);
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+            const key = `${x}|${y}`;
+            let c = cells.get(key);
+            if (!c) { c = { x, y, zs: [] }; cells.set(key, c); }
+            c.zs.push(z);
+          }
+        } else if (gdata) {
+          const xi = gdata.columns.indexOf(xf.name);
+          const yi = gdata.columns.indexOf(yf.name);
+          const zi = gdata.columns.indexOf(zf!.name);
+          for (const r of gdata.rows) {
+            const x = Number(r[xi]);
+            const y = Number(r[yi]);
+            const z = Number(r[zi]);
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+            const key = `${x}|${y}`;
+            let c = cells.get(key);
+            if (!c) { c = { x, y, zs: [] }; cells.set(key, c); }
+            c.zs.push(z);
+          }
         }
         const pts: number[][] = [];
         const errSegs: number[][][] = [];
@@ -353,7 +581,22 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
   };
 
   let grouped = false;
-  if (overlay) {
+  if (overlay && useFramePoints) {
+    const seen = new Set<string>();
+    const groups: string[] = [];
+    for (const point of framePoints) {
+      const key = String(point.group ?? "");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      groups.push(key);
+    }
+    grouped = groups.length > 0;
+    const hidden = new Set(spec.hiddenGroups ?? []);
+    for (const gkey of groups) {
+      if (hidden.has(gkey)) continue;
+      addLayers(null, framePoints.filter((point) => String(point.group ?? "") === gkey), gkey, colorOf(gkey));
+    }
+  } else if (overlay) {
     const gi = data.columns.indexOf(overlay.name);
     if (gi >= 0) {
       // 首次出现顺序去重分组。
@@ -361,7 +604,7 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       const groups: string[] = [];
       for (const row of data.rows) {
         const gv = row[gi];
-        if (isMissing(gv)) continue;
+        if (isMissingValue(gv)) continue;
         const k = String(gv);
         if (!seen.has(k)) { seen.add(k); groups.push(k); }
       }
@@ -372,12 +615,12 @@ export function build3DOption(spec: GraphSpec, data: GraphData, theme: GraphThem
       for (const gkey of groups) {
         if (hidden.has(gkey)) continue;
         const rows = data.rows.filter((r) => String(r[gi]) === gkey);
-        addLayers({ columns: data.columns, rows }, gkey, colorOf(gkey));
+        addLayers({ columns: data.columns, rows }, null, gkey, colorOf(gkey));
       }
     }
   }
   if (!grouped) {
-    addLayers(data, zf?.name ?? "series", colorOf(DEFAULT_GROUP_KEY));
+    addLayers(useFramePoints ? null : data, useFramePoints ? framePoints : null, zf?.name ?? "series", colorOf(DEFAULT_GROUP_KEY));
   }
 
   if (series.length === 0) {

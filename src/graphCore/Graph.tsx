@@ -8,14 +8,18 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as echarts from "echarts";
 import type { GraphSpec, GraphData } from "./types";
+import { withoutGraphAnimation } from "./animation";
 import { getGraphTheme } from "./theme";
 import { buildGraph, type ScatterPointPick } from "./transform";
+import { withInterleavedGraphLayers } from "./layers";
 import { Chart3D } from "./Chart3D";
+import type { GraphDataFrame } from "@/types/graphData";
 import { useThemeStore } from "@/stores/useThemeStore";
 
 interface GraphProps {
   spec: GraphSpec;
   data: GraphData;
+  frame?: GraphDataFrame | null;
   className?: string;
   /** 单个面板最小宽 */
   minPanelWidth?: number;
@@ -96,7 +100,7 @@ interface GraphProps {
   onBrushSelect?: (picks: ScatterPointPick[]) => void;
 }
 
-export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onAxisContextMenu, onPointClick, brushMode, onBrushSelect }: GraphProps) {
+export function Graph({ spec, data, frame, className, minPanelWidth = 320, minPanelHeight = 240, valueOrders, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onAxisContextMenu, onPointClick, brushMode, onBrushSelect }: GraphProps) {
   // 订阅主题变化以触发重渲染
   const themeMode = useThemeStore((s) => s.mode);
 
@@ -109,15 +113,15 @@ export function Graph({ spec, data, className, minPanelWidth = 320, minPanelHeig
     // 3D 场景走独立的自绘渲染器，跳过昂贵的 2D 面板构建。
     if (use3DScene) return { cols: 1, rows: 1, panels: [] as ReturnType<typeof buildGraph>["panels"] };
     const theme = getGraphTheme();
-    return buildGraph(spec, data, theme, valueOrders);
+    return buildGraph(spec, data, theme, valueOrders, frame ?? undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spec, data, themeMode, valueOrders]);
+  }, [spec, data, themeMode, valueOrders, frame]);
 
   // 3D 场景：hooks 之后再分支返回，保证 hooks 调用顺序稳定。
   if (use3DScene) {
     return (
       <div className={`gc-graph${className ? " " + className : ""}`} style={{ width: "100%", height: "100%" }}>
-        <Chart3D spec={spec} data={data} />
+        <Chart3D spec={spec} data={data} frame={frame ?? undefined} />
       </div>
     );
   }
@@ -175,7 +179,8 @@ interface GraphPanelProps {
 }
 
 function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick, onAxisRangeChange, onAxisContextMenu, onPointClick, brushMode, onBrushSelect }: GraphPanelProps) {
-  const ref = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const chartHostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
   // Keep the latest callbacks in refs so the Zrender dblclick handler
   // (which we register exactly once on mount) always sees the freshest
@@ -203,11 +208,11 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
 
   // 初始化 / 销毁
   useEffect(() => {
-    if (!ref.current) return;
-    const inst = echarts.init(ref.current, undefined, { renderer: "canvas" });
+    if (!panelRef.current || !chartHostRef.current) return;
+    const inst = echarts.init(chartHostRef.current, undefined, { renderer: "canvas" });
     chartRef.current = inst;
     const ro = new ResizeObserver(() => inst.resize());
-    ro.observe(ref.current);
+    ro.observe(panelRef.current);
 
     // ----- Rubber-band brush overlay ---------------------------------
     // A transparent abs-positioned div painted over the ECharts canvas
@@ -216,8 +221,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     // does NOT clear the container's children after init, so appending
     // here is safe. The overlay has pointer-events:none so input always
     // reaches the container element (which owns our pointer handlers).
-    const el = ref.current;
-    el.style.position = "relative";
+    const el = panelRef.current;
     const brushOverlay = document.createElement("div");
     brushOverlay.style.cssText =
       "display:none;position:absolute;pointer-events:none;" +
@@ -228,7 +232,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
     // (rowId, colName) picks whose pixel position falls inside the rect.
     // Dedup by `${rowId}|${colName}` since two scatter series sharing the
     // same source column (e.g. group-faceted) can both emit the same cell.
-    const hitTestBrush = (x1: number, y1: number, x2: number, y2: number): ScatterPointPick[] => {
+    const legacyHitTestBrush = (x1: number, y1: number, x2: number, y2: number): ScatterPointPick[] => {
       const minX = Math.min(x1, x2);
       const maxX = Math.max(x1, x2);
       const minY = Math.min(y1, y2);
@@ -297,7 +301,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
       } catch {
         // see above
       }
-      const el = ref.current;
+      const el = panelRef.current;
       if (!inYAxis && !inXAxis && el) {
         // Geometric fallback: treat the left margin as Y and the bottom
         // margin as X. Conservative caps (80px / 18%) keep the central
@@ -815,7 +819,13 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
         try { el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
         const st = brushState;
         brushState = null;
-        const picks = hitTestBrush(st.startPx, st.startPy, st.curPx, st.curPy);
+        const minX = Math.min(st.startPx, st.curPx);
+        const maxX = Math.max(st.startPx, st.curPx);
+        const minY = Math.min(st.startPy, st.curPy);
+        const maxY = Math.max(st.startPy, st.curPy);
+        const picks = maxX - minX < 2 && maxY - minY < 2
+          ? []
+          : legacyHitTestBrush(st.startPx, st.startPy, st.curPx, st.curPy);
         onBrushSelectRef.current?.(picks);
         return;
       }
@@ -961,7 +971,14 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
 
   // 更新选项
   useEffect(() => {
-    chartRef.current?.setOption(option as echarts.EChartsCoreOption, true);
+    const inst = chartRef.current;
+    if (!inst) return;
+    inst.setOption(
+      withoutGraphAnimation(
+        withInterleavedGraphLayers(option) as echarts.EChartsCoreOption,
+      ),
+      true,
+    );
   }, [option]);
 
   // Right-click on an axis strip → open the axis context menu. Handled
@@ -973,7 +990,7 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
   const handleAxisContextMenu = (e: React.MouseEvent) => {
     const cb = onAxisContextMenu;
     const inst = chartRef.current;
-    const el = ref.current;
+    const el = panelRef.current;
     if (!cb || !inst || !el) return;
     const rect = el.getBoundingClientRect();
     const px = e.clientX - rect.left;
@@ -1031,7 +1048,9 @@ function GraphPanel({ title, option, minHeight, onYAxisDblClick, onXAxisDblClick
           {title}
         </div>
       )}
-      <div ref={ref} style={{ flex: 1, minHeight: 0 }} onContextMenu={handleAxisContextMenu} />
+      <div ref={panelRef} style={{ flex: 1, minHeight: 0, position: "relative" }} onContextMenu={handleAxisContextMenu}>
+        <div ref={chartHostRef} style={{ position: "absolute", inset: 0 }} />
+      </div>
     </div>
   );
 }

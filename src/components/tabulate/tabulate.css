@@ -1,0 +1,434 @@
+.sp-tabulate-view {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(320px, 360px) minmax(480px, 1fr);
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-main);
+}
+
+.sp-tabulate-fields-column,
+.sp-tabulate-roles-column,
+.sp-tabulate-results-column {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-main);
+  background: var(--bg-panel);
+}
+
+.sp-tabulate-results-column {
+  border-right: none;
+}
+
+.sp-tabulate-panel,
+.sp-tabulate-zone,
+.sp-tabulate-results-panel {
+  min-height: 0;
+}
+
+.sp-tabulate-fields-panel,
+.sp-tabulate-zone {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.sp-tabulate-field-toolbar {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-main);
+}
+
+.sp-tabulate-heading-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sp-tabulate-source-label {
+  overflow: hidden;
+  color: var(--fg-hint);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.sp-tabulate-view.is-fields-collapsed .sp-tabulate-source-label {
+  display: none;
+}
+
+.sp-tabulate-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 32px;
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg-secondary);
+}
+
+.sp-tabulate-search input,
+.sp-tabulate-depth-control select,
+.sp-tabulate-form-field select,
+.sp-tabulate-form-field input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+}
+
+.sp-tabulate-zone-body,
+.sp-tabulate-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.sp-tabulate-table-wrap {
+  position: relative;
+  isolation: isolate;
+}
+
+.sp-tabulate-zone-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-main);
+  background: var(--bg-card);
+}
+
+.sp-tabulate-fields-panel .sp-cols-panel-item {
+  cursor: grab;
+}
+
+.sp-tabulate-fields-panel .sp-cols-panel-item:active {
+  cursor: grabbing;
+}
+
+.sp-tabulate-fields-panel .sp-cols-panel-item:focus-visible,
+.sp-tabulate-zone-item.is-drop-target {
+  outline: none;
+  background: var(--bg-cell-hover);
+}
+
+.sp-tabulate-zone-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sp-tabulate-zone-label,
+.sp-tabulate-state-title {
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+
+.sp-tabulate-header-hint,
+.sp-tabulate-zone-hint,
+.sp-tabulate-state-detail,
+.sp-tabulate-form-help,
+.sp-tabulate-stat-field {
+  color: var(--fg-hint);
+  font-size: 12px;
+}
+
+.sp-tabulate-zone-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.sp-tabulate-icon-button,
+.sp-tabulate-inline-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  background: var(--bg-btn-secondary);
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.sp-tabulate-icon-button:hover,
+.sp-tabulate-inline-button:hover,
+.sp-tabulate-depth-control select:hover,
+.sp-tabulate-form-field select:hover,
+.sp-tabulate-form-field input:hover {
+  background: var(--bg-btn-secondary-hover);
+}
+
+.sp-tabulate-inline-button:disabled,
+.sp-tabulate-icon-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sp-tabulate-empty-note,
+.sp-tabulate-inline-error,
+.sp-tabulate-collapsed-rail {
+  padding: 14px 12px;
+  color: var(--fg-hint);
+  font-size: 12px;
+}
+
+.sp-tabulate-inline-error {
+  border-top: 1px solid var(--border-main);
+  color: var(--fg-danger);
+}
+
+.sp-tabulate-drop-tail {
+  height: 3px;
+  margin: 0 12px 10px;
+  border-radius: 999px;
+  background: var(--fg-accent);
+}
+
+.sp-tabulate-totals-toggle-row {
+  display: flex;
+  gap: 16px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-main);
+  font-size: 13px;
+}
+
+.sp-tabulate-totals-toggle-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sp-tabulate-results-panel {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+}
+
+.sp-tabulate-results-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.sp-tabulate-results-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-main);
+  background: var(--bg-card);
+}
+
+.sp-tabulate-export-button {
+  margin-left: auto;
+  min-height: 30px;
+  min-width: 178px;
+  justify-content: center;
+}
+
+.sp-tabulate-export-button.is-busy {
+  cursor: progress;
+}
+
+.sp-tabulate-depth-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.sp-tabulate-depth-control select,
+.sp-tabulate-form-field select,
+.sp-tabulate-form-field input {
+  min-width: 112px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+}
+
+.sp-tabulate-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+  font-size: 13px;
+}
+
+.sp-tabulate-table th,
+.sp-tabulate-table td {
+  padding: 8px 10px;
+  border-right: 1px solid var(--border-cell);
+  border-bottom: 1px solid var(--border-cell);
+  white-space: nowrap;
+  background: var(--bg-card);
+}
+
+.sp-tabulate-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg-header);
+  color: var(--fg-secondary);
+}
+
+.sp-tabulate-group-header,
+.sp-tabulate-stat-header,
+.sp-tabulate-corner-header {
+  text-align: center;
+}
+
+.sp-tabulate-stat-field {
+  display: block;
+  margin-top: 3px;
+}
+
+.sp-tabulate-row-label,
+.sp-tabulate-corner-header {
+  position: sticky;
+  z-index: 4;
+  width: 148px;
+  min-width: 148px;
+  max-width: 148px;
+  background-color: var(--bg-card);
+  background-clip: padding-box;
+  box-shadow: 1px 0 0 var(--border-cell);
+  text-align: left;
+}
+
+.sp-tabulate-corner-header {
+  background-color: var(--bg-header);
+  z-index: 5;
+}
+
+.sp-tabulate-table thead th.sp-tabulate-corner-header {
+  z-index: 6;
+}
+
+.sp-tabulate-footer-row th,
+.sp-tabulate-total-cell,
+.sp-tabulate-grand-total-cell,
+.sp-tabulate-total-header,
+.sp-tabulate-total-stat-header {
+  background: var(--bg-cell-hover);
+}
+
+.sp-tabulate-state-card {
+  margin: 18px;
+  padding: 18px;
+  border: 1px solid var(--border-main);
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+}
+
+.sp-tabulate-result-banner {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  max-width: min(520px, calc(100% - 32px));
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-main);
+  box-shadow: var(--shadow-menu);
+  font-size: 12px;
+  background: var(--bg-card);
+}
+
+.sp-tabulate-result-banner.is-info {
+  border-color: var(--fg-accent);
+}
+
+.sp-tabulate-result-banner.is-warning {
+  border-color: #c48a16;
+}
+
+.sp-tabulate-result-banner.is-error {
+  border-color: var(--fg-danger);
+}
+
+.sp-tabulate-stat-dialog {
+  min-width: 420px;
+}
+
+.sp-tabulate-stat-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sp-tabulate-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sp-tabulate-form-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.sp-tabulate-collapsible-header {
+  padding-right: 4px;
+}
+
+.sp-tabulate-collapsed-rail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  font-size: 18px;
+}
+
+@media (max-width: 1100px) {
+  .sp-tabulate-view {
+    grid-template-columns: 52px minmax(300px, 340px) minmax(0, 1fr);
+  }
+
+  .sp-tabulate-view:not(.is-fields-collapsed) {
+    grid-template-columns: minmax(240px, 280px) minmax(300px, 340px) minmax(0, 1fr);
+  }
+
+  .sp-tabulate-view.is-fields-collapsed .sp-tabulate-fields-column {
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 880px) {
+  .sp-tabulate-view {
+    grid-template-columns: 52px minmax(260px, 320px) minmax(0, 1fr);
+  }
+
+  .sp-tabulate-view:not(.is-fields-collapsed) {
+    grid-template-columns: minmax(220px, 260px) minmax(260px, 320px) minmax(0, 1fr);
+  }
+
+  .sp-tabulate-results-toolbar,
+  .sp-tabulate-totals-toggle-row {
+    flex-wrap: wrap;
+  }
+}

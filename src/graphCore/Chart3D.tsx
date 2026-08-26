@@ -12,26 +12,29 @@ import * as echarts from "echarts";
 // 副作用导入：注册 3D 组件（grid3D、series-surface、series-scatter3D 等）。
 import "echarts-gl";
 import type { GraphSpec, GraphData } from "./types";
+import { withoutGraphAnimation } from "./animation";
 import { getGraphTheme } from "./theme";
 import { build3DOption } from "./threeD";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { useTranslation } from "react-i18next";
+import type { GraphDataFrame } from "@/types/graphData";
 
 interface Chart3DProps {
   spec: GraphSpec;
   data: GraphData;
+  frame?: GraphDataFrame;
 }
 
-export function Chart3D({ spec, data }: Chart3DProps) {
+export function Chart3D({ spec, data, frame }: Chart3DProps) {
   const { t } = useTranslation();
   const themeMode = useThemeStore((s) => s.mode);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
 
   const built = useMemo(
-    () => build3DOption(spec, data, getGraphTheme()),
+    () => build3DOption(spec, data, getGraphTheme(), frame),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [spec, data, themeMode],
+    [spec, data, frame, themeMode],
   );
 
   // 初始化 / 销毁。
@@ -53,7 +56,7 @@ export function Chart3D({ spec, data }: Chart3DProps) {
     const inst = chartRef.current;
     if (!inst) return;
     if (built.option) {
-      inst.setOption(built.option as echarts.EChartsCoreOption, true);
+      inst.setOption(withoutGraphAnimation(built.option as echarts.EChartsCoreOption), true);
     } else {
       inst.clear();
     }

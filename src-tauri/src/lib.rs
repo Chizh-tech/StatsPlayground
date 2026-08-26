@@ -5,6 +5,10 @@ mod models;
 mod services;
 mod state;
 
+#[cfg(any(test, feature = "perf-harness"))]
+#[doc(hidden)]
+pub mod perf_harness;
+
 use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -20,23 +24,48 @@ pub fn run() {
             commands::data_commands::list_datasets,
             commands::data_commands::delete_dataset,
             commands::data_commands::query_table,
+            commands::data_commands::query_table_window,
+            commands::data_commands::get_dataset_generation,
+            commands::data_commands::locate_table_row,
+            commands::data_commands::query_table_filter_values,
+            commands::graph_data_commands::stream_graph_data,
+            commands::graph_data_commands::cancel_graph_data,
+            commands::data_commands::execute_sql_query,
+            commands::data_commands::create_table_from_sql_query,
             commands::data_commands::create_table,
+            commands::data_commands::create_table_from_rows,
             commands::data_commands::add_row,
+            commands::data_commands::add_rows,
+            commands::data_commands::apply_added_rows,
             commands::data_commands::update_cell,
+            commands::data_commands::clear_cells,
+            commands::data_commands::update_cells,
             commands::data_commands::delete_row,
+            commands::data_commands::delete_rows,
+            commands::data_commands::delete_rows_with_change_set,
+            commands::data_commands::delete_columns_with_change_set,
+            commands::data_commands::alter_column_with_change_set,
+            commands::data_commands::alter_columns_type_with_change_set,
             commands::data_commands::rename_dataset,
             commands::data_commands::add_column,
+            commands::data_commands::add_column_with_change_set,
+            commands::data_commands::add_columns_with_change_set,
             commands::data_commands::insert_column_at,
             commands::data_commands::reorder_column,
+            commands::data_commands::reorder_column_if_generation,
             commands::data_commands::delete_column,
             commands::data_commands::rename_column,
             commands::data_commands::change_column_type,
             commands::data_commands::paste_at_position,
+            commands::data_commands::paste_at_position_with_change_set,
+            commands::data_commands::apply_table_change_set,
+            commands::data_commands::drop_table_change_set,
             commands::data_commands::restore_snapshot,
             commands::data_commands::get_column_display_props,
             commands::data_commands::set_column_display_props,
             commands::stats_commands::get_column_stats,
             commands::stats_commands::get_descriptive_stats,
+            commands::tabulate_commands::tabulate,
             commands::io_commands::export_csv,
             commands::io_commands::import_sqlite,
             commands::io_commands::export_sqlite,
