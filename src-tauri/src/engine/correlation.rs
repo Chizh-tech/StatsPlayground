@@ -23,7 +23,12 @@ pub fn correlate(
     right: &[Option<f64>],
     method: StatisticalMethod,
 ) -> CorrelationResult {
-    debug_assert_eq!(left.len(), right.len());
+    assert!(
+        left.len() == right.len(),
+        "left and right columns must have equal length: left={}, right={}",
+        left.len(),
+        right.len()
+    );
 
     let pairs = pairwise_finite(left, right);
     let sample_count = pairs.len() as u64;
@@ -52,10 +57,20 @@ fn pairwise_finite(left: &[Option<f64>], right: &[Option<f64>]) -> Vec<(f64, f64
     left.iter()
         .zip(right.iter())
         .filter_map(|(lx, ry)| match (lx, ry) {
-            (Some(x), Some(y)) if x.is_finite() && y.is_finite() => Some((*x, *y)),
+            (Some(x), Some(y)) if x.is_finite() && y.is_finite() => {
+                Some((normalize_signed_zero(*x), normalize_signed_zero(*y)))
+            }
             _ => None,
         })
         .collect()
+}
+
+fn normalize_signed_zero(value: f64) -> f64 {
+    if value == 0.0 {
+        0.0
+    } else {
+        value
+    }
 }
 
 fn pearson_from_pairs(pairs: &[(f64, f64)]) -> Result<f64, CorrelationFailure> {
@@ -153,10 +168,7 @@ fn kendall_tau_b_from_pairs(pairs: &[(f64, f64)]) -> Result<f64, CorrelationFail
     }
 
     let mut sorted_pairs: Vec<(f64, f64)> = pairs.to_vec();
-    sorted_pairs.sort_by(|a, b| {
-        a.0.total_cmp(&b.0)
-            .then_with(|| a.1.total_cmp(&b.1))
-    });
+    sorted_pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
 
     let n_u128 = n as u128;
     let n0 = choose2(n_u128);
@@ -296,6 +308,33 @@ fn merge_count(values: &mut [f64], scratch: &mut [f64]) -> u128 {
 mod tests {
     use super::*;
 
+    fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<String>() {
+            return message.clone();
+        }
+        if let Some(message) = payload.downcast_ref::<&'static str>() {
+            return (*message).to_string();
+        }
+        "<non-string panic payload>".to_string()
+    }
+
+    #[test]
+    fn correlate_panics_on_mismatched_lengths_with_clear_message() {
+        let panic = std::panic::catch_unwind(|| {
+            let _ = correlate(
+                &[Some(1.0)],
+                &[Some(1.0), Some(2.0)],
+                StatisticalMethod::Pearson,
+            );
+        })
+        .expect_err("mismatched inputs must panic");
+
+        assert!(
+            panic_message(panic).contains("left and right columns must have equal length"),
+            "panic message should explain the equal-length API contract"
+        );
+    }
+
     #[test]
     fn pearson_uses_pairwise_finite_rows_and_is_stable_at_large_offsets() {
         let left = [
@@ -340,12 +379,48 @@ mod tests {
     }
 
     #[test]
+    fn spearman_treats_negative_and_positive_zero_as_same_tie() {
+        let left = [Some(-0.0), Some(0.0), Some(1.0), Some(2.0)];
+        let right = [Some(1.0), Some(2.0), Some(3.0), Some(4.0)];
+        let result = correlate(&left, &right, StatisticalMethod::Spearman);
+        assert_eq!(result.sample_count, 4);
+        assert!((result.coefficient.unwrap() - 0.9486832980505138).abs() < 1e-12);
+    }
+
+    #[test]
     fn kendall_tau_b_corrects_ties() {
         let left = [Some(1.0), Some(1.0), Some(2.0), Some(3.0)];
         let right = [Some(1.0), Some(2.0), Some(2.0), Some(3.0)];
         let result = correlate(&left, &right, StatisticalMethod::Kendall);
         assert_eq!(result.sample_count, 4);
         assert!((result.coefficient.unwrap() - 0.8).abs() < 1e-12);
+    }
+
+    #[test]
+    fn kendall_tau_b_is_negative_one_for_reverse_order() {
+        let left = [Some(1.0), Some(2.0), Some(3.0), Some(4.0)];
+        let right = [Some(4.0), Some(3.0), Some(2.0), Some(1.0)];
+        let result = correlate(&left, &right, StatisticalMethod::Kendall);
+        assert_eq!(result.sample_count, 4);
+        assert!((result.coefficient.unwrap() + 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn kendall_tau_b_accounts_for_joint_ties() {
+        let left = [Some(1.0), Some(1.0), Some(2.0), Some(2.0)];
+        let right = [Some(1.0), Some(1.0), Some(2.0), Some(2.0)];
+        let result = correlate(&left, &right, StatisticalMethod::Kendall);
+        assert_eq!(result.sample_count, 4);
+        assert!((result.coefficient.unwrap() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn kendall_treats_negative_and_positive_zero_as_same_tie() {
+        let left = [Some(-0.0), Some(0.0), Some(1.0), Some(2.0)];
+        let right = [Some(1.0), Some(2.0), Some(3.0), Some(4.0)];
+        let result = correlate(&left, &right, StatisticalMethod::Kendall);
+        assert_eq!(result.sample_count, 4);
+        assert!((result.coefficient.unwrap() - 0.9128709291752769).abs() < 1e-12);
     }
 
     #[test]
