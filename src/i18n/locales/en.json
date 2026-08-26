@@ -575,7 +575,8 @@
       "smoother": "Smoother",
       "fitline": "Fit Line",
       "scatter3d": "Scatter",
-      "surface": "Surface"
+      "surface": "Surface",
+      "contour3d": "Contour"
     },
     "frequency": "Count",
     "startOver": "Start Over",
@@ -620,6 +621,7 @@
       "histStyle": "Histogram Style",
       "smoothness": "Smoothness",
       "surfaceSmoothness": "Smoothness",
+      "contourLevels": "Levels",
       "histHeight": "Histogram Height",
       "showCounts": "Show Counts",
       "showPercents": "Show Percents",
