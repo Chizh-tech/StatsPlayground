@@ -36,11 +36,63 @@ pub struct DistributionColumnRefV1 {
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisSnapshotV1 {
     pub schema_version: DistributionSchemaVersionV1,
+    pub analysis_id: String,
     pub snapshot_id: String,
-    pub source_dataset_id: String,
+    pub dataset_id: String,
     pub source_data_version: String,
-    pub column_schema_fingerprint: String,
-    pub filter_hash: String,
+    pub dataset_generation: u64,
+    pub schema_fingerprint: String,
+    pub filter_fingerprint: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionProgressV1 {
+    pub run_id: String,
+    pub phase: String,
+    pub current: u64,
+    pub total: u64,
+    pub message_key: String,
+    pub percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionCancelTokenV1 {
+    pub cancel_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DistributionRunStatusV1 {
+    Running,
+    Completed,
+    Cancelled,
+    Stale,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionRunStateV1 {
+    pub run_id: String,
+    pub status: DistributionRunStatusV1,
+    pub progress: Option<DistributionProgressV1>,
+    pub snapshot_id: String,
+    pub cancel_token: String,
+}
+
+impl DistributionRunStateV1 {
+    pub fn running(run_id: &str, snapshot_id: &str, cancel_token: &str) -> Self {
+        Self {
+            run_id: run_id.to_string(),
+            status: DistributionRunStatusV1::Running,
+            progress: None,
+            snapshot_id: snapshot_id.to_string(),
+            cancel_token: cancel_token.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -18,11 +18,42 @@ export interface DistributionColumnRefV1 {
 
 export interface AnalysisSnapshotV1 {
   schemaVersion: DistributionSchemaVersionV1;
+  analysisId: string;
   snapshotId: string;
-  sourceDatasetId: string;
+  datasetId: string;
   sourceDataVersion: string;
-  columnSchemaFingerprint: string;
-  filterHash: string;
+  datasetGeneration: number;
+  schemaFingerprint: string;
+  filterFingerprint: string;
+  createdAt: string;
+}
+
+export interface DistributionProgressV1 {
+  runId: string;
+  phase: string;
+  current: number;
+  total: number;
+  messageKey: string;
+  percent: number;
+}
+
+export interface DistributionCancelTokenV1 {
+  cancelToken: string;
+}
+
+export type DistributionRunStatusV1 =
+  | "running"
+  | "completed"
+  | "cancelled"
+  | "stale"
+  | "failed";
+
+export interface DistributionRunStateV1 {
+  runId: string;
+  status: DistributionRunStatusV1;
+  progress: DistributionProgressV1 | null;
+  snapshotId: string;
+  cancelToken: string;
 }
 
 export interface ObservationContributionDimensionV1 {
