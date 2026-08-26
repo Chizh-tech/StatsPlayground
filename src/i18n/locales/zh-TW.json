@@ -786,14 +786,18 @@
       "full": "完整",
       "sample": "取樣",
       "size": "樣本大小",
-      "seed": "取樣種子"
+      "seed": "取樣種子",
+      "pointsOmitted": "已省略原始資料點",
+      "pointBudgetCount": "{{valid}} 個有效資料列；點數預算為 {{budget}}",
+      "switchToSample": "切換至取樣"
     },
     "rowStatus": {
       "empty": "尚無圖形資料幀",
       "pending": "正在處理資料列...",
       "pendingRows": "處理中：{{processed}} / {{source}} 列",
       "full": "完整資料：{{processed}} 列",
-      "sampled": "已取樣：{{processed}} / {{source}} 列"
+      "sampled": "已取樣：{{processed}} / {{source}} 列",
+      "pointsOmitted": "已省略原始點：{{valid}} 個有效資料列超過 {{budget}} 點預算"
     },
     "pipeline": {
       "ready": "就緒",

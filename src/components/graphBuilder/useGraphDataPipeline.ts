@@ -1,4 +1,5 @@
 import { SCATTER_RENDER_BUDGET } from "../../graphCore/scatterBudget.ts";
+import { clampSampleSize } from "./graphSamplingPolicy.ts";
 import { useEffect, useMemo, useState } from "react";
 import {
   decodeGraphPayload,
@@ -510,7 +511,7 @@ function deriveSampling(item: GraphBuilderItem): GraphSampling {
     return { mode: "full" };
   }
 
-  const size = Math.trunc(sampling.size);
+  const size = clampSampleSize(sampling.size);
   const seed = Math.trunc(sampling.seed);
   if (!Number.isFinite(size) || !Number.isFinite(seed) || size <= 0 || seed < 0) {
     return { mode: "full" };

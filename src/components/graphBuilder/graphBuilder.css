@@ -576,6 +576,56 @@
   border: 1px solid color-mix(in srgb, var(--fg-danger) 40%, transparent);
 }
 
+.gb-point-budget-notice {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 7px 9px;
+  background-color: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--fg-primary) 14%, transparent);
+  color: var(--fg-primary);
+  font-size: 11px;
+}
+
+.gb-point-budget-notice > i {
+  color: var(--fg-accent);
+}
+
+.gb-point-budget-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.gb-point-budget-copy span {
+  color: var(--fg-muted);
+}
+
+.gb-point-budget-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 4px;
+  padding: 5px 8px;
+  background-color: var(--fg-accent);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.gb-point-budget-action:hover {
+  background-color: var(--fg-accent-hover);
+}
+
 .gb-empty {
   flex: 1;
   display: flex;

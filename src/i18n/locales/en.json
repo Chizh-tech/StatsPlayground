@@ -786,14 +786,18 @@
       "full": "Full",
       "sample": "Sample",
       "size": "Sample size",
-      "seed": "Sample seed"
+      "seed": "Sample seed",
+      "pointsOmitted": "Raw points were omitted",
+      "pointBudgetCount": "{{valid}} valid rows; point budget {{budget}}",
+      "switchToSample": "Switch to Sample"
     },
     "rowStatus": {
       "empty": "No graph frame yet",
       "pending": "Processing rows...",
       "pendingRows": "Processing: {{processed}} / {{source}} rows",
       "full": "Full Data: {{processed}} rows",
-      "sampled": "Sampled: {{processed}} / {{source}} rows"
+      "sampled": "Sampled: {{processed}} / {{source}} rows",
+      "pointsOmitted": "Raw points omitted: {{valid}} valid rows exceed the {{budget}} point budget"
     },
     "pipeline": {
       "ready": "Ready",
