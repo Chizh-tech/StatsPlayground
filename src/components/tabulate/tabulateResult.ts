@@ -37,6 +37,16 @@ export function canShowReadyResult(
   return datasetAvailable && statisticCount > 0 && cellCount > 0;
 }
 
+export function canExportTabulateResult(
+  resultReady: boolean,
+  requestCurrent: boolean,
+  loading: boolean,
+  readOnly: boolean,
+  exporting: boolean,
+): boolean {
+  return resultReady && requestCurrent && !loading && !readOnly && !exporting;
+}
+
 export function cellIndex(
   rowIndex: number,
   columnIndex: number,

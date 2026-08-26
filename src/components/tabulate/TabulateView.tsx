@@ -27,6 +27,7 @@ import {
 } from "./TabulateStatisticEditor";
 import {
   buildTabulateExportRequest,
+  canExportTabulateResult,
   canShowReadyResult,
   canAssignTabulateField,
   isLatestSequence,
@@ -62,6 +63,7 @@ export function TabulateView({ item, dataset, onTableCreated }: TabulateViewProp
   const [fieldsLoading, setFieldsLoading] = useState(false);
   const [fieldLoadError, setFieldLoadError] = useState<string | null>(null);
   const [result, setResult] = useState<TabulateResult | null>(null);
+  const [completedQueryRequest, setCompletedQueryRequest] = useState<TabulateRequest | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -79,6 +81,7 @@ export function TabulateView({ item, dataset, onTableCreated }: TabulateViewProp
   useEffect(() => {
     requestSequence.current += 1;
     setResult(null);
+    setCompletedQueryRequest(null);
     setError(null);
     setExportError(null);
     setExporting(false);
@@ -215,22 +218,26 @@ export function TabulateView({ item, dataset, onTableCreated }: TabulateViewProp
     if (!queryRequest) {
       requestSequence.current += 1;
       setResult(null);
+      setCompletedQueryRequest(null);
       setLoading(false);
       setError(null);
       return;
     }
 
     const sequence = ++requestSequence.current;
+    setCompletedQueryRequest(null);
+    setLoading(true);
     const timer = window.setTimeout(async () => {
-      setLoading(true);
       try {
         const next = await tabulateService.run(queryRequest);
         if (isLatestSequence(sequence, requestSequence.current)) {
           setResult(next);
+          setCompletedQueryRequest(queryRequest);
           setError(null);
         }
       } catch (reason: unknown) {
         if (isLatestSequence(sequence, requestSequence.current)) {
+          setCompletedQueryRequest(null);
           setError(String(reason));
         }
       } finally {
@@ -288,6 +295,13 @@ export function TabulateView({ item, dataset, onTableCreated }: TabulateViewProp
   const showStandaloneLoading = !result && loading;
   const showReadyTable = result != null
     && canShowReadyResult(result.cellCount, dataset != null, item.statistics.length);
+  const canExport = canExportTabulateResult(
+    showReadyTable,
+    completedQueryRequest === queryRequest,
+    loading,
+    readOnly,
+    exporting,
+  );
 
   const updateCurrentItem = (patch: Partial<TabulateItem>) => {
     updateItem(item.id, patch);
@@ -295,7 +309,7 @@ export function TabulateView({ item, dataset, onTableCreated }: TabulateViewProp
   };
 
   const handleExport = async () => {
-    if (exporting || readOnly || !fullQueryRequest) {
+    if (!canExport || !fullQueryRequest) {
       return;
     }
 
@@ -568,7 +582,7 @@ export function TabulateView({ item, dataset, onTableCreated }: TabulateViewProp
                 onVisibleColumnDepthChange={setVisibleColumnDepth}
                 onExport={handleExport}
                 exporting={exporting}
-                exportDisabled={readOnly || exporting || result == null}
+                exportDisabled={!canExport}
               />
               {loading ? <ResultBanner tone="info" message={t("tabulate.refreshingAggregate")} /> : null}
               {tooLargeError ? <ResultBanner tone="warning" message={error ?? t("tabulate.resultTooLargeTitle")} /> : null}

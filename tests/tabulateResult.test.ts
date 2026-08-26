@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import {
   buildHeaderSpans,
+  canExportTabulateResult,
   canShowReadyResult,
   cellIndex,
   isNumericDuckDbType,
@@ -72,6 +73,12 @@ assert.equal(isNumericDuckDbType("INTERVAL"), false);
 assert.equal(canShowReadyResult(4, true, 1), true);
 assert.equal(canShowReadyResult(4, false, 1), false);
 assert.equal(canShowReadyResult(4, true, 0), false);
+assert.equal(canExportTabulateResult(true, true, false, false, false), true);
+assert.equal(canExportTabulateResult(true, false, false, false, false), false);
+assert.equal(canExportTabulateResult(true, true, true, false, false), false);
+assert.equal(canExportTabulateResult(true, true, false, true, false), false);
+assert.equal(canExportTabulateResult(true, true, false, false, true), false);
+assert.equal(canExportTabulateResult(false, true, false, false, false), false);
 
 const tabulateViewSource = readFileSync(
   new URL("../src/components/tabulate/TabulateView.tsx", import.meta.url),
