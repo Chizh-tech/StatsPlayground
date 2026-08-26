@@ -483,6 +483,119 @@ assert.equal(isGraphAggregatePacket({
   ],
 }), false);
 
+const validCorrelationPacket = {
+  kind: "correlationMatrix" as const,
+  method: "pearson",
+  columns: ["a", "b"],
+  cells: [
+    { xIndex: 0, yIndex: 0, coefficient: 1, sampleCount: 10 },
+    { xIndex: 1, yIndex: 0, coefficient: 0.5, sampleCount: 9 },
+    { xIndex: 0, yIndex: 1, coefficient: 0.5, sampleCount: 9 },
+    { xIndex: 1, yIndex: 1, coefficient: 1, sampleCount: 10 },
+  ],
+};
+
+assert.equal(isGraphAggregatePacket(validCorrelationPacket), true);
+assert.equal(isGraphAggregatePacket({ ...validCorrelationPacket, method: "distance" }), false);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: validCorrelationPacket.cells.slice(0, 3),
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    columns: ["a", "a"],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      validCorrelationPacket.cells[1],
+      validCorrelationPacket.cells[2],
+      { ...validCorrelationPacket.cells[3], xIndex: 0, yIndex: 0 },
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      validCorrelationPacket.cells[1],
+      validCorrelationPacket.cells[2],
+      { ...validCorrelationPacket.cells[3], xIndex: 2 },
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      validCorrelationPacket.cells[1],
+      { ...validCorrelationPacket.cells[2], coefficient: 1.01 },
+      validCorrelationPacket.cells[3],
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      { ...validCorrelationPacket.cells[1], sampleCount: -1 },
+      validCorrelationPacket.cells[2],
+      validCorrelationPacket.cells[3],
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      { ...validCorrelationPacket.cells[1], sampleCount: 2.5 },
+      validCorrelationPacket.cells[2],
+      validCorrelationPacket.cells[3],
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      { ...validCorrelationPacket.cells[1], coefficient: undefined },
+      validCorrelationPacket.cells[2],
+      validCorrelationPacket.cells[3],
+    ],
+  }),
+  false,
+);
+assert.equal(
+  isGraphAggregatePacket({
+    ...validCorrelationPacket,
+    cells: [
+      validCorrelationPacket.cells[0],
+      { ...validCorrelationPacket.cells[1], unavailableReason: "zeroVariance" },
+      validCorrelationPacket.cells[2],
+      validCorrelationPacket.cells[3],
+    ],
+  }),
+  false,
+);
+
 assert.throws(
   () =>
     decodeGraphPayload(
