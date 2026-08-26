@@ -49,29 +49,26 @@ export function buildContourPolylines(grid: ContourGrid, requestedLevels: number
 
   const output: ContourPolyline[] = [];
   let acceptedSegments = 0;
-  for (const level of levels) {
+  levelLoop: for (const level of levels) {
     if (output.length >= MAX_POLYLINES) {
+      break;
+    }
+
+    const remainingSegments = MAX_SEGMENTS - acceptedSegments;
+    if (remainingSegments <= 0) {
       break;
     }
 
     const segments: Segment[] = [];
     for (let yIndex = 0; yIndex < ys.length - 1; yIndex += 1) {
       for (let xIndex = 0; xIndex < xs.length - 1; xIndex += 1) {
-        if (acceptedSegments >= MAX_SEGMENTS) {
-          break;
-        }
-
         const cellSegments = extractCellSegments(xs, ys, values, xIndex, yIndex, level, pointKey);
         for (const segment of cellSegments) {
-          if (acceptedSegments >= MAX_SEGMENTS) {
-            break;
+          if (segments.length >= remainingSegments) {
+            break levelLoop;
           }
           segments.push(segment);
-          acceptedSegments += 1;
         }
-      }
-      if (acceptedSegments >= MAX_SEGMENTS) {
-        break;
       }
     }
 
@@ -80,12 +77,11 @@ export function buildContourPolylines(grid: ContourGrid, requestedLevels: number
     }
 
     const polylines = stitchSegments(segments, level, pointKey);
-    for (const polyline of polylines) {
-      output.push(polyline);
-      if (output.length >= MAX_POLYLINES) {
-        break;
-      }
+    if (output.length + polylines.length > MAX_POLYLINES) {
+      break;
     }
+    acceptedSegments += segments.length;
+    output.push(...polylines);
   }
 
   return output;
@@ -270,7 +266,7 @@ function stitchSegments(segments: Segment[], level: number, pointKey: (point: Se
     });
 
   for (const { index } of openSeeds) {
-    if (visited.has(index) || polylines.length >= MAX_POLYLINES) {
+    if (visited.has(index)) {
       continue;
     }
     const startKey = chooseStartKey(segments[index], degrees, pointKey);
@@ -281,7 +277,7 @@ function stitchSegments(segments: Segment[], level: number, pointKey: (point: Se
   }
 
   for (let index = 0; index < segments.length; index += 1) {
-    if (visited.has(index) || polylines.length >= MAX_POLYLINES) {
+    if (visited.has(index)) {
       continue;
     }
     const points = walkPolyline(segments, adjacency, visited, index, null, pointKey);

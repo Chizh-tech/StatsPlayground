@@ -140,11 +140,7 @@ const segmentCapB = buildContourPolylines({
   zmax: 2,
 }, 3);
 assert.deepEqual(segmentCapA, segmentCapB);
-assert.equal(segmentCapA.length, 1);
-assert.equal(segmentCapA[0]?.level, 0.5);
-assert.equal(segmentCapA[0]?.points.length, 20_001);
-assert.deepEqual(segmentCapA[0]?.points[0], [0, 0.25, 0.5]);
-assert.deepEqual(segmentCapA[0]?.points.at(-1), [20_000, 0.25, 0.5]);
+assert.equal(segmentCapA.length, 0);
 
 const polylineCapXs = Array.from({ length: 701 }, (_, index) => index);
 const polylineCapValues = new Float64Array(polylineCapXs.length * 2);
@@ -166,9 +162,9 @@ const polylineCapB = buildContourPolylines({
   zmax: 2,
 }, 3);
 assert.deepEqual(polylineCapA, polylineCapB);
-assert.equal(polylineCapA.length, 512);
+assert.equal(polylineCapA.length, 351);
 assert.equal(polylineCapA.filter((line) => line.level === 0.5).length, 351);
-assert.equal(polylineCapA.filter((line) => line.level === 1).length, 161);
+assert.equal(polylineCapA.some((line) => line.level === 1), false);
 assert.equal(polylineCapA.some((line) => line.level === 1.5), false);
 assert.ok(polylineCapA.every((line, index) => index === 0 || line.level >= polylineCapA[index - 1].level));
 assert.ok(polylineCapA.every((line) => line.points.every((point) => point.every(Number.isFinite))));

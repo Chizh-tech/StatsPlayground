@@ -290,4 +290,52 @@ const visualMaps = groupedContourResult.option.visualMap as Array<Record<string,
 assert.ok(visualMaps.every((visualMap) =>
   (visualMap.seriesIndex as number[]).every((index) => !contourIndexes.has(index))));
 
+const frameContour: GraphDataFrame = {
+  requestId: "req-3d-contour",
+  datasetId: "ds-3d-contour",
+  generation: 1,
+  sourceRows: 18,
+  processedRows: 18,
+  sampling: { mode: "full" },
+  dictionaries: { group: ["A", "B"] },
+  extents: {},
+  aggregates: [],
+  rawChunks: [{
+    chunkIndex: 0,
+    rowOffset: 0,
+    rowCount: 18,
+    xValues: new Float64Array([0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]),
+    yValues: new Float64Array([0, 0, 0, 1, 1, 1, 2, 2, 2, 0, 0, 0, 1, 1, 1, 2, 2, 2]),
+    zValues: new Float64Array([0, 1, 2, 1, 2, 3, 2, 3, 4, 10, 11, 12, 11, 12, 13, 12, 13, 14]),
+    groupCodes: new Uint32Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
+    rowIds: new BigInt64Array([]),
+    validity: {
+      x: new Uint8Array([0xff, 0xff, 0x03]),
+      y: new Uint8Array([0xff, 0xff, 0x03]),
+      z: new Uint8Array([0xff, 0xff, 0x03]),
+      group: new Uint8Array([0xff, 0xff, 0x03]),
+    },
+  }],
+};
+const frameContourResult = build3DOption({
+  encoding: {
+    ...spec.encoding,
+    overlay: { name: "group", type: "nominal" },
+  },
+  elements: [{ kind: "contour3d", options: { levels: 3 } }],
+  styles: {
+    A: { gradient: { color: "#cc0000" } },
+    B: { gradient: { color: "#0000cc" } },
+  },
+  hiddenGroups: ["B"],
+}, frame3dData, theme, frameContour);
+assert.ok(frameContourResult.option);
+const frameContours = (frameContourResult.option.series as Array<Record<string, unknown>>)
+  .filter((item) => String(item.name).includes("__contour_"));
+assert.equal(frameContours.length, 3);
+assert.ok(frameContours.every((item) => String(item.name).startsWith("A__contour_")));
+assert.ok(frameContours.every((item) => (item.lineStyle as Record<string, unknown>).color === "#cc0000"));
+assert.ok(frameContours.every((item) =>
+  (item.data as number[][]).every((point) => point.every(Number.isFinite))));
+
 console.log("threeD regressions passed");
