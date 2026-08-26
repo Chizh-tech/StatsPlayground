@@ -1,3 +1,4 @@
+import { SCATTER_RENDER_BUDGET } from "../../graphCore/scatterBudget.ts";
 import { useEffect, useMemo, useState } from "react";
 import {
   decodeGraphPayload,
@@ -296,10 +297,18 @@ function ingestDecodedChunk(state: GraphStreamState, chunk: DecodedGraphChunk): 
   };
 }
 
-function hasCoherentCompletion(pending: PendingGraphState, chunksSent: number): boolean {
+function hasCoherentCompletion(
+  pending: PendingGraphState,
+  completion: GraphDataCompletion,
+): boolean {
+  const { chunksSent, rawPointDisposition } = completion;
+  if (!rawPointDisposition) return false;
   if (chunksSent === 0) {
-    return pending.finalChunkIndex === null && pending.chunkIndexes.size === 0;
+    return pending.finalChunkIndex === null
+      && pending.chunkIndexes.size === 0
+      && (rawPointDisposition.status === "empty" || rawPointDisposition.status === "omitted");
   }
+  if (rawPointDisposition.status !== "included" || rawPointDisposition.validRows <= 0) return false;
   if (pending.finalChunkIndex === null) {
     return false;
   }
@@ -439,7 +448,7 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
       if (state.pendingHeader) {
         return failPending(state, "graph terminal marker arrived with a pending header");
       }
-      if (!hasCoherentCompletion(state.pending, completion.chunksSent)) {
+      if (!hasCoherentCompletion(state.pending, completion)) {
         return failPending(state, "graph terminal marker has inconsistent chunksSent");
       }
 
@@ -474,6 +483,7 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
         extents: state.pending.extents,
         rawChunks,
         aggregates: state.pending.aggregates,
+        rawPointDisposition: completion.rawPointDisposition,
       };
 
       return {
@@ -808,6 +818,7 @@ export function useGraphDataPipeline(
           filters: requestSkeleton.filters,
           elements: requestSkeleton.elements,
           sampling: requestSkeleton.sampling,
+          rawPointBudget: SCATTER_RENDER_BUDGET,
           viewport: requestSkeleton.viewport,
         };
 

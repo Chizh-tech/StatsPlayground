@@ -91,7 +91,27 @@ function isGraphDataCompletion(value: unknown): value is GraphDataCompletion {
     && typeof record.generation === "number"
     && Number.isInteger(record.chunksSent)
     && typeof record.cancelled === "boolean"
+    && isRawPointDisposition(record.rawPointDisposition)
   );
+}
+
+function isRawPointDisposition(value: unknown): boolean {
+  const record = toRecord(value);
+  if (!record || !Number.isInteger(record.validRows) || !Number.isInteger(record.budget)) {
+    return false;
+  }
+  if ((record.validRows as number) < 0 || (record.budget as number) <= 0) {
+    return false;
+  }
+  if (record.status === "included") {
+    return true;
+  }
+  if (record.status === "empty") {
+    return record.validRows === 0;
+  }
+  return record.status === "omitted"
+    && record.reason === "pointBudgetExceeded"
+    && (record.validRows as number) > (record.budget as number);
 }
 
 function isGraphAggregatePacket(value: unknown): value is GraphAggregatePacket {
@@ -111,6 +131,7 @@ function completionEquals(left: GraphDataCompletion, right: GraphDataCompletion)
     && left.processedRows === right.processedRows
     && left.chunksSent === right.chunksSent
     && left.cancelled === right.cancelled
+    && JSON.stringify(left.rawPointDisposition) === JSON.stringify(right.rawPointDisposition)
   );
 }
 
@@ -123,6 +144,7 @@ export function createGraphStreamTransport(
   let pendingHeader: GraphChunkHeader | null = null;
   let invokeCompletion: GraphDataCompletion | null = null;
   let sawFinalChunkPayload = false;
+  const pendingZeroChunkAggregates: GraphAggregatePacket[] = [];
   let closed = false;
   let failed = false;
 
@@ -204,6 +226,18 @@ export function createGraphStreamTransport(
           fail("graph terminal marker has inconsistent chunksSent");
           return;
         }
+        if (pendingZeroChunkAggregates.length > 0) {
+          const disposition = structured.rawPointDisposition;
+          if (structured.chunksSent !== 0
+            || (disposition.status !== "empty" && disposition.status !== "omitted")) {
+            fail("graph aggregate packet arrived before all raw chunks were delivered");
+            return;
+          }
+          for (const packet of pendingZeroChunkAggregates) {
+            handlers.onAggregate(packet);
+          }
+          pendingZeroChunkAggregates.length = 0;
+        }
         if (invokeCompletion && !completionEquals(invokeCompletion, structured)) {
           fail("graph terminal marker does not match invoke completion");
           return;
@@ -217,10 +251,10 @@ export function createGraphStreamTransport(
       if (isGraphAggregatePacket(structured)) {
         if (!pendingHeader) {
           if (!sawFinalChunkPayload) {
-            fail("graph aggregate packet arrived before all raw chunks were delivered");
-            return;
+            pendingZeroChunkAggregates.push(structured);
+          } else {
+            handlers.onAggregate(structured);
           }
-          handlers.onAggregate(structured);
           return;
         }
         fail("graph aggregate packet arrived before payload for the previous chunk");

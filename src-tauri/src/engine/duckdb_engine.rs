@@ -7290,6 +7290,7 @@ mod tests {
                 summary_stat: "none".into(),
             }],
             sampling: GraphSampling::Sample { size: 32, seed: 7 },
+            raw_point_budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
             viewport: GraphViewport {
                 width: 1280,
                 height: 720,
@@ -7374,6 +7375,7 @@ mod tests {
                 summary_stat: "none".into(),
             }],
             sampling: GraphSampling::Full,
+            raw_point_budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
             viewport: GraphViewport {
                 width: 1280,
                 height: 720,

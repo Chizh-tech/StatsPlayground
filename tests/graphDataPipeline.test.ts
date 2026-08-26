@@ -369,6 +369,7 @@ assert.deepEqual(Array.from(dynamicDecoded.wrapCodes ?? []), [1, 1]);
     filters: [],
     elements: [{ kind: "line", summaryStat: "none" }],
     sampling: { mode: "full" },
+    rawPointBudget: 8_000,
     viewport: { width: 1024, height: 768 },
   };
 
@@ -413,6 +414,7 @@ assert.deepEqual(Array.from(dynamicDecoded.wrapCodes ?? []), [1, 1]);
       processedRows: 3,
       chunksSent: 1,
       cancelled: false,
+      rawPointDisposition: { status: "included", validRows: 3, budget: 8_000 },
     },
   });
 
@@ -598,6 +600,7 @@ function makeRequest(requestId: string, generation: number): GraphDataRequest {
     filters: [],
     elements: [{ kind: "points", summaryStat: "none" }],
     sampling: { mode: "full" },
+    rawPointBudget: 8_000,
     viewport: { width: 1280, height: 720 },
   };
 }
@@ -650,6 +653,7 @@ function makeCompletion(requestId: string, generation: number, cancelled = false
     processedRows: 4,
     chunksSent: 2,
     cancelled,
+    rawPointDisposition: { status: "included", validRows: 4, budget: 8_000 },
   };
 }
 
@@ -665,6 +669,7 @@ function makeCommittedFrame(): GraphDataFrame {
     extents: {},
     rawChunks: [],
     aggregates: [],
+    rawPointDisposition: { status: "empty", validRows: 0, budget: 8_000 },
   };
 }
 
@@ -912,6 +917,7 @@ function makeProgressedChunk(
         processedRows: 0,
         chunksSent: 0,
         cancelled: false,
+        rawPointDisposition: { status: "empty", validRows: 0, budget: 8_000 },
       },
     },
   );
@@ -924,6 +930,71 @@ function makeProgressedChunk(
     sourceRows: 0,
     percent: 100,
   });
+}
+
+{
+  const state = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request: makeRequest("req-points-omitted", 35) },
+    { type: "aggregate", packet: histogramPacket },
+    {
+      type: "complete",
+      completion: {
+        requestId: "req-points-omitted",
+        datasetId: "dataset-1",
+        generation: 35,
+        sourceRows: 8_001,
+        processedRows: 8_001,
+        chunksSent: 0,
+        cancelled: false,
+        rawPointDisposition: {
+          status: "omitted",
+          reason: "pointBudgetExceeded",
+          validRows: 8_001,
+          budget: 8_000,
+        },
+      },
+    },
+  );
+
+  assert.equal(state.status, "ready");
+  assert.equal(state.error, null);
+  assert.equal(state.committed?.rawChunks.length, 0);
+  assert.equal(state.committed?.aggregates.length, 1);
+  assert.deepEqual(state.committed?.rawPointDisposition, {
+    status: "omitted",
+    reason: "pointBudgetExceeded",
+    validRows: 8_001,
+    budget: 8_000,
+  });
+}
+
+{
+  const state = run(
+    createInitialGraphStreamState(makeCommittedFrame()),
+    { type: "start", request: makeRequest("req-included-without-chunks", 36) },
+    {
+      type: "complete",
+      completion: {
+        requestId: "req-included-without-chunks",
+        datasetId: "dataset-1",
+        generation: 36,
+        sourceRows: 1,
+        processedRows: 1,
+        chunksSent: 0,
+        cancelled: false,
+        rawPointDisposition: {
+          status: "included",
+          validRows: 1,
+          budget: 8_000,
+        },
+      },
+    },
+  );
+
+  assert.equal(state.pending, null);
+  assert.equal(state.committed?.requestId, "old-request");
+  assert.match(state.error ?? "", /inconsistent chunksSent/i);
 }
 
 {
@@ -1116,6 +1187,42 @@ function makeProgressedChunk(
 {
   const events: string[] = [];
   let transportError: string | null = null;
+  const request = makeRequest("req-omitted-aggregate", 27);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => events.push("header"),
+    onPayload: () => events.push("payload"),
+    onAggregate: () => events.push("aggregate"),
+    onComplete: () => events.push("complete"),
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({ messageType: "aggregate", ...histogramPacket });
+  transport.onChannelMessage({
+    messageType: "complete",
+    requestId: request.requestId,
+    datasetId: request.datasetId,
+    generation: request.generation,
+    sourceRows: 8_001,
+    processedRows: 8_001,
+    chunksSent: 0,
+    cancelled: false,
+    rawPointDisposition: {
+      status: "omitted",
+      reason: "pointBudgetExceeded",
+      validRows: 8_001,
+      budget: 8_000,
+    },
+  });
+
+  assert.equal(transportError, null);
+  assert.deepEqual(events, ["aggregate", "complete"]);
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
   const request = makeRequest("req-aggregate-before-raw", 25);
   const transport = createGraphStreamTransport(request, {
     onHeader: () => {
@@ -1140,6 +1247,11 @@ function makeProgressedChunk(
     kind: "summary",
     yColumn: "cost",
     summaries: [],
+  });
+  transport.onChannelMessage({
+    messageType: "complete",
+    ...makeCompletion(request.requestId, request.generation),
+    chunksSent: 0,
   });
 
   assert.deepEqual(events, []);
@@ -1240,6 +1352,7 @@ function makeProgressedChunk(
       processedRows: 10,
       chunksSent: 1,
       cancelled: false,
+      rawPointDisposition: { status: "included", validRows: 2, budget: 8_000 },
     } },
   );
 
