@@ -1604,10 +1604,15 @@ impl DuckDbEngine {
                 .all(|element| element.kind.eq_ignore_ascii_case("correlationMatrix"));
 
         if exclusive_correlation {
+            let correlation_plan = correlation_plan.as_ref().ok_or_else(|| {
+                AppError::InvalidParam(
+                    "correlation matrix request is missing resolved bindings".to_string(),
+                )
+            })?;
             let packet = self.query_correlation_matrix_packet(
                 request,
                 &allowed_columns,
-                correlation_plan.as_ref().expect("correlation plan"),
+                correlation_plan,
                 &mut should_cancel,
             )?;
             let Some(packet) = packet else {
@@ -1846,7 +1851,10 @@ impl DuckDbEngine {
         let select_columns = correlation_plan
             .columns
             .iter()
-            .map(|column| Self::quote_identifier(column))
+            .map(|column| {
+                let quoted = Self::quote_identifier(column);
+                format!("CAST({quoted} AS DOUBLE) AS {quoted}")
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let query_sql = format!(
@@ -7758,6 +7766,74 @@ mod tests {
                 serde_json::json!(20)
             ]
         );
+    }
+
+    #[test]
+    fn correlation_matrix_cancellation_during_row_scan_returns_no_partial_packet() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "corr-cancel-row-scan",
+            "Correlation Cancel Row Scan",
+            &["a".into(), "b".into()],
+            &["DOUBLE".into(), "DOUBLE".into()],
+        )
+        .unwrap();
+
+        db.conn()
+            .execute(
+                "INSERT INTO \"dataset_corr_cancel_row_scan\" (_row_id, a, b)
+                 VALUES
+                 (1, 1.0, 2.0),
+                 (2, 2.0, 4.0),
+                 (3, 3.0, 6.0),
+                 (4, 4.0, 8.0)",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = 4 WHERE id = $1",
+                params!["corr-cancel-row-scan"],
+            )
+            .unwrap();
+
+        let request = GraphDataRequest {
+            request_id: "request-corr-cancel-row-scan".into(),
+            dataset_id: "corr-cancel-row-scan".into(),
+            generation: 0,
+            fields: vec![
+                GraphFieldBinding {
+                    role: "multiX0".into(),
+                    column: "a".into(),
+                },
+                GraphFieldBinding {
+                    role: "multiX1".into(),
+                    column: "b".into(),
+                },
+            ],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "correlationMatrix".into(),
+                summary_stat: "none".into(),
+                correlation_method: Some(crate::models::graph_data::CorrelationMethod::Pearson),
+            }],
+            sampling: GraphSampling::Full,
+            viewport: GraphViewport {
+                width: 1200,
+                height: 700,
+            },
+        };
+
+        let mut checks = 0usize;
+        let (packets, cancelled) = db
+            .collect_graph_aggregate_packets_with_cancel(&request, || {
+                checks = checks.saturating_add(1);
+                Ok(checks >= 2)
+            })
+            .unwrap();
+
+        assert!(cancelled);
+        assert!(packets.is_empty());
     }
 
     #[test]

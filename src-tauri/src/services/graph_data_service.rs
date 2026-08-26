@@ -493,6 +493,19 @@ impl<'a> GraphDataService<'a> {
                     self.is_cancelled(&request.request_id, run.nonce)
                 })?;
 
+            if aggregates_cancelled {
+                let encode_started = if observed {
+                    Some(begin_timing_observation())
+                } else {
+                    None
+                };
+                let completion = self.emit_aggregate_cancelled_terminal(request, sink)?;
+                if let Some(encode_started) = encode_started {
+                    record_encode(encode_started);
+                }
+                return Ok(completion);
+            }
+
             let metadata: RefCell<Option<ProjectionMetadata>> = RefCell::new(None);
             let accumulator: RefCell<Option<ChunkAccumulator>> = RefCell::new(None);
             let mut chunk_index: u32 = 0;
@@ -621,9 +634,6 @@ impl<'a> GraphDataService<'a> {
             }
 
             if !cancelled {
-                if aggregates_cancelled {
-                    cancelled = true;
-                }
                 for packet in &aggregate_packets {
                     let encode_started = if observed {
                         Some(begin_timing_observation())
@@ -669,6 +679,34 @@ impl<'a> GraphDataService<'a> {
             value.projection_passes = projection_passes_cell.get();
         }
         result
+    }
+
+    fn emit_aggregate_cancelled_terminal<S: GraphChunkSink>(
+        &self,
+        request: &GraphDataRequest,
+        sink: &mut S,
+    ) -> Result<GraphDataCompletion, AppError> {
+        let completion = GraphDataCompletion {
+            request_id: request.request_id.clone(),
+            dataset_id: request.dataset_id.clone(),
+            generation: request.generation,
+            source_rows: 0,
+            processed_rows: 0,
+            chunks_sent: 0,
+            cancelled: true,
+        };
+        sink.send_terminal(&completion)
+            .map_err(Self::map_sink_error_to_app_error)?;
+        Ok(completion)
+    }
+
+    #[cfg(test)]
+    fn emit_aggregate_cancelled_terminal_for_test<S: GraphChunkSink>(
+        &self,
+        request: &GraphDataRequest,
+        sink: &mut S,
+    ) -> Result<GraphDataCompletion, AppError> {
+        self.emit_aggregate_cancelled_terminal(request, sink)
     }
 
     fn send_chunk<S: GraphChunkSink>(
@@ -2159,6 +2197,90 @@ mod tests {
                 service.collect_aggregates_for_test(&missing_method),
                 Err(AppError::InvalidParam(_))
             ));
+        }
+
+        #[test]
+        fn correlation_matrix_supports_decimal_and_unsigned_numeric_columns() {
+            let state = AppState::new().expect("state");
+            let dataset_id = "agg-correlation-decimal-unsigned";
+            {
+                let db = state.db.lock().expect("db lock");
+                db.create_empty_table(
+                    dataset_id,
+                    "Correlation Decimal Unsigned",
+                    &["d".into(), "u".into()],
+                    &["DECIMAL(12,2)".into(), "UINTEGER".into()],
+                )
+                .expect("create decimal/unsigned table");
+                let table = format!("dataset_{}", dataset_id.replace('-', "_"));
+                db.conn()
+                    .execute(
+                        &format!(
+                            "INSERT INTO \"{table}\" (_row_id, d, u) VALUES
+                             (1, 1.00::DECIMAL(12,2), 10::UINTEGER),
+                             (2, 2.00::DECIMAL(12,2), 20::UINTEGER),
+                             (3, 3.00::DECIMAL(12,2), 30::UINTEGER),
+                             (4, 4.00::DECIMAL(12,2), 40::UINTEGER)"
+                        ),
+                        [],
+                    )
+                    .expect("insert decimal/unsigned rows");
+                db.conn()
+                    .execute(
+                        "UPDATE _meta_datasets SET row_count = 4 WHERE id = $1",
+                        params![dataset_id],
+                    )
+                    .expect("update decimal/unsigned row count");
+            }
+
+            let service = GraphDataService::new(&state);
+            let request = GraphDataRequest {
+                request_id: "request-decimal-unsigned-correlation".to_string(),
+                dataset_id: dataset_id.to_string(),
+                generation: 0,
+                fields: vec![
+                    GraphFieldBinding {
+                        role: "multiX0".to_string(),
+                        column: "d".to_string(),
+                    },
+                    GraphFieldBinding {
+                        role: "multiX1".to_string(),
+                        column: "u".to_string(),
+                    },
+                ],
+                filters: Vec::new(),
+                elements: vec![GraphElementRequest {
+                    kind: "correlationMatrix".to_string(),
+                    summary_stat: "none".to_string(),
+                    correlation_method: Some(CorrelationMethod::Pearson),
+                }],
+                sampling: GraphSampling::Full,
+                viewport: GraphViewport {
+                    width: 1200,
+                    height: 700,
+                },
+            };
+
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("correlation aggregate packets");
+            let packet = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::CorrelationMatrix(value) => Some(value),
+                    _ => None,
+                })
+                .expect("correlation matrix packet");
+
+            assert_eq!(packet.columns, vec!["d", "u"]);
+            let off_diagonal = packet
+                .cells
+                .iter()
+                .find(|cell| cell.x_index == 0 && cell.y_index == 1)
+                .expect("off-diagonal cell");
+            assert_eq!(off_diagonal.sample_count, 4);
+            let coefficient = off_diagonal.coefficient.expect("coefficient value");
+            assert!((coefficient - 1.0).abs() <= 1e-12);
         }
 
         #[test]
@@ -3881,6 +4003,24 @@ mod tests {
             .expect("prestart cancellation should be observed");
 
         assert!(completion.cancelled);
+        assert_eq!(completion.processed_rows, 0);
+        assert_eq!(completion.chunks_sent, 0);
+        assert_eq!(sink.events, vec!["complete"]);
+    }
+
+    #[test]
+    fn stream_with_sink_short_circuits_when_aggregate_collection_is_cancelled() {
+        let state = AppState::new().expect("state");
+        let service = GraphDataService::new(&state);
+        let request = build_request("prestart-cancel", 0);
+        let mut sink = OrderingSink::default();
+
+        let completion = service
+            .emit_aggregate_cancelled_terminal_for_test(&request, &mut sink)
+            .expect("aggregate cancellation completion");
+
+        assert!(completion.cancelled);
+        assert_eq!(completion.source_rows, 0);
         assert_eq!(completion.processed_rows, 0);
         assert_eq!(completion.chunks_sent, 0);
         assert_eq!(sink.events, vec!["complete"]);
