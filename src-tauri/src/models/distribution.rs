@@ -23,6 +23,7 @@ pub enum DistributionModelingTypeV1 {
     Ordinal,
     Nominal,
     DiscreteNumeric,
+    DateTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -135,6 +136,39 @@ pub enum FilterExprV1 {
         include_end: bool,
         time_zone: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityOverrideEnvelopeV1 {
+    pub schema_version: DistributionSchemaVersionV1,
+    pub capability_id: String,
+    pub payload_schema_version: String,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionAnalysisConfigV1 {
+    pub schema_version: DistributionSchemaVersionV1,
+    pub source_dataset_id: String,
+    pub y_columns: Vec<DistributionColumnRefV1>,
+    pub weight_column_id: Option<String>,
+    pub frequency_column_id: Option<String>,
+    pub by_column_ids: Vec<String>,
+    pub filter_expr: FilterExprV1,
+    pub confidence_level: f64,
+    pub histograms_only: bool,
+    pub enabled_capability_ids: Vec<String>,
+    pub capability_overrides: Vec<CapabilityOverrideEnvelopeV1>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionConfigErrorV1 {
+    pub code: String,
+    pub message_key: String,
+    pub field_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -512,6 +546,41 @@ mod tests {
         .collect::<std::collections::BTreeSet<_>>();
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn analysis_config_v1_serializes_roles_and_overrides_in_camel_case() {
+        let config = DistributionAnalysisConfigV1 {
+            schema_version: "1".to_string(),
+            source_dataset_id: "dataset-1".to_string(),
+            y_columns: vec![DistributionColumnRefV1 {
+                column_id: "col-y".to_string(),
+                modeling_type: DistributionModelingTypeV1::Continuous,
+            }],
+            weight_column_id: Some("col-weight".to_string()),
+            frequency_column_id: Some("col-freq".to_string()),
+            by_column_ids: vec!["col-date".to_string()],
+            filter_expr: FilterExprV1::IsNull {
+                field_id: "col-group".to_string(),
+                negate: true,
+            },
+            confidence_level: 0.95,
+            histograms_only: false,
+            enabled_capability_ids: vec!["capability.synthetic".to_string()],
+            capability_overrides: vec![CapabilityOverrideEnvelopeV1 {
+                schema_version: "1".to_string(),
+                capability_id: "capability.synthetic".to_string(),
+                payload_schema_version: "1".to_string(),
+                payload: serde_json::json!({ "enabled": true }),
+            }],
+        };
+
+        let json = serde_json::to_value(config).expect("serialize analysis config");
+        assert_eq!(json["sourceDatasetId"], "dataset-1");
+        assert_eq!(json["confidenceLevel"], 0.95);
+        assert_eq!(json["histogramsOnly"], false);
+        assert_eq!(json["enabledCapabilityIds"][0], "capability.synthetic");
+        assert_eq!(json["capabilityOverrides"][0]["payloadSchemaVersion"], "1");
     }
 
     #[test]

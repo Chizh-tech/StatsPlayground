@@ -5,6 +5,8 @@ export type { TabulateRequest, TabulateResult, TabulateStatistic, TabulateStatis
 export type {
 	AnalysisSnapshotV1,
 	DistributionCancelTokenV1,
+	CapabilityOverrideEnvelopeV1,
+	DistributionAnalysisConfigV1,
 	BlackBoxCaseV1,
 	BlackBoxObservationV1,
 	BlackBoxProvenanceV1,
@@ -14,6 +16,8 @@ export type {
 	DistributionChartDataV1,
 	DistributionChartKindV1,
 	DistributionColumnRefV1,
+	DistributionColumnInfoV1,
+	DistributionConfigErrorV1,
 	DistributionDocV1,
 	DistributionIssueV1,
 	DistributionLoadStatusV1,

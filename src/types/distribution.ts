@@ -9,11 +9,23 @@ export type DistributionModeV1 =
   | "ordinal"
   | "nominal"
   | "discreteNumeric";
-export type DistributionModelingTypeV1 = Exclude<DistributionModeV1, "emptySystem">;
+export type DistributionModelingTypeV1 =
+  | "continuous"
+  | "ordinal"
+  | "nominal"
+  | "discreteNumeric"
+  | "datetime";
 
 export interface DistributionColumnRefV1 {
   columnId: string;
   modelingType: DistributionModelingTypeV1;
+}
+
+export interface DistributionColumnInfoV1 {
+  columnId: string;
+  sqlType: string;
+  modelingType: DistributionModelingTypeV1;
+  integerCompatible: boolean;
 }
 
 export interface AnalysisSnapshotV1 {
@@ -247,4 +259,31 @@ export interface DistributionIssueV1 {
   messageKey: string;
   schemaVersion: string;
   sourceDatasetId?: string;
+}
+
+export interface CapabilityOverrideEnvelopeV1 {
+  schemaVersion: DistributionSchemaVersionV1;
+  capabilityId: string;
+  payloadSchemaVersion: string;
+  payload: Record<string, unknown>;
+}
+
+export interface DistributionAnalysisConfigV1 {
+  schemaVersion: DistributionSchemaVersionV1;
+  sourceDatasetId: string;
+  yColumns: DistributionColumnRefV1[];
+  weightColumnId: string | null;
+  frequencyColumnId: string | null;
+  byColumnIds: string[];
+  filterExpr: FilterExprV1;
+  confidenceLevel: number;
+  histogramsOnly: boolean;
+  enabledCapabilityIds: string[];
+  capabilityOverrides: CapabilityOverrideEnvelopeV1[];
+}
+
+export interface DistributionConfigErrorV1 {
+  code: string;
+  messageKey: string;
+  fieldPath: string;
 }
