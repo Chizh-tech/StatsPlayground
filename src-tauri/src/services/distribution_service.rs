@@ -290,8 +290,13 @@ mod tests {
 
     #[test]
     fn progress_is_monotonic_and_cancel_token_is_opaque() {
-        let mut state =
-            DistributionRunStateV1::running("run-1", "snapshot-1", "opaque:/not-interpreted");
+        let mut state = DistributionRunStateV1::running(
+            "dist-1",
+            1,
+            "run-1",
+            "snapshot-1",
+            "opaque:/not-interpreted",
+        );
         DistributionService::emit_progress(&mut state, "prepare", 2, 10, "distribution.prepare")
             .expect("first progress");
         DistributionService::emit_progress(&mut state, "prepare", 8, 10, "distribution.prepare")

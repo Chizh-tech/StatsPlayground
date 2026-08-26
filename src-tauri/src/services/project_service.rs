@@ -248,6 +248,7 @@ impl<'a> ProjectService<'a> {
                         name: entry.map(|value| value.name.clone()).unwrap_or_default(),
                         source_dataset_id,
                         status: "unavailable".to_string(),
+                        config_revision: 1,
                         current_config: body
                             .get("currentConfig")
                             .cloned()
@@ -275,6 +276,7 @@ impl<'a> ProjectService<'a> {
                         name: entry.map(|value| value.name.clone()).unwrap_or_default(),
                         source_dataset_id: String::new(),
                         status: "unavailable".to_string(),
+                        config_revision: 1,
                         current_config: serde_json::json!({}),
                         load_status: DistributionLoadStatusV1::Corrupt,
                         raw_envelope: None,
@@ -1456,6 +1458,7 @@ mod tests {
                 name: "Distribution 1".to_string(),
                 source_dataset_id: "ds-42".to_string(),
                 status: "ready".to_string(),
+                config_revision: 1,
                 current_config: serde_json::json!({ "mode": "continuous" }),
                 load_status: DistributionLoadStatusV1::Ready,
                 raw_envelope: None,

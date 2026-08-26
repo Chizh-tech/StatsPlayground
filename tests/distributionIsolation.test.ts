@@ -35,6 +35,7 @@ const result: OpenProjectResult = {
       sourceDatasetId: "ds-1",
       status: "ready",
       loadStatus: "ready",
+      configRevision: 1,
       currentConfig: {
         schemaVersion: "1",
         sourceDatasetId: "ds-1",

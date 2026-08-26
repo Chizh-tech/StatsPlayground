@@ -136,6 +136,8 @@ pub struct DistributionDocV1 {
     pub name: String,
     pub source_dataset_id: String,
     pub status: String,
+    #[serde(default = "default_config_revision")]
+    pub config_revision: u64,
     pub current_config: Value,
     #[serde(default)]
     pub load_status: DistributionLoadStatusV1,
@@ -259,6 +261,10 @@ pub struct GraphDoc {
 
 fn default_doc_version() -> String {
     "1".to_string()
+}
+
+fn default_config_revision() -> u64 {
+    1
 }
 
 // ----------------------------------------------------------------------------
@@ -1127,6 +1133,7 @@ mod tests {
                 name: "Distribution 1".to_string(),
                 source_dataset_id: "ds-42".to_string(),
                 status: "ready".to_string(),
+                config_revision: 1,
                 current_config: json!({
                     "mode": "continuous",
                     "filterExpr": {
@@ -1288,6 +1295,7 @@ mod tests {
             &loaded.distributions[0],
             DistributionArchiveRecordV1::Parsed(envelope)
                 if envelope.body.analysis_id == "dist-ready"
+                    && envelope.body.config_revision == 1
         ));
         assert!(matches!(
             &loaded.distributions[1],

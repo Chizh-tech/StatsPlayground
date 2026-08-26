@@ -62,11 +62,31 @@ export type DistributionRunStatusV1 =
   | "failed";
 
 export interface DistributionRunStateV1 {
+  analysisId: string;
+  configRevision: number;
   runId: string;
   status: DistributionRunStatusV1;
   progress: DistributionProgressV1 | null;
   snapshotId: string;
   cancelToken: string;
+}
+
+export interface DistributionResultEnvelopeV1 {
+  analysisId: string;
+  configRevision: number;
+  runId: string;
+  snapshotId: string;
+  completedAt: string;
+  reportBlocks: DistributionReportBlockV1[];
+}
+
+export interface DistributionRunFailureV1 {
+  analysisId: string;
+  configRevision: number;
+  runId: string;
+  snapshotId: string;
+  code: string;
+  messageKey: string;
 }
 
 export interface ObservationContributionDimensionV1 {
@@ -240,6 +260,7 @@ interface DistributionDocBaseV1 {
 export interface LoadedDistributionDocV1 extends DistributionDocBaseV1 {
   schemaVersion: DistributionSchemaVersionV1;
   loadStatus: "ready" | "missingSource";
+  configRevision: number;
   currentConfig: DistributionAnalysisConfigV1;
   rawEnvelope?: never;
   rawText?: never;

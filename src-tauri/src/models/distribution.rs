@@ -78,6 +78,8 @@ pub enum DistributionRunStatusV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DistributionRunStateV1 {
+    pub analysis_id: String,
+    pub config_revision: u64,
     pub run_id: String,
     pub status: DistributionRunStatusV1,
     pub progress: Option<DistributionProgressV1>,
@@ -86,8 +88,16 @@ pub struct DistributionRunStateV1 {
 }
 
 impl DistributionRunStateV1 {
-    pub fn running(run_id: &str, snapshot_id: &str, cancel_token: &str) -> Self {
+    pub fn running(
+        analysis_id: &str,
+        config_revision: u64,
+        run_id: &str,
+        snapshot_id: &str,
+        cancel_token: &str,
+    ) -> Self {
         Self {
+            analysis_id: analysis_id.to_string(),
+            config_revision,
             run_id: run_id.to_string(),
             status: DistributionRunStatusV1::Running,
             progress: None,
