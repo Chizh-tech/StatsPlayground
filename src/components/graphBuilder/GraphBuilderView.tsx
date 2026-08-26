@@ -2944,8 +2944,10 @@ function Scatter3DOptions({ options, onChange, t }: OptionsEditorProps) {
   );
 }
 
-/** Surface (3D) options panel — aggregation statistic and optional
- *  masked Z smoothing. A zero value preserves the observed faceted grid. */
+/** Surface (3D) options panel — aggregation statistic and visual smoothness.
+ *  Smoothness controls lighting/facet softness for appearance only; a zero
+ *  value preserves the observed faceted grid and any holes (no Z value
+ *  smoothing or interpolation is performed). */
 function SurfaceOptions({ options, onChange, t }: OptionsEditorProps) {
   const stat = getOpt<string>(options, "stat", "mean");
   const smoothness = getOpt<number>(options, "smoothness", 0);
