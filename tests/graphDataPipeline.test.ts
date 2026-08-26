@@ -3,11 +3,13 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { SCATTER_RENDER_BUDGET } from "../src/graphCore/scatterBudget.ts";
 import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphData.ts";
 import {
   createInitialGraphStreamState,
   createStreamStartCancellationCoordinator,
   deriveFields,
+  deriveGraphRequestParts,
   reduceGraphStream,
   type GraphLoadProgress,
   type GraphStreamState,
@@ -1426,6 +1428,31 @@ function makeProgressedChunk(
 
   assert.equal(completed, false);
   assert.match(transportError ?? "", /inconsistent chunksSent/i);
+}
+
+{
+  const rawItem = makeGraphBuilderItem({
+    elements: [
+      { kind: "points", enabled: true, options: { summaryStat: "none" } },
+      { kind: "fitline", enabled: true, options: { degree: 1 } },
+    ],
+    sampling: { mode: "full" },
+  });
+  const rawParts = deriveGraphRequestParts(rawItem);
+
+  assert.deepEqual(rawParts.sampling, {
+    mode: "sample",
+    size: SCATTER_RENDER_BUDGET,
+    seed: 0,
+  });
+  assert.deepEqual(rawParts.elements.map((element) => element.kind), ["points", "fitline"]);
+
+  const boxItem = makeGraphBuilderItem({
+    elements: [{ kind: "boxplot", enabled: true }],
+    sampling: { mode: "full" },
+  });
+
+  assert.deepEqual(deriveGraphRequestParts(boxItem).sampling, { mode: "full" });
 }
 
 {

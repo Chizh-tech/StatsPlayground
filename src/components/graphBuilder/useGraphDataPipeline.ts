@@ -1,5 +1,5 @@
 import { SCATTER_RENDER_BUDGET } from "../../graphCore/scatterBudget.ts";
-import { clampSampleSize } from "./graphSamplingPolicy.ts";
+import { resolveEffectiveGraphSampling } from "./graphSamplingPolicy.ts";
 import { useEffect, useMemo, useState } from "react";
 import {
   decodeGraphPayload,
@@ -505,21 +505,6 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
   }
 }
 
-function deriveSampling(item: GraphBuilderItem): GraphSampling {
-  const sampling = item.sampling;
-  if (!sampling || sampling.mode === "full") {
-    return { mode: "full" };
-  }
-
-  const size = clampSampleSize(sampling.size);
-  const seed = Math.trunc(sampling.seed);
-  if (!Number.isFinite(size) || !Number.isFinite(seed) || size <= 0 || seed < 0) {
-    return { mode: "full" };
-  }
-
-  return { mode: "sample", size, seed };
-}
-
 function serializeFilters(filters: FilterRuleItem[]): TableWindowFilter[] {
   return filters.map(({ op, rule }) => {
     switch (rule.kind) {
@@ -557,6 +542,21 @@ function deriveElements(item: GraphBuilderItem): GraphElementRequest[] {
           ? String(element.options.summaryStat)
           : "none",
     }));
+}
+
+export function deriveGraphRequestParts(item: GraphBuilderItem): {
+  fields: GraphFieldBinding[];
+  filters: TableWindowFilter[];
+  elements: GraphElementRequest[];
+  sampling: GraphSampling;
+} {
+  const elements = deriveElements(item);
+  return {
+    fields: deriveFields(item),
+    filters: serializeFilters(item.filters ?? []),
+    elements,
+    sampling: resolveEffectiveGraphSampling(item.sampling, elements),
+  };
 }
 
 function hasEnabledElementKinds(item: GraphBuilderItem): Set<string> {
@@ -760,10 +760,7 @@ export function useGraphDataPipeline(
   }, [viewport.height, viewport.width]);
 
   const requestSkeleton = useMemo(() => {
-    const sampling = deriveSampling(item);
-    const fields = deriveFields(item);
-    const filters = serializeFilters(item.filters ?? []);
-    const elements = deriveElements(item);
+    const { fields, filters, elements, sampling } = deriveGraphRequestParts(item);
 
     return {
       datasetId: dataset.id,
