@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 
 import type { ProjectInfo } from "../src/types/project";
 import type { SaveProgress, SaveProjectRequest } from "../src/services/projectService";
+import { deriveElements } from "../src/components/graphBuilder/useGraphDataPipeline.ts";
 import { createProjectStore } from "../src/stores/useProjectStore.ts";
+import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -52,6 +54,121 @@ function makeProgress(overallProgress: number, tableIndex = 0): SaveProgress {
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+{
+  const correlationGraph = {
+    id: "graph-corr",
+    name: "Correlation Graph",
+    sourceDatasetId: "dataset-1",
+    encoding: {},
+    multiX: [
+      { name: "a", type: "continuous" },
+      { name: "b", type: "continuous" },
+    ],
+    elements: [
+      {
+        kind: "correlationMatrix",
+        enabled: true,
+        options: { correlationMethod: "kendall" },
+      },
+    ],
+    smootherLambda: 0.5,
+    createdAt: new Date(0).toISOString(),
+  };
+
+  let capturedSaveRequest: SaveProjectRequest | null = null;
+
+  const store = createProjectStore({
+    projectService: {
+      initProject: async () => savedProject,
+      createProject: async () => savedProject,
+      openProject: async () => ({
+        project: savedProject,
+        datasets: [],
+        history: [],
+        snapshots: [],
+        graphBuilders: [correlationGraph],
+        tabulates: [],
+        folders: [],
+        tableFolders: {},
+        graphFolders: {},
+        tabulateFolders: {},
+        datasetNameMigrations: [],
+      }),
+      saveProject: async (req) => {
+        capturedSaveRequest = req;
+        return savedProject;
+      },
+      getCurrentProject: async () => savedProject,
+    },
+  });
+
+  const opened = await store.getState().openProject("C:/tmp/project.spprj");
+  assert.equal(
+    (opened.graphBuilders[0] as { elements?: Array<{ options?: { correlationMethod?: string } }> }).elements?.[0]?.options?.correlationMethod,
+    "kendall",
+  );
+
+  await store.getState().saveProject({
+    ...request,
+    graphBuilders: opened.graphBuilders,
+  });
+
+  assert.equal(
+    (capturedSaveRequest?.graphBuilders[0] as { elements?: Array<{ options?: { correlationMethod?: string } }> }).elements?.[0]?.options?.correlationMethod,
+    "kendall",
+  );
+}
+
+{
+  const legacyCorrelationGraph: GraphBuilderItem = {
+    id: "graph-legacy-corr",
+    name: "Legacy Correlation Graph",
+    sourceDatasetId: "dataset-1",
+    encoding: {},
+    multiX: [
+      { name: "left", type: "continuous" },
+      { name: "right", type: "continuous" },
+    ],
+    elements: [{ kind: "correlationMatrix", enabled: true }],
+    smootherLambda: 0.5,
+    createdAt: new Date(0).toISOString(),
+  };
+  const baseline = JSON.stringify(legacyCorrelationGraph);
+
+  const store = createProjectStore({
+    projectService: {
+      initProject: async () => savedProject,
+      createProject: async () => savedProject,
+      openProject: async () => ({
+        project: savedProject,
+        datasets: [],
+        history: [],
+        snapshots: [],
+        graphBuilders: [legacyCorrelationGraph],
+        tabulates: [],
+        folders: [],
+        tableFolders: {},
+        graphFolders: {},
+        tabulateFolders: {},
+        datasetNameMigrations: [],
+      }),
+      saveProject: async () => savedProject,
+      getCurrentProject: async () => savedProject,
+    },
+  });
+
+  const opened = await store.getState().openProject("C:/tmp/project.spprj");
+  const derived = deriveElements(opened.graphBuilders[0] as GraphBuilderItem);
+  assert.deepEqual(derived, [
+    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
+  ]);
+  assert.equal(
+    (opened.graphBuilders[0] as { elements?: Array<{ options?: { correlationMethod?: string } }> }).elements?.[0]?.options?.correlationMethod,
+    undefined,
+  );
+  assert.equal(JSON.stringify(legacyCorrelationGraph), baseline);
 }
 
 {

@@ -7,6 +7,7 @@ import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphDa
 import {
   createInitialGraphStreamState,
   createStreamStartCancellationCoordinator,
+  deriveElements,
   deriveFields,
   reduceGraphStream,
   type GraphLoadProgress,
@@ -1376,6 +1377,69 @@ function makeProgressedChunk(
 
   assert.equal(completed, false);
   assert.match(transportError ?? "", /inconsistent chunksSent/i);
+}
+
+{
+  const correlationItem = makeGraphBuilderItem({
+    encoding: {},
+    multiX: [
+      { name: "a", type: "continuous" },
+      { name: "b", type: "continuous" },
+      { name: "c", type: "continuous" },
+    ],
+    elements: [
+      {
+        kind: "correlationMatrix",
+        enabled: true,
+        options: { correlationMethod: "spearman" },
+      },
+    ],
+  });
+
+  assert.deepEqual(deriveFields(correlationItem), [
+    { role: "multiX0", column: "a" },
+    { role: "multiX1", column: "b" },
+    { role: "multiX2", column: "c" },
+  ]);
+  assert.deepEqual(deriveElements(correlationItem), [
+    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "spearman" },
+  ]);
+  assert.deepEqual(
+    deriveFields(correlationItem).filter((field) => field.column === "__sp_variable__" || field.column === "__sp_value__"),
+    [],
+  );
+
+  const legacyCorrelationItem = makeGraphBuilderItem({
+    encoding: {},
+    multiY: [
+      { name: "m0", type: "continuous" },
+      { name: "m1", type: "continuous" },
+    ],
+    elements: [{ kind: "correlationMatrix", enabled: true }],
+  });
+
+  assert.deepEqual(deriveElements(legacyCorrelationItem), [
+    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
+  ]);
+
+  const invalidMethodItem = makeGraphBuilderItem({
+    encoding: {},
+    multiX: [
+      { name: "k0", type: "continuous" },
+      { name: "k1", type: "continuous" },
+    ],
+    elements: [
+      {
+        kind: "correlationMatrix",
+        enabled: true,
+        options: { correlationMethod: "distance" },
+      },
+    ],
+  });
+
+  assert.deepEqual(deriveElements(invalidMethodItem), [
+    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
+  ]);
 }
 
 {

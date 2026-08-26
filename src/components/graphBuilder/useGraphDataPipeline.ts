@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   decodeGraphPayload,
   type GraphAggregatePacket,
+  type CorrelationMethod,
   type DecodedGraphChunk,
   type DecodedRawPointChunk,
   type GraphChunkHeader,
@@ -13,7 +14,7 @@ import {
   type GraphElementRequest,
   type GraphViewport,
 } from "../../types/graphData.ts";
-import type { GraphBuilderItem } from "../../types/graphBuilder";
+import { isCorrelationMatrixItem, type GraphBuilderItem } from "../../types/graphBuilder.ts";
 import type { DatasetMeta, TableWindowFilter } from "../../types/data";
 import type { FilterRuleItem } from "../../types/filter";
 
@@ -536,16 +537,40 @@ function serializeFilters(filters: FilterRuleItem[]): TableWindowFilter[] {
   });
 }
 
-function deriveElements(item: GraphBuilderItem): GraphElementRequest[] {
+const CORRELATION_METHOD_SET: ReadonlySet<CorrelationMethod> = new Set([
+  "pearson",
+  "spearman",
+  "kendall",
+]);
+
+function normalizeCorrelationMethod(value: unknown): CorrelationMethod {
+  if (typeof value === "string" && CORRELATION_METHOD_SET.has(value as CorrelationMethod)) {
+    return value as CorrelationMethod;
+  }
+  return "pearson";
+}
+
+export function deriveElements(item: GraphBuilderItem): GraphElementRequest[] {
   return item.elements
     .filter((element) => element.enabled !== false)
-    .map((element) => ({
-      kind: element.kind,
-      summaryStat:
-        typeof element.options?.summaryStat === "string"
-          ? String(element.options.summaryStat)
-          : "none",
-    }));
+    .map((element) => {
+      const requestElement: GraphElementRequest = {
+        kind: element.kind,
+        summaryStat:
+          typeof element.options?.summaryStat === "string"
+            ? String(element.options.summaryStat)
+            : "none",
+      };
+
+      if (element.kind === "correlationMatrix") {
+        return {
+          ...requestElement,
+          correlationMethod: normalizeCorrelationMethod(element.options?.correlationMethod),
+        } as GraphElementRequest;
+      }
+
+      return requestElement;
+    });
 }
 
 function hasEnabledElementKinds(item: GraphBuilderItem): Set<string> {
@@ -592,6 +617,29 @@ function deriveActiveMultiFields(item: GraphBuilderItem): GraphFieldBinding[] {
 }
 
 export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
+  if (isCorrelationMatrixItem(item)) {
+    const fields: GraphFieldBinding[] = [];
+    const seen = new Set<string>();
+
+    const addField = (role: string, column: string | undefined): void => {
+      if (!column || seen.has(`${role}:${column}`)) {
+        return;
+      }
+      seen.add(`${role}:${column}`);
+      fields.push({ role, column });
+    };
+
+    for (const multiField of deriveActiveMultiFields(item)) {
+      addField(multiField.role, multiField.column);
+    }
+
+    for (const filter of item.filters ?? []) {
+      addField("filter", filter.rule.field.name);
+    }
+
+    return fields;
+  }
+
   const fields: GraphFieldBinding[] = [];
   const seen = new Set<string>();
   const enabledKinds = hasEnabledElementKinds(item);
@@ -765,9 +813,19 @@ export function useGraphDataPipeline(
   }, [dataset.id, item, debouncedViewport]);
 
   useEffect(() => {
+    const hasCorrelationElement = requestSkeleton.elements.some(
+      (element) => element.kind === "correlationMatrix",
+    );
+    const hasCorrelationBinding = requestSkeleton.fields.some(
+      (field) => /^multi[XY]\d+$/.test(field.role),
+    );
     const hasX = requestSkeleton.fields.some((field) => field.role === "x");
     const hasY = requestSkeleton.fields.some((field) => field.role === "y");
-    if (!hasX || !hasY) {
+    const missingRequiredBindings = hasCorrelationElement
+      ? !hasCorrelationBinding
+      : (!hasX || !hasY);
+
+    if (missingRequiredBindings) {
       setState((previous) => ({
         ...previous,
         pending: null,
