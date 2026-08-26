@@ -15,7 +15,7 @@
 - Full Data never silently samples or drops raw observations.
 - Histogram, heatmap, boxplot, and summary packets remain exact over all filtered rows.
 - `stacked`, `uniform`, and `normal` jitter are deterministic and apply consistently to every legend group.
-- The point budget is selected from measured candidates `[10_000, 20_000, 50_000, 100_000]`; choose the largest candidate meeting coherent frame <= 2 seconds and avoidable main-thread task <= 200 milliseconds, then apply a 20% safety reduction rounded down to the nearest 1,000.
+- The point budget is selected from measured candidates `[5_000, 8_000, 10_000, 20_000, 50_000, 100_000]`; choose the largest candidate meeting coherent frame <= 2 seconds and avoidable main-thread task <= 200 milliseconds, apply a 20% safety reduction rounded down to the nearest 1,000, then select the largest measured passing candidate at or below that cap. Throw if no measured candidate passes or no measured passing candidate validates the cap.
 - Preserve cancellation, generation checks, explicit sampling seeds, frame caching, axis interaction, and 3D rendering.
 - Do not stage, modify, or commit the untracked `query.js`.
 - Existing uncommitted frame/aggregate transport fixes are part of the working baseline; do not revert them. Canvas-only jitter edits are superseded and removed by this plan.
@@ -48,13 +48,15 @@ import {
   chooseScatterBudget,
 } from "../src/graphCore/scatterBudget.ts";
 
-assert.deepEqual(BUDGET_CANDIDATES, [10_000, 20_000, 50_000, 100_000]);
+assert.deepEqual(BUDGET_CANDIDATES, [5_000, 8_000, 10_000, 20_000, 50_000, 100_000]);
 assert.equal(chooseScatterBudget([
+  { points: 5_000, coherentFrameMs: 180, longestTaskMs: 30 },
+  { points: 8_000, coherentFrameMs: 240, longestTaskMs: 35 },
   { points: 10_000, coherentFrameMs: 300, longestTaskMs: 40 },
   { points: 20_000, coherentFrameMs: 700, longestTaskMs: 80 },
   { points: 50_000, coherentFrameMs: 1_700, longestTaskMs: 180 },
   { points: 100_000, coherentFrameMs: 3_000, longestTaskMs: 280 },
-]), 40_000);
+]), 20_000);
 ```
 
 - [ ] **Step 2: Run the contract test and verify RED**
@@ -68,7 +70,7 @@ Expected: FAIL because `src/graphCore/scatterBudget.ts` does not exist.
 Create `src/graphCore/scatterBudget.ts` with:
 
 ```ts
-export const BUDGET_CANDIDATES = [10_000, 20_000, 50_000, 100_000] as const;
+export const BUDGET_CANDIDATES = [5_000, 8_000, 10_000, 20_000, 50_000, 100_000] as const;
 
 export interface ScatterBudgetMeasurement {
   points: number;
@@ -80,8 +82,17 @@ export function chooseScatterBudget(rows: readonly ScatterBudgetMeasurement[]): 
   const passing = rows
     .filter((row) => row.coherentFrameMs <= 2_000 && row.longestTaskMs <= 200)
     .map((row) => row.points);
-  const measured = passing.length > 0 ? Math.max(...passing) : 10_000;
-  return Math.max(1_000, Math.floor((measured * 0.8) / 1_000) * 1_000);
+  if (passing.length === 0) {
+    throw new Error("No measured scatter candidate passed the performance thresholds");
+  }
+
+  const largestPassing = Math.max(...passing);
+  const safetyCap = Math.floor((largestPassing * 0.8) / 1_000) * 1_000;
+  const measuredSafe = passing.filter((points) => points <= safetyCap);
+  if (measuredSafe.length === 0) {
+    throw new Error(`No measured passing scatter candidate validates the ${safetyCap}-point safety cap`);
+  }
+  return Math.max(...measuredSafe);
 }
 ```
 
