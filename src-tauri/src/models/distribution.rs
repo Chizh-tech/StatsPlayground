@@ -436,6 +436,8 @@ pub struct DistributionIssueV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 
     #[test]
     fn distribution_request_v1_serializes_camel_case_and_versioned_filter_ast() {
@@ -552,5 +554,47 @@ mod tests {
         let serialized = serde_json::to_value(chart).expect("serialize chart data");
         assert_eq!(serialized["kind"], "histogramData");
         assert!(serialized.get("observations").is_none());
+    }
+
+    fn filter_expr_strategy() -> impl Strategy<Value = FilterExprV1> {
+        let leaf = prop_oneof![
+            "[a-z]{1,8}".prop_map(|field_id| FilterExprV1::IsNull {
+                field_id,
+                negate: false,
+            }),
+            ("[a-z]{1,8}", -1_000_000i32..=1_000_000, -1_000_000i32..=1_000_000).prop_map(
+                |(field_id, left, right)| FilterExprV1::NumericRange {
+                    field_id,
+                    min: Some(left.min(right) as f64),
+                    max: Some(left.max(right) as f64),
+                    include_min: true,
+                    include_max: true,
+                },
+            ),
+        ];
+        leaf.prop_recursive(4, 32, 4, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..4)
+                    .prop_map(|exprs| FilterExprV1::And { exprs }),
+                prop::collection::vec(inner.clone(), 0..4)
+                    .prop_map(|exprs| FilterExprV1::Or { exprs }),
+                inner.prop_map(|expr| FilterExprV1::Not { expr: Box::new(expr) }),
+            ]
+        })
+    }
+
+    #[test]
+    fn filter_expr_v1_round_trips_with_deterministic_property_stream() {
+        let config = Config { cases: 128, ..Config::default() };
+        let rng = TestRng::deterministic_rng(RngAlgorithm::ChaCha);
+        let mut runner = TestRunner::new_with_rng(config, rng);
+        runner
+            .run(&filter_expr_strategy(), |expr| {
+                let json = serde_json::to_string(&expr).expect("serialize filter");
+                let restored = serde_json::from_str(&json).expect("deserialize filter");
+                prop_assert_eq!(expr, restored);
+                Ok(())
+            })
+            .expect("deterministic FilterExpr property test");
     }
 }

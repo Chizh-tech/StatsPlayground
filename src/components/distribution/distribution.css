@@ -1,0 +1,45 @@
+.distribution-workspace {
+  height: 100%;
+  padding: 20px 24px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+
+.distribution-header,
+.distribution-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.distribution-header h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.distribution-header p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.distribution-count {
+  min-width: 28px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.distribution-controls {
+  justify-content: flex-start;
+  margin-top: 20px;
+}
+
+.distribution-controls progress {
+  width: min(320px, 45vw);
+}
+
+.distribution-results {
+  min-height: 160px;
+  margin-top: 20px;
+  border-top: 1px solid var(--border-color);
+}

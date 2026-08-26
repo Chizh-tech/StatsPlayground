@@ -21,6 +21,7 @@ import { HelpDialog } from "./HelpDialog";
 import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
 import { GraphBuilderView } from "./graphBuilder";
 import { TabulateView } from "./tabulate";
+import { DistributionWorkspace } from "./distribution";
 import "./graphBuilder/graphBuilder.css";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";
@@ -151,6 +152,8 @@ export function Workspace() {
   const distributions = useDistributionStore((s) => s.items);
   const derivedFormulas = useDistributionStore((s) => s.derivedFormulas);
   const distributionIssues = useDistributionStore((s) => s.issues);
+  const distributionBootstrap = useDistributionStore((s) => s.bootstrap);
+  const distributionRunState = useDistributionStore((s) => s.runState);
   const selectedDistributionId = useDistributionStore((s) => s.selectedAnalysisId);
   const selectDistribution = useDistributionStore((s) => s.selectItem);
   const resetDistributions = useDistributionStore((s) => s.reset);
@@ -1664,7 +1667,12 @@ export function Workspace() {
 
         {/* Right: Main Content */}
         <div className="main-area">
-          {activeTabulateId ? (
+          {selectedDistributionId ? (
+            <DistributionWorkspace
+              bootstrap={distributionBootstrap}
+              runState={distributionRunState}
+            />
+          ) : activeTabulateId ? (
             (() => {
               const item = tabulates.find((entry) => entry.id === activeTabulateId);
               if (!item) {
