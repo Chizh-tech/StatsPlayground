@@ -178,6 +178,21 @@ assert.equal(makeGraphRows(10).length, 10);
     "Correlation mode must gate inapplicable controls",
   );
   assert.equal(
+    graphBuilderViewSource.includes("{/* 2D / 3D segmented toggle — styled like the cursor-mode pill. */}"),
+    true,
+    "GraphBuilderView must keep the 2D/3D segmented control source marker",
+  );
+  assert.match(
+    graphBuilderViewSource,
+    /\{!isCorrelationMode && \([\s\S]*?className=\"gb-dim-mode\"/,
+    "Correlation mode must hide the global 2D/3D segmented control",
+  );
+  assert.match(
+    graphBuilderViewSource,
+    /item\.threeD\s*&&\s*!isCorrelationMode\s*\?/,
+    "Canvas row must only use 3D five-column layout when 3D is active outside correlation mode",
+  );
+  assert.equal(
     graphBuilderViewSource.includes("onYAxisDblClick={isCorrelationMode ? undefined :"),
     true,
     "Correlation mode must disable axis settings triggers",

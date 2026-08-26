@@ -1580,38 +1580,40 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             </div>
           )}
           {/* 2D / 3D segmented toggle — styled like the cursor-mode pill. */}
-          <div
-            className="gb-dim-mode"
-            role="radiogroup"
-            aria-label={t("graph.dimMode.label", { defaultValue: "2D / 3D mode" })}
-          >
-            <span
-              className={`gb-dim-mode-thumb gb-dim-mode-thumb-${item.threeD ? "3d" : "2d"}`}
-              aria-hidden="true"
-            />
-            <button
-              type="button"
-              role="radio"
-              aria-checked={!item.threeD}
-              className={`gb-dim-mode-opt${!item.threeD ? " is-active" : ""}`}
-              onClick={() => { if (item.threeD) toggleThreeD(); }}
-              title={t("graph.dimMode.twoDTitle", { defaultValue: "2D mode" })}
+          {!isCorrelationMode && (
+            <div
+              className="gb-dim-mode"
+              role="radiogroup"
+              aria-label={t("graph.dimMode.label", { defaultValue: "2D / 3D mode" })}
             >
-              2D
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={!!item.threeD}
-              className={`gb-dim-mode-opt${item.threeD ? " is-active" : ""}`}
-              onClick={() => { if (!item.threeD) toggleThreeD(); }}
-              title={t("graph.dimMode.threeDTitle", {
-                defaultValue: "3D mode: adds Z and Group Z channels and renders a 3D surface from X / Y / Z.",
-              })}
-            >
-              3D
-            </button>
-          </div>
+              <span
+                className={`gb-dim-mode-thumb gb-dim-mode-thumb-${item.threeD ? "3d" : "2d"}`}
+                aria-hidden="true"
+              />
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!item.threeD}
+                className={`gb-dim-mode-opt${!item.threeD ? " is-active" : ""}`}
+                onClick={() => { if (item.threeD) toggleThreeD(); }}
+                title={t("graph.dimMode.twoDTitle", { defaultValue: "2D mode" })}
+              >
+                2D
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!!item.threeD}
+                className={`gb-dim-mode-opt${item.threeD ? " is-active" : ""}`}
+                onClick={() => { if (!item.threeD) toggleThreeD(); }}
+                title={t("graph.dimMode.threeDTitle", {
+                  defaultValue: "3D mode: adds Z and Group Z channels and renders a 3D surface from X / Y / Z.",
+                })}
+              >
+                3D
+              </button>
+            </div>
+          )}
         </div>
         <div className="gb-toolbar-spacer" />
         <div className="gb-toolbar-right">
@@ -1801,7 +1803,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           <div
             className={`gb-canvas-row${isCorrelationMode ? " gb-canvas-row-correlation" : ""}`}
             style={
-              item.threeD
+              item.threeD && !isCorrelationMode
                 ? // 3D: 追加 Z（最左）与 Group Z（最右）两条 28px 轨道，
                   // 保持 [Z][Y][canvas][GroupY][GroupZ] 五列布局。
                   { gridTemplateColumns: "28px 28px 1fr 28px 28px" }
