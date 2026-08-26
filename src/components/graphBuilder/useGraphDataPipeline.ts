@@ -1,3 +1,5 @@
+import { SCATTER_RENDER_BUDGET } from "../../graphCore/scatterBudget.ts";
+import { resolveEffectiveGraphSampling } from "./graphSamplingPolicy.ts";
 import { useEffect, useMemo, useState } from "react";
 import {
   decodeGraphPayload,
@@ -297,10 +299,18 @@ function ingestDecodedChunk(state: GraphStreamState, chunk: DecodedGraphChunk): 
   };
 }
 
-function hasCoherentCompletion(pending: PendingGraphState, chunksSent: number): boolean {
+function hasCoherentCompletion(
+  pending: PendingGraphState,
+  completion: GraphDataCompletion,
+): boolean {
+  const { chunksSent, rawPointDisposition } = completion;
+  if (!rawPointDisposition) return false;
   if (chunksSent === 0) {
-    return pending.finalChunkIndex === null && pending.chunkIndexes.size === 0;
+    return pending.finalChunkIndex === null
+      && pending.chunkIndexes.size === 0
+      && (rawPointDisposition.status === "empty" || rawPointDisposition.status === "omitted");
   }
+  if (rawPointDisposition.status !== "included" || rawPointDisposition.validRows <= 0) return false;
   if (pending.finalChunkIndex === null) {
     return false;
   }
@@ -440,7 +450,7 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
       if (state.pendingHeader) {
         return failPending(state, "graph terminal marker arrived with a pending header");
       }
-      if (!hasCoherentCompletion(state.pending, completion.chunksSent)) {
+      if (!hasCoherentCompletion(state.pending, completion)) {
         return failPending(state, "graph terminal marker has inconsistent chunksSent");
       }
 
@@ -475,6 +485,7 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
         extents: state.pending.extents,
         rawChunks,
         aggregates: state.pending.aggregates,
+        rawPointDisposition: completion.rawPointDisposition,
       };
 
       return {
@@ -493,21 +504,6 @@ export function reduceGraphStream(state: GraphStreamState, message: GraphStreamM
       return failPending(state, message.error);
     }
   }
-}
-
-function deriveSampling(item: GraphBuilderItem): GraphSampling {
-  const sampling = item.sampling;
-  if (!sampling || sampling.mode === "full") {
-    return { mode: "full" };
-  }
-
-  const size = Math.trunc(sampling.size);
-  const seed = Math.trunc(sampling.seed);
-  if (!Number.isFinite(size) || !Number.isFinite(seed) || size <= 0 || seed < 0) {
-    return { mode: "full" };
-  }
-
-  return { mode: "sample", size, seed };
 }
 
 function serializeFilters(filters: FilterRuleItem[]): TableWindowFilter[] {
@@ -571,6 +567,21 @@ export function deriveElements(item: GraphBuilderItem): GraphElementRequest[] {
 
       return requestElement;
     });
+}
+
+export function deriveGraphRequestParts(item: GraphBuilderItem): {
+  fields: GraphFieldBinding[];
+  filters: TableWindowFilter[];
+  elements: GraphElementRequest[];
+  sampling: GraphSampling;
+} {
+  const elements = deriveElements(item);
+  return {
+    fields: deriveFields(item),
+    filters: serializeFilters(item.filters ?? []),
+    elements,
+    sampling: resolveEffectiveGraphSampling(item.sampling, elements),
+  };
 }
 
 function hasEnabledElementKinds(item: GraphBuilderItem): Set<string> {
@@ -664,7 +675,7 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
 
   addField("x", item.encoding.x?.name);
   addField("y", item.encoding.y?.name);
-  const has3DElement = enabledKinds.has("surface") || enabledKinds.has("scatter3d");
+  const has3DElement = enabledKinds.has("surface") || enabledKinds.has("contour3d") || enabledKinds.has("scatter3d");
   if (item.threeD && has3DElement) {
     addField("z", item.encoding.z?.name);
   }
@@ -807,10 +818,7 @@ export function useGraphDataPipeline(
   }, [viewport.height, viewport.width]);
 
   const requestSkeleton = useMemo(() => {
-    const sampling = deriveSampling(item);
-    const fields = deriveFields(item);
-    const filters = serializeFilters(item.filters ?? []);
-    const elements = deriveElements(item);
+    const { fields, filters, elements, sampling } = deriveGraphRequestParts(item);
 
     return {
       datasetId: dataset.id,
@@ -876,6 +884,7 @@ export function useGraphDataPipeline(
           filters: requestSkeleton.filters,
           elements: requestSkeleton.elements,
           sampling: requestSkeleton.sampling,
+          rawPointBudget: SCATTER_RENDER_BUDGET,
           viewport: requestSkeleton.viewport,
         };
 

@@ -13,6 +13,7 @@
 import type { GraphSpec, GraphData } from "./types.ts";
 import type { GraphTheme } from "./theme.ts";
 import { DEFAULT_GROUP_KEY } from "./types.ts";
+import { buildContourPolylines } from "./contours3d.ts";
 import { collectFrame3DPoints, type Typed3DPoint } from "./threeDFrame.ts";
 import type { GraphDataFrame } from "@/types/graphData";
 
@@ -20,6 +21,16 @@ import type { GraphDataFrame } from "@/types/graphData";
 const POINT_CAP = 8000;
 
 type SurfaceStat = "mean" | "median";
+
+interface SurfaceGrid {
+  xs: number[];
+  ys: number[];
+  values: Float64Array;
+  verts: number[][];
+  dataShape: [number, number];
+  zmin: number;
+  zmax: number;
+}
 
 /** 将 #rrggbb 向黑（ratio<0）或白（ratio>0）混合，ratio∈[-1,1]。 */
 function shade(hex: string, ratio: number): string {
@@ -81,7 +92,7 @@ function errMagnitude(zs: number[], kind: string): number {
   return se;
 }
 
-/** 按原始 X/Y 网格聚合，并可对有限 Z 做保留空洞的邻域平滑。 */
+/** 按原始 X/Y 网格聚合，保留缺失位置为空洞（NaN）；不对 Z 值做邻域平滑。 */
 function buildSurfaceData(
   data: GraphData,
   xName: string,
@@ -89,7 +100,7 @@ function buildSurfaceData(
   zName: string,
   stat: SurfaceStat,
   smoothness: number,
-): { verts: number[][]; dataShape: [number, number]; zmin: number; zmax: number } | null {
+): SurfaceGrid | null {
   const { xi, yi, zi } = colIndices(data, xName, yName, zName);
   if (xi < 0 || yi < 0 || zi < 0) return null;
 
@@ -144,7 +155,6 @@ function buildSurfaceData(
     }
   }
   if (!hasCompleteQuad) return null;
-
   const blend = Math.max(0, Math.min(1, smoothness));
   if (blend > 0) {
     const neighbors = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
@@ -186,7 +196,7 @@ function buildSurfaceData(
       }
     }
   }
-  return { verts, dataShape: [ny, nx], zmin, zmax };
+  return { xs, ys, values, verts, dataShape: [ny, nx], zmin, zmax };
 }
 
 /** 抽取 3D 散点 [x,y,z]（Z 缺省时 z=0）。 */
@@ -227,7 +237,7 @@ function buildSurfaceDataFromPoints(
   points: readonly Typed3DPoint[],
   stat: SurfaceStat,
   smoothness: number,
-): { verts: number[][]; dataShape: [number, number]; zmin: number; zmax: number } | null {
+): SurfaceGrid | null {
   const xSet = new Set<number>();
   const ySet = new Set<number>();
   const observations: { x: number; y: number; z: number }[] = [];
@@ -319,7 +329,7 @@ function buildSurfaceDataFromPoints(
       }
     }
   }
-  return { verts, dataShape: [ny, nx], zmin, zmax };
+  return { xs, ys, values, verts, dataShape: [ny, nx], zmin, zmax };
 }
 
 function buildScatterDataFromPoints(
@@ -371,18 +381,28 @@ export function build3DOption(
   const zf = spec.encoding.z;
   const els = spec.elements ?? [];
   const surfaceEl = els.find((e) => e.kind === "surface" && e.enabled !== false);
+  const contourEl = els.find((e) => e.kind === "contour3d" && e.enabled !== false);
   const pointsEl = els.find((e) => e.kind === "scatter3d" && e.enabled !== false);
-  const stat: SurfaceStat = surfaceEl?.options?.stat === "median" ? "median" : "mean";
-  const surfaceSmoothness = Number(surfaceEl?.options?.smoothness ?? 0);
+  const surfaceStat: SurfaceStat = surfaceEl?.options?.stat === "median" ? "median" : "mean";
+  const rawSurfaceSmoothness = Number(surfaceEl?.options?.smoothness ?? 0);
+  const surfaceSmoothness = Number.isFinite(rawSurfaceSmoothness)
+    ? Math.max(0, Math.min(1, rawSurfaceSmoothness))
+    : 0;
+  const contourStat: SurfaceStat = contourEl?.options?.stat === "median" ? "median" : "mean";
+  const rawContourSmoothness = Number(contourEl?.options?.smoothness ?? 0);
+  const contourSmoothness = Number.isFinite(rawContourSmoothness)
+    ? Math.max(0, Math.min(1, rawContourSmoothness))
+    : 0;
+  const contourLevels = Number(contourEl?.options?.levels ?? 10);
 
-  if (!surfaceEl && !pointsEl) {
-    return { option: null, hint: { key: "graph.threeD.addSurface", def: "Add a Surface or Scatter layer to render in 3D." } };
+  if (!surfaceEl && !contourEl && !pointsEl) {
+    return { option: null, hint: { key: "graph.threeD.addSurface", def: "Add a Surface, Contour, or Scatter layer to render in 3D." } };
   }
   if (!xf || !yf) {
     return { option: null, hint: { key: "graph.threeD.dragXY", def: "Drag columns onto X and Y (and Z) to build a 3D chart." } };
   }
-  if (surfaceEl && !zf) {
-    return { option: null, hint: { key: "graph.threeD.dragHint", def: "Drag a column onto Z to build a 3D surface." } };
+  if ((surfaceEl || contourEl) && !zf) {
+    return { option: null, hint: { key: "graph.threeD.dragHint", def: "Drag a column onto Z to build a 3D surface or contour plot." } };
   }
 
   // 分组：当绑定了 Overlay（图例）列时，按其值把数据切成多组，
@@ -399,7 +419,7 @@ export function build3DOption(
   // 记录每组占用的 series 下标 + 名称 + 主题色，之后为每组建一个作
   // 用于这些 series 的 visualMap（右上角渐变条），并着色其曲面/散点。
   const groupSeries: { name: string; color: string; indices: number[] }[] = [];
-  const surfIndices: number[] = [];
+  let hasSurfaceSeries = false;
 
   // 渐变标尺范围。对 surface plot 用「实际曲面（插值网格）」的
   // 最高/最低（比原始数据范围更紧凑，对比度更高）；无曲面
@@ -419,26 +439,51 @@ export function build3DOption(
 
   const addLayers = (gdata: GraphData | null, gpoints: readonly Typed3DPoint[] | null, name: string, color: string) => {
     const indices: number[] = [];
-    if (surfaceEl && xf && yf && zf) {
-      const s = gpoints
-        ? buildSurfaceDataFromPoints(gpoints, stat, surfaceSmoothness)
-        : (gdata ? buildSurfaceData(gdata, xf.name, yf.name, zf.name, stat, surfaceSmoothness) : null);
-      if (s) {
+    const buildGrid = (stat: SurfaceStat, smoothness: number): SurfaceGrid | null => (
+      gpoints
+        ? buildSurfaceDataFromPoints(gpoints, stat, smoothness)
+        : (gdata && zf ? buildSurfaceData(gdata, xf.name, yf.name, zf.name, stat, smoothness) : null)
+    );
+    const surfaceGrid = surfaceEl && xf && yf && zf
+      ? buildGrid(surfaceStat, 0)
+      : null;
+    if (surfaceEl && surfaceGrid) {
         series.push({
           type: "surface",
           name,
-          data: s.verts,
-          dataShape: s.dataShape,
-          // hasZ: 用 color 着色，由该组 visualMap 按顶点 Z 取深浅色调（若
-          // Z 无有效范围，后面会回退为 lambert）；无 Z 时直接纯色。
-          shading: hasZ ? "color" : "lambert",
+          data: surfaceGrid.verts,
+          dataShape: surfaceGrid.dataShape,
+          shading: "lambert",
           itemStyle: { color },
           wireframe: { show: false },
         });
-        surfIndices.push(series.length - 1);
+        hasSurfaceSeries = true;
         indices.push(series.length - 1);
-        if (s.zmin < smin) smin = s.zmin;
-        if (s.zmax > smax) smax = s.zmax;
+        if (surfaceGrid.zmin < smin) smin = surfaceGrid.zmin;
+        if (surfaceGrid.zmax > smax) smax = surfaceGrid.zmax;
+    }
+    if (contourEl && xf && yf && zf) {
+      const contourGrid = surfaceGrid
+        && surfaceStat === contourStat
+        && contourSmoothness === 0
+        ? surfaceGrid
+        : buildGrid(contourStat, contourSmoothness);
+      if (contourGrid) {
+        const zOffset = (contourGrid.zmax - contourGrid.zmin) / 1_000_000;
+        const contours = buildContourPolylines(contourGrid, contourLevels);
+        for (let contourIndex = 0; contourIndex < contours.length; contourIndex += 1) {
+          const contour = contours[contourIndex];
+          series.push({
+            type: "line3D",
+            coordinateSystem: "cartesian3D",
+            name: `${name}__contour_${contour.level}_${contourIndex}`,
+            data: contour.points.map(([x, y, z]) => [x, y, z + zOffset]),
+            lineStyle: { color, width: 2, opacity: 0.9 },
+            silent: true,
+          });
+        }
+        if (contourGrid.zmin < smin) smin = contourGrid.zmin;
+        if (contourGrid.zmax > smax) smax = contourGrid.zmax;
       }
     }
     if (pointsEl && xf && yf) {
@@ -588,6 +633,10 @@ export function build3DOption(
   const rmax = hasSurfRange ? smax : pmax;
   const useDepth = hasZ && rmax > rmin;
 
+  const visualSmoothness = hasSurfaceSeries ? surfaceSmoothness : 0;
+  const mainIntensity = 1.2 - 0.9 * visualSmoothness;
+  const ambientIntensity = 0.3 + 0.6 * visualSmoothness;
+
   const axisCommon = {
     nameTextStyle: { color: theme.fgSecondary },
     axisLine: { lineStyle: { color: theme.axisLine } },
@@ -608,8 +657,8 @@ export function build3DOption(
       axisPointer: { lineStyle: { color: theme.fgDim } },
       viewControl: { autoRotate: false, rotateSensitivity: 1, zoomSensitivity: 1 },
       light: {
-        main: { intensity: 1.2, shadow: false, alpha: 40, beta: 40 },
-        ambient: { intensity: 0.3 },
+        main: { intensity: mainIntensity, shadow: false, alpha: 40, beta: 40 },
+        ambient: { intensity: ambientIntensity },
       },
     },
     series,
@@ -674,9 +723,6 @@ export function build3DOption(
       }));
       option.graphic = { elements };
     }
-  } else {
-    // Z 无有效范围：把 color 着色的曲面回退为 lambert 纯色。
-    for (const i of surfIndices) (series[i] as Record<string, unknown>).shading = "lambert";
   }
 
   return { option };

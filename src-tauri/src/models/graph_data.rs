@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use super::table::TableWindowFilter;
 
+pub const GRAPH_SCATTER_RENDER_BUDGET: usize = 8_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphFieldBinding {
@@ -52,6 +54,7 @@ pub struct GraphDataRequest {
     pub filters: Vec<TableWindowFilter>,
     pub elements: Vec<GraphElementRequest>,
     pub sampling: GraphSampling,
+    pub raw_point_budget: usize,
     pub viewport: GraphViewport,
 }
 
@@ -247,6 +250,24 @@ impl GraphChunkHeader {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub enum GraphRawPointOmissionReason {
+    PointBudgetExceeded,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum GraphRawPointDisposition {
+    Included { valid_rows: u64, budget: usize },
+    Empty { valid_rows: u64, budget: usize },
+    Omitted {
+        reason: GraphRawPointOmissionReason,
+        valid_rows: u64,
+        budget: usize,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct GraphDataCompletion {
     pub request_id: String,
     pub dataset_id: String,
@@ -255,6 +276,7 @@ pub struct GraphDataCompletion {
     pub processed_rows: u64,
     pub chunks_sent: u32,
     pub cancelled: bool,
+    pub raw_point_disposition: GraphRawPointDisposition,
 }
 
 #[cfg(test)]
@@ -274,12 +296,55 @@ mod tests {
             "filters": [],
             "elements": [{ "kind": "points", "summaryStat": "none" }],
             "sampling": { "mode": "full" },
+            "rawPointBudget": 8000,
             "viewport": { "width": 1200, "height": 700 }
         }))
         .unwrap();
 
         assert_eq!(request.request_id, "req-1");
         assert!(matches!(request.sampling, GraphSampling::Full));
+        assert_eq!(serde_json::to_value(&request).unwrap()["rawPointBudget"], 8000);
+    }
+
+    #[test]
+    fn graph_completion_round_trips_raw_point_dispositions() {
+        let dispositions = [
+            serde_json::json!({
+                "status": "included",
+                "validRows": 7,
+                "budget": 8000
+            }),
+            serde_json::json!({
+                "status": "empty",
+                "validRows": 0,
+                "budget": 8000
+            }),
+            serde_json::json!({
+                "status": "omitted",
+                "reason": "pointBudgetExceeded",
+                "validRows": 8001,
+                "budget": 8000
+            }),
+        ];
+
+        for raw_point_disposition in dispositions {
+            let completion: GraphDataCompletion = serde_json::from_value(serde_json::json!({
+                "requestId": "req-1",
+                "datasetId": "dataset-id",
+                "generation": 7,
+                "sourceRows": 8001,
+                "processedRows": 8001,
+                "chunksSent": 0,
+                "cancelled": false,
+                "rawPointDisposition": raw_point_disposition
+            }))
+            .unwrap();
+
+            assert_eq!(
+                serde_json::to_value(completion).unwrap()["rawPointDisposition"],
+                raw_point_disposition
+            );
+        }
     }
 
     #[test]

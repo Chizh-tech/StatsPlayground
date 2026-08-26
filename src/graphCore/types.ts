@@ -35,25 +35,13 @@ export type ElementKind =
   | "smoother"     // 平滑曲线
   | "fitline"      // 拟合线（多项式 / 稳健 Cauchy + 置信区间 + 统计量）
   | "surface"      // 3D 曲面（仅 3D 模式；由 X/Y/Z 三通道构建）
+  | "contour3d"    // 3D 等高线（仅 3D 模式；由 X/Y/Z 三通道构建）
   | "scatter3d";   // 3D 散点（仅 3D 模式；由 X/Y/Z 三通道构建）
 
 /** 平滑器配置 */
 export interface SmootherOptions {
   /** 平滑窗口比例 0~1 */
   lambda?: number;
-}
-
-/** Optional typed-buffer raw-point overlay jitter controls.
- *
- * Default is `none` so every valid row maps directly through the affine/
- * category projector with no implicit random perturbation. When enabled,
- * jitter must be explicit and deterministic (`seeded`) so redraws, hit tests,
- * and regression digests stay stable.
- */
-export interface RawPointJitterOptions {
-  rawPointJitter?: "none" | "seeded";
-  rawPointJitterSeed?: number;
-  rawPointJitterAmplitudePx?: number;
 }
 
 /** 点的符号形状 */
@@ -290,7 +278,7 @@ export interface ChartElement {
   /** 元素是否启用 */
   enabled?: boolean;
   /** 元素特有选项 */
-  options?: SmootherOptions & RawPointJitterOptions & Record<string, unknown>;
+  options?: SmootherOptions & Record<string, unknown>;
 }
 
 /** 编码通道：将数据字段映射到视觉属性 */

@@ -134,7 +134,8 @@
     "pasteData": "Paste data",
     "resizeColumn": "Resize column",
     "autoFitColumn": "Auto-fit column",
-    "sqlQueryTableCreated": "Create table \"{{name}}\" from SQL query"
+    "sqlQueryTableCreated": "Create table \"{{name}}\" from SQL query",
+    "tabulateTableCreated": "Create data table \"{{name}}\" from tabulate result"
   },
   "workspace": {
     "directory": "Directory",
@@ -219,6 +220,9 @@
     "removeLabel": "Remove {{label}}",
     "rowTotals": "Row totals",
     "columnTotals": "Column totals",
+    "exportTable": "Export to Data Table",
+    "exportingTable": "Exporting...",
+    "exportTableFailed": "Failed to export Tabulate result to data table.",
     "visibleFieldsHint": "{{rows}}×{{columns}} visible levels",
     "waiting": "Waiting",
     "refreshingAggregate": "Refreshing aggregate...",
@@ -576,7 +580,8 @@
       "smoother": "Smoother",
       "fitline": "Fit Line",
       "scatter3d": "Scatter",
-      "surface": "Surface"
+      "surface": "Surface",
+      "contour3d": "Contour"
     },
     "frequency": "Count",
     "startOver": "Start Over",
@@ -627,6 +632,7 @@
       "histStyle": "Histogram Style",
       "smoothness": "Smoothness",
       "surfaceSmoothness": "Smoothness",
+      "contourLevels": "Levels",
       "histHeight": "Histogram Height",
       "showCounts": "Show Counts",
       "showPercents": "Show Percents",
@@ -806,14 +812,18 @@
       "full": "Full",
       "sample": "Sample",
       "size": "Sample size",
-      "seed": "Sample seed"
+      "seed": "Sample seed",
+      "pointsOmitted": "Raw points were omitted",
+      "pointBudgetCount": "{{valid}} valid rows; point budget {{budget}}",
+      "switchToSample": "Switch to Sample"
     },
     "rowStatus": {
       "empty": "No graph frame yet",
       "pending": "Processing rows...",
       "pendingRows": "Processing: {{processed}} / {{source}} rows",
       "full": "Full Data: {{processed}} rows",
-      "sampled": "Sampled: {{processed}} / {{source}} rows"
+      "sampled": "Sampled: {{processed}} / {{source}} rows",
+      "pointsOmitted": "Raw points omitted: {{valid}} valid rows exceed the {{budget}} point budget"
     },
     "pipeline": {
       "ready": "Ready",

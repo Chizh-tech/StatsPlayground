@@ -576,7 +576,8 @@
       "smoother": "Làm mịn",
       "fitline": "Đường khớp",
       "scatter3d": "Điểm",
-      "surface": "Bề mặt"
+      "surface": "Bề mặt",
+      "contour3d": "Đường đồng mức"
     },
     "frequency": "Tần suất",
     "startOver": "Bắt đầu lại",
@@ -627,6 +628,7 @@
       "histStyle": "Kiểu biểu đồ",
       "smoothness": "Độ mịn",
       "surfaceSmoothness": "Độ mịn bề mặt",
+      "contourLevels": "Số mức",
       "histHeight": "Chiều cao biểu đồ",
       "showCounts": "Hiện số đếm",
       "showPercents": "Hiện phần trăm",
@@ -805,14 +807,18 @@
       "full": "Toàn bộ",
       "sample": "Lấy mẫu",
       "size": "Kích thước mẫu",
-      "seed": "Hạt giống mẫu"
+      "seed": "Hạt giống mẫu",
+      "pointsOmitted": "Đã bỏ qua các điểm dữ liệu thô",
+      "pointBudgetCount": "{{valid}} hàng hợp lệ; giới hạn {{budget}} điểm",
+      "switchToSample": "Chuyển sang lấy mẫu"
     },
     "rowStatus": {
       "empty": "Chưa có khung dữ liệu đồ thị",
       "pending": "Đang xử lý các hàng...",
       "pendingRows": "Đang xử lý: {{processed}} / {{source}} hàng",
       "full": "Toàn bộ dữ liệu: {{processed}} hàng",
-      "sampled": "Đã lấy mẫu: {{processed}} / {{source}} hàng"
+      "sampled": "Đã lấy mẫu: {{processed}} / {{source}} hàng",
+      "pointsOmitted": "Đã bỏ qua điểm thô: {{valid}} hàng hợp lệ vượt giới hạn {{budget}} điểm"
     },
     "pipeline": {
       "ready": "Sẵn sàng",

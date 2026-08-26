@@ -28,6 +28,7 @@ export interface GraphDataRequest {
   filters: TableWindowFilter[];
   elements: GraphElementRequest[];
   sampling: GraphSampling;
+  rawPointBudget: number;
   viewport: GraphViewport;
 }
 
@@ -75,7 +76,18 @@ export interface GraphDataCompletion {
   processedRows: number;
   chunksSent: number;
   cancelled: boolean;
+  rawPointDisposition: GraphRawPointDisposition;
 }
+
+export type GraphRawPointDisposition =
+  | { status: "included"; validRows: number; budget: number }
+  | { status: "empty"; validRows: 0; budget: number }
+  | {
+      status: "omitted";
+      reason: "pointBudgetExceeded";
+      validRows: number;
+      budget: number;
+    };
 
 export interface GraphChunkMessage {
   header: GraphChunkHeader;
@@ -509,6 +521,7 @@ export interface GraphDataFrame {
   extents: Record<string, { min: number; max: number }>;
   rawChunks: readonly DecodedRawPointChunk[];
   aggregates: readonly GraphAggregatePacket[];
+  rawPointDisposition: GraphRawPointDisposition;
 }
 
 export interface DecodedGraphChunk extends DecodedRawPointChunk {

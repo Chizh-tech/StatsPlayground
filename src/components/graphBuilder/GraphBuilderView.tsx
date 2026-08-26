@@ -21,6 +21,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
 import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { SCATTER_RENDER_BUDGET } from "@/graphCore/scatterBudget";
 import type { DatasetMeta } from "@/types/data";
 import { isCorrelationMatrixItem, type GraphBuilderItem, type GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -31,7 +32,13 @@ import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
 import { prepareAxisBinding } from "./axisBinding";
+import {
+  clampSampleSize,
+  DEFAULT_GRAPH_SAMPLE_SIZE,
+  getRawPointNotice,
+} from "./graphSamplingPolicy";
 import { FilterPanel } from "@/components/filter";
+import { defaultLayerOptions, GRAPH_LAYER_DEFS } from "./graphLayerConfig";
 import { useGraphDataPipeline } from "./useGraphDataPipeline";
 
 interface GraphBuilderViewProps {
@@ -50,7 +57,7 @@ type SlotKey = GraphSlotKey;
 
 interface ChartTypeDef {
   kind: ElementKind;
-  icon: string; // 简单文字/符号图标（暂用 SVG path 太重）
+  icon: string;
 }
 
 const CHART_TYPE_DEFS: ChartTypeDef[] = [
@@ -63,6 +70,7 @@ const CHART_TYPE_DEFS: ChartTypeDef[] = [
   { kind: "histogram", icon: "▥" },
   { kind: "scatter3d", icon: "●" },
   { kind: "surface", icon: "◪" },
+  { kind: "contour3d", icon: "≋" },
 ];
 
 /** Per-layer dimensionality. 2D and 3D layers are fully separate sets:
@@ -82,8 +90,11 @@ const LAYER_DIM: Record<ElementKind, LayerDim> = {
   fitline: "2d",
   scatter3d: "3d",
   surface: "3d",
+  contour3d: "3d",
 };
-
+const GRAPH_LAYER_DEFS_WITH_CORRELATION = GRAPH_LAYER_DEFS.some((def) => def.kind === "correlationMatrix")
+  ? GRAPH_LAYER_DEFS
+  : [...GRAPH_LAYER_DEFS, { kind: "correlationMatrix", icon: "▦" }];
 const DRAG_MIME = "text/plain";
 const CORRELATION_MIN_COLUMNS = 2;
 const CORRELATION_MAX_COLUMNS = 20;
@@ -1249,16 +1260,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         return base.map((e, i) => (i === idx ? { ...e, enabled: true } : e));
       }
       const next: ChartElement = { kind, enabled: true };
-      if (kind === "smoother") next.options = { algo: "spline" };
-      if (kind === "fitline") {
-        next.options = { fitType: "polynomial", degree: 1 };
-      }
-      if (kind === "surface") next.options = { stat: "mean", smoothness: 0 };
-      // 3D 散点先继承已有 2D 散点（points）的设置作为默认。
-      if (kind === "scatter3d") {
-        const pts = base.find((e) => e.kind === "points");
-        next.options = { ...(pts?.options ?? {}) };
-      }
+      next.options = defaultLayerOptions(kind, base);
       return [...base, next];
     });
   }, [setElements]);
@@ -1398,9 +1400,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
   const samplingMode = item.sampling?.mode === "sample" ? "sample" : "full";
   const sampleSize = useMemo(() => {
-    if (item.sampling?.mode !== "sample") return 20000;
-    const value = Math.trunc(item.sampling.size);
-    return Number.isFinite(value) && value > 0 ? value : 20000;
+    if (item.sampling?.mode !== "sample") return DEFAULT_GRAPH_SAMPLE_SIZE;
+    return clampSampleSize(item.sampling.size);
   }, [item.sampling]);
   const sampleSeed = useMemo(() => {
     if (item.sampling?.mode !== "sample") return 0;
@@ -1425,7 +1426,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   }, [item.id, updateItem, markDirty, sampleSize, sampleSeed]);
 
   const setSampleSize = useCallback((raw: number) => {
-    const size = Math.max(1, Math.trunc(raw) || sampleSize);
+    const size = clampSampleSize(Number.isFinite(raw) ? raw : sampleSize);
     updateItem(item.id, {
       sampling: {
         mode: "sample",
@@ -1435,6 +1436,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     });
     markDirty();
   }, [item.id, updateItem, markDirty, sampleSeed, sampleSize]);
+
+  const rawPointNotice = useMemo(
+    () => getRawPointNotice(frame?.rawPointDisposition),
+    [frame?.rawPointDisposition],
+  );
 
   const setSampleSeed = useCallback((raw: number) => {
     const seed = Math.max(0, Math.trunc(raw) || 0);
@@ -1471,11 +1477,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         defaultValue: "Sampled: {{processed}} / {{source}} rows",
       });
     }
+    if (rawPointNotice) {
+      return t("graph.rowStatus.pointsOmitted", {
+        valid: rawPointNotice.validRows.toLocaleString(),
+        budget: rawPointNotice.budget.toLocaleString(),
+        defaultValue: "Raw points omitted: {{valid}} valid rows exceed the {{budget}} point budget",
+      });
+    }
     return t("graph.rowStatus.full", {
       processed: progress.processedRows,
       defaultValue: "Full Data: {{processed}} rows",
     });
-  }, [frame, pipelineStatus, progress, t]);
+  }, [frame, pipelineStatus, progress, rawPointNotice, t]);
 
   const correlationColumnCount = useMemo(() => {
     const multiX = item.multiX ?? [];
@@ -1638,6 +1651,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   className="gb-sampling-input"
                   type="number"
                   min={1}
+                  max={SCATTER_RENDER_BUDGET}
                   step={1}
                   value={sampleSize}
                   onChange={(e) => setSampleSize(Number(e.target.value))}
@@ -1765,7 +1779,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     />
                   ))}
                 <AddLayerCard
-                  availableKinds={CHART_TYPE_DEFS.map((c) => c.kind).filter(
+                  availableKinds={GRAPH_LAYER_DEFS_WITH_CORRELATION.map((c) => c.kind).filter(
                     (k) => !activeKinds.has(k) && LAYER_DIM[k] === (item.threeD ? "3d" : "2d"),
                   )}
                   onAdd={addElement}
@@ -1929,6 +1943,29 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   )}
                   {pipelineStatus === "error" && pipelineError && (
                     <div className="gb-canvas-overlay gb-canvas-overlay-error">{pipelineError}</div>
+                  )}
+                  {pipelineStatus === "ready" && rawPointNotice && (
+                    <div className="gb-point-budget-notice" role="status">
+                      <i className="fa-solid fa-circle-info" aria-hidden="true" />
+                      <span className="gb-point-budget-copy">
+                        <strong>{t("graph.sampling.pointsOmitted", {
+                          defaultValue: "Raw points were omitted",
+                        })}</strong>
+                        <span>{t("graph.sampling.pointBudgetCount", {
+                          valid: rawPointNotice.validRows.toLocaleString(),
+                          budget: rawPointNotice.budget.toLocaleString(),
+                          defaultValue: "{{valid}} valid rows; point budget {{budget}}",
+                        })}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="gb-point-budget-action"
+                        onClick={() => setSamplingMode("sample")}
+                      >
+                        <i className="fa-solid fa-shuffle" aria-hidden="true" />
+                        {t("graph.sampling.switchToSample", { defaultValue: "Switch to Sample" })}
+                      </button>
+                    </div>
                   )}
                 </>
               )}
@@ -2593,7 +2630,7 @@ function LayerCard({
   onRemove,
   t,
 }: LayerCardProps) {
-  const def = CHART_TYPE_DEFS.find((c) => c.kind === kind);
+  const def = GRAPH_LAYER_DEFS_WITH_CORRELATION.find((c) => c.kind === kind);
   return (
     <div className="gb-layer-card">
       <div className="gb-layer-head">
@@ -2637,6 +2674,9 @@ function LayerCard({
         )}
         {kind === "correlationMatrix" && (
           <CorrelationMatrixOptions options={options} onChange={onChangeOptions} t={t} />
+        )}
+        {kind === "contour3d" && (
+          <Contour3DOptions options={options} onChange={onChangeOptions} t={t} />
         )}
       </div>
     </div>
@@ -3031,8 +3071,10 @@ function Scatter3DOptions({ options, onChange, t }: OptionsEditorProps) {
   );
 }
 
-/** Surface (3D) options panel — aggregation statistic and optional
- *  masked Z smoothing. A zero value preserves the observed faceted grid. */
+/** Surface (3D) options panel — aggregation statistic and visual smoothness.
+ *  Smoothness controls lighting/facet softness for appearance only; a zero
+ *  value preserves the observed faceted grid and any holes (no Z value
+ *  smoothing or interpolation is performed). */
 function SurfaceOptions({ options, onChange, t }: OptionsEditorProps) {
   const stat = getOpt<string>(options, "stat", "mean");
   const smoothness = getOpt<number>(options, "smoothness", 0);
@@ -3077,6 +3119,48 @@ function CorrelationMatrixOptions({ options, onChange, t }: OptionsEditorProps) 
         <option value="kendall">{t("graph.opt.correlation.kendall", { defaultValue: "Kendall" })}</option>
       </select>
     </OptRow>
+  );
+}
+
+function Contour3DOptions({ options, onChange, t }: OptionsEditorProps) {
+  const stat = getOpt<string>(options, "stat", "mean");
+  const smoothness = getOpt<number>(options, "smoothness", 0);
+  const levels = getOpt<number>(options, "levels", 10);
+  return (
+    <>
+      <OptRow label={t("graph.opt.surfaceStat", { defaultValue: "Statistic" })}>
+        <select
+          className="gb-opt-select"
+          value={stat}
+          onChange={(e) => onChange({ stat: e.target.value })}
+        >
+          <option value="mean">{t("graph.opt.summary.mean", { defaultValue: "Mean" })}</option>
+          <option value="median">{t("graph.opt.summary.median", { defaultValue: "Median" })}</option>
+        </select>
+      </OptRow>
+      <OptRow label={t("graph.opt.surfaceSmoothness", { defaultValue: "Smoothness" })}>
+        <input
+          type="range"
+          className="gb-slider"
+          min={0}
+          max={1}
+          step={0.05}
+          value={smoothness}
+          onChange={(e) => onChange({ smoothness: parseFloat(e.target.value) })}
+        />
+      </OptRow>
+      <OptRow label={t("graph.opt.contourLevels", { defaultValue: "Levels" })}>
+        <input
+          type="range"
+          className="gb-slider"
+          min={3}
+          max={20}
+          step={1}
+          value={levels}
+          onChange={(e) => onChange({ levels: Math.max(3, Math.min(20, parseInt(e.target.value, 10))) })}
+        />
+      </OptRow>
+    </>
   );
 }
 
@@ -3414,7 +3498,7 @@ function AddLayerCard({ availableKinds, onAdd, t }: AddLayerCardProps) {
           style={{ left: pos.left, top: pos.top, minWidth: pos.width }}
         >
           {availableKinds.map((k) => {
-            const def = CHART_TYPE_DEFS.find((c) => c.kind === k);
+            const def = GRAPH_LAYER_DEFS_WITH_CORRELATION.find((c) => c.kind === k);
             return (
               <button
                 key={k}

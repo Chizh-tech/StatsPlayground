@@ -37,7 +37,7 @@
 - Produces: `SCATTER_RENDER_BUDGET` recorded as an exact integer in the performance report for Tasks 4 and 5.
 - Produces: `npm run benchmark:scatter` as a repeatable target-WebView benchmark command.
 
-- [ ] **Step 1: Add the failing harness contract test**
+- [x] **Step 1: Add the failing harness contract test**
 
 Create `tests/scatterBudgetHarness.test.ts` with assertions for the deterministic candidate sequence and safety calculation:
 
@@ -59,13 +59,13 @@ assert.equal(chooseScatterBudget([
 ]), 20_000);
 ```
 
-- [ ] **Step 2: Run the contract test and verify RED**
+- [x] **Step 2: Run the contract test and verify RED**
 
 Run: `node --experimental-strip-types tests/scatterBudgetHarness.test.ts`
 
 Expected: FAIL because `src/graphCore/scatterBudget.ts` does not exist.
 
-- [ ] **Step 3: Add the policy module and target-WebView benchmark harness**
+- [x] **Step 3: Add the policy module and target-WebView benchmark harness**
 
 Create `src/graphCore/scatterBudget.ts` with:
 
@@ -116,7 +116,7 @@ Run ungrouped, two-group, and four-facet cases three times each. The report uses
 "benchmark:scatter": "node scripts/runScatterBudget.mjs"
 ```
 
-- [ ] **Step 4: Run the harness and record the measured budget**
+- [x] **Step 4: Run the harness and record the measured budget**
 
 Run:
 
@@ -126,7 +126,7 @@ npm run benchmark:scatter
 
 Expected: all candidate measurements are written to `docs/performance/echarts-scatter-budget-2026-08-26.md`; the report names the exact selected `SCATTER_RENDER_BUDGET` calculated by `chooseScatterBudget` and includes OS, WebView2, CPU, and app build identifiers.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 
@@ -162,7 +162,7 @@ git commit -m "perf(graph): establish ECharts scatter budget"
 - Produces: `buildFrameScatterItems(input: FrameScatterInput): FrameScatterGroup[]` in `frameScatter.ts`.
 - Consumes: explicit group order, resolved styles, facet selector, jitter policy, X/Y encoding, and pick column supplied by `transform.ts`; `frameScatter.ts` must not import or parse `GraphSpec`.
 
-- [ ] **Step 1: Write failing jitter tests**
+- [x] **Step 1: Write failing jitter tests**
 
 Cover these exact behaviors in `tests/jitter.test.ts`:
 
@@ -178,7 +178,7 @@ assert.ok(westOffsets.some(([x]) => x !== 0));
 
 Use three overlapping points per group at the same X/Y. Assert `uniform` and `normal` have a centered distribution with both negative and positive offsets over at least 100 stable row IDs, preventing whole-group translation.
 
-- [ ] **Step 2: Write failing adapter tests**
+- [x] **Step 2: Write failing adapter tests**
 
 In `tests/frameScatter.test.ts`, build a typed frame with numeric and categorical X, groups East/West, source codes, size values, facet codes, validity masks, and row IDs. Assert:
 
@@ -190,7 +190,7 @@ In `tests/frameScatter.test.ts`, build a typed frame with numeric and categorica
 - invalid and nonmatching facet rows are omitted;
 - the adapter never accepts `GraphData` or `GraphSpec`.
 
-- [ ] **Step 3: Run both tests and verify RED**
+- [x] **Step 3: Run both tests and verify RED**
 
 Run:
 
@@ -201,11 +201,11 @@ node --experimental-strip-types tests/frameScatter.test.ts
 
 Expected: FAIL because both modules are missing.
 
-- [ ] **Step 4: Implement the pure jitter module**
+- [x] **Step 4: Implement the pure jitter module**
 
 Use stable row-ID hashing for random modes. `stacked` groups by X key and projected Y bucket, spreads symmetrically, and scales by `limit`. Return offsets only; do not know about ECharts, groups, colors, or frame chunks.
 
-- [ ] **Step 5: Implement the mechanical frame adapter**
+- [x] **Step 5: Implement the mechanical frame adapter**
 
 Define explicit inputs:
 
@@ -231,7 +231,7 @@ export interface FrameScatterItem {
 
 Reject row IDs outside JavaScript's safe integer range from pick metadata while retaining the visual point. Group results remain aligned with dictionary codes.
 
-- [ ] **Step 6: Wire the adapter into transform semantics**
+- [x] **Step 6: Wire the adapter into transform semantics**
 
 `transform.ts` resolves group styles, marker shapes, hidden legend state, and options. It converts each `FrameScatterGroup` into the same standard ECharts scatter shape used by the legacy row path:
 
@@ -249,7 +249,7 @@ Reject row IDs outside JavaScript's safe integer range from pick metadata while 
 
 Do not enable `large`. Keep exact aggregate series unchanged.
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 Run:
 
@@ -287,7 +287,7 @@ git commit -m "feat(graph): render typed points as ECharts scatter"
 - Consumes: frame-backed standard scatter series from Task 2.
 - Produces: one ECharts-only `GraphPanel`; point click and brush consume item `__pick` metadata.
 
-- [ ] **Step 1: Rewrite the architecture guard first**
+- [x] **Step 1: Rewrite the architecture guard first**
 
 Change `tests/scatterProgressive.test.ts` to assert:
 
@@ -301,21 +301,21 @@ assert.ok(frameScatterSeries.every((series) => series.large !== true));
 
 Also assert faceted frame-backed panels each contain only their matching point items.
 
-- [ ] **Step 2: Run the guard and verify RED**
+- [x] **Step 2: Run the guard and verify RED**
 
 Run: `node --experimental-strip-types tests/scatterProgressive.test.ts`
 
 Expected: FAIL because `Graph.tsx` still imports and mounts `RawPointsLayer`.
 
-- [ ] **Step 3: Remove Canvas hosting and interaction branches**
+- [x] **Step 3: Remove Canvas hosting and interaction branches**
 
 Delete `rawPoints` panel props, `rawIndexRef`, Canvas hit testing, brush fallback, zrender Canvas DOM z-index mutation, and `<RawPointsLayer />`. Keep standard ECharts click and brush extraction from `__pick` data items.
 
-- [ ] **Step 4: Remove Canvas modules and exports**
+- [x] **Step 4: Remove Canvas modules and exports**
 
 Delete both Canvas files and their dedicated tests. Remove `GRAPH_RAW_CANVAS_Z_INDEX` and `applyZrenderCanvasZIndices`, retaining `withInterleavedGraphLayers` for ECharts series zlevels. Remove obsolete `RawPointJitterOptions` and `rawPointJitter*` fields.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 
@@ -366,11 +366,11 @@ export type GraphRawPointDisposition =
     };
 ```
 
-- [ ] **Step 1: Add failing Rust model tests**
+- [x] **Step 1: Add failing Rust model tests**
 
 Update the camel-case request fixture with `rawPointBudget`. Add serde round-trip assertions for all three disposition variants and reject zero or policy-exceeding budgets in service validation.
 
-- [ ] **Step 2: Add failing service tests**
+- [x] **Step 2: Add failing service tests**
 
 Seed datasets immediately below and above the measured budget. For a Full raw-points request above budget assert:
 
@@ -388,11 +388,11 @@ assert!(!sink.aggregates.is_empty());
 
 For under-budget Full and Sample requests, assert chunks are present and status is `Included`. For zero valid observations, assert `Empty`.
 
-- [ ] **Step 3: Add failing TypeScript reducer tests**
+- [x] **Step 3: Add failing TypeScript reducer tests**
 
 In `tests/graphDataPipeline.test.ts`, assert omission commits a coherent frame with no raw chunks and exact aggregates, while an `included` completion with inconsistent `chunksSent` still fails.
 
-- [ ] **Step 4: Run tests and verify RED**
+- [x] **Step 4: Run tests and verify RED**
 
 Run:
 
@@ -403,11 +403,11 @@ Push-Location src-tauri; cargo test graph_data; Pop-Location
 
 Expected: FAIL because request/completion disposition fields do not exist.
 
-- [ ] **Step 5: Implement contract and validation**
+- [x] **Step 5: Implement contract and validation**
 
 Add matching camelCase Rust/TS types. The backend accepts only `1..=SCATTER_RENDER_BUDGET`; Sample size is also bounded by this policy. Invalid values return `AppError::InvalidParam`.
 
-- [ ] **Step 6: Implement omission without raw payloads**
+- [x] **Step 6: Implement omission without raw payloads**
 
 For requests containing an enabled raw 2D points element (`kind == "points"` and `summary_stat == "none"`), buffer raw chunks until the renderable observation count is known. If count exceeds budget:
 
@@ -419,11 +419,11 @@ For requests containing an enabled raw 2D points element (`kind == "points"` and
 
 Do not apply this omission policy to 3D-only requests. Under budget, flush buffered chunks in original order.
 
-- [ ] **Step 7: Commit reducer state**
+- [x] **Step 7: Commit reducer state**
 
 `useGraphDataPipeline` copies completion disposition into `GraphDataFrame.rawPointDisposition`. `hasCoherentCompletion` permits zero chunks only for `empty` or `omitted`, never for `included` nonempty frames.
 
-- [ ] **Step 8: Verify and commit**
+- [x] **Step 8: Verify and commit**
 
 Run:
 
@@ -463,7 +463,7 @@ git commit -m "feat(graph): enforce raw point render budget"
 - Consumes: `GraphDataFrame.rawPointDisposition` from Task 4 and `SCATTER_RENDER_BUDGET` from Task 1.
 - Produces: explicit Full-over-budget status and a Switch to Sample action using existing `setSamplingMode("sample")`.
 
-- [ ] **Step 1: Write failing policy tests**
+- [x] **Step 1: Write failing policy tests**
 
 Extract and test pure helpers:
 
@@ -477,13 +477,13 @@ assert.deepEqual(getRawPointNotice({
 }), { kind: "pointBudgetExceeded", validRows: 75_000, budget: 40_000 });
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `node --experimental-strip-types tests/graphSamplingPolicy.test.ts`
 
 Expected: FAIL because helpers do not exist.
 
-- [ ] **Step 3: Implement the UI policy**
+- [x] **Step 3: Implement the UI policy**
 
 - Cap Sample input `max` and store updates at `SCATTER_RENDER_BUDGET`.
 - Keep Full selected when raw points are omitted; do not silently mutate persisted sampling.
@@ -493,11 +493,11 @@ Expected: FAIL because helpers do not exist.
 - Aggregate layers remain visible behind the status; do not replace the chart with an empty state.
 - Row status must say raw points were omitted, not `Full Data: N rows`.
 
-- [ ] **Step 4: Add all four locale strings**
+- [x] **Step 4: Add all four locale strings**
 
 Use equivalent translations for status, valid/budget count, and action. Do not leave English fallback copy in non-English locales.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 
@@ -528,14 +528,14 @@ git commit -m "feat(graph): explain point budget sampling"
 - Consumes: completed single-renderer architecture from Tasks 1-5.
 - Produces: executable behavior matrix and checked plan record.
 
-- [ ] **Step 1: Complete the rendering matrix**
+- [x] **Step 1: Complete the rendering matrix**
 
 Assert frame-backed standard ECharts points alone and overlaid with line, bar,
 smoother, fit line, histogram, heatmap, and boxplot. Include numeric, date,
 categorical, grouped, melted, Group X/Y, and Wrap cases. Every raw point series
 must carry pick metadata and must not set `large: true`.
 
-- [ ] **Step 2: Run the complete frontend suite**
+- [x] **Step 2: Run the complete frontend suite**
 
 Run:
 
@@ -554,7 +554,7 @@ git diff --check
 
 Expected: every command exits 0; only existing Vite bundle warnings remain.
 
-- [ ] **Step 3: Run backend verification**
+- [x] **Step 3: Run backend verification**
 
 Run:
 
@@ -569,6 +569,10 @@ Pop-Location
 Expected: all exit 0.
 
 - [ ] **Step 4: Cold-start desktop acceptance**
+
+Blocked on 2026-08-26: port 1420 is owned by the active
+`issue-45-3d-contour-plot` worktree's Vite/Tauri processes. Automated frontend,
+backend, and architecture checks passed; native interaction checks remain manual.
 
 Run: `npm run tauri dev`
 
@@ -585,7 +589,7 @@ Verify manually in the target WebView:
 - Sample renders through the same ECharts scatter path;
 - zoom, pan, transpose, Group X/Y, Wrap, and 3D remain functional.
 
-- [ ] **Step 5: Final architecture search and commit**
+- [x] **Step 5: Final architecture search and commit**
 
 Run:
 

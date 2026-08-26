@@ -1,4 +1,5 @@
 export const BUDGET_CANDIDATES = [5_000, 8_000, 10_000, 20_000, 50_000, 100_000] as const;
+export const SCATTER_RENDER_BUDGET = 8_000;
 
 export interface ScatterBudgetMeasurement {
   points: number;
