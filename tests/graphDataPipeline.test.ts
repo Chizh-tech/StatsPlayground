@@ -1658,6 +1658,38 @@ function makeProgressedChunk(
     { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
   ];
   assert.deepEqual(deriveElements(invalidMethodItem), invalidCorrelationElementsExpected);
+
+  const mixedCorrelationItem = makeGraphBuilderItem({
+    encoding: {},
+    multiX: [
+      { name: "mx0", type: "continuous" },
+      { name: "mx1", type: "continuous" },
+    ],
+    multiY: [
+      { name: "my0", type: "continuous" },
+      { name: "my1", type: "continuous" },
+      { name: "my2", type: "continuous" },
+    ],
+    filters: [
+      {
+        id: "corr-filter",
+        op: "AND",
+        rule: {
+          kind: "categorical",
+          field: { name: "segment", type: "nominal" },
+          selected: ["A"],
+          exclude: false,
+        },
+      },
+    ],
+    elements: [{ kind: "correlationMatrix", enabled: true }],
+  });
+
+  assert.deepEqual(deriveFields(mixedCorrelationItem), [
+    { role: "multiX0", column: "mx0" },
+    { role: "multiX1", column: "mx1" },
+    { role: "filter", column: "segment" },
+  ]);
 }
 
 {

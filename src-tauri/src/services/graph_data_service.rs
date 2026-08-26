@@ -4247,6 +4247,82 @@ mod tests {
     }
 
     #[test]
+    fn stream_with_sink_correlation_only_request_rejects_stale_generation() {
+        let state = AppState::new().expect("state");
+        let dataset_id = "stream-correlation-only-stale";
+        {
+            let db = state.db.lock().expect("db lock");
+            db.create_empty_table(
+                dataset_id,
+                "Stream Correlation Only Stale",
+                &["a".into(), "b".into(), "c".into()],
+                &["DOUBLE".into(), "DOUBLE".into(), "DOUBLE".into()],
+            )
+            .expect("create correlation table");
+            let table = format!("dataset_{}", dataset_id.replace('-', "_"));
+            db.conn()
+                .execute(
+                    &format!(
+                        "INSERT INTO \"{table}\" (_row_id, a, b, c) VALUES
+                         (1, 1.0, 2.0, 3.0),
+                         (2, 2.0, 4.0, 2.0),
+                         (3, 3.0, 6.0, 1.0),
+                         (4, 4.0, 8.0, 0.0)"
+                    ),
+                    [],
+                )
+                .expect("insert correlation rows");
+            db.conn()
+                .execute(
+                    "UPDATE _meta_datasets SET row_count = 4, generation = 1 WHERE id = $1",
+                    params![dataset_id],
+                )
+                .expect("update row count and generation");
+        }
+
+        let service = GraphDataService::new(&state);
+        let request = GraphDataRequest {
+            request_id: format!("request-{dataset_id}-correlation-only-stream"),
+            dataset_id: dataset_id.to_string(),
+            generation: 0,
+            fields: vec![
+                GraphFieldBinding {
+                    role: "multiY0".to_string(),
+                    column: "a".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "multiY1".to_string(),
+                    column: "b".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "multiY2".to_string(),
+                    column: "c".to_string(),
+                },
+            ],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "correlationMatrix".to_string(),
+                summary_stat: "none".to_string(),
+                correlation_method: Some(crate::models::graph_data::CorrelationMethod::Spearman),
+            }],
+            sampling: GraphSampling::Full,
+            viewport: GraphViewport {
+                width: 1200,
+                height: 700,
+            },
+        };
+
+        let mut sink = RecordingSink::default();
+        let error = service
+            .stream_with_sink(&request, &mut sink)
+            .expect_err("stale generation must fail");
+
+        assert!(
+            matches!(error, AppError::InvalidParam(message) if message.contains("stale dataset generation"))
+        );
+    }
+
+    #[test]
     fn stream_with_sink_maps_closed_sink_to_invalid_param() {
         let state = AppState::new().expect("state");
         seed_dataset(&state, "closed-sink", 8);

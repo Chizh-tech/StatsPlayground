@@ -1590,6 +1590,14 @@ impl DuckDbEngine {
             return Ok((Vec::new(), true));
         }
 
+        let current_generation = self.get_dataset_generation(&request.dataset_id)?;
+        if current_generation != request.generation {
+            return Err(AppError::InvalidParam(format!(
+                "stale dataset generation: expected {current_generation}, received {}",
+                request.generation
+            )));
+        }
+
         let user_columns = self.get_user_columns(&request.dataset_id)?;
         let allowed_columns = user_columns
             .iter()
@@ -7834,6 +7842,71 @@ mod tests {
 
         assert!(cancelled);
         assert!(packets.is_empty());
+    }
+
+    #[test]
+    fn collect_graph_aggregate_packets_with_cancel_rejects_stale_generation_for_correlation_only() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "corr-stale-aggregate-only",
+            "Correlation Stale Aggregate Only",
+            &["a".into(), "b".into()],
+            &["DOUBLE".into(), "DOUBLE".into()],
+        )
+        .unwrap();
+
+        db.conn()
+            .execute(
+                "INSERT INTO \"dataset_corr_stale_aggregate_only\" (_row_id, a, b)
+                 VALUES
+                 (1, 1.0, 2.0),
+                 (2, 2.0, 4.0),
+                 (3, 3.0, 6.0),
+                 (4, 4.0, 8.0)",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = 4, generation = 1 WHERE id = $1",
+                params!["corr-stale-aggregate-only"],
+            )
+            .unwrap();
+
+        let request = GraphDataRequest {
+            request_id: "request-corr-stale-aggregate-only".into(),
+            dataset_id: "corr-stale-aggregate-only".into(),
+            generation: 0,
+            fields: vec![
+                GraphFieldBinding {
+                    role: "multiX0".into(),
+                    column: "a".into(),
+                },
+                GraphFieldBinding {
+                    role: "multiX1".into(),
+                    column: "b".into(),
+                },
+            ],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "correlationMatrix".into(),
+                summary_stat: "none".into(),
+                correlation_method: Some(crate::models::graph_data::CorrelationMethod::Pearson),
+            }],
+            sampling: GraphSampling::Full,
+            viewport: GraphViewport {
+                width: 1200,
+                height: 700,
+            },
+        };
+
+        let error = db
+            .collect_graph_aggregate_packets_with_cancel(&request, || Ok(false))
+            .expect_err("stale generation must fail");
+        assert!(matches!(
+            error,
+            AppError::InvalidParam(message) if message.contains("stale dataset generation")
+        ));
     }
 
     #[test]

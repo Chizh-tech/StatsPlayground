@@ -620,6 +620,10 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
   if (isCorrelationMatrixItem(item)) {
     const fields: GraphFieldBinding[] = [];
     const seen = new Set<string>();
+    const multiX = item.multiX ?? [];
+    const multiY = item.multiY ?? [];
+    const xActive = multiX.length >= 2;
+    const yActive = multiY.length >= 2;
 
     const addField = (role: string, column: string | undefined): void => {
       if (!column || seen.has(`${role}:${column}`)) {
@@ -629,8 +633,14 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
       fields.push({ role, column });
     };
 
-    for (const multiField of deriveActiveMultiFields(item)) {
-      addField(multiField.role, multiField.column);
+    if (xActive) {
+      for (let index = 0; index < multiX.length; index += 1) {
+        addField(`multiX${index}`, multiX[index].name);
+      }
+    } else if (yActive) {
+      for (let index = 0; index < multiY.length; index += 1) {
+        addField(`multiY${index}`, multiY[index].name);
+      }
     }
 
     for (const filter of item.filters ?? []) {
