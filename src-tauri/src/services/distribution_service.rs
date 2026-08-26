@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use std::hash::{Hash, Hasher};
+use sha2::{Digest, Sha256};
 
 use crate::models::distribution::{
     AnalysisSnapshotV1, BlackBoxCaseV1, CapabilityDescriptorV1, DistributionCancelTokenV1,
@@ -86,9 +86,7 @@ impl<'a> DistributionService<'a> {
             .map_err(|error| AppError::Database(error.to_string()))?;
         let generation = db.get_dataset_generation(dataset_id)?;
         let columns = db.get_user_columns(dataset_id)?;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        columns.hash(&mut hasher);
-        Ok((generation, format!("schema:{:016x}", hasher.finish())))
+        Ok((generation, schema_fingerprint(&columns)?))
     }
 
     pub fn emit_progress(
@@ -121,9 +119,8 @@ impl<'a> DistributionService<'a> {
     pub fn cancel_run(
         state: &mut DistributionRunStateV1,
         token: &DistributionCancelTokenV1,
-        expected_token: &str,
     ) -> Result<(), AppError> {
-        if token.cancel_token != expected_token || token.cancel_token != state.cancel_token {
+        if token.cancel_token != state.cancel_token {
             return Err(AppError::InvalidParam("cancel token mismatch".to_string()));
         }
         state.status = DistributionRunStatusV1::Cancelled;
@@ -174,6 +171,13 @@ impl<'a> DistributionService<'a> {
         }
         Ok(())
     }
+}
+
+fn schema_fingerprint(columns: &[(String, String)]) -> Result<String, AppError> {
+    let canonical = serde_json::to_vec(columns)
+        .map_err(|error| AppError::InvalidParam(format!("invalid schema: {error}")))?;
+    let digest = Sha256::digest(canonical);
+    Ok(format!("schema:sha256:{digest:x}"))
 }
 
 fn is_machine_id(value: &str) -> bool {
@@ -305,9 +309,11 @@ mod tests {
         let token = DistributionCancelTokenV1 {
             cancel_token: "opaque:/not-interpreted".to_string(),
         };
-        assert!(DistributionService::cancel_run(&mut state, &token, "different").is_err());
-        DistributionService::cancel_run(&mut state, &token, "opaque:/not-interpreted")
-            .expect("cancel");
+        let wrong_token = DistributionCancelTokenV1 {
+            cancel_token: "different".to_string(),
+        };
+        assert!(DistributionService::cancel_run(&mut state, &wrong_token).is_err());
+        DistributionService::cancel_run(&mut state, &token).expect("cancel");
         assert_eq!(state.status, DistributionRunStatusV1::Cancelled);
     }
 
@@ -326,6 +332,15 @@ mod tests {
         assert!(service
             .validate_snapshot_is_current(&snapshot, "filter:v2")
             .is_err());
+    }
+
+    #[test]
+    fn schema_fingerprint_is_canonical_sha256() {
+        let columns = vec![("value".to_string(), "DOUBLE".to_string())];
+        assert_eq!(
+            schema_fingerprint(&columns).expect("fingerprint"),
+            "schema:sha256:2f6ce0b14f1e3607f4c670257550863187ce940cc0d6c78254f9ec3ff7ecf193"
+        );
     }
 
     fn synthetic_black_box_case() -> BlackBoxCaseV1 {

@@ -3895,6 +3895,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "sqlparser",
  "tauri",
  "tauri-build",
