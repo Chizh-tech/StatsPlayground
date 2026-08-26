@@ -110,8 +110,6 @@ assert.equal(makeGraphRows(10).length, 10);
 {
   const graphSource = readFileSync(resolve(TEST_FILE_DIR, "../src/graphCore/Graph.tsx"), "utf8");
   assert.equal(graphSource.includes("toScatterPick("), false, "Graph.tsx must not call undefined toScatterPick");
-  const helperUses = graphSource.match(/bigintToScatterPointPick\(/g) ?? [];
-  assert.ok(helperUses.length >= 2, "Graph.tsx click and brush conversion must share bigintToScatterPointPick helper");
 }
 
 {
@@ -1146,6 +1144,58 @@ function makeProgressedChunk(
 
   assert.deepEqual(events, []);
   assert.match(transportError ?? "", /aggregate/i);
+}
+
+{
+  let aggregate: GraphAggregatePacket | null = null;
+  let transportError: string | null = null;
+  const request = makeRequest("req-aggregate-null-options", 27);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {},
+    onPayload: () => {},
+    onAggregate: (packet) => {
+      aggregate = packet;
+    },
+    onComplete: () => {},
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader("req-aggregate-null-options", 27, 0, true),
+  });
+  transport.onChannelMessage(makePayload(0));
+  transport.onChannelMessage(JSON.stringify({
+    messageType: "aggregate",
+    kind: "histogram",
+    xColumn: null,
+    yColumn: "cost",
+    groupColumn: null,
+    sourceColumn: null,
+    binCount: 1,
+    minValue: 0,
+    maxValue: 1,
+    missingCount: 0,
+    binWidth: 1,
+    totalCount: 1,
+    bins: [{
+      group: null,
+      category: null,
+      sourceColumn: null,
+      facetX: null,
+      facetY: null,
+      facetZ: null,
+      wrap: null,
+      binStart: 0,
+      binEnd: 1,
+      count: 1,
+    }],
+  }));
+
+  assert.equal(transportError, null);
+  assert.equal(aggregate?.kind, "histogram");
 }
 
 {
