@@ -34,16 +34,32 @@ function toRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function normalizeStructuredValue(value: unknown): unknown {
+  if (value === null) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeStructuredValue);
+  }
+  const record = toRecord(value);
+  if (!record) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, normalizeStructuredValue(entry)]),
+  );
+}
+
 function parseStructuredMessage(message: unknown): Record<string, unknown> | null {
   if (typeof message === "string") {
     try {
       const parsed = JSON.parse(message) as unknown;
-      return toRecord(parsed);
+      return toRecord(normalizeStructuredValue(parsed));
     } catch {
       return null;
     }
   }
-  return toRecord(message);
+  return toRecord(normalizeStructuredValue(message));
 }
 
 function isMessageType(record: Record<string, unknown>, expected: string): boolean {
@@ -102,6 +118,10 @@ export function createGraphStreamTransport(
   request: GraphDataRequest,
   handlers: GraphStreamTransportHandlers,
 ): GraphStreamTransport {
+  const aggregateOnlyCorrelation =
+    request.elements.length > 0
+    && request.elements.every((element) => element.kind === "correlationMatrix");
+
   const seenChunkIndexes = new Set<number>();
   let nextChunkIndex = 0;
   let pendingHeader: GraphChunkHeader | null = null;
@@ -200,7 +220,7 @@ export function createGraphStreamTransport(
 
       if (isGraphAggregatePacket(structured)) {
         if (!pendingHeader) {
-          if (!sawFinalChunkPayload) {
+          if (!sawFinalChunkPayload && !(aggregateOnlyCorrelation && structured.kind === "correlationMatrix")) {
             fail("graph aggregate packet arrived before all raw chunks were delivered");
             return;
           }

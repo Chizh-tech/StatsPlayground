@@ -1367,6 +1367,86 @@ function makeProgressedChunk(
 {
   const events: string[] = [];
   let transportError: string | null = null;
+  const request: GraphDataRequest = {
+    ...makeRequest("req-correlation-aggregate-only", 27),
+    elements: [{ kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" }],
+  };
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {
+      events.push("header");
+    },
+    onPayload: () => {
+      events.push("payload");
+    },
+    onAggregate: (packet) => {
+      events.push(`aggregate:${packet.kind}`);
+    },
+    onComplete: () => {
+      events.push("complete");
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "aggregate",
+    ...validCorrelationPacket,
+  });
+  transport.onChannelMessage({
+    messageType: "complete",
+    requestId: request.requestId,
+    datasetId: request.datasetId,
+    generation: request.generation,
+    sourceRows: 0,
+    processedRows: 0,
+    chunksSent: 0,
+    cancelled: false,
+  });
+
+  assert.equal(transportError, null);
+  assert.deepEqual(events, ["aggregate:correlationMatrix", "complete"]);
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
+  const request: GraphDataRequest = {
+    ...makeRequest("req-correlation-aggregate-only-wrong-kind", 28),
+    elements: [{ kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" }],
+  };
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {
+      events.push("header");
+    },
+    onPayload: () => {
+      events.push("payload");
+    },
+    onAggregate: () => {
+      events.push("aggregate");
+    },
+    onComplete: () => {
+      events.push("complete");
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "aggregate",
+    kind: "summary",
+    yColumn: "cost",
+    summaries: [],
+  });
+
+  assert.deepEqual(events, []);
+  assert.match(transportError ?? "", /aggregate/i);
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
   const request = makeRequest("req-aggregate-before-raw", 25);
   const transport = createGraphStreamTransport(request, {
     onHeader: () => {
