@@ -207,6 +207,33 @@ assert.equal(makeGraphRows(10).length, 10);
     true,
     "Correlation mode must suppress brush picking",
   );
+  assert.equal(
+    graphBuilderViewSource.includes(
+      "const preserved = prev.filter((e) => LAYER_DIM[e.kind] === \"3d\" || e.enabled === false);",
+    ),
+    true,
+    "Adding correlation must preserve all 3D layers and disabled/inactive 2D layers",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("...preserved.filter((e) => e.kind !== \"correlationMatrix\")"),
+    true,
+    "Adding correlation must replace enabled ordinary 2D layers with a single active correlation layer",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("const addingOrdinary2d = LAYER_DIM[kind] === \"2d\";"),
+    true,
+    "addElement must identify ordinary 2D additions",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("const correlationActive = prev.some((e) => e.enabled !== false && e.kind === \"correlationMatrix\");"),
+    true,
+    "addElement must detect active correlation mode when adding non-correlation layers",
+  );
+  assert.equal(
+    graphBuilderViewSource.includes("? prev.filter((e) => e.kind !== \"correlationMatrix\")"),
+    true,
+    "Adding ordinary 2D while correlation is active must remove correlation layers",
+  );
 
   for (const graphBuilderFile of graphBuilderFiles) {
     const relativeFile = graphBuilderFile.replace(resolve(TEST_FILE_DIR, "../"), "").replace(/\\/g, "/");
