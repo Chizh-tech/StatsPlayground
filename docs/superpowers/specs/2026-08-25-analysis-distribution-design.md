@@ -1,9 +1,10 @@
 # Analyze Distribution 总体设计
 
 **日期：** 2026-08-25
-**状态：** 已完成分节设计评审，等待书面规格最终评审
+**状态：** 总体架构已评审；当前产品范围见批准范围与验收台账
 **目标基准：** JMP Pro 19.0 黑盒兼容
 **许可证边界：** StatsPlayground 保持 Apache-2.0；本设计不授予任何第三方知识产权许可
+**范围台账：** [2026-08-26-analysis-distribution-approved-scope.md](2026-08-26-analysis-distribution-approved-scope.md)
 
 ## 1. 目标与规格层级
 
@@ -12,6 +13,8 @@
 “兼容”不表示复制 JMP 软件、源码、JSL、文档、界面素材或品牌表达。统计方法必须独立实现；JMP 只能在经法律审查的隔离流程中作为黑盒验收参考。
 
 本文只冻结总体架构、产品范围和阶段门禁，不替代各统计方法的数学规格。任何方法进入实现前，必须有单独评审的 versioned method spec，冻结公式、参数化、有效观测、Weight/Freq、缺失值、退化状态、数值算法、报告字段、黄金案例和容差。未冻结的方法不进入 capability registry，也不在 UI 显示。
+
+当前版本实际交付范围、开发状态和人工验收状态以批准范围与验收台账为准。本文列出的长期目标不表示已批准进入当前版本。
 
 ## 2. 已批准决策
 
@@ -26,6 +29,8 @@
 - 平台工具提供主程序原生等价能力，不实现 JSL。
 - 共同建立脱敏黄金数据集和机器可读回归结果。
 - 采用严格 clean-room 流程，并在发布前完成正式法律审查。
+- 当前批准首版只交付连续描述能力和 Normal Process Capability；扩展摘要、Stem-and-leaf、equivalence、tolerance、高级拟合、zero-inflated、mixtures、情景分析和 Multiple Response 暂缓。
+- Process Capability 默认读取 Table 列属性规格；手工规格只覆盖当前分析，不回写 Table。
 
 ## 3. 用户流程
 
@@ -70,6 +75,8 @@ Distribution 不生成 ECharts option，不拥有坐标轴、颜色、tooltip、
 
 目标集合包括 Mean、sample standard deviation、standard error、均值置信限、N、N Missing、Sum Weight、Sum、sample variance、bias-corrected skewness、excess kurtosis、coefficient of variation、N Zero、N Unique、uncorrected/corrected sums of squares、lag-1 autocorrelation、Minimum、Maximum、Median、Mode、trimmed mean、geometric mean、Range、IQR、MAD、Proportion Zero/Nonzero、Huber robust mean 和 robust standard deviation。
 
+首版批准集合限于 Mean、sample standard deviation、standard error、均值置信限、N、N Missing、Minimum、Maximum、Median、Mode、Range、IQR 和 MAD。其余摘要统计保留为长期目标，当前暂缓。
+
 阶段 0 必须先批准机器可读的《观测贡献语义表》，定义 `ObservationEligibility`、`WeightSemantics`、`FreqSemantics` 和 `ByMissingSemantics`。它至少覆盖有效行、逻辑样本量、N/N Missing/Sum Weight、统计分母、自由度、零/负/非有限值、缺失 By、Weight 与 Freq 同时存在以及 n=0/1/常数列。具体方法不能自行解释这些组合。
 
 ### 4.3 检验、区间与诊断数据
@@ -91,11 +98,23 @@ Test block 必须包含估计值、原假设、统计量、参考分布、自由
 
 Process Capability 支持 specification limits、拟合分布 quantile limits、K-sigma 单/双侧限制、Moving Range 和适用 normal/nonnormal capability 指标，并复用相同的分布参数化。
 
+首版 Process Capability 只支持 Normal capability，并遵守以下规格来源规则：
+
+- Table 列属性存在有效 LSL 或 USL 时自动生成 capability 报告。
+- 列属性无有效规格边界时默认不生成；用户可在当前分析内手工输入有效 LSL 或 USL 后启用。
+- 仅有 Target 不启用 capability。
+- 手工值覆盖当前分析读取到的列属性值，随分析配置保存，但不回写 Table。
+- 规格值必须是目标列单位下的有限数值；双侧规格满足 `LSL < USL`，Target 不得越过已提供的规格边界。无效列属性规格产生 warning 且不自动启用，无效手工规格阻止运行。
+- 首版 Within Sigma 使用 average moving range；其他估计方法、nonnormal capability、K-sigma、quantile limits 和交互式情景分析暂缓。
+- 首版输出范围、单侧语义、置信区间、超规比例和 PPM 以批准范围台账及独立 method spec 为准。
+
 ### 4.5 分类和多重响应
 
 Nominal/Ordinal 报告至少包含 Level、Count、Probability、Probability Standard Error、Cumulative Probability、N Missing 和 N Unique。
 
 Multiple Response 报告至少包含 Level、Count、Share of Responses、Rate Per Case、Total Cases、Total Responses、Levels、Empty、Responding、Single Item 和 Multiple Item。多重响应的源列编码、分隔、空项、重复项和 Weight/Freq 语义必须在阶段 4 method spec 中冻结。
+
+当前版本暂缓 Nominal、Ordinal 和 Multiple Response；待连续变量能力完成自动测试和 UI 人工验收后重新评审。
 
 ### 4.6 Save 派生列
 
@@ -255,6 +274,7 @@ JMP/SAS 网站材料标注保留全部权利，其公开网站条款还对将网
 - UI 字段、状态、警告和交互测试通过。
 - 前端 build、Rust build/clippy/test 和跨平台 CI 通过。
 - 来源台账及依赖许可证审计通过。
+- 产品负责人在 StatsPlayground 正式界面中完成真实用户流程验收，并在批准范围台账中将对应 `uiAcceptance` 更新为 `passed`。
 
 最终验收包包含覆盖矩阵、公开来源、黄金输入/输出、自动回归、容差、UI 清单、跨平台记录和差异矩阵。差异必须记录原因、影响、回归案例、产品批准和法律审查状态；产品批准不等同于法律批准。
 
@@ -266,19 +286,19 @@ JMP/SAS 网站材料标注保留全部权利，其公开网站条款还对将网
 
 ### 阶段 1：平台骨架与连续描述
 
-交付启动角色、项目分析项、By/Weight/Freq、quantiles、summary、stem-and-leaf，以及 histogram/box/ECDF 的结构化 chart-data；统计结果和 chart-data 通过黄金对照，图形由 Graph Builder 渲染。
+交付启动角色、项目分析项、By/Weight/Freq、批准的 quantiles 与 summary，以及 histogram/box/ECDF 的结构化 chart-data；统计结果和 chart-data 通过黄金对照，图形由 Graph Builder 渲染。Stem-and-leaf 当前暂缓。
 
 ### 阶段 2：连续推断
 
-交付 mean/std-dev/equivalence tests、confidence/prediction/tolerance intervals，以及 Q-Q/P-P 结构化诊断数据；统计量、DF、p 值、区间和诊断坐标通过黄金对照。
+连续描述能力验收后重新评审 mean/std-dev tests、confidence/prediction intervals 和 Q-Q/P-P 诊断数据。Equivalence tests 与 tolerance intervals 当前暂缓。
 
 ### 阶段 3：分布拟合与过程能力
 
-逐个交付已冻结的 continuous/discrete registry entries、拟合优度、Fit All、capability、拟合曲线和诊断 chart-data；参数、评分、排序、坐标、警告通过黄金对照及法律检查点。
+先交付批准的 Normal Process Capability：规格限读取/覆盖、Within/Overall 指标、置信区间、超规比例、PPM 和结构化图表数据。通用拟合 UI、离散拟合、Fit All、高级拟合、zero-inflated、mixtures 和 nonnormal capability 当前暂缓。
 
 ### 阶段 4：分类与多重响应
 
-交付 Nominal、Ordinal、Multiple Response 默认和可选报告；所有建模类型通过黄金对照。
+Nominal、Ordinal 和 Multiple Response 当前暂缓；连续变量功能稳定并完成人工验收后再决定交付范围。
 
 ### 阶段 5：公式列与平台等价工具
 
