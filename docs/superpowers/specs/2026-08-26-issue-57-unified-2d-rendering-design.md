@@ -47,6 +47,20 @@ render budget remain unchanged unless a failing contract test proves a packet
 is not emitted. Frontend changes stay within the graph builder pipeline and
 `graphCore` rendering boundary.
 
+### Point Budget Behavior
+
+The confirmed blank-chart path is a Full request containing raw points whose
+valid row count exceeds `rawPointBudget`: the backend deliberately clears all
+buffered raw chunks and emits only aggregate packets. Histogram layers survive,
+while points and any raw-derived overlay lose their input.
+
+Full mode will continue to compute aggregates over the complete filtered data,
+but raw-derived ECharts layers will request a deterministic sample capped at
+`SCATTER_RENDER_BUDGET`. Explicit user Sample settings still win. The committed
+frame reports the effective sample so the status UI does not claim that every
+raw point was drawn. A point-producing request must not complete with an
+`omitted` disposition merely because the valid row count exceeded the budget.
+
 ## Rendering Behavior
 
 ### Points
@@ -64,6 +78,10 @@ is not emitted. Frontend changes stay within the graph builder pipeline and
 `Graph.tsx` will no longer mount `RawPointsLayer` for 2D panels. Canvas-specific
 z-index, hit-testing, and brush routing will be removed from the active path.
 ECharts click and brush handling will use the existing `__pick` metadata.
+
+Points, raw lines, smoothers, and fit lines are raw-derived layers for sampling
+purposes. Summary points/lines and packet-owned histogram, heatmap, and boxplot
+layers remain exact aggregate consumers and do not force raw sampling.
 
 ### Box Plots
 
@@ -106,6 +124,8 @@ Add regression coverage using production-shaped `GraphDataFrame` fixtures:
 - standalone boxplot packets emit boxplot series and categories;
 - standalone fitline and smoother elements emit non-empty line data;
 - points remain visible when composed with histogram and boxplot layers;
+- Full requests with more than `SCATTER_RENDER_BUDGET` source rows still emit a
+  bounded, deterministic raw sample while aggregate packets remain full-data;
 - grouped, hidden-group, faceted, datetime, and jitter behavior remains intact;
 - Graph Builder and `Graph.tsx` no longer rely on `RawPointsLayer` for 2D output;
 - frame-backed paths never read legacy rows.
