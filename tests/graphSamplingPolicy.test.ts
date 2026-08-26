@@ -7,6 +7,8 @@ import {
   clampSampleSize,
   DEFAULT_GRAPH_SAMPLE_SIZE,
   getRawPointNotice,
+  requiresRawGraphFrame,
+  resolveEffectiveGraphSampling,
 } from "../src/components/graphBuilder/graphSamplingPolicy.ts";
 
 assert.equal(clampSampleSize(SCATTER_RENDER_BUDGET + 1), SCATTER_RENDER_BUDGET);
@@ -53,3 +55,38 @@ for (const locale of ["en", "vi", "zh-CN", "zh-TW"]) {
 }
 
 console.log("graph sampling policy tests passed");
+
+// Additional TDD cases from task brief
+const rawCases = [
+  [{ kind: "points", summaryStat: "none" }],
+  [{ kind: "line", summaryStat: "none" }],
+  [{ kind: "bar", summaryStat: "none" }],
+  [{ kind: "smoother", summaryStat: "none" }],
+  [{ kind: "fitline", summaryStat: "none" }],
+];
+for (const elements of rawCases) {
+  assert.equal(requiresRawGraphFrame(elements), true);
+  assert.deepEqual(resolveEffectiveGraphSampling({ mode: "full" }, elements), {
+    mode: "sample",
+    size: SCATTER_RENDER_BUDGET,
+    seed: 0,
+  });
+}
+
+const aggregateOnly = [
+  { kind: "histogram", summaryStat: "none" },
+  { kind: "boxplot", summaryStat: "none" },
+  { kind: "points", summaryStat: "mean" },
+];
+assert.equal(requiresRawGraphFrame(aggregateOnly), false);
+assert.deepEqual(
+  resolveEffectiveGraphSampling({ mode: "full" }, aggregateOnly),
+  { mode: "full" },
+);
+assert.deepEqual(
+  resolveEffectiveGraphSampling(
+    { mode: "sample", size: SCATTER_RENDER_BUDGET + 1, seed: 17 },
+    rawCases[0],
+  ),
+  { mode: "sample", size: SCATTER_RENDER_BUDGET, seed: 17 },
+);
