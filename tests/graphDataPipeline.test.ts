@@ -15,6 +15,9 @@ import {
   type GraphLoadProgress,
   type GraphStreamState,
 } from "../src/components/graphBuilder/useGraphDataPipeline.ts";
+import {
+  updateMultivariateColumns,
+} from "../src/components/graphBuilder/updateMultivariateColumns.ts";
 import { normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
 import { createGraphStreamTransport } from "../src/services/graphDataTransport.ts";
 import type {
@@ -158,82 +161,16 @@ assert.equal(makeGraphRows(10).length, 10);
     /const CHART_TYPE_DEFS:[\s\S]*?correlationMatrix/,
     "GraphBuilderView CHART_TYPE_DEFS must include correlationMatrix",
   );
-  assert.match(
-    graphBuilderViewSource,
-    /const LAYER_DIM:[\s\S]*?correlationMatrix:\s*"2d"/,
-    "GraphBuilderView LAYER_DIM must include correlationMatrix as 2d",
-  );
+  assert.match(graphBuilderViewSource, /item\.mode === "multivariate"/);
+  assert.match(graphBuilderViewSource, /setMode\("2d"\)/);
+  assert.match(graphBuilderViewSource, /setMode\("3d"\)/);
+  assert.match(graphBuilderViewSource, /setMode\("multivariate"\)/);
+  assert.match(graphBuilderViewSource, /modeStates\.multivariate\.columns/);
+  assert.doesNotMatch(graphBuilderViewSource, /isCorrelationMatrixItem\(item\)/);
   assert.equal(
     graphBuilderViewSource.includes("CorrelationMatrixOptions"),
     true,
     "LayerCard must render CorrelationMatrixOptions",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes("isCorrelationMatrixItem(item)"),
-    true,
-    "GraphBuilderView must derive correlation mode from isCorrelationMatrixItem",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes("!isCorrelationMode && ("),
-    true,
-    "Correlation mode must gate inapplicable controls",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes("{/* 2D / 3D segmented toggle — styled like the cursor-mode pill. */}"),
-    true,
-    "GraphBuilderView must keep the 2D/3D segmented control source marker",
-  );
-  assert.match(
-    graphBuilderViewSource,
-    /\{!isCorrelationMode && \([\s\S]*?className=\"gb-dim-mode\"/,
-    "Correlation mode must hide the global 2D/3D segmented control",
-  );
-  assert.match(
-    graphBuilderViewSource,
-    /item\.threeD\s*&&\s*!isCorrelationMode\s*\?/,
-    "Canvas row must only use 3D five-column layout when 3D is active outside correlation mode",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes("onYAxisDblClick={isCorrelationMode ? undefined :"),
-    true,
-    "Correlation mode must disable axis settings triggers",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes("onPointClick={isCorrelationMode ? undefined :"),
-    true,
-    "Correlation mode must suppress point picking",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes("onBrushSelect={isCorrelationMode ? undefined :"),
-    true,
-    "Correlation mode must suppress brush picking",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes(
-      "const preserved = prev.filter((e) => LAYER_DIM[e.kind] === \"3d\" || e.enabled === false);",
-    ),
-    true,
-    "Adding correlation must preserve all 3D layers and disabled/inactive 2D layers",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes("...preserved.filter((e) => e.kind !== \"correlationMatrix\")"),
-    true,
-    "Adding correlation must replace enabled ordinary 2D layers with a single active correlation layer",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes("const addingOrdinary2d = LAYER_DIM[kind] === \"2d\";"),
-    true,
-    "addElement must identify ordinary 2D additions",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes("const correlationActive = prev.some((e) => e.enabled !== false && e.kind === \"correlationMatrix\");"),
-    true,
-    "addElement must detect active correlation mode when adding non-correlation layers",
-  );
-  assert.equal(
-    graphBuilderViewSource.includes("? prev.filter((e) => e.kind !== \"correlationMatrix\")"),
-    true,
-    "Adding ordinary 2D while correlation is active must remove correlation layers",
   );
 
   for (const graphBuilderFile of graphBuilderFiles) {
@@ -245,6 +182,69 @@ assert.equal(makeGraphRows(10).length, 10);
       `Graph Builder production file must not reference queryTableWindow: ${relativeFile}`,
     );
   }
+}
+
+{
+  const continuous = (name: string) => ({ name, type: "continuous" as const });
+  const nominal = (name: string) => ({ name, type: "nominal" as const });
+
+  const appendResult = updateMultivariateColumns(
+    [continuous("a"), continuous("b")],
+    { type: "append", fields: [continuous("c"), continuous("d")] },
+  );
+  assert.equal(appendResult.error, undefined);
+  assert.deepEqual(
+    appendResult.columns.map((field) => field.name),
+    ["a", "b", "c", "d"],
+  );
+
+  const reorderResult = updateMultivariateColumns(
+    [continuous("a"), continuous("b"), continuous("c")],
+    { type: "reorder", from: 2, to: 0 },
+  );
+  assert.equal(reorderResult.error, undefined);
+  assert.deepEqual(
+    reorderResult.columns.map((field) => field.name),
+    ["c", "a", "b"],
+  );
+
+  const removeResult = updateMultivariateColumns(
+    [continuous("a"), continuous("b"), continuous("c")],
+    { type: "remove", index: 1 },
+  );
+  assert.equal(removeResult.error, undefined);
+  assert.deepEqual(
+    removeResult.columns.map((field) => field.name),
+    ["a", "c"],
+  );
+
+  const duplicateResult = updateMultivariateColumns(
+    [continuous("a"), continuous("b")],
+    { type: "append", fields: [continuous("b")] },
+  );
+  assert.equal(duplicateResult.error, "duplicateField");
+  assert.deepEqual(
+    duplicateResult.columns.map((field) => field.name),
+    ["a", "b"],
+  );
+
+  const categoricalResult = updateMultivariateColumns(
+    [continuous("a"), continuous("b")],
+    { type: "append", fields: [nominal("cat")] },
+  );
+  assert.equal(categoricalResult.error, "invalidFieldType");
+  assert.deepEqual(
+    categoricalResult.columns.map((field) => field.name),
+    ["a", "b"],
+  );
+
+  const maxColumns = Array.from({ length: 20 }, (_, index) => continuous(`v${index + 1}`));
+  const overflowResult = updateMultivariateColumns(maxColumns, {
+    type: "append",
+    fields: [continuous("v21")],
+  });
+  assert.equal(overflowResult.error, "maxColumns");
+  assert.equal(overflowResult.columns.length, 20);
 }
 
 {

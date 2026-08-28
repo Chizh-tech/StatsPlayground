@@ -584,6 +584,16 @@
       "contour3d": "Contour"
     },
     "frequency": "Count",
+    "mode": {
+      "label": "Graph mode",
+      "twoD": "2D",
+      "threeD": "3D",
+      "multivariate": "Multivariate"
+    },
+    "multivariate": {
+      "variables": "Y (Variables)",
+      "chartType": "Chart type"
+    },
     "startOver": "Start Over",
     "swapXY": {
       "label": "Swap X & Y",

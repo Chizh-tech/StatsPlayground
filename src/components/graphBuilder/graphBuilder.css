@@ -2059,7 +2059,7 @@
    switch, but with text options ("2D" / "3D") so it needs wider slots. */
 .gb-dim-mode {
   --gb-dm-pad: 3px;
-  --gb-dm-opt-w: 30px;
+  --gb-dm-opt-w: 86px;
   position: relative;
   display: inline-flex;
   align-items: stretch;
@@ -2085,6 +2085,7 @@
 
 .gb-dim-mode-thumb-2d { left: var(--gb-dm-pad); }
 .gb-dim-mode-thumb-3d { left: calc(var(--gb-dm-pad) + var(--gb-dm-opt-w)); }
+.gb-dim-mode-thumb-multivariate { left: calc(var(--gb-dm-pad) + (var(--gb-dm-opt-w) * 2)); }
 
 .gb-dim-mode-opt {
   position: relative;
@@ -2111,5 +2112,23 @@
 .gb-dim-mode-opt:focus-visible {
   outline: 2px solid var(--fg-accent);
   outline-offset: 1px;
+}
+
+.gb-multivariate-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gb-multivariate-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--fg-primary);
+  font-size: 12px;
+  padding: 6px 10px;
 }
 

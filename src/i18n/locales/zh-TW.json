@@ -580,6 +580,16 @@
       "contour3d": "等高線"
     },
     "frequency": "頻次",
+    "mode": {
+      "label": "圖形模式",
+      "twoD": "二維",
+      "threeD": "三維",
+      "multivariate": "多變量"
+    },
+    "multivariate": {
+      "variables": "Y（變數）",
+      "chartType": "圖形類型"
+    },
     "startOver": "重新開始",
     "swapXY": {
       "label": "交換 X / Y",

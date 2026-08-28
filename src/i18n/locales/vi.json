@@ -580,6 +580,16 @@
       "contour3d": "Đường đồng mức"
     },
     "frequency": "Tần suất",
+    "mode": {
+      "label": "Chế độ đồ thị",
+      "twoD": "2D",
+      "threeD": "3D",
+      "multivariate": "Đa biến"
+    },
+    "multivariate": {
+      "variables": "Y (Biến)",
+      "chartType": "Loại biểu đồ"
+    },
     "startOver": "Bắt đầu lại",
     "swapXY": {
       "label": "Hoán đổi X & Y",
