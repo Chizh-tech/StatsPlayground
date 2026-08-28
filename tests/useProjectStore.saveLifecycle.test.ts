@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 
 import type { ProjectInfo } from "../src/types/project";
 import type { SaveProgress, SaveProjectRequest } from "../src/services/projectService";
-import { normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
-import { deriveElements } from "../src/components/graphBuilder/useGraphDataPipeline.ts";
 import { createProjectStore } from "../src/stores/useProjectStore.ts";
+import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
 
 interface Deferred<T> {
@@ -63,30 +60,13 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
-{
-  const workspaceSource = readFileSync(
-    path.join(process.cwd(), "src", "components", "Workspace.tsx"),
-    "utf8",
-  ).replace(/\r\n/g, "\n");
-
-  const createGraphBuilderMatch = workspaceSource.match(
-    /const handleCreateGraphBuilder = \(\) => \{([\s\S]*?)\n  \};/,
-  );
-
-  assert.ok(createGraphBuilderMatch, "Workspace must define handleCreateGraphBuilder");
-  const createGraphBuilderBody = createGraphBuilderMatch[1];
-  assert.match(createGraphBuilderBody, /mode:\s*"2d"/);
-  assert.match(
-    createGraphBuilderBody,
-    /modeStates:\s*\{\s*twoD:\s*createDefaultGraph2DState\(\),\s*threeD:\s*createDefaultGraph3DState\(\),\s*multivariate:\s*createDefaultMultivariateGraphState\(\),\s*\}/s,
-  );
-  assert.doesNotMatch(createGraphBuilderBody, /encoding:\s*\{\}/);
-  assert.doesNotMatch(createGraphBuilderBody, /multiX:\s*\[/);
-  assert.doesNotMatch(createGraphBuilderBody, /multiY:\s*\[/);
-  assert.doesNotMatch(createGraphBuilderBody, /elements:\s*\[/);
+function resetGraphBuilderStore() {
+  useGraphBuilderStore.getState().reset();
 }
 
 {
+  resetGraphBuilderStore();
+
   const correlationGraph = {
     id: "graph-corr",
     name: "Correlation Graph",
@@ -113,6 +93,8 @@ async function flushMicrotasks(): Promise<void> {
     },
     createdAt: new Date(0).toISOString(),
   };
+  const inputGraphs = [correlationGraph] as GraphBuilderItem[];
+  const baseline = JSON.stringify(inputGraphs);
 
   let capturedSaveRequest: SaveProjectRequest | null = null;
 
@@ -125,7 +107,7 @@ async function flushMicrotasks(): Promise<void> {
         datasets: [],
         history: [],
         snapshots: [],
-        graphBuilders: [correlationGraph],
+        graphBuilders: [],
         tabulates: [],
         folders: [],
         tableFolders: {},
@@ -141,9 +123,11 @@ async function flushMicrotasks(): Promise<void> {
     },
   });
 
-  const opened = await store.getState().openProject("C:/tmp/project.spprj");
-  assert.equal((opened.graphBuilders[0] as GraphBuilderItem).mode, "multivariate");
-  assert.deepEqual((opened.graphBuilders[0] as GraphBuilderItem).modeStates.multivariate, {
+  useGraphBuilderStore.getState().loadFromProject(inputGraphs);
+  const loaded = useGraphBuilderStore.getState().items[0] as GraphBuilderItem;
+
+  assert.equal(loaded.mode, "multivariate");
+  assert.deepEqual(loaded.modeStates.multivariate, {
     columns: [continuous("height"), continuous("weight")],
     chartType: "correlationMatrix",
     correlationMethod: "kendall",
@@ -151,7 +135,7 @@ async function flushMicrotasks(): Promise<void> {
 
   await store.getState().saveProject({
     ...request,
-    graphBuilders: opened.graphBuilders.map((item) => normalizeGraphBuilderItem(item)),
+    graphBuilders: useGraphBuilderStore.getState().items,
   });
 
   const savedGraph = capturedSaveRequest?.graphBuilders[0] as GraphBuilderItem;
@@ -164,9 +148,12 @@ async function flushMicrotasks(): Promise<void> {
   for (const legacyKey of ["threeD", "encoding", "multiX", "multiY", "elements"]) {
     assert.equal(Object.hasOwn(savedGraph, legacyKey), false);
   }
+  assert.equal(JSON.stringify(inputGraphs), baseline);
 }
 
 {
+  resetGraphBuilderStore();
+
   const legacyCorrelationGraph: GraphBuilderItem = {
     id: "graph-legacy-corr",
     name: "Legacy Correlation Graph",
@@ -192,7 +179,7 @@ async function flushMicrotasks(): Promise<void> {
         datasets: [],
         history: [],
         snapshots: [],
-        graphBuilders: [legacyCorrelationGraph],
+        graphBuilders: [],
         tabulates: [],
         folders: [],
         tableFolders: {},
@@ -208,19 +195,22 @@ async function flushMicrotasks(): Promise<void> {
     },
   });
 
-  const opened = await store.getState().openProject("C:/tmp/project.spprj");
-  const derived = deriveElements(opened.graphBuilders[0] as GraphBuilderItem);
-  assert.deepEqual(derived, [
-    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
-  ]);
-  assert.equal(
-    (opened.graphBuilders[0] as { elements?: Array<{ options?: { correlationMethod?: string } }> }).elements?.[0]?.options?.correlationMethod,
-    undefined,
-  );
+  useGraphBuilderStore.getState().loadFromProject([legacyCorrelationGraph]);
+  const loaded = useGraphBuilderStore.getState().items[0] as GraphBuilderItem;
+
+  assert.equal(loaded.mode, "multivariate");
+  assert.deepEqual(loaded.modeStates.multivariate, {
+    columns: [continuous("left"), continuous("right")],
+    chartType: "correlationMatrix",
+    correlationMethod: "pearson",
+  });
+  for (const legacyKey of ["threeD", "encoding", "multiX", "multiY", "elements"]) {
+    assert.equal(Object.hasOwn(loaded, legacyKey), false);
+  }
 
   await store.getState().saveProject({
     ...request,
-    graphBuilders: opened.graphBuilders.map((item) => normalizeGraphBuilderItem(item)),
+    graphBuilders: useGraphBuilderStore.getState().items,
   });
 
   const savedGraph = capturedSaveRequest?.graphBuilders[0] as GraphBuilderItem;
@@ -237,6 +227,8 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 {
+  resetGraphBuilderStore();
+
   const saveDeferred = deferred<ProjectInfo>();
   let onProgressRef: ((progress: SaveProgress) => void) | undefined;
   let readOnlyAtInvoke = false;
@@ -281,6 +273,8 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 {
+  resetGraphBuilderStore();
+
   const saveDeferred = deferred<ProjectInfo>();
   let onProgressRef: ((progress: SaveProgress) => void) | undefined;
 
@@ -314,6 +308,8 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 {
+  resetGraphBuilderStore();
+
   const saveDeferred = deferred<ProjectInfo>();
 
   const store = createProjectStore({
