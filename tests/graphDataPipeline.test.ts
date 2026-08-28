@@ -904,19 +904,147 @@ function run(state: GraphStreamState, ...messages: Parameters<typeof reduceGraph
   return next;
 }
 
-function makeGraphBuilderItem(overrides: Partial<GraphBuilderItem> = {}): GraphBuilderItem {
+function defaultModeStates(): GraphBuilderItem["modeStates"] {
+  return {
+    twoD: {
+      encoding: {},
+      multiX: [],
+      multiY: [],
+      elements: [{ kind: "points", enabled: true }],
+      smootherLambda: 0.4,
+    },
+    threeD: {
+      encoding: {},
+      elements: [{ kind: "scatter3d", enabled: true }],
+      smootherLambda: 0.4,
+    },
+    multivariate: {
+      columns: [],
+      chartType: "correlationMatrix",
+      correlationMethod: "pearson",
+    },
+  };
+}
+
+function createDefaultGraph2DState(): GraphBuilderItem["modeStates"]["twoD"] {
+  return {
+    ...defaultModeStates().twoD,
+    encoding: {},
+    multiX: [],
+    multiY: [],
+    elements: [{ kind: "points", enabled: true }],
+  };
+}
+
+function continuous(name: string): { name: string; type: "continuous" } {
+  return { name, type: "continuous" };
+}
+
+function makeGraphBuilderItem(overrides: Record<string, unknown> = {}): GraphBuilderItem {
+  const raw = overrides as {
+    mode?: GraphBuilderItem["mode"];
+    modeStates?: Partial<GraphBuilderItem["modeStates"]>;
+    encoding?: Record<string, { name: string; type: "continuous" | "nominal" | "ordinal" | "date" }>;
+    elements?: Array<{ kind: string; enabled?: boolean; options?: Record<string, unknown> }>;
+    multiX?: Array<{ name: string; type: "continuous" | "nominal" | "ordinal" | "date" }>;
+    multiY?: Array<{ name: string; type: "continuous" | "nominal" | "ordinal" | "date" }>;
+    threeD?: boolean;
+    filters?: GraphBuilderItem["filters"];
+    sampling?: GraphBuilderItem["sampling"];
+    hiddenGroups?: string[];
+    groupStyles?: GraphBuilderItem["modeStates"]["twoD"]["groupStyles"];
+    smootherLambda?: number;
+  };
+
+  const modeStates = defaultModeStates();
+  modeStates.twoD.encoding = {
+    x: { name: "region", type: "nominal" },
+    y: { name: "cost", type: "continuous" },
+  };
+  modeStates.threeD.encoding = {
+    x: { name: "region", type: "nominal" },
+    y: { name: "cost", type: "continuous" },
+  };
+
+  const topLevelElements = raw.elements ?? [{ kind: "points", enabled: true }];
+  const THREE_D_KINDS = new Set(["surface", "contour3d", "scatter3d"]);
+  modeStates.twoD.elements = topLevelElements.filter((element) => !THREE_D_KINDS.has(String(element.kind)));
+  modeStates.threeD.elements = topLevelElements.filter((element) => THREE_D_KINDS.has(String(element.kind)));
+
+  if (raw.encoding) {
+    modeStates.twoD.encoding = {
+      ...modeStates.twoD.encoding,
+      ...raw.encoding,
+    };
+    modeStates.threeD.encoding = {
+      ...modeStates.threeD.encoding,
+      ...raw.encoding,
+    };
+  }
+  modeStates.twoD.multiX = raw.multiX ?? [];
+  modeStates.twoD.multiY = raw.multiY ?? [];
+
+  if (typeof raw.smootherLambda === "number") {
+    modeStates.twoD.smootherLambda = raw.smootherLambda;
+    modeStates.threeD.smootherLambda = raw.smootherLambda;
+  }
+  if (raw.hiddenGroups) {
+    modeStates.twoD.hiddenGroups = [...raw.hiddenGroups];
+    modeStates.threeD.hiddenGroups = [...raw.hiddenGroups];
+  }
+  if (raw.groupStyles) {
+    modeStates.twoD.groupStyles = raw.groupStyles;
+    modeStates.threeD.groupStyles = raw.groupStyles;
+  }
+
+  if (raw.modeStates?.twoD) {
+    modeStates.twoD = {
+      ...modeStates.twoD,
+      ...raw.modeStates.twoD,
+      encoding: {
+        ...modeStates.twoD.encoding,
+        ...(raw.modeStates.twoD.encoding ?? {}),
+      },
+      multiX: [...(raw.modeStates.twoD.multiX ?? modeStates.twoD.multiX)],
+      multiY: [...(raw.modeStates.twoD.multiY ?? modeStates.twoD.multiY)],
+      elements: [...(raw.modeStates.twoD.elements ?? modeStates.twoD.elements)],
+    };
+  }
+  if (raw.modeStates?.threeD) {
+    modeStates.threeD = {
+      ...modeStates.threeD,
+      ...raw.modeStates.threeD,
+      encoding: {
+        ...modeStates.threeD.encoding,
+        ...(raw.modeStates.threeD.encoding ?? {}),
+      },
+      elements: [...(raw.modeStates.threeD.elements ?? modeStates.threeD.elements)],
+    };
+  }
+  if (raw.modeStates?.multivariate) {
+    modeStates.multivariate = {
+      ...modeStates.multivariate,
+      ...raw.modeStates.multivariate,
+      columns: [...(raw.modeStates.multivariate.columns ?? modeStates.multivariate.columns)],
+    };
+  }
+
+  const modeFromCorrelation = topLevelElements.some(
+    (element) => element.enabled !== false && element.kind === "correlationMatrix",
+  )
+    ? "multivariate"
+    : undefined;
+  const mode = raw.mode ?? modeFromCorrelation ?? (raw.threeD ? "3d" : "2d");
+
   return {
     id: "graph-1",
     name: "Graph 1",
     sourceDatasetId: "dataset-1",
-    encoding: {
-      x: { name: "region", type: "nominal" },
-      y: { name: "cost", type: "continuous" },
-    },
-    elements: [{ kind: "points", enabled: true }],
-    smootherLambda: 0.5,
+    mode,
+    modeStates,
+    filters: raw.filters,
+    sampling: raw.sampling,
     createdAt: new Date().toISOString(),
-    ...overrides,
   };
 }
 
@@ -1756,80 +1884,22 @@ function makeProgressedChunk(
 
 {
   const correlationItem = makeGraphBuilderItem({
-    encoding: {},
-    multiX: [
-      { name: "a", type: "continuous" },
-      { name: "b", type: "continuous" },
-      { name: "c", type: "continuous" },
-    ],
-    elements: [
-      {
-        kind: "correlationMatrix",
-        enabled: true,
-        options: { correlationMethod: "spearman" },
+    mode: "multivariate",
+    modeStates: {
+      ...defaultModeStates(),
+      twoD: {
+        ...createDefaultGraph2DState(),
+        encoding: {
+          x: continuous("inactive_x"),
+          y: continuous("inactive_y"),
+        },
       },
-    ],
-  });
-
-  assert.deepEqual(deriveFields(correlationItem), [
-    { role: "multiX0", column: "a" },
-    { role: "multiX1", column: "b" },
-    { role: "multiX2", column: "c" },
-  ]);
-  const correlationElementsExpected: GraphElementRequest[] = [
-    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "spearman" },
-  ];
-  assert.deepEqual(deriveElements(correlationItem), correlationElementsExpected);
-  assert.deepEqual(
-    deriveFields(correlationItem).filter((field) => field.column === "__sp_variable__" || field.column === "__sp_value__"),
-    [],
-  );
-
-  const legacyCorrelationItem = makeGraphBuilderItem({
-    encoding: {},
-    multiY: [
-      { name: "m0", type: "continuous" },
-      { name: "m1", type: "continuous" },
-    ],
-    elements: [{ kind: "correlationMatrix", enabled: true }],
-  });
-
-  const legacyCorrelationElementsExpected: GraphElementRequest[] = [
-    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
-  ];
-  assert.deepEqual(deriveElements(legacyCorrelationItem), legacyCorrelationElementsExpected);
-
-  const invalidMethodItem = makeGraphBuilderItem({
-    encoding: {},
-    multiX: [
-      { name: "k0", type: "continuous" },
-      { name: "k1", type: "continuous" },
-    ],
-    elements: [
-      {
-        kind: "correlationMatrix",
-        enabled: true,
-        options: { correlationMethod: "distance" },
+      multivariate: {
+        columns: [continuous("a"), continuous("b"), continuous("c")],
+        chartType: "correlationMatrix",
+        correlationMethod: "spearman",
       },
-    ],
-  });
-
-  const invalidCorrelationElementsExpected: GraphElementRequest[] = [
-    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
-  ];
-  assert.deepEqual(deriveElements(invalidMethodItem), invalidCorrelationElementsExpected);
-
-  const mixedCorrelationItem = makeGraphBuilderItem({
-    encoding: {},
-    multiX: [
-      { name: "mx0", type: "continuous" },
-      { name: "mx1", type: "continuous" },
-    ],
-    multiY: [
-      { name: "my0", type: "continuous" },
-      { name: "my1", type: "continuous" },
-      { name: "my2", type: "continuous" },
-    ],
+    },
     filters: [
       {
         id: "corr-filter",
@@ -1842,14 +1912,88 @@ function makeProgressedChunk(
         },
       },
     ],
-    elements: [{ kind: "correlationMatrix", enabled: true }],
+  });
+
+  assert.deepEqual(roleColumns(deriveFields(correlationItem), "multiY0"), ["a"]);
+  assert.deepEqual(roleColumns(deriveFields(correlationItem), "multiY2"), ["c"]);
+  assert.deepEqual(roleColumns(deriveFields(correlationItem), "x"), []);
+  assert.deepEqual(roleColumns(deriveFields(correlationItem), "filter"), ["segment"]);
+  const correlationElementsExpected: GraphElementRequest[] = [
+    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "spearman" },
+  ];
+  assert.deepEqual(deriveElements(correlationItem), correlationElementsExpected);
+  assert.deepEqual(
+    deriveFields(correlationItem).filter((field) => field.column === "__sp_variable__" || field.column === "__sp_value__"),
+    [],
+  );
+
+  const invalidMethodItem = makeGraphBuilderItem({
+    mode: "multivariate",
+    modeStates: {
+      ...defaultModeStates(),
+      multivariate: {
+        columns: [continuous("k0"), continuous("k1")],
+        chartType: "correlationMatrix",
+        correlationMethod: "distance" as "pearson",
+      },
+    },
+  });
+
+  const invalidCorrelationElementsExpected: GraphElementRequest[] = [
+    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
+  ];
+  assert.deepEqual(deriveElements(invalidMethodItem), invalidCorrelationElementsExpected);
+
+  const mixedCorrelationItem = makeGraphBuilderItem({
+    mode: "2d",
+    modeStates: {
+      ...defaultModeStates(),
+      twoD: {
+        ...createDefaultGraph2DState(),
+        encoding: {
+          x: continuous("x_active"),
+          y: continuous("y_active"),
+        },
+      },
+      multivariate: {
+        columns: [continuous("my0"), continuous("my1"), continuous("my2")],
+        chartType: "correlationMatrix",
+        correlationMethod: "pearson",
+      },
+    },
+    filters: [
+      {
+        id: "corr-filter",
+        op: "AND",
+        rule: {
+          kind: "categorical",
+          field: { name: "segment", type: "nominal" },
+          selected: ["A"],
+          exclude: false,
+        },
+      },
+    ],
   });
 
   assert.deepEqual(deriveFields(mixedCorrelationItem), [
-    { role: "multiX0", column: "mx0" },
-    { role: "multiX1", column: "mx1" },
+    { role: "x", column: "x_active" },
+    { role: "y", column: "y_active" },
     { role: "filter", column: "segment" },
   ]);
+
+  const sampledMultivariateItem = makeGraphBuilderItem({
+    mode: "multivariate",
+    modeStates: {
+      ...defaultModeStates(),
+      multivariate: {
+        columns: [continuous("s0"), continuous("s1")],
+        chartType: "correlationMatrix",
+        correlationMethod: "pearson",
+      },
+    },
+    sampling: { mode: "sample", size: 100, seed: 7 },
+  });
+  assert.deepEqual(deriveGraphRequestParts(sampledMultivariateItem).sampling, { mode: "full" });
 
   const rawItem = makeGraphBuilderItem({
     elements: [

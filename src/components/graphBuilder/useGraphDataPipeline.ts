@@ -16,7 +16,7 @@ import {
   type GraphElementRequest,
   type GraphViewport,
 } from "../../types/graphData.ts";
-import { isCorrelationMatrixItem, type GraphBuilderItem } from "../../types/graphBuilder.ts";
+import type { GraphBuilderItem } from "../../types/graphBuilder.ts";
 import type { DatasetMeta, TableWindowFilter } from "../../types/data";
 import type { FilterRuleItem } from "../../types/filter";
 
@@ -547,7 +547,19 @@ function normalizeCorrelationMethod(value: unknown): CorrelationMethod {
 }
 
 export function deriveElements(item: GraphBuilderItem): GraphElementRequest[] {
-  return item.elements
+  if (item.mode === "multivariate") {
+    return [{
+      kind: "correlationMatrix",
+      summaryStat: "none",
+      correlationMethod: normalizeCorrelationMethod(item.modeStates.multivariate.correlationMethod),
+    }];
+  }
+
+  const activeElements = item.mode === "3d"
+    ? item.modeStates.threeD.elements
+    : item.modeStates.twoD.elements;
+
+  return activeElements
     .filter((element) => element.enabled !== false)
     .map((element) => {
       const requestElement: GraphElementRequest = {
@@ -580,32 +592,41 @@ export function deriveGraphRequestParts(item: GraphBuilderItem): {
     fields: deriveFields(item),
     filters: serializeFilters(item.filters ?? []),
     elements,
-    sampling: resolveEffectiveGraphSampling(item.sampling, elements),
+    sampling: item.mode === "multivariate"
+      ? { mode: "full" }
+      : resolveEffectiveGraphSampling(item.sampling, elements),
   };
 }
 
-function hasEnabledElementKinds(item: GraphBuilderItem): Set<string> {
+function hasEnabledElementKinds(elements: readonly GraphElementRequest[]): Set<string> {
   return new Set(
-    item.elements
+    elements
       .filter((element) => element.enabled !== false)
       .map((element) => String(element.kind).toLowerCase()),
   );
 }
 
-function deriveGroupingColumn(item: GraphBuilderItem): string | undefined {
+function deriveGroupingColumn(
+  mode: GraphBuilderItem["mode"],
+  encoding: Partial<Record<"x" | "y" | "z" | "color" | "size" | "overlay" | "groupX" | "groupY" | "groupZ" | "wrap", { name: string }>>,
+): string | undefined {
   return (
-    item.encoding.overlay?.name
-    ?? item.encoding.color?.name
-    ?? item.encoding.groupX?.name
-    ?? item.encoding.groupY?.name
-    ?? (item.threeD ? item.encoding.groupZ?.name : undefined)
-    ?? item.encoding.wrap?.name
+    encoding.overlay?.name
+    ?? encoding.color?.name
+    ?? encoding.groupX?.name
+    ?? encoding.groupY?.name
+    ?? (mode === "3d" ? encoding.groupZ?.name : undefined)
+    ?? encoding.wrap?.name
   );
 }
 
 function deriveActiveMultiFields(item: GraphBuilderItem): GraphFieldBinding[] {
-  const multiX = item.multiX ?? [];
-  const multiY = item.multiY ?? [];
+  if (item.mode !== "2d") {
+    return [];
+  }
+
+  const multiX = item.modeStates.twoD.multiX ?? [];
+  const multiY = item.modeStates.twoD.multiY ?? [];
   const xActive = multiX.length >= 2;
   const yActive = multiY.length >= 2;
 
@@ -628,13 +649,10 @@ function deriveActiveMultiFields(item: GraphBuilderItem): GraphFieldBinding[] {
 }
 
 export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
-  if (isCorrelationMatrixItem(item)) {
+  if (item.mode === "multivariate") {
     const fields: GraphFieldBinding[] = [];
     const seen = new Set<string>();
-    const multiX = item.multiX ?? [];
-    const multiY = item.multiY ?? [];
-    const xActive = multiX.length >= 2;
-    const yActive = multiY.length >= 2;
+    const columns = item.modeStates.multivariate.columns ?? [];
 
     const addField = (role: string, column: string | undefined): void => {
       if (!column || seen.has(`${role}:${column}`)) {
@@ -644,14 +662,8 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
       fields.push({ role, column });
     };
 
-    if (xActive) {
-      for (let index = 0; index < multiX.length; index += 1) {
-        addField(`multiX${index}`, multiX[index].name);
-      }
-    } else if (yActive) {
-      for (let index = 0; index < multiY.length; index += 1) {
-        addField(`multiY${index}`, multiY[index].name);
-      }
+    for (let index = 0; index < columns.length; index += 1) {
+      addField(`multiY${index}`, columns[index].name);
     }
 
     for (const filter of item.filters ?? []) {
@@ -663,7 +675,10 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
 
   const fields: GraphFieldBinding[] = [];
   const seen = new Set<string>();
-  const enabledKinds = hasEnabledElementKinds(item);
+  const activeMode = item.mode;
+  const activeState = activeMode === "3d" ? item.modeStates.threeD : item.modeStates.twoD;
+  const enabledKinds = hasEnabledElementKinds(deriveElements(item));
+  const encoding = activeState.encoding;
 
   const addField = (role: string, column: string | undefined): void => {
     if (!column || seen.has(`${role}:${column}`)) {
@@ -673,28 +688,30 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
     fields.push({ role, column });
   };
 
-  addField("x", item.encoding.x?.name);
-  addField("y", item.encoding.y?.name);
+  addField("x", encoding.x?.name);
+  addField("y", encoding.y?.name);
   const has3DElement = enabledKinds.has("surface") || enabledKinds.has("contour3d") || enabledKinds.has("scatter3d");
-  if (item.threeD && has3DElement) {
-    addField("z", item.encoding.z?.name);
+  if (activeMode === "3d" && has3DElement) {
+    addField("z", encoding.z?.name);
   }
 
   const canUseSize = enabledKinds.has("points") || enabledKinds.has("scatter3d");
   if (canUseSize) {
-    addField("size", item.encoding.size?.name);
+    addField("size", encoding.size?.name);
   }
 
-  const hasHiddenGroups = (item.hiddenGroups?.length ?? 0) > 0;
+  const hasHiddenGroups = (activeState.hiddenGroups?.length ?? 0) > 0;
   const canUseGroup = enabledKinds.size > 0 || hasHiddenGroups;
   if (canUseGroup) {
-    addField("group", deriveGroupingColumn(item));
+    addField("group", deriveGroupingColumn(activeMode, encoding));
   }
 
-  addField("groupX", item.encoding.groupX?.name);
-    addField("groupZ", item.encoding.groupZ?.name);
-  addField("groupY", item.encoding.groupY?.name);
-  addField("wrap", item.encoding.wrap?.name);
+  addField("groupX", encoding.groupX?.name);
+  if (activeMode === "3d") {
+    addField("groupZ", encoding.groupZ?.name);
+  }
+  addField("groupY", encoding.groupY?.name);
+  addField("wrap", encoding.wrap?.name);
 
   for (const filter of item.filters ?? []) {
     addField("filter", filter.rule.field.name);
