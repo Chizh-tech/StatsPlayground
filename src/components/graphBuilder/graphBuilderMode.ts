@@ -111,6 +111,45 @@ function canonicalizeMultivariateColumns(value: unknown): FieldRef[] {
   return out;
 }
 
+function collapseSingleContinuousAxisField(
+  baseEncoding: Partial<Graph2DState["encoding"]>,
+  multiFields: FieldRef[],
+  axis: "x" | "y",
+): {
+  encoding: Partial<Graph2DState["encoding"]>;
+  multiFields: FieldRef[];
+} {
+  const continuousFields = multiFields.filter((field) => field.type === "continuous");
+  if (continuousFields.length !== 1) {
+    return { encoding: baseEncoding, multiFields };
+  }
+  return {
+    encoding: {
+      ...baseEncoding,
+      [axis]: { name: continuousFields[0].name, type: "continuous" },
+    },
+    multiFields: [],
+  };
+}
+
+function normalizeTwoDEncodingAndMultiAxes(
+  encoding: Partial<Graph2DState["encoding"]>,
+  multiXInput: unknown,
+  multiYInput: unknown,
+): Pick<Graph2DState, "encoding" | "multiX" | "multiY"> {
+  const multiX = toFieldRefArray(multiXInput);
+  const multiY = toFieldRefArray(multiYInput);
+
+  const xCollapsed = collapseSingleContinuousAxisField(encoding, multiX, "x");
+  const yCollapsed = collapseSingleContinuousAxisField(xCollapsed.encoding, multiY, "y");
+
+  return {
+    encoding: yCollapsed.encoding,
+    multiX: xCollapsed.multiFields,
+    multiY: yCollapsed.multiFields,
+  };
+}
+
 function toElements(value: unknown): ChartElement[] {
   if (!Array.isArray(value)) return [];
   return value.filter((entry) => isObject(entry) && typeof entry.kind === "string").map((entry) => clone(entry as ChartElement));
@@ -192,12 +231,17 @@ function normalizeCurrentModeItem(item: GraphBuilderItem): GraphBuilderItem {
   const twoDInput = item.modeStates.twoD as unknown as Record<string, unknown>;
   const threeDInput = item.modeStates.threeD as unknown as Record<string, unknown>;
   const multivariateInput = item.modeStates.multivariate as unknown as Record<string, unknown>;
+  const normalizedTwoDAxes = normalizeTwoDEncodingAndMultiAxes(
+    pickEncoding(twoDInput.encoding, TWO_D_KEYS),
+    twoDInput.multiX,
+    twoDInput.multiY,
+  );
 
   const twoDCore: Graph2DState = {
     ...twoDDefault,
-    encoding: pickEncoding(twoDInput.encoding, TWO_D_KEYS),
-    multiX: toFieldRefArray(twoDInput.multiX),
-    multiY: toFieldRefArray(twoDInput.multiY),
+    encoding: normalizedTwoDAxes.encoding,
+    multiX: normalizedTwoDAxes.multiX,
+    multiY: normalizedTwoDAxes.multiY,
     elements: toElements(twoDInput.elements).filter((element) => getLayerMode(element.kind) === "2d"),
     smootherLambda: typeof twoDInput.smootherLambda === "number" ? twoDInput.smootherLambda : twoDDefault.smootherLambda,
   };
@@ -323,10 +367,15 @@ export function normalizeGraphBuilderItem(item: unknown): GraphBuilderItem {
   const shared2D = pickEncoding(encoding, SHARED_CARTESIAN_KEYS as unknown as Graph2DSlotKey[]);
   const shared3D = pickEncoding(encoding, SHARED_CARTESIAN_KEYS as unknown as Graph3DSlotKey[]);
   const only3D = pickEncoding(encoding, THREE_D_ONLY_KEYS as unknown as Graph3DSlotKey[]);
+  const normalizedLegacyTwoDAxes = normalizeTwoDEncodingAndMultiAxes(
+    { ...shared2D },
+    source.multiX,
+    source.multiY,
+  );
 
-  twoD.encoding = { ...shared2D };
-  twoD.multiX = toFieldRefArray(source.multiX);
-  twoD.multiY = toFieldRefArray(source.multiY);
+  twoD.encoding = normalizedLegacyTwoDAxes.encoding;
+  twoD.multiX = normalizedLegacyTwoDAxes.multiX;
+  twoD.multiY = normalizedLegacyTwoDAxes.multiY;
   twoD.elements = elements.filter((element) => getLayerMode(element.kind) === "2d");
   twoD.smootherLambda = typeof source.smootherLambda === "number" ? source.smootherLambda : twoD.smootherLambda;
   const maybeGroupStyles = isObject(source.groupStyles) ? clone(source.groupStyles) : undefined;

@@ -68,13 +68,34 @@ const legacy2d = normalizeGraphBuilderItem({
   threeD: false,
 });
 assert.equal(legacy2d.mode, "2d");
-assert.deepEqual(legacy2d.modeStates.twoD.encoding.x, legacyBase.encoding.x);
-assert.deepEqual(legacy2d.modeStates.twoD.encoding.y, legacyBase.encoding.y);
+assert.deepEqual(legacy2d.modeStates.twoD.encoding.x, continuous("mx0"));
+assert.deepEqual(legacy2d.modeStates.twoD.encoding.y, continuous("my0"));
+assert.deepEqual(legacy2d.modeStates.twoD.multiX, []);
+assert.deepEqual(legacy2d.modeStates.twoD.multiY, []);
 assert.deepEqual(legacy2d.modeStates.threeD.encoding.x, legacyBase.encoding.x);
 assert.deepEqual(legacy2d.modeStates.threeD.encoding.y, legacyBase.encoding.y);
 assert.deepEqual(legacy2d.modeStates.threeD.encoding.z, legacyBase.encoding.z);
 assert.deepEqual(legacy2d.modeStates.twoD.elements.map((element) => element.kind), ["points", "line"]);
 assert.deepEqual(legacy2d.modeStates.threeD.elements.map((element) => element.kind), ["surface"]);
+
+const legacySingleMultiWinsOverStaleEncoding = normalizeGraphBuilderItem({
+  ...legacyBase,
+  encoding: {
+    ...legacyBase.encoding,
+    x: continuous("stale-x"),
+    y: continuous("stale-y"),
+  },
+  multiX: [continuous("active-x")],
+  multiY: [continuous("active-y")],
+  threeD: false,
+});
+assert.deepEqual(legacySingleMultiWinsOverStaleEncoding.modeStates.twoD.encoding.x, continuous("active-x"));
+assert.deepEqual(legacySingleMultiWinsOverStaleEncoding.modeStates.twoD.encoding.y, continuous("active-y"));
+assert.deepEqual(legacySingleMultiWinsOverStaleEncoding.modeStates.twoD.multiX, []);
+assert.deepEqual(legacySingleMultiWinsOverStaleEncoding.modeStates.twoD.multiY, []);
+
+const legacySingleMultiIdempotent = normalizeGraphBuilderItem(legacySingleMultiWinsOverStaleEncoding);
+assert.deepEqual(legacySingleMultiIdempotent, legacySingleMultiWinsOverStaleEncoding);
 
 const legacy3d = normalizeGraphBuilderItem({
   ...legacyBase,
@@ -181,7 +202,38 @@ assert.deepEqual(
   ["a", "b", "c"],
 );
 
-const idempotenceCases: GraphBuilderItem[] = [legacy2d, legacy3d, legacyCorrelation];
+const currentTwoDSingleMultiCollapse = normalizeGraphBuilderItem({
+  ...legacy2d,
+  mode: "2d",
+  modeStates: {
+    ...legacy2d.modeStates,
+    twoD: {
+      ...legacy2d.modeStates.twoD,
+      encoding: {
+        ...legacy2d.modeStates.twoD.encoding,
+        x: continuous("stale-current-x"),
+        y: continuous("stale-current-y"),
+      },
+      multiX: [continuous("current-active-x")],
+      multiY: [continuous("current-active-y")],
+    },
+  },
+});
+assert.deepEqual(currentTwoDSingleMultiCollapse.modeStates.twoD.encoding.x, continuous("current-active-x"));
+assert.deepEqual(currentTwoDSingleMultiCollapse.modeStates.twoD.encoding.y, continuous("current-active-y"));
+assert.deepEqual(currentTwoDSingleMultiCollapse.modeStates.twoD.multiX, []);
+assert.deepEqual(currentTwoDSingleMultiCollapse.modeStates.twoD.multiY, []);
+
+const currentTwoDSingleMultiIdempotent = normalizeGraphBuilderItem(currentTwoDSingleMultiCollapse);
+assert.deepEqual(currentTwoDSingleMultiIdempotent, currentTwoDSingleMultiCollapse);
+
+const idempotenceCases: GraphBuilderItem[] = [
+  legacy2d,
+  legacy3d,
+  legacyCorrelation,
+  legacySingleMultiWinsOverStaleEncoding,
+  currentTwoDSingleMultiCollapse,
+];
 for (const item of idempotenceCases) {
   assert.deepEqual(normalizeGraphBuilderItem(item), item);
 }
