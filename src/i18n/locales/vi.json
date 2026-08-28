@@ -669,6 +669,10 @@
       "coefficient": "Hệ số tương quan",
       "unavailableLabel": "Không khả dụng",
       "sampleCount": "n",
+      "dropReason": {
+        "duplicateField": "Cột đã được chọn trong danh sách biến đa biến.",
+        "invalidFieldType": "Chỉ có thể thêm cột số vào danh sách biến đa biến."
+      },
       "unavailableReason": {
         "insufficientData": "Không đủ dữ liệu",
         "zeroVariance": "Phương sai bằng 0",

@@ -1,5 +1,6 @@
 import { SCATTER_RENDER_BUDGET } from "../../graphCore/scatterBudget.ts";
 import { resolveEffectiveGraphSampling } from "./graphSamplingPolicy.ts";
+import { MAX_MULTIVARIATE_COLUMNS } from "./updateMultivariateColumns.ts";
 import { useEffect, useMemo, useState } from "react";
 import {
   decodeGraphPayload,
@@ -598,6 +599,26 @@ export function deriveGraphRequestParts(item: GraphBuilderItem): {
   };
 }
 
+export function canExecuteGraphRequest(
+  item: GraphBuilderItem,
+  fields: readonly GraphFieldBinding[],
+  elements: readonly GraphElementRequest[],
+): boolean {
+  if (item.mode === "multivariate") {
+    const selectedColumns = item.modeStates.multivariate.columns.length;
+    return selectedColumns >= 2 && selectedColumns <= MAX_MULTIVARIATE_COLUMNS;
+  }
+
+  const hasCorrelationElement = elements.some((element) => element.kind === "correlationMatrix");
+  if (hasCorrelationElement) {
+    return fields.some((field) => /^multi[XY]\d+$/.test(field.role));
+  }
+
+  const hasX = fields.some((field) => field.role === "x");
+  const hasY = fields.some((field) => field.role === "y");
+  return hasX && hasY;
+}
+
 function hasEnabledElementKinds(elements: readonly GraphElementRequest[]): Set<string> {
   return new Set(
     elements
@@ -847,19 +868,7 @@ export function useGraphDataPipeline(
   }, [dataset.id, item, debouncedViewport]);
 
   useEffect(() => {
-    const hasCorrelationElement = requestSkeleton.elements.some(
-      (element) => element.kind === "correlationMatrix",
-    );
-    const hasCorrelationBinding = requestSkeleton.fields.some(
-      (field) => /^multi[XY]\d+$/.test(field.role),
-    );
-    const hasX = requestSkeleton.fields.some((field) => field.role === "x");
-    const hasY = requestSkeleton.fields.some((field) => field.role === "y");
-    const missingRequiredBindings = hasCorrelationElement
-      ? !hasCorrelationBinding
-      : (!hasX || !hasY);
-
-    if (missingRequiredBindings) {
+    if (!canExecuteGraphRequest(item, requestSkeleton.fields, requestSkeleton.elements)) {
       setState((previous) => ({
         ...previous,
         pending: null,

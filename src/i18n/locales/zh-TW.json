@@ -669,6 +669,10 @@
       "coefficient": "相關係數",
       "unavailableLabel": "不可用",
       "sampleCount": "樣本數",
+      "dropReason": {
+        "duplicateField": "此欄位已在多變量清單中選取。",
+        "invalidFieldType": "多變量清單僅可加入數值欄位。"
+      },
       "unavailableReason": {
         "insufficientData": "樣本不足",
         "zeroVariance": "零變異",

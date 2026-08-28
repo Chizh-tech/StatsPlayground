@@ -6,6 +6,7 @@ import ts from "typescript";
 import { SCATTER_RENDER_BUDGET } from "../src/graphCore/scatterBudget.ts";
 import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphData.ts";
 import {
+  canExecuteGraphRequest,
   createInitialGraphStreamState,
   createStreamStartCancellationCoordinator,
   deriveElements,
@@ -315,6 +316,8 @@ assert.equal(makeGraphRows(10).length, 10);
     "graph.correlation.unavailableReason.insufficientData",
     "graph.correlation.unavailableReason.zeroVariance",
     "graph.correlation.unavailableReason.unknown",
+    "graph.correlation.dropReason.duplicateField",
+    "graph.correlation.dropReason.invalidFieldType",
   ];
 
   for (const keyPath of requiredLocalePaths) {
@@ -1855,6 +1858,46 @@ function makeProgressedChunk(
 
   assert.equal(completed, false);
   assert.match(transportError ?? "", /inconsistent chunksSent/i);
+}
+
+{
+  const noColumns = makeCanonicalGraphBuilderItem({
+    mode: "multivariate",
+    modeStates: {
+      ...defaultModeStates(),
+      multivariate: {
+        columns: [],
+        chartType: "correlationMatrix",
+        correlationMethod: "pearson",
+      },
+    },
+  });
+  const oneColumn = makeCanonicalGraphBuilderItem({
+    mode: "multivariate",
+    modeStates: {
+      ...defaultModeStates(),
+      multivariate: {
+        columns: [continuous("only_one")],
+        chartType: "correlationMatrix",
+        correlationMethod: "pearson",
+      },
+    },
+  });
+  const twoColumns = makeCanonicalGraphBuilderItem({
+    mode: "multivariate",
+    modeStates: {
+      ...defaultModeStates(),
+      multivariate: {
+        columns: [continuous("c0"), continuous("c1")],
+        chartType: "correlationMatrix",
+        correlationMethod: "pearson",
+      },
+    },
+  });
+
+  assert.equal(canExecuteGraphRequest(noColumns, deriveGraphRequestParts(noColumns).fields, deriveGraphRequestParts(noColumns).elements), false);
+  assert.equal(canExecuteGraphRequest(oneColumn, deriveGraphRequestParts(oneColumn).fields, deriveGraphRequestParts(oneColumn).elements), false);
+  assert.equal(canExecuteGraphRequest(twoColumns, deriveGraphRequestParts(twoColumns).fields, deriveGraphRequestParts(twoColumns).elements), true);
 }
 
 {

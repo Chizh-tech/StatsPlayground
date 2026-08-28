@@ -673,6 +673,10 @@
       "coefficient": "相关系数",
       "unavailableLabel": "不可用",
       "sampleCount": "样本数",
+      "dropReason": {
+        "duplicateField": "该列已在多变量列表中选中。",
+        "invalidFieldType": "多变量列表仅支持添加数值列。"
+      },
       "unavailableReason": {
         "insufficientData": "样本不足",
         "zeroVariance": "零方差",

@@ -673,6 +673,10 @@
       "coefficient": "Coefficient",
       "unavailableLabel": "Unavailable",
       "sampleCount": "n",
+      "dropReason": {
+        "duplicateField": "Column already selected in multivariate variables.",
+        "invalidFieldType": "Only numeric columns can be added to multivariate variables."
+      },
       "unavailableReason": {
         "insufficientData": "Insufficient data",
         "zeroVariance": "Zero variance",

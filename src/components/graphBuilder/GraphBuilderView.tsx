@@ -74,6 +74,7 @@ const GRAPH_LAYER_DEFS_WITH_CORRELATION: readonly GraphLayerDef[] = GRAPH_LAYER_
 const DRAG_MIME = "text/plain";
 const CORRELATION_MIN_COLUMNS = 2;
 const CORRELATION_MAX_COLUMNS = MAX_MULTIVARIATE_COLUMNS;
+type MultivariateDropNotice = "invalidFieldType" | "duplicateField" | "maxColumns";
 
 export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const { t } = useTranslation();
@@ -204,7 +205,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // or non-numeric appended in multi-mode). The Slot component reads
   // this and adds a CSS class for ~400 ms.
   const [rejectFlashSlot, setRejectFlashSlot] = useState<SlotKey | null>(null);
-  const [correlationNotice, setCorrelationNotice] = useState<"tooManyColumns" | null>(null);
+  const [correlationNotice, setCorrelationNotice] = useState<MultivariateDropNotice | null>(null);
   const rejectFlashTimerRef = useRef<number | null>(null);
   const flashRejectOnSlot = useCallback((slot: SlotKey) => {
     setRejectFlashSlot(slot);
@@ -1237,9 +1238,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         });
         if (next.error) {
           flashRejectOnSlot("y");
-          if (next.error === "maxColumns") {
-            setCorrelationNotice("tooManyColumns");
-          }
+          setCorrelationNotice(next.error);
           return;
         }
         setCorrelationNotice(null);
@@ -1551,6 +1550,26 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const correlationColumnsReady =
     correlationColumnCount >= CORRELATION_MIN_COLUMNS &&
     correlationColumnCount <= CORRELATION_MAX_COLUMNS;
+
+  const correlationNoticeText = useMemo(() => {
+    if (!isMultivariateMode || !correlationNotice) {
+      return null;
+    }
+    if (correlationNotice === "duplicateField") {
+      return t("graph.correlation.dropReason.duplicateField", {
+        defaultValue: "Column already selected in multivariate variables.",
+      });
+    }
+    if (correlationNotice === "invalidFieldType") {
+      return t("graph.correlation.dropReason.invalidFieldType", {
+        defaultValue: "Only numeric columns can be added to multivariate variables.",
+      });
+    }
+    return t("graph.correlation.tooManyColumns", {
+      max: CORRELATION_MAX_COLUMNS,
+      defaultValue: "Correlation matrix supports up to {{max}} columns.",
+    });
+  }, [correlationNotice, isMultivariateMode, t]);
 
   const progressPercent = progress?.percent ?? null;
   const progressAriaProps = progressPercent === null
@@ -2027,12 +2046,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                       pickCells(dataset.id, picks);
                     })}
                   />
-                  {isMultivariateMode && correlationNotice === "tooManyColumns" && (
-                    <div className="gb-canvas-overlay gb-canvas-overlay-warn">
-                      {t("graph.correlation.tooManyColumns", {
-                        max: CORRELATION_MAX_COLUMNS,
-                        defaultValue: "Correlation matrix supports up to {{max}} columns.",
-                      })}
+                  {correlationNoticeText && (
+                    <div className="gb-canvas-overlay gb-canvas-overlay-warn" role="status" aria-live="polite">
+                      {correlationNoticeText}
                     </div>
                   )}
                   {pipelineStatus === "error" && pipelineError && (
@@ -2220,7 +2236,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           onChange={(next) => {
             if (item.mode === "multivariate") {
               const result = updateMultivariateColumns(multivariate.columns, { type: "set", fields: next });
-              if (result.error) return;
+              if (result.error) {
+                setCorrelationNotice(result.error);
+                return;
+              }
+              setCorrelationNotice(null);
               setMultivariateState((prev) => ({ ...prev, columns: result.columns }));
               return;
             }
