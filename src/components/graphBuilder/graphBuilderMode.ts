@@ -188,7 +188,6 @@ export function createDefaultMultivariateGraphState(): MultivariateGraphState {
 function normalizeCurrentModeItem(item: GraphBuilderItem): GraphBuilderItem {
   const twoDDefault = createDefaultGraph2DState();
   const threeDDefault = createDefaultGraph3DState();
-  const multiDefault = createDefaultMultivariateGraphState();
 
   const twoDInput = item.modeStates.twoD as unknown as Record<string, unknown>;
   const threeDInput = item.modeStates.threeD as unknown as Record<string, unknown>;

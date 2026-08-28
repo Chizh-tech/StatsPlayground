@@ -18,6 +18,10 @@ import {
 import {
   updateMultivariateColumns,
 } from "../src/components/graphBuilder/updateMultivariateColumns.ts";
+import {
+  deriveMultivariateSlotBinding,
+  resolveCanvasDropSlot,
+} from "../src/components/graphBuilder/multivariateInteractions.ts";
 import { normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
 import { createGraphStreamTransport } from "../src/services/graphDataTransport.ts";
 import type {
@@ -158,14 +162,16 @@ assert.equal(makeGraphRows(10).length, 10);
   );
   assert.match(
     graphBuilderViewSource,
-    /const CHART_TYPE_DEFS:[\s\S]*?correlationMatrix/,
-    "GraphBuilderView CHART_TYPE_DEFS must include correlationMatrix",
+    /GRAPH_LAYER_DEFS_WITH_CORRELATION[\s\S]*correlationMatrix/,
+    "GraphBuilderView must keep correlationMatrix available in layer definitions",
   );
   assert.match(graphBuilderViewSource, /item\.mode === "multivariate"/);
   assert.match(graphBuilderViewSource, /setMode\("2d"\)/);
   assert.match(graphBuilderViewSource, /setMode\("3d"\)/);
   assert.match(graphBuilderViewSource, /setMode\("multivariate"\)/);
   assert.match(graphBuilderViewSource, /modeStates\.multivariate\.columns/);
+  assert.match(graphBuilderViewSource, /resolveCanvasDropSlot\(/);
+  assert.match(graphBuilderViewSource, /deriveMultivariateSlotBinding\(/);
   assert.doesNotMatch(graphBuilderViewSource, /isCorrelationMatrixItem\(item\)/);
   assert.equal(
     graphBuilderViewSource.includes("CorrelationMatrixOptions"),
@@ -182,6 +188,45 @@ assert.equal(makeGraphRows(10).length, 10);
       `Graph Builder production file must not reference queryTableWindow: ${relativeFile}`,
     );
   }
+}
+
+{
+  const continuous = (name: string) => ({ name, type: "continuous" as const });
+
+  assert.equal(
+    resolveCanvasDropSlot({ isMultivariateMode: true, xBound: false, yBound: false }),
+    "y",
+  );
+  assert.equal(
+    resolveCanvasDropSlot({ isMultivariateMode: true, xBound: true, yBound: true }),
+    "y",
+  );
+  assert.equal(
+    resolveCanvasDropSlot({ isMultivariateMode: false, xBound: false, yBound: false }),
+    "x",
+  );
+  assert.equal(
+    resolveCanvasDropSlot({ isMultivariateMode: false, xBound: true, yBound: false }),
+    "y",
+  );
+
+  const empty = deriveMultivariateSlotBinding([]);
+  assert.equal(empty.field, undefined);
+  assert.equal(empty.showManager, false);
+  assert.equal(empty.columns.length, 0);
+
+  const single = deriveMultivariateSlotBinding([continuous("a")]);
+  assert.equal(single.field?.name, "a");
+  assert.equal(single.showManager, true);
+  assert.deepEqual(single.columns.map((field) => field.name), ["a"]);
+
+  const multi = deriveMultivariateSlotBinding([
+    continuous("a"),
+    continuous("b"),
+  ]);
+  assert.equal(multi.field, undefined);
+  assert.equal(multi.showManager, true);
+  assert.deepEqual(multi.columns.map((field) => field.name), ["a", "b"]);
 }
 
 {

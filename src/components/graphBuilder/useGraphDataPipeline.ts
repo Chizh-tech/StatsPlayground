@@ -691,7 +691,7 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
   addField("y", encoding.y?.name);
   const has3DElement = enabledKinds.has("surface") || enabledKinds.has("contour3d") || enabledKinds.has("scatter3d");
   if (activeMode === "3d" && has3DElement) {
-    addField("z", encoding.z?.name);
+    addField("z", item.modeStates.threeD.encoding.z?.name);
   }
 
   const canUseSize = enabledKinds.has("points") || enabledKinds.has("scatter3d");
@@ -707,7 +707,7 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
 
   addField("groupX", encoding.groupX?.name);
   if (activeMode === "3d") {
-    addField("groupZ", encoding.groupZ?.name);
+    addField("groupZ", item.modeStates.threeD.encoding.groupZ?.name);
   }
   addField("groupY", encoding.groupY?.name);
   addField("wrap", encoding.wrap?.name);

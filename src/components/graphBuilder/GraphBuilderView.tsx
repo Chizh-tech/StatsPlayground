@@ -38,7 +38,7 @@ import {
   getRawPointNotice,
 } from "./graphSamplingPolicy";
 import { FilterPanel } from "@/components/filter";
-import { defaultLayerOptions, GRAPH_LAYER_DEFS, getLayerMode } from "./graphLayerConfig";
+import { defaultLayerOptions, GRAPH_LAYER_DEFS, getLayerMode, type GraphLayerDef } from "./graphLayerConfig";
 import {
   createDefaultGraph2DState,
   createDefaultGraph3DState,
@@ -48,6 +48,10 @@ import {
   MAX_MULTIVARIATE_COLUMNS,
   updateMultivariateColumns,
 } from "./updateMultivariateColumns";
+import {
+  deriveMultivariateSlotBinding,
+  resolveCanvasDropSlot,
+} from "./multivariateInteractions";
 import { useGraphDataPipeline } from "./useGraphDataPipeline";
 
 interface GraphBuilderViewProps {
@@ -64,27 +68,9 @@ type SlotKey = GraphSlotKey;
 // Group X / Group Y are still exposed via the dedicated facet drop slots
 // surrounding the canvas, not via a side shelf.
 
-interface ChartTypeDef {
-  kind: ElementKind;
-  icon: string;
-}
-
-const CHART_TYPE_DEFS: ChartTypeDef[] = [
-  { kind: "points", icon: "●" },
-  { kind: "line", icon: "╱" },
-  { kind: "smoother", icon: "∿" },
-  { kind: "fitline", icon: "ƒ" },
-  { kind: "correlationMatrix", icon: "▦" },
-  { kind: "boxplot", icon: "⊟" },
-  { kind: "histogram", icon: "▥" },
-  { kind: "scatter3d", icon: "●" },
-  { kind: "surface", icon: "◪" },
-  { kind: "contour3d", icon: "≋" },
-];
-
-const GRAPH_LAYER_DEFS_WITH_CORRELATION = GRAPH_LAYER_DEFS.some((def) => def.kind === "correlationMatrix")
+const GRAPH_LAYER_DEFS_WITH_CORRELATION: readonly GraphLayerDef[] = GRAPH_LAYER_DEFS.some((def) => def.kind === "correlationMatrix")
   ? GRAPH_LAYER_DEFS
-  : [...GRAPH_LAYER_DEFS, { kind: "correlationMatrix", icon: "▦" }];
+  : [...GRAPH_LAYER_DEFS, { kind: "correlationMatrix" as ElementKind, icon: "▦" }];
 const DRAG_MIME = "text/plain";
 const CORRELATION_MIN_COLUMNS = 2;
 const CORRELATION_MAX_COLUMNS = MAX_MULTIVARIATE_COLUMNS;
@@ -284,21 +270,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       document.removeEventListener("contextmenu", close);
     };
   }, [axisCtxMenu]);
-  // Auto-close the manager when its slot leaves multi-mode (cols
-  // dropped below 2 via deletion in the manager itself, slot-clear,
-  // swap XY, start-over, etc.). Without this, the next time the user
-  // re-enters multi-mode on the same slot the manager would pop open
-  // by itself because `managerOpenSlot` was still set from before.
-  useEffect(() => {
-    if (!managerOpenSlot) return;
-    const cols = managerOpenSlot === "x"
-      ? multiX
-      : managerOpenSlot === "y"
-        ? multiY
-        : undefined;
-    if ((cols?.length ?? 0) < 2) setManagerOpenSlot(null);
-  }, [managerOpenSlot, multiX, multiY]);
-
   // Resizable side-rail widths. Mirror the Excel-grid splitter pattern
   // (DataTableView): clamp on drag and double-click to reset.
   const [leftWidth, setLeftWidth] = useState(220);
@@ -400,6 +371,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const smootherLambda = cartesianState.smootherLambda;
   const multiX = twoD.multiX ?? [];
   const multiY = isMultivariateMode ? multivariate.columns : (twoD.multiY ?? []);
+  const multivariateSlotBinding = deriveMultivariateSlotBinding(multivariate.columns);
   const groupStyles = cartesianState.groupStyles ?? {};
   const hiddenGroups = cartesianState.hiddenGroups ?? [];
   const yAxisConfig = twoD.yAxis;
@@ -409,6 +381,25 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // Filter rules (JMP-style Local Data Filter). Persist on the item so
   // they survive project save/load.
   const filters = useMemo(() => item.filters ?? [], [item.filters]);
+
+  // Auto-close the manager when its slot is no longer manageable.
+  // In 2D, management is meaningful only for 2+ columns (multi mode).
+  // In multivariate Y, 0/1/2+ are valid editable states, so keep the
+  // manager open for a single remaining variable and close only at 0.
+  useEffect(() => {
+    if (!managerOpenSlot) return;
+    const cols = managerOpenSlot === "x"
+      ? multiX
+      : managerOpenSlot === "y"
+        ? multiY
+        : undefined;
+    const minColumns = item.mode === "multivariate" && managerOpenSlot === "y"
+      ? 1
+      : 2;
+    if ((cols?.length ?? 0) < minColumns) {
+      setManagerOpenSlot(null);
+    }
+  }, [item.mode, managerOpenSlot, multiX, multiY]);
 
   // ---- Multi-column melt (multi-mode rendering) ---------------------
   //
@@ -1533,7 +1524,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         defaultValue: "Sampled: {{processed}} / {{source}} rows",
       });
     }
-    if (rawPointNotice) {
+    if (!isMultivariateMode && rawPointNotice) {
       return t("graph.rowStatus.pointsOmitted", {
         valid: rawPointNotice.validRows.toLocaleString(),
         budget: rawPointNotice.budget.toLocaleString(),
@@ -1544,7 +1535,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       processed: progress.processedRows,
       defaultValue: "Full Data: {{processed}} rows",
     });
-  }, [frame, pipelineStatus, progress, rawPointNotice, t]);
+  }, [frame, isMultivariateMode, pipelineStatus, progress, rawPointNotice, t]);
 
   const correlationColumnCount = useMemo(() => {
     if (item.mode === "multivariate") {
@@ -1936,11 +1927,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             <Slot
               slot="y"
               label={isMultivariateMode ? t("graph.multivariate.variables", { defaultValue: "Y (Variables)" }) : "Y"}
-              field={encoding.y}
-              fields={multiY}
+              field={isMultivariateMode ? multivariateSlotBinding.field : encoding.y}
+              fields={isMultivariateMode ? multivariateSlotBinding.columns : multiY}
               onDrop={(e) => handleDropOnSlot("y", e)}
               onClear={() => clearSlot("y")}
-              onOpenManager={() => setManagerOpenSlot("y")}
+              onOpenManager={
+                isMultivariateMode && !multivariateSlotBinding.showManager
+                  ? undefined
+                  : () => setManagerOpenSlot("y")
+              }
               onContextMenu={(x, y) => setSlotCtxMenu({ slot: "y", x, y })}
               orientation="vertical-left"
               required={!isMultivariateMode}
@@ -1970,12 +1965,14 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 // `routeDropToSlot` so the single/multi/append cases
                 // get the same handling as a direct slot drop.
                 const xBound = !!encoding.x || multiX.length > 0;
-                const yBound = !!encoding.y || multiY.length > 0;
-                const slot: SlotKey = !xBound
-                  ? "x"
-                  : !yBound
-                    ? "y"
-                    : "y";
+                const yBound = isMultivariateMode
+                  ? multivariateSlotBinding.columns.length > 0
+                  : (!!encoding.y || multiY.length > 0);
+                const slot = resolveCanvasDropSlot({
+                  isMultivariateMode,
+                  xBound,
+                  yBound,
+                });
                 routeDropToSlot(slot, fields);
               }}
             >
@@ -2041,7 +2038,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   {pipelineStatus === "error" && pipelineError && (
                     <div className="gb-canvas-overlay gb-canvas-overlay-error">{pipelineError}</div>
                   )}
-                  {pipelineStatus === "ready" && rawPointNotice && (
+                  {!isMultivariateMode && pipelineStatus === "ready" && rawPointNotice && (
                     <div className="gb-point-budget-notice" role="status">
                       <i className="fa-solid fa-circle-info" aria-hidden="true" />
                       <span className="gb-point-budget-copy">
@@ -2213,7 +2210,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           (length-1 collapses to single-field encoding, length-0
           clears the slot entirely). */}
       {managerOpenSlot && (managerOpenSlot === "x" || managerOpenSlot === "y") &&
-       ((managerOpenSlot === "x" ? multiX : multiY)?.length ?? 0) >= 2 && (
+       ((item.mode === "multivariate" && managerOpenSlot === "y")
+         ? (multiY.length >= 1)
+         : ((managerOpenSlot === "x" ? multiX : multiY)?.length ?? 0) >= 2) && (
         <MultiColManager
           slot={managerOpenSlot}
           cols={(managerOpenSlot === "x" ? multiX : multiY) ?? []}
@@ -2340,7 +2339,8 @@ function Slot({ label, field, fields, onDrop, onClear, onOpenManager, onContextM
   // is auto-collapsed back to single mode on the write side, so we
   // never need to handle that case here. */
   const isMulti = !!fields && fields.length >= 2;
-  const filled = isMulti || !!field;
+  const canManage = !!fields && fields.length >= 1 && !!onOpenManager;
+  const filled = isMulti || !!field || !!(fields && fields.length > 0);
   return (
     <div
       className={`gb-slot gb-slot-${orientation}${over ? " gb-slot-over" : ""}${filled ? " gb-slot-filled" : ""}${isMulti ? " gb-slot-multi" : ""}${rejectFlash ? " gb-slot-reject" : ""}`}
@@ -2358,7 +2358,7 @@ function Slot({ label, field, fields, onDrop, onClear, onOpenManager, onContextM
         setOver(false);
         onDrop(e);
       }}
-      onClick={isMulti ? () => onOpenManager?.() : undefined}
+      onClick={canManage ? () => onOpenManager?.() : undefined}
       onContextMenu={(e) => {
         // Only intercept right-clicks on filled slots — empty slots
         // have nothing to act on so let the browser do its thing
@@ -2370,7 +2370,7 @@ function Slot({ label, field, fields, onDrop, onClear, onOpenManager, onContextM
         e.stopPropagation();
         onContextMenu(e.clientX, e.clientY);
       }}
-      title={isMulti ? t("graph.multiSlot.openManager", { defaultValue: "Click to manage columns" }) : undefined}
+      title={canManage ? t("graph.multiSlot.openManager", { defaultValue: "Click to manage columns" }) : undefined}
     >
       {!filled && (
         <span className="gb-slot-label">{label}{required ? " *" : ""}</span>
@@ -2738,13 +2738,20 @@ function LayerCard({
   t,
 }: LayerCardProps) {
   const def = GRAPH_LAYER_DEFS_WITH_CORRELATION.find((c) => c.kind === kind);
+  const layerMode = getLayerMode(kind);
+  const layerModeLabel =
+    layerMode === "3d"
+      ? "3D"
+      : layerMode === "multivariate"
+        ? t("graph.mode.multivariate", { defaultValue: "Multivariate" })
+        : "2D";
   return (
     <div className="gb-layer-card">
       <div className="gb-layer-head">
         <span className="gb-layer-icon">{def?.icon ?? "▦"}</span>
         <span className="gb-layer-title">{label}</span>
-        <span className={`gb-layer-dim gb-layer-dim-${LAYER_DIM[kind]}`}>
-          {LAYER_DIM[kind] === "3d" ? "3D" : "2D"}
+        <span className={`gb-layer-dim gb-layer-dim-${layerMode}`}>
+          {layerModeLabel}
         </span>
         <button
           className="gb-layer-x"
