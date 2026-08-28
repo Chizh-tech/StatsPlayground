@@ -173,6 +173,11 @@ assert.equal(makeGraphRows(10).length, 10);
   assert.match(graphBuilderViewSource, /modeStates\.multivariate\.columns/);
   assert.match(graphBuilderViewSource, /resolveCanvasDropSlot\(/);
   assert.match(graphBuilderViewSource, /deriveMultivariateSlotBinding\(/);
+  assert.match(
+    graphBuilderViewSource,
+    /\{isMultivariateMode && !correlationColumnsReady \? \([\s\S]*?\)\s*:\s*[\s\S]*?\)\s*\}\s*\{correlationNoticeText && \(/,
+    "multivariate rejection status must render outside the correlationColumnsReady conditional",
+  );
   assert.doesNotMatch(graphBuilderViewSource, /isCorrelationMatrixItem\(item\)/);
   assert.equal(
     graphBuilderViewSource.includes("CorrelationMatrixOptions"),

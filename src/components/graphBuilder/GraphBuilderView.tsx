@@ -1291,6 +1291,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const clearSlot = (slot: SlotKey) => {
     if (item.mode === "multivariate") {
       if (slot !== "y") return;
+      setCorrelationNotice(null);
       setMultivariateState((prev) => ({ ...prev, columns: [] }));
       return;
     }
@@ -2046,11 +2047,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                       pickCells(dataset.id, picks);
                     })}
                   />
-                  {correlationNoticeText && (
-                    <div className="gb-canvas-overlay gb-canvas-overlay-warn" role="status" aria-live="polite">
-                      {correlationNoticeText}
-                    </div>
-                  )}
                   {pipelineStatus === "error" && pipelineError && (
                     <div className="gb-canvas-overlay gb-canvas-overlay-error">{pipelineError}</div>
                   )}
@@ -2078,6 +2074,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     </div>
                   )}
                 </>
+              )}
+              {correlationNoticeText && (
+                <div className="gb-canvas-overlay gb-canvas-overlay-warn" role="status" aria-live="polite">
+                  {correlationNoticeText}
+                </div>
               )}
             </div>
             {!isMultivariateMode && (
