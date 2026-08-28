@@ -183,6 +183,7 @@ function resetGraphBuilderStore() {
     ],
     elements: [{ kind: "correlationMatrix", enabled: true }],
     smootherLambda: 0.5,
+    groupThemeSlots: { Build: { EV: 0, EV1: 1, EV2: 2, "TC1.6": 3 } },
     createdAt: new Date(0).toISOString(),
   };
   const baseline = JSON.stringify(legacyCorrelationGraph);
@@ -226,6 +227,9 @@ function resetGraphBuilderStore() {
     chartType: "correlationMatrix",
     correlationMethod: "pearson",
   });
+  assert.deepEqual(loaded.groupThemeSlots, {
+    Build: { EV: 0, EV1: 1, EV2: 2, "TC1.6": 3 },
+  });
   for (const legacyKey of ["threeD", "encoding", "multiX", "multiY", "elements"]) {
     assert.equal(Object.hasOwn(loaded, legacyKey), false);
   }
@@ -241,6 +245,9 @@ function resetGraphBuilderStore() {
     columns: [continuous("left"), continuous("right")],
     chartType: "correlationMatrix",
     correlationMethod: "pearson",
+  });
+  assert.deepEqual(savedGraph.groupThemeSlots, {
+    Build: { EV: 0, EV1: 1, EV2: 2, "TC1.6": 3 },
   });
   for (const legacyKey of ["threeD", "encoding", "multiX", "multiY", "elements"]) {
     assert.equal(Object.hasOwn(savedGraph, legacyKey), false);

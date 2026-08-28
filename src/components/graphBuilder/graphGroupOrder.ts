@@ -1,9 +1,11 @@
+import { DEFAULT_GROUP_KEY } from "../../graphCore/types.ts";
+
 function normalizeGroupValues(values: readonly unknown[]): string[] {
   const unique = new Set<string>();
   for (const value of values) {
     if (value == null) continue;
     const key = String(value);
-    if (key.trim().length === 0) continue;
+    if (key.trim().length === 0 || key === DEFAULT_GROUP_KEY) continue;
     unique.add(key);
   }
   return [...unique];
@@ -37,4 +39,18 @@ export function resolveStableGroupKeys(
     .filter((key) => !used.has(key))
     .sort(compareGroupKeys);
   return [...ordered, ...remaining];
+}
+
+export function resolveThemeGroupKeySets(
+  discoveredValues: readonly unknown[],
+  dictionaryValues: readonly unknown[],
+  valueOrder: readonly string[] | undefined,
+): {
+  slotCandidateKeys: string[];
+  legendGroupKeys: string[];
+} {
+  return {
+    slotCandidateKeys: resolveStableGroupKeys(discoveredValues, dictionaryValues, valueOrder),
+    legendGroupKeys: resolveStableGroupKeys(discoveredValues, [], valueOrder),
+  };
 }

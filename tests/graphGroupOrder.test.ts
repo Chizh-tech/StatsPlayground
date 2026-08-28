@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 
-import { resolveStableGroupKeys } from "../src/components/graphBuilder/graphGroupOrder.ts";
+import {
+  resolveStableGroupKeys,
+  resolveThemeGroupKeySets,
+} from "../src/components/graphBuilder/graphGroupOrder.ts";
 
 const aggregateOrder = ["West", "Central", "East"];
 const sampledDictionaryOrder = ["East", "West", "Central"];
@@ -25,6 +28,12 @@ assert.deepEqual(
   ),
   ["West", "East", "Central"],
   "explicit Value Order should lead and remaining groups should stay deterministic",
+);
+
+assert.deepEqual(
+  resolveThemeGroupKeySets([], [], undefined),
+  { slotCandidateKeys: [], legendGroupKeys: [] },
+  "no frame-backed discovery should not produce persistent or legend group keys",
 );
 
 console.log("graph group order regressions passed");

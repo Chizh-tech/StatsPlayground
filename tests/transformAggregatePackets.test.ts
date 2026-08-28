@@ -216,6 +216,235 @@ function typedDateFrame(aggregates: GraphDataFrame["aggregates"] = []): GraphDat
   };
 }
 
+const STYLE_MATRIX_GROUP_ORDER = ["EV", "EV1", "EV2", "TC1.6"] as const;
+const STYLE_MATRIX_PANEL_ORDER = ["Panel-A", "Panel-B"] as const;
+const STYLE_MATRIX_TARGET_GROUP = "TC1.6";
+const STYLE_MATRIX_VALUE_ORDERS = {
+  Build: [...STYLE_MATRIX_GROUP_ORDER],
+  panel: [...STYLE_MATRIX_PANEL_ORDER],
+  Shade: ["S-EV", "S-EV1", "S-EV2", "S-TC"],
+};
+const STYLE_MATRIX_STYLES: NonNullable<GraphSpec["styles"]> = {
+  EV: {
+    line: { color: "#a10011" },
+    fill: { color: "#b10022" },
+    point: { color: "#c10033", fillColor: "#c10033" },
+    gradient: { color: "#d10044" },
+  },
+  EV1: {
+    line: { color: "#115500" },
+    fill: { color: "#227700" },
+    point: { color: "#339900", fillColor: "#339900" },
+    gradient: { color: "#44bb00" },
+  },
+  EV2: {
+    line: { color: "#001199" },
+    fill: { color: "#0022bb" },
+    point: { color: "#0033dd", fillColor: "#0033dd" },
+    gradient: { color: "#0044ff" },
+  },
+  "TC1.6": {
+    line: { color: "#7a0f70" },
+    fill: { color: "#c71db8" },
+    point: { color: "#ff4be9", fillColor: "#ff4be9" },
+    gradient: { color: "#ff8ff3" },
+  },
+};
+
+function opaqueRgba(hex: string): string {
+  const match = /^#?([0-9a-f]{6})$/i.exec(hex);
+  assert.ok(match, `expected hex color, received ${hex}`);
+  const rgb = match![1];
+  return `rgba(${parseInt(rgb.slice(0, 2), 16)}, ${parseInt(rgb.slice(2, 4), 16)}, ${parseInt(rgb.slice(4, 6), 16)}, 1)`;
+}
+
+function belongsToGroup(entry: Record<string, unknown>, groupKey: string): boolean {
+  const name = typeof entry.name === "string" ? entry.name : "";
+  const id = typeof entry.id === "string" ? entry.id : "";
+  return name === groupKey
+    || name.startsWith(`${groupKey} `)
+    || name.startsWith(`${groupKey}_`)
+    || id.startsWith(`${groupKey}__`)
+    || id.startsWith(`${groupKey}_`);
+}
+
+function assertSeriesMatchesResolvedGroupStyle(
+  entry: Record<string, unknown>,
+  expected: NonNullable<GraphSpec["styles"]>[typeof STYLE_MATRIX_TARGET_GROUP],
+  label: string,
+): void {
+  const type = String(entry.type ?? "");
+  if (type === "scatter") {
+    const itemStyle = entry.itemStyle as { color?: string; borderColor?: string } | undefined;
+    assert.equal(itemStyle?.color, expected.point?.color, `${label} scatter fill must use point style color`);
+    assert.equal(itemStyle?.borderColor, expected.point?.color, `${label} scatter border must use point style color`);
+    return;
+  }
+  if (type === "line") {
+    const lineStyle = entry.lineStyle as { color?: string } | undefined;
+    const itemStyle = entry.itemStyle as { color?: string } | undefined;
+    const areaStyle = entry.areaStyle as { color?: string } | undefined;
+    if (lineStyle) {
+      assert.equal(lineStyle.color, expected.line?.color, `${label} line stroke must use line style color`);
+    }
+    if (itemStyle) {
+      assert.equal(itemStyle.color, expected.line?.color, `${label} line itemStyle must use line style color`);
+    }
+    if (areaStyle) {
+      const id = typeof entry.id === "string" ? entry.id : "";
+      const expectedAreaColor = id.includes("_fit") || id.endsWith("__band_hi")
+        ? expected.line?.color
+        : expected.fill?.color;
+      assert.equal(areaStyle.color, expectedAreaColor, `${label} filled line area must use the expected group style color`);
+    }
+    return;
+  }
+  if (type === "bar" || type === "heatmap") {
+    const itemStyle = entry.itemStyle as { color?: string } | undefined;
+    assert.equal(itemStyle?.color, expected.fill?.color, `${label} ${type} fill must use fill style color`);
+    return;
+  }
+  if (type === "boxplot") {
+    const itemStyle = entry.itemStyle as { color?: string; borderColor?: string } | undefined;
+    assert.equal(itemStyle?.color, opaqueRgba(expected.fill?.color ?? ""), `${label} box fill must use fill style color`);
+    assert.equal(itemStyle?.borderColor, opaqueRgba(expected.line?.color ?? ""), `${label} box border must use line style color`);
+  }
+}
+
+function assertTargetGroupSeriesStyled(
+  series: Array<Record<string, unknown>>,
+  label: string,
+): void {
+  const matching = series.filter((entry) => belongsToGroup(entry, STYLE_MATRIX_TARGET_GROUP));
+  assert.ok(matching.length > 0, `${label} must emit at least one ${STYLE_MATRIX_TARGET_GROUP} series`);
+  for (const entry of matching) {
+    assertSeriesMatchesResolvedGroupStyle(entry, STYLE_MATRIX_STYLES[STYLE_MATRIX_TARGET_GROUP], label);
+  }
+}
+
+function assertPanelKeepsMissingMiddleGap(
+  series: Array<Record<string, unknown>>,
+  label: string,
+): void {
+  assert.equal(
+    series.some((entry) => belongsToGroup(entry, "EV2")),
+    false,
+    `${label} should keep EV2 absent in Panel-A instead of reindexing later groups`,
+  );
+}
+
+function styleMatrixPointFrame(aggregates: GraphDataFrame["aggregates"] = []): GraphDataFrame {
+  const bitmask = new Uint8Array([0xff, 0x03]);
+  return {
+    ...frameBackedAggregateFrame(aggregates, 10),
+    dictionaries: {
+      group: [...STYLE_MATRIX_GROUP_ORDER],
+      facetX: [...STYLE_MATRIX_PANEL_ORDER],
+    },
+    extents: {
+      x: { min: 1, max: 4 },
+      y: { min: 1, max: 6.5 },
+    },
+    rawChunks: [{
+      chunkIndex: 0,
+      rowOffset: 0,
+      rowCount: 10,
+      xValues: new Float64Array([1, 2, 2, 3, 4, 1, 2, 2, 3, 4]),
+      yValues: new Float64Array([1.1, 1.8, 2.4, 3.2, 4.1, 1.2, 2.2, 3.7, 4.8, 6.1]),
+      rowIds: new BigInt64Array([1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n]),
+      groupCodes: new Uint32Array([0, 1, 3, 3, 3, 0, 2, 3, 3, 3]),
+      facetXCodes: new Uint32Array([0, 0, 0, 0, 0, 1, 1, 1, 1, 1]),
+      validity: {
+        x: bitmask,
+        y: bitmask,
+        group: bitmask,
+        facetX: bitmask,
+      },
+    }],
+    aggregates,
+  };
+}
+
+function styleMatrixAggregateOnlyFrame(aggregates: GraphDataFrame["aggregates"]): GraphDataFrame {
+  return {
+    ...frameBackedAggregateFrame(aggregates, 10),
+    dictionaries: {
+      group: [...STYLE_MATRIX_GROUP_ORDER],
+      facetX: [...STYLE_MATRIX_PANEL_ORDER],
+    },
+    aggregates,
+  };
+}
+
+function styleMatrixBoxPlotPacket(): GraphDataFrame["aggregates"][number] {
+  return {
+    kind: "boxPlot",
+    xColumn: "x",
+    yColumn: "y",
+    groupColumn: "Build",
+    entries: [
+      { group: "EV", facetX: "Panel-A", category: "1", count: 4, min: 1, q1: 1.1, median: 1.2, q3: 1.3, max: 1.4, whiskerLow: 1, whiskerHigh: 1.4, outliers: [] },
+      { group: "EV1", facetX: "Panel-A", category: "1", count: 4, min: 1.5, q1: 1.6, median: 1.7, q3: 1.8, max: 1.9, whiskerLow: 1.5, whiskerHigh: 1.9, outliers: [] },
+      { group: "TC1.6", facetX: "Panel-A", category: "1", count: 4, min: 3.1, q1: 3.3, median: 3.5, q3: 3.7, max: 3.9, whiskerLow: 3.1, whiskerHigh: 3.9, outliers: [] },
+      { group: "EV", facetX: "Panel-B", category: "1", count: 4, min: 1.1, q1: 1.2, median: 1.3, q3: 1.4, max: 1.5, whiskerLow: 1.1, whiskerHigh: 1.5, outliers: [] },
+      { group: "EV2", facetX: "Panel-B", category: "1", count: 4, min: 2.1, q1: 2.2, median: 2.3, q3: 2.4, max: 2.5, whiskerLow: 2.1, whiskerHigh: 2.5, outliers: [] },
+      { group: "TC1.6", facetX: "Panel-B", category: "1", count: 4, min: 4.2, q1: 4.4, median: 4.6, q3: 4.8, max: 5, whiskerLow: 4.2, whiskerHigh: 5, outliers: [] },
+    ],
+  };
+}
+
+function styleMatrixHistogramPacket(): GraphDataFrame["aggregates"][number] {
+  return {
+    kind: "histogram",
+    xColumn: "x",
+    yColumn: "y",
+    groupColumn: "Build",
+    binCount: 2,
+    minValue: 0,
+    maxValue: 4,
+    missingCount: 0,
+    binWidth: 2,
+    totalCount: 12,
+    bins: [
+      { group: "EV", facetX: "Panel-A", binStart: 0, binEnd: 2, count: 2 },
+      { group: "EV1", facetX: "Panel-A", binStart: 0, binEnd: 2, count: 2 },
+      { group: "TC1.6", facetX: "Panel-A", binStart: 0, binEnd: 2, count: 3 },
+      { group: "TC1.6", facetX: "Panel-A", binStart: 2, binEnd: 4, count: 2 },
+      { group: "EV", facetX: "Panel-B", binStart: 0, binEnd: 2, count: 2 },
+      { group: "EV2", facetX: "Panel-B", binStart: 0, binEnd: 2, count: 2 },
+      { group: "TC1.6", facetX: "Panel-B", binStart: 0, binEnd: 2, count: 1 },
+      { group: "TC1.6", facetX: "Panel-B", binStart: 2, binEnd: 4, count: 2 },
+    ],
+  };
+}
+
+function styleMatrixHeatmapPacket(): GraphDataFrame["aggregates"][number] {
+  return {
+    kind: "heatmap",
+    xColumn: "x",
+    yColumn: "y",
+    groupColumn: "Build",
+    xBinCount: 1,
+    yBinCount: 1,
+    xMin: 0,
+    xMax: 2,
+    yMin: 0,
+    yMax: 2,
+    missingCount: 0,
+    xBinWidth: 2,
+    yBinWidth: 2,
+    totalCount: 6,
+    cells: [
+      { group: "EV", facetX: "Panel-A", xBinIndex: 0, yBinIndex: 0, xBinStart: 0, xBinEnd: 2, yBinStart: 0, yBinEnd: 2, count: 1 },
+      { group: "EV1", facetX: "Panel-A", xBinIndex: 0, yBinIndex: 0, xBinStart: 0, xBinEnd: 2, yBinStart: 0, yBinEnd: 2, count: 1 },
+      { group: "TC1.6", facetX: "Panel-A", xBinIndex: 0, yBinIndex: 0, xBinStart: 0, xBinEnd: 2, yBinStart: 0, yBinEnd: 2, count: 2 },
+      { group: "EV", facetX: "Panel-B", xBinIndex: 0, yBinIndex: 0, xBinStart: 0, xBinEnd: 2, yBinStart: 0, yBinEnd: 2, count: 1 },
+      { group: "EV2", facetX: "Panel-B", xBinIndex: 0, yBinIndex: 0, xBinStart: 0, xBinEnd: 2, yBinStart: 0, yBinEnd: 2, count: 1 },
+      { group: "TC1.6", facetX: "Panel-B", xBinIndex: 0, yBinIndex: 0, xBinStart: 0, xBinEnd: 2, yBinStart: 0, yBinEnd: 2, count: 2 },
+    ],
+  };
+}
+
 for (const mode of ["uniform", "normal"] as const) {
   for (const data of [
     baseData(
@@ -728,6 +957,186 @@ for (const element of [
       .find((entry) => entry.type === "scatter");
     assert.ok(scatter, `facet ${panel.title} must emit frame-backed scatter`);
     assert.equal((scatter.data as unknown[]).length, 3, `facet ${panel.title} must contain only its points`);
+  }
+}
+
+{
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "x", type: "continuous" },
+      y: { name: "y", type: "continuous" },
+      overlay: { name: "Build", type: "nominal" },
+      color: { name: "Shade", type: "nominal" },
+      groupX: { name: "panel", type: "nominal" },
+    },
+    styles: STYLE_MATRIX_STYLES,
+    elements: [{ kind: "line", enabled: true, options: { summaryStat: "none" } }],
+  };
+  const data = baseData(
+    ["panel", "x", "y", "Build", "Shade"],
+    [
+      ["Panel-A", 1, 1.1, "EV", "S-EV"],
+      ["Panel-A", 2, 1.8, "EV1", "S-EV1"],
+      ["Panel-A", 2, 2.4, "TC1.6", "S-TC"],
+      ["Panel-A", 3, 3.2, "TC1.6", "S-TC"],
+      ["Panel-A", 4, 4.1, "TC1.6", "S-TC"],
+      ["Panel-B", 1, 1.2, "EV", "S-EV"],
+      ["Panel-B", 2, 2.2, "EV2", "S-EV2"],
+      ["Panel-B", 2, 3.7, "TC1.6", "S-TC"],
+      ["Panel-B", 3, 4.8, "TC1.6", "S-TC"],
+      ["Panel-B", 4, 6.1, "TC1.6", "S-TC"],
+    ],
+  );
+  const panel = buildGraph(spec, data, theme, STYLE_MATRIX_VALUE_ORDERS).panels[0];
+  const series = panelSeries(panel.option as Record<string, unknown>);
+  assertPanelKeepsMissingMiddleGap(series, "overlay precedence panel");
+  assertTargetGroupSeriesStyled(series, "overlay precedence panel");
+}
+
+{
+  const styleMatrixCases: Array<{
+    name: string;
+    spec: GraphSpec;
+    data: GraphData;
+    frame?: GraphDataFrame;
+    verify?: (option: Record<string, unknown>, series: Array<Record<string, unknown>>) => void;
+  }> = [
+    {
+      name: "boxplot",
+      spec: {
+        encoding: {
+          x: { name: "x", type: "continuous" },
+          y: { name: "y", type: "continuous" },
+          overlay: { name: "Build", type: "nominal" },
+          groupX: { name: "panel", type: "nominal" },
+        },
+        styles: STYLE_MATRIX_STYLES,
+        elements: [{ kind: "boxplot", enabled: true }],
+      },
+      data: frameBackedAggregateData(["x", "y", "Build"], 10),
+      frame: styleMatrixPointFrame([styleMatrixBoxPlotPacket()]),
+    },
+    {
+      name: "boxplot + points",
+      spec: {
+        encoding: {
+          x: { name: "x", type: "continuous" },
+          y: { name: "y", type: "continuous" },
+          overlay: { name: "Build", type: "nominal" },
+          groupX: { name: "panel", type: "nominal" },
+        },
+        styles: STYLE_MATRIX_STYLES,
+        elements: [
+          { kind: "boxplot", enabled: true },
+          { kind: "points", enabled: true, options: { summaryStat: "none" } },
+        ],
+      },
+      data: frameBackedAggregateData(["x", "y", "Build"], 10),
+      frame: styleMatrixPointFrame([styleMatrixBoxPlotPacket()]),
+    },
+    {
+      name: "points + boxplot",
+      spec: {
+        encoding: {
+          x: { name: "x", type: "continuous" },
+          y: { name: "y", type: "continuous" },
+          overlay: { name: "Build", type: "nominal" },
+          groupX: { name: "panel", type: "nominal" },
+        },
+        styles: STYLE_MATRIX_STYLES,
+        elements: [
+          { kind: "points", enabled: true, options: { summaryStat: "none" } },
+          { kind: "boxplot", enabled: true },
+        ],
+      },
+      data: frameBackedAggregateData(["x", "y", "Build"], 10),
+      frame: styleMatrixPointFrame([styleMatrixBoxPlotPacket()]),
+    },
+    {
+      name: "line + bar + smoother + fitline",
+      spec: {
+        encoding: {
+          x: { name: "x", type: "continuous" },
+          y: { name: "y", type: "continuous" },
+          overlay: { name: "Build", type: "nominal" },
+          color: { name: "Shade", type: "nominal" },
+          groupX: { name: "panel", type: "nominal" },
+        },
+        styles: STYLE_MATRIX_STYLES,
+        elements: [
+          { kind: "line", enabled: true, options: { summaryStat: "none" } },
+          { kind: "bar", enabled: true },
+          { kind: "smoother", enabled: true },
+          { kind: "fitline", enabled: true, options: { degree: 1, showFitCI: true, showPredCI: true } },
+        ],
+      },
+      data: baseData(
+        ["panel", "x", "y", "Build", "Shade"],
+        [
+          ["Panel-A", 1, 1.1, "EV", "S-EV"],
+          ["Panel-A", 2, 1.8, "EV1", "S-EV1"],
+          ["Panel-A", 2, 2.4, "TC1.6", "S-TC"],
+          ["Panel-A", 3, 3.2, "TC1.6", "S-TC"],
+          ["Panel-A", 4, 4.1, "TC1.6", "S-TC"],
+          ["Panel-B", 1, 1.2, "EV", "S-EV"],
+          ["Panel-B", 2, 2.2, "EV2", "S-EV2"],
+          ["Panel-B", 2, 3.7, "TC1.6", "S-TC"],
+          ["Panel-B", 3, 4.8, "TC1.6", "S-TC"],
+          ["Panel-B", 4, 6.1, "TC1.6", "S-TC"],
+        ],
+      ),
+    },
+    {
+      name: "histogram + points",
+      spec: {
+        encoding: {
+          x: { name: "x", type: "continuous" },
+          y: { name: "y", type: "continuous" },
+          overlay: { name: "Build", type: "nominal" },
+          groupX: { name: "panel", type: "nominal" },
+        },
+        styles: STYLE_MATRIX_STYLES,
+        elements: [
+          { kind: "histogram", enabled: true, options: { histStyle: "bar" } },
+          { kind: "points", enabled: true, options: { summaryStat: "none" } },
+        ],
+      },
+      data: frameBackedAggregateData(["x", "y", "Build"], 10),
+      frame: styleMatrixAggregateOnlyFrame([styleMatrixHistogramPacket()]),
+    },
+    {
+      name: "heatmap",
+      spec: {
+        encoding: {
+          x: { name: "x", type: "continuous" },
+          y: { name: "y", type: "continuous" },
+          overlay: { name: "Build", type: "nominal" },
+          groupX: { name: "panel", type: "nominal" },
+        },
+        styles: STYLE_MATRIX_STYLES,
+        elements: [{ kind: "heatmap", enabled: true }],
+      },
+      data: frameBackedAggregateData(["x", "y", "Build"], 10),
+      frame: styleMatrixAggregateOnlyFrame([styleMatrixHeatmapPacket()]),
+      verify: (option) => {
+        assert.equal(
+          "visualMap" in option,
+          false,
+          "grouped heatmap should not expose an option-level visualMap that overrides group fill color",
+        );
+      },
+    },
+  ];
+
+  for (const testCase of styleMatrixCases) {
+    const built = buildGraph(testCase.spec, testCase.data, theme, STYLE_MATRIX_VALUE_ORDERS, testCase.frame);
+    assert.equal(built.panels.length, 2, `${testCase.name} should preserve both facet panels`);
+    const panel = built.panels[0];
+    const option = panel.option as Record<string, unknown>;
+    const series = panelSeries(option);
+    assertPanelKeepsMissingMiddleGap(series, testCase.name);
+    assertTargetGroupSeriesStyled(series, testCase.name);
+    testCase.verify?.(option, series);
   }
 }
 
