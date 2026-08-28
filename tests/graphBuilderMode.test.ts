@@ -102,6 +102,85 @@ const legacyCorrelationInvalidMethod = normalizeGraphBuilderItem({
 });
 assert.equal(legacyCorrelationInvalidMethod.modeStates.multivariate.correlationMethod, "pearson");
 
+const legacyCorrelationCanonicalColumns = normalizeGraphBuilderItem({
+  ...legacyBase,
+  multiX: [
+    continuous("dup"),
+    nominal("cat-ignored"),
+    continuous("keep-1"),
+    continuous("dup"),
+    continuous("keep-2"),
+    nominal("cat-ignored-2"),
+    continuous("keep-1"),
+  ],
+  elements: [{ kind: "correlationMatrix", correlationMethod: "pearson" }],
+});
+assert.deepEqual(
+  legacyCorrelationCanonicalColumns.modeStates.multivariate.columns.map((field) => field.name),
+  ["dup", "keep-1", "keep-2"],
+);
+assert.deepEqual(
+  legacyCorrelationCanonicalColumns.modeStates.multivariate.columns.map((field) => field.type),
+  ["continuous", "continuous", "continuous"],
+);
+
+const overTwentyContinuous = Array.from({ length: 25 }, (_, index) => continuous(`c${index + 1}`));
+const legacyCorrelationTruncatesTo20 = normalizeGraphBuilderItem({
+  ...legacyBase,
+  multiX: overTwentyContinuous,
+  elements: [{ kind: "correlationMatrix", correlationMethod: "kendall" }],
+});
+assert.equal(legacyCorrelationTruncatesTo20.modeStates.multivariate.columns.length, 20);
+assert.deepEqual(
+  legacyCorrelationTruncatesTo20.modeStates.multivariate.columns.map((field) => field.name),
+  overTwentyContinuous.slice(0, 20).map((field) => field.name),
+);
+
+const currentZeroColumns = normalizeGraphBuilderItem({
+  ...legacyCorrelation,
+  modeStates: {
+    ...legacyCorrelation.modeStates,
+    multivariate: {
+      ...legacyCorrelation.modeStates.multivariate,
+      columns: [],
+    },
+  },
+});
+assert.deepEqual(currentZeroColumns.modeStates.multivariate.columns, []);
+
+const currentSingleColumn = normalizeGraphBuilderItem({
+  ...legacyCorrelation,
+  modeStates: {
+    ...legacyCorrelation.modeStates,
+    multivariate: {
+      ...legacyCorrelation.modeStates.multivariate,
+      columns: [continuous("only")],
+    },
+  },
+});
+assert.deepEqual(currentSingleColumn.modeStates.multivariate.columns, [continuous("only")]);
+
+const currentCanonicalColumns = normalizeGraphBuilderItem({
+  ...legacyCorrelation,
+  modeStates: {
+    ...legacyCorrelation.modeStates,
+    multivariate: {
+      ...legacyCorrelation.modeStates.multivariate,
+      columns: [
+        continuous("a"),
+        nominal("cat-ignored"),
+        continuous("b"),
+        continuous("a"),
+        continuous("c"),
+      ],
+    },
+  },
+});
+assert.deepEqual(
+  currentCanonicalColumns.modeStates.multivariate.columns.map((field) => field.name),
+  ["a", "b", "c"],
+);
+
 const idempotenceCases: GraphBuilderItem[] = [legacy2d, legacy3d, legacyCorrelation];
 for (const item of idempotenceCases) {
   assert.deepEqual(normalizeGraphBuilderItem(item), item);

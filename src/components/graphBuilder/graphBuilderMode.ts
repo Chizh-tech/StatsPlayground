@@ -14,6 +14,7 @@ import type { GraphSampling } from "@/types/graphData";
 
 const FULL_SAMPLING: GraphSampling = { mode: "full" };
 const VALID_CORRELATION_METHODS = new Set(["pearson", "spearman", "kendall"]);
+const MAX_MULTIVARIATE_COLUMNS = 20;
 
 const SHARED_CARTESIAN_KEYS: GraphSlotKey[] = [
   "x",
@@ -90,6 +91,22 @@ function toFieldRefArray(value: unknown): FieldRef[] {
     if (!isObject(entry)) continue;
     if (typeof entry.name !== "string" || typeof entry.type !== "string") continue;
     out.push({ name: entry.name, type: entry.type as FieldRef["type"] });
+  }
+  return out;
+}
+
+function canonicalizeMultivariateColumns(value: unknown): FieldRef[] {
+  const fields = toFieldRefArray(value);
+  const out: FieldRef[] = [];
+  const seen = new Set<string>();
+  for (const field of fields) {
+    if (field.type !== "continuous") continue;
+    if (seen.has(field.name)) continue;
+    seen.add(field.name);
+    out.push({ name: field.name, type: "continuous" });
+    if (out.length >= MAX_MULTIVARIATE_COLUMNS) {
+      break;
+    }
   }
   return out;
 }
@@ -250,7 +267,7 @@ function normalizeCurrentModeItem(item: GraphBuilderItem): GraphBuilderItem {
       twoD: twoDWithOpts,
       threeD: threeDWithOpts,
       multivariate: {
-        columns: toFieldRefArray(multivariateInput.columns),
+        columns: canonicalizeMultivariateColumns(multivariateInput.columns),
         chartType: "correlationMatrix",
         correlationMethod: normalizeCorrelationMethod(multivariateInput.correlationMethod),
       },
@@ -278,8 +295,8 @@ export function normalizeGraphBuilderItem(item: unknown): GraphBuilderItem {
     | undefined;
 
   if (correlationElement) {
-    const multiX = toFieldRefArray(source.multiX);
-    const multiY = toFieldRefArray(source.multiY);
+    const multiX = canonicalizeMultivariateColumns(source.multiX);
+    const multiY = canonicalizeMultivariateColumns(source.multiY);
     const methodFromOptions = isObject(correlationElement.options)
       ? correlationElement.options.correlationMethod
       : undefined;
