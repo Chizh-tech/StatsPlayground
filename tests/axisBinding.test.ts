@@ -36,6 +36,22 @@ function containsNodeText(root: ts.Node, sourceFile: ts.SourceFile, exactText: s
   return found;
 }
 
+function isExactSlotFieldBinding(
+  prop: ts.ObjectLiteralElementLike,
+  sourceFile: ts.SourceFile,
+  expectedValue: string,
+): boolean {
+  if (!ts.isPropertyAssignment(prop) || !ts.isComputedPropertyName(prop.name)) return false;
+  const keyExpr = unwrapParens(prop.name.expression);
+  if (!ts.isIdentifier(keyExpr) || keyExpr.text !== "slot" || keyExpr.getText(sourceFile) !== "slot") {
+    return false;
+  }
+  const valueExpr = unwrapParens(prop.initializer);
+  return ts.isIdentifier(valueExpr)
+    && valueExpr.text === expectedValue
+    && valueExpr.getText(sourceFile) === expectedValue;
+}
+
 const rangeAndStyle: YAxisConfig = {
   min: 2,
   max: 8,
@@ -225,7 +241,7 @@ for (const stmt of bindBody.statements) {
     if (
       !ts.isObjectLiteralExpression(encodingProp.initializer)
       || !encodingProp.initializer.properties.some(
-        (prop) => ts.isPropertyAssignment(prop) && ts.isComputedPropertyName(prop.name),
+        (prop) => isExactSlotFieldBinding(prop, graphBuilderAst, "field"),
       )
     ) {
       continue;
@@ -329,10 +345,10 @@ walk(bindBody, (node) => {
   const body = arg0.body;
   const candidate = ts.isParenthesizedExpression(body) ? body.expression : body;
   if (!ts.isObjectLiteralExpression(candidate)) return;
-  const hasComputed = candidate.properties.some(
-    (prop) => ts.isPropertyAssignment(prop) && ts.isComputedPropertyName(prop.name),
+  const hasExactSlotField = candidate.properties.some(
+    (prop) => isExactSlotFieldBinding(prop, graphBuilderAst, "field"),
   );
-  if (hasComputed) foundSetEncodingFallback = true;
+  if (hasExactSlotField) foundSetEncodingFallback = true;
 });
 
 assert.ok(
