@@ -15,6 +15,7 @@ import {
   type GraphLoadProgress,
   type GraphStreamState,
 } from "../src/components/graphBuilder/useGraphDataPipeline.ts";
+import { normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
 import { createGraphStreamTransport } from "../src/services/graphDataTransport.ts";
 import type {
   GraphChunkHeader,
@@ -926,21 +927,39 @@ function defaultModeStates(): GraphBuilderItem["modeStates"] {
   };
 }
 
-function createDefaultGraph2DState(): GraphBuilderItem["modeStates"]["twoD"] {
-  return {
-    ...defaultModeStates().twoD,
-    encoding: {},
-    multiX: [],
-    multiY: [],
-    elements: [{ kind: "points", enabled: true }],
-  };
-}
-
 function continuous(name: string): { name: string; type: "continuous" } {
   return { name, type: "continuous" };
 }
 
 function makeGraphBuilderItem(overrides: Record<string, unknown> = {}): GraphBuilderItem {
+  return normalizeGraphBuilderItem({
+    id: "graph-1",
+    name: "Graph 1",
+    sourceDatasetId: "dataset-1",
+    createdAt: new Date(0).toISOString(),
+    ...overrides,
+  });
+}
+
+function makeCanonicalGraphBuilderItem(input: {
+  mode: GraphBuilderItem["mode"];
+  modeStates: GraphBuilderItem["modeStates"];
+  filters?: GraphBuilderItem["filters"];
+  sampling?: GraphBuilderItem["sampling"];
+}): GraphBuilderItem {
+  return {
+    id: "graph-1",
+    name: "Graph 1",
+    sourceDatasetId: "dataset-1",
+    createdAt: new Date(0).toISOString(),
+    mode: input.mode,
+    modeStates: input.modeStates,
+    filters: input.filters,
+    sampling: input.sampling,
+  };
+}
+
+function makeLegacyGraphBuilderItem(overrides: Record<string, unknown> = {}): GraphBuilderItem {
   const raw = overrides as {
     mode?: GraphBuilderItem["mode"];
     modeStates?: Partial<GraphBuilderItem["modeStates"]>;
@@ -956,96 +975,7 @@ function makeGraphBuilderItem(overrides: Record<string, unknown> = {}): GraphBui
     smootherLambda?: number;
   };
 
-  const modeStates = defaultModeStates();
-  modeStates.twoD.encoding = {
-    x: { name: "region", type: "nominal" },
-    y: { name: "cost", type: "continuous" },
-  };
-  modeStates.threeD.encoding = {
-    x: { name: "region", type: "nominal" },
-    y: { name: "cost", type: "continuous" },
-  };
-
-  const topLevelElements = raw.elements ?? [{ kind: "points", enabled: true }];
-  const THREE_D_KINDS = new Set(["surface", "contour3d", "scatter3d"]);
-  modeStates.twoD.elements = topLevelElements.filter((element) => !THREE_D_KINDS.has(String(element.kind)));
-  modeStates.threeD.elements = topLevelElements.filter((element) => THREE_D_KINDS.has(String(element.kind)));
-
-  if (raw.encoding) {
-    modeStates.twoD.encoding = {
-      ...modeStates.twoD.encoding,
-      ...raw.encoding,
-    };
-    modeStates.threeD.encoding = {
-      ...modeStates.threeD.encoding,
-      ...raw.encoding,
-    };
-  }
-  modeStates.twoD.multiX = raw.multiX ?? [];
-  modeStates.twoD.multiY = raw.multiY ?? [];
-
-  if (typeof raw.smootherLambda === "number") {
-    modeStates.twoD.smootherLambda = raw.smootherLambda;
-    modeStates.threeD.smootherLambda = raw.smootherLambda;
-  }
-  if (raw.hiddenGroups) {
-    modeStates.twoD.hiddenGroups = [...raw.hiddenGroups];
-    modeStates.threeD.hiddenGroups = [...raw.hiddenGroups];
-  }
-  if (raw.groupStyles) {
-    modeStates.twoD.groupStyles = raw.groupStyles;
-    modeStates.threeD.groupStyles = raw.groupStyles;
-  }
-
-  if (raw.modeStates?.twoD) {
-    modeStates.twoD = {
-      ...modeStates.twoD,
-      ...raw.modeStates.twoD,
-      encoding: {
-        ...modeStates.twoD.encoding,
-        ...(raw.modeStates.twoD.encoding ?? {}),
-      },
-      multiX: [...(raw.modeStates.twoD.multiX ?? modeStates.twoD.multiX)],
-      multiY: [...(raw.modeStates.twoD.multiY ?? modeStates.twoD.multiY)],
-      elements: [...(raw.modeStates.twoD.elements ?? modeStates.twoD.elements)],
-    };
-  }
-  if (raw.modeStates?.threeD) {
-    modeStates.threeD = {
-      ...modeStates.threeD,
-      ...raw.modeStates.threeD,
-      encoding: {
-        ...modeStates.threeD.encoding,
-        ...(raw.modeStates.threeD.encoding ?? {}),
-      },
-      elements: [...(raw.modeStates.threeD.elements ?? modeStates.threeD.elements)],
-    };
-  }
-  if (raw.modeStates?.multivariate) {
-    modeStates.multivariate = {
-      ...modeStates.multivariate,
-      ...raw.modeStates.multivariate,
-      columns: [...(raw.modeStates.multivariate.columns ?? modeStates.multivariate.columns)],
-    };
-  }
-
-  const modeFromCorrelation = topLevelElements.some(
-    (element) => element.enabled !== false && element.kind === "correlationMatrix",
-  )
-    ? "multivariate"
-    : undefined;
-  const mode = raw.mode ?? modeFromCorrelation ?? (raw.threeD ? "3d" : "2d");
-
-  return {
-    id: "graph-1",
-    name: "Graph 1",
-    sourceDatasetId: "dataset-1",
-    mode,
-    modeStates,
-    filters: raw.filters,
-    sampling: raw.sampling,
-    createdAt: new Date().toISOString(),
-  };
+  return makeGraphBuilderItem(raw);
 }
 
 function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): string[] {
@@ -1883,12 +1813,12 @@ function makeProgressedChunk(
 }
 
 {
-  const correlationItem = makeGraphBuilderItem({
+  const correlationItem = makeCanonicalGraphBuilderItem({
     mode: "multivariate",
     modeStates: {
       ...defaultModeStates(),
       twoD: {
-        ...createDefaultGraph2DState(),
+        ...defaultModeStates().twoD,
         encoding: {
           x: continuous("inactive_x"),
           y: continuous("inactive_y"),
@@ -1927,7 +1857,7 @@ function makeProgressedChunk(
     [],
   );
 
-  const invalidMethodItem = makeGraphBuilderItem({
+  const invalidMethodItem = makeCanonicalGraphBuilderItem({
     mode: "multivariate",
     modeStates: {
       ...defaultModeStates(),
@@ -1944,12 +1874,12 @@ function makeProgressedChunk(
   ];
   assert.deepEqual(deriveElements(invalidMethodItem), invalidCorrelationElementsExpected);
 
-  const mixedCorrelationItem = makeGraphBuilderItem({
+  const mixedCorrelationItem = makeCanonicalGraphBuilderItem({
     mode: "2d",
     modeStates: {
       ...defaultModeStates(),
       twoD: {
-        ...createDefaultGraph2DState(),
+        ...defaultModeStates().twoD,
         encoding: {
           x: continuous("x_active"),
           y: continuous("y_active"),
@@ -1981,7 +1911,7 @@ function makeProgressedChunk(
     { role: "filter", column: "segment" },
   ]);
 
-  const sampledMultivariateItem = makeGraphBuilderItem({
+  const sampledMultivariateItem = makeCanonicalGraphBuilderItem({
     mode: "multivariate",
     modeStates: {
       ...defaultModeStates(),
@@ -1995,7 +1925,7 @@ function makeProgressedChunk(
   });
   assert.deepEqual(deriveGraphRequestParts(sampledMultivariateItem).sampling, { mode: "full" });
 
-  const rawItem = makeGraphBuilderItem({
+  const rawItem = makeLegacyGraphBuilderItem({
     elements: [
       { kind: "points", enabled: true, options: { summaryStat: "none" } },
       { kind: "fitline", enabled: true, options: { degree: 1 } },
@@ -2011,7 +1941,7 @@ function makeProgressedChunk(
   });
   assert.deepEqual(rawParts.elements.map((element) => element.kind), ["points", "fitline"]);
 
-  const boxItem = makeGraphBuilderItem({
+  const boxItem = makeLegacyGraphBuilderItem({
     elements: [{ kind: "boxplot", enabled: true }],
     sampling: { mode: "full" },
   });
@@ -2020,7 +1950,7 @@ function makeProgressedChunk(
 }
 
 {
-  const colorGrouped = makeGraphBuilderItem({
+  const colorGrouped = makeLegacyGraphBuilderItem({
     encoding: {
       x: { name: "x", type: "continuous" },
       y: { name: "y", type: "continuous" },
@@ -2034,7 +1964,7 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(fields, "y"), ["y"]);
 
   const overlayFallback = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       encoding: {
         x: { name: "x", type: "continuous" },
         y: { name: "y", type: "continuous" },
@@ -2047,7 +1977,7 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(overlayFallback, "group"), ["ov"]);
 
   const groupXFallback = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       encoding: {
         x: { name: "x", type: "continuous" },
         y: { name: "y", type: "continuous" },
@@ -2060,7 +1990,7 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(groupXFallback, "groupX"), ["gx"]);
 
   const groupYFallback = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       encoding: {
         x: { name: "x", type: "continuous" },
         y: { name: "y", type: "continuous" },
@@ -2073,7 +2003,7 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(groupYFallback, "groupY"), ["gy"]);
 
   const groupZFallback = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       threeD: true,
       encoding: {
         x: { name: "x", type: "continuous" },
@@ -2091,7 +2021,7 @@ function makeProgressedChunk(
 
 {
   const activeMultiX = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       encoding: {
         x: { name: "x_stale", type: "continuous" },
         y: { name: "y", type: "continuous" },
@@ -2110,7 +2040,7 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(activeMultiX, "multiX2"), ["mx2"]);
 
   const activeMultiY = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       encoding: {
         x: { name: "x", type: "continuous" },
         y: { name: "y_stale", type: "continuous" },
@@ -2127,7 +2057,7 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(activeMultiY, "multiY1"), ["my1"]);
 
   const activeMultiBoth = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       encoding: {
         x: { name: "x_stale", type: "continuous" },
         y: { name: "y_stale", type: "continuous" },
@@ -2151,7 +2081,7 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(activeMultiBoth, "multiY2"), ["my2"]);
 
   const staleInactiveMulti = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       encoding: {
         x: { name: "x", type: "continuous" },
         y: { name: "y", type: "continuous" },
@@ -2167,7 +2097,7 @@ function makeProgressedChunk(
 
 {
   const hiddenWrapFacet = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       encoding: {
         x: { name: "x", type: "continuous" },
         y: { name: "y", type: "continuous" },
@@ -2182,7 +2112,7 @@ function makeProgressedChunk(
 
 {
   const staleUnused = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       encoding: {
         x: { name: "x", type: "continuous" },
         y: { name: "y", type: "continuous" },
@@ -2211,7 +2141,7 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(staleUnused, "filter"), ["category_filter"]);
 
   const pointsWithSize = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       encoding: {
         x: { name: "x", type: "continuous" },
         y: { name: "y", type: "continuous" },
@@ -2223,7 +2153,7 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(pointsWithSize, "size"), ["point_size"]);
 
   const no3DElement = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       threeD: true,
       encoding: {
         x: { name: "x", type: "continuous" },
@@ -2236,7 +2166,7 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(no3DElement, "z"), []);
 
   const with3DElement = deriveFields(
-    makeGraphBuilderItem({
+    makeLegacyGraphBuilderItem({
       threeD: true,
       encoding: {
         x: { name: "x", type: "continuous" },

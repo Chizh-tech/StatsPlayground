@@ -1,5 +1,5 @@
-import type { ChartElement, FieldRef } from "@/graphCore";
-import { getLayerMode } from "@/components/graphBuilder/graphLayerConfig";
+import type { ChartElement, FieldRef } from "../../graphCore/index.ts";
+import { getLayerMode } from "./graphLayerConfig.ts";
 import type {
   Graph2DSlotKey,
   Graph2DState,
@@ -9,8 +9,8 @@ import type {
   GraphBuilderMode,
   GraphSlotKey,
   MultivariateGraphState,
-} from "@/types/graphBuilder";
-import type { GraphSampling } from "@/types/graphData";
+} from "../../types/graphBuilder.ts";
+import type { GraphSampling } from "../../types/graphData.ts";
 
 const FULL_SAMPLING: GraphSampling = { mode: "full" };
 const VALID_CORRELATION_METHODS = new Set(["pearson", "spearman", "kendall"]);

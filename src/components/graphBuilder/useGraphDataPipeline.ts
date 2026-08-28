@@ -601,7 +601,6 @@ export function deriveGraphRequestParts(item: GraphBuilderItem): {
 function hasEnabledElementKinds(elements: readonly GraphElementRequest[]): Set<string> {
   return new Set(
     elements
-      .filter((element) => element.enabled !== false)
       .map((element) => String(element.kind).toLowerCase()),
   );
 }
