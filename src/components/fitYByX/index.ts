@@ -7,7 +7,7 @@ export {
   clearFitYByXField,
   createFitYByXDialogState,
   filterFitYByXFields,
-  type FitYByXDialogFieldInfo,
+  type FitYByXFieldInfo,
   type FitYByXDialogState,
   type FitYByXRoleDialogProps,
 } from "./FitYByXRoleDialog";

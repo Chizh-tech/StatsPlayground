@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import type { FitYByXFieldInfo } from "../src/components/fitYByX/index.ts";
 import {
   assignFitYByXField,
   canCreateFitYByX,
   createFitYByXDialogState,
   filterFitYByXFields,
-  type FitYByXFieldInfo,
 } from "../src/components/fitYByX/FitYByXRoleDialog.tsx";
 
 const responseField: FitYByXFieldInfo = {
@@ -64,6 +64,12 @@ assert.deepEqual(visibleByRole.map(({ name }) => name), ["batch"]);
 const fitYByXViewSource = readFileSync(
   resolve(process.cwd(), "src/components/fitYByX/FitYByXView.tsx"),
   "utf8",
+);
+
+assert.equal(
+  fitYByXViewSource.includes("workspace.datasourceDeleted"),
+  true,
+  "FitYByXView must use the workspace unavailable-document presentation when the source dataset is missing",
 );
 
 assert.equal(

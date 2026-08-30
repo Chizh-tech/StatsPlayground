@@ -27,36 +27,10 @@ export function FitYByXView({ item, dataset }: FitYByXViewProps) {
 
   if (dataset == null) {
     return (
-      <div className="sp-fit-y-by-x-view">
-        <section className="sp-fit-y-by-x-summary">
-          <div className="sp-panel-header">
-            <span className="sp-panel-header-title">{item.name}</span>
-            <span className="sp-tabulate-header-hint">{t("workspace.datasourceDeleted", { defaultValue: "Source unavailable" })}</span>
-          </div>
-          <div className="sp-fit-y-by-x-summary-body">
-            <div className="sp-fit-y-by-x-summary-row">
-              <span className="sp-fit-y-by-x-summary-label">{t("fitYByX.response", { defaultValue: "Response (Y)" })}</span>
-              <span className="sp-fit-y-by-x-summary-value">{item.response.name}</span>
-            </div>
-            <div className="sp-fit-y-by-x-summary-row">
-              <span className="sp-fit-y-by-x-summary-label">{t("fitYByX.factor", { defaultValue: "Factor (X)" })}</span>
-              <span className="sp-fit-y-by-x-summary-value">{item.factor.name}</span>
-            </div>
-          </div>
-        </section>
-
-        <section className="sp-fit-y-by-x-runtime-panel">
-          <div className="sp-tabulate-state-card" role="status" aria-live="polite">
-            <div className="sp-tabulate-state-title">
-              {t("tabulate.sourceUnavailableTitle", { defaultValue: "Source unavailable" })}
-            </div>
-            <div className="sp-tabulate-state-detail">
-              {t("tabulate.sourceUnavailableDetail", {
-                defaultValue: "The source dataset for this analysis is no longer available.",
-              })}
-            </div>
-          </div>
-        </section>
+      <div className="main-content">
+        <div className="workspace-empty">
+          <p>{t("workspace.datasourceDeleted")}</p>
+        </div>
       </div>
     );
   }
