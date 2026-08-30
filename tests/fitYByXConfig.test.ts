@@ -5,7 +5,7 @@ import {
   createDefaultFitYByXGraphConfig,
   createFitYByXItem,
   validateFitYByXRoles,
-} from "../src/components/fitYByX/fitYByXConfig.ts";
+} from "../src/components/fitYByX/index.ts";
 import {
   createEmbeddedGraphItem,
   normalizeGraphBuilderItem,

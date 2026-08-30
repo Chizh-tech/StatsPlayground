@@ -10,6 +10,41 @@ import {
   type FitYByXFieldInfo,
 } from "../src/components/fitYByX/index.ts";
 
+const fitYByXBarrelSource = readFileSync(
+  resolve(process.cwd(), "src/components/fitYByX/index.ts"),
+  "utf8",
+);
+
+assert.equal(
+  fitYByXBarrelSource.includes("FitYByXRoleDialog") && fitYByXBarrelSource.includes("./FitYByXRoleDialog"),
+  true,
+  "Fit Y by X barrel must keep exporting FitYByXRoleDialog",
+);
+assert.equal(
+  fitYByXBarrelSource.includes("FitYByXRoleZone") && fitYByXBarrelSource.includes("./FitYByXRoleZone"),
+  true,
+  "Fit Y by X barrel must keep exporting FitYByXRoleZone",
+);
+assert.equal(
+  fitYByXBarrelSource.includes("FitYByXView") && fitYByXBarrelSource.includes("./FitYByXView"),
+  true,
+  "Fit Y by X barrel must keep exporting FitYByXView",
+);
+assert.equal(
+  fitYByXBarrelSource.includes("createDefaultFitYByXGraphConfig")
+    && fitYByXBarrelSource.includes("createFitYByXItem")
+    && fitYByXBarrelSource.includes("./fitYByXConfig"),
+  true,
+  "Fit Y by X barrel must keep exporting the public config helpers",
+);
+assert.equal(
+  fitYByXBarrelSource.includes("FitYByXFieldInfo")
+    && fitYByXBarrelSource.includes("createFitYByXDialogState")
+    && fitYByXBarrelSource.includes("filterFitYByXFields"),
+  true,
+  "Fit Y by X barrel must keep exporting the public dialog-state and search helpers",
+);
+
 const responseField: FitYByXFieldInfo = {
   name: "height",
   sqlType: "DOUBLE",

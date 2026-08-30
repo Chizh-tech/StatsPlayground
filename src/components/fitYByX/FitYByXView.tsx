@@ -1,14 +1,17 @@
-import { useMemo } from "react";
+import { lazy, Suspense, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { createEmbeddedGraphItem } from "@/components/graphBuilder/graphBuilderMode";
-import { GraphRuntime } from "@/components/graphBuilder/GraphRuntime";
 import type { DatasetMeta } from "@/types/data";
 import type { FitYByXItem } from "@/types/fitYByX";
 
 if (typeof document !== "undefined") {
   void import("./fitYByX.css");
 }
+
+const GraphRuntime = lazy(async () => ({
+  default: (await import("@/components/graphBuilder/GraphRuntime")).GraphRuntime,
+}));
 
 export interface FitYByXViewProps {
   item: FitYByXItem;
@@ -69,10 +72,12 @@ export function FitYByXView({ item, dataset }: FitYByXViewProps) {
               </div>
             </div>
           ) : (
-            <GraphRuntime
-              item={graphItem}
-              dataset={dataset}
-            />
+            <Suspense fallback={null}>
+              <GraphRuntime
+                item={graphItem}
+                dataset={dataset}
+              />
+            </Suspense>
           )}
         </div>
       </section>

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
+import { createFitYByXItem } from "../src/components/fitYByX/index.ts";
 import { createEmbeddedGraphItem, normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
 import { buildGraphRuntimeModel } from "../src/components/graphBuilder/graphRuntimeModel.ts";
 import { deriveGraphRequestParts } from "../src/components/graphBuilder/useGraphDataPipeline.ts";

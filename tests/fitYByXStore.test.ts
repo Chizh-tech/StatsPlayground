@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
+import { createFitYByXItem } from "../src/components/fitYByX/index.ts";
 import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
 import { useProjectStore } from "../src/stores/useProjectStore.ts";
 
