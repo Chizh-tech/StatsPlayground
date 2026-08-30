@@ -22,6 +22,7 @@ import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
 import { GraphBuilderView } from "./graphBuilder";
 import { TabulateView } from "./tabulate";
 import "./graphBuilder/graphBuilder.css";
+import "./fitYByX/fitYByX.css";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useFitYByXStore } from "@/stores/useFitYByXStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";

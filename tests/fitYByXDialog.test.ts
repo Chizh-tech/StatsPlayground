@@ -138,6 +138,11 @@ assert.equal(
   "FitYByXView must mount GraphRuntime when the source dataset exists",
 );
 assert.equal(
+  fitYByXViewSource.includes("React.lazy") || fitYByXViewSource.includes("lazy(") || fitYByXViewSource.includes("<Suspense"),
+  false,
+  "FitYByXView must synchronously mount GraphRuntime without lazy or Suspense",
+);
+assert.equal(
   fitYByXViewSource.includes("dataset == null") || fitYByXViewSource.includes("dataset === undefined"),
   true,
   "FitYByXView must guard the missing-source case before mounting GraphRuntime",

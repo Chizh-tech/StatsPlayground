@@ -27,10 +27,6 @@ import {
   type FitYByXRoleZoneItem,
 } from "./FitYByXRoleZone";
 
-if (typeof document !== "undefined") {
-  void import("./fitYByX.css");
-}
-
 export interface FitYByXRoleDialogProps {
   dataset: DatasetMeta;
   defaultName: string;
