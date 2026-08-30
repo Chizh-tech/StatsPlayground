@@ -20,6 +20,7 @@ import { SqlQueryDialog } from "./SqlQueryDialog";
 import { HelpDialog } from "./HelpDialog";
 import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
 import { GraphBuilderView } from "./graphBuilder";
+import { FitYByXRoleDialog, FitYByXView } from "./fitYByX";
 import { TabulateView } from "./tabulate";
 import "./graphBuilder/graphBuilder.css";
 import "./fitYByX/fitYByX.css";
@@ -164,6 +165,12 @@ export function Workspace() {
   const { record: recordHistory, createSnapshot, restoreSnapshot, deleteSnapshot, reset: resetHistory } = useHistoryStore();
   const graphBuilders = useGraphBuilderStore((s) => s.items);
   const fitYByXItems = useFitYByXStore((s) => s.items);
+  const fitYByXCounter = useFitYByXStore((s) => s.counter);
+  const addFitYByX = useFitYByXStore((s) => s.addItem);
+  const renameFitYByX = useFitYByXStore((s) => s.renameItem);
+  const deleteFitYByX = useFitYByXStore((s) => s.deleteItem);
+  const deleteFitYByXByDataset = useFitYByXStore((s) => s.deleteByDataset);
+  const nextFitYByXName = useFitYByXStore((s) => s.nextName);
   const resetFitYByX = useFitYByXStore((s) => s.reset);
   const loadFitYByXFromProject = useFitYByXStore((s) => s.loadFromProject);
   const tabulates = useTabulateStore((s) => s.items);
@@ -183,6 +190,7 @@ export function Workspace() {
   const [activeTab, setActiveTab] = useState<"files" | "history">("files");
   /** 当前选中项的类型与 ID。代替原有的 viewMode 机制。 */
   const [activeGraphBuilderId, setActiveGraphBuilderId] = useState<string | null>(null);
+  const [activeFitYByXId, setActiveFitYByXId] = useState<string | null>(null);
   const [activeTabulateId, setActiveTabulateId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -190,6 +198,7 @@ export function Workspace() {
   const [showSqlQuery, setShowSqlQuery] = useState(false);
   const [helpDialog, setHelpDialog] = useState<"about" | "license" | null>(null);
   const [tableOp, setTableOp] = useState<TableOpType | null>(null);
+  const [showFitYByXDialog, setShowFitYByXDialog] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
 
@@ -206,6 +215,7 @@ export function Workspace() {
   const fsMoveFolder = useFolderStore((s) => s.moveFolder);
   const fsSetTableFolder = useFolderStore((s) => s.setTableFolder);
   const fsSetGraphFolder = useFolderStore((s) => s.setGraphFolder);
+  const fsSetFitYByXFolder = useFolderStore((s) => s.setFitYByXFolder);
   const fsSetTabulateFolder = useFolderStore((s) => s.setTabulateFolder);
   const fsToggleCollapsed = useFolderStore((s) => s.toggleCollapsed);
   const fsCollapseAll = useFolderStore((s) => s.collapseAll);
@@ -226,6 +236,7 @@ export function Workspace() {
   type CtxMenu =
     | { kind: "table"; id: string; x: number; y: number }
     | { kind: "graph"; id: string; x: number; y: number }
+    | { kind: "fitYByX"; id: string; x: number; y: number }
     | { kind: "tabulate"; id: string; x: number; y: number }
     | { kind: "folder"; path: string; x: number; y: number }
     | { kind: "empty"; x: number; y: number };
@@ -259,9 +270,15 @@ export function Workspace() {
     if (activeDatasetId && !updatedDatasets.find((d) => d.id === activeDatasetId)) {
       setActiveDataset(null);
     }
+    if (activeFitYByXId) {
+      const activeFitYByX = useFitYByXStore.getState().items.find((item) => item.id === activeFitYByXId);
+      if (activeFitYByX && !updatedDatasets.find((dataset) => dataset.id === activeFitYByX.sourceDatasetId)) {
+        setActiveFitYByXId(null);
+      }
+    }
     // Force DataTableView to remount and reload data
     setTableKey((k) => k + 1);
-  }, [refreshDatasets, activeDatasetId, setActiveDataset]);
+  }, [refreshDatasets, activeDatasetId, activeFitYByXId, setActiveDataset]);
 
   useEffect(() => {
     refreshDatasets();
@@ -369,6 +386,7 @@ export function Workspace() {
     await refreshDatasets();
     markDirty();
     setActiveGraphBuilderId(null);
+    setActiveFitYByXId(null);
     setActiveTabulateId(null);
     setActiveDataset(meta.id);
     recordAction(t("history.newTable", { name }));
@@ -420,6 +438,7 @@ export function Workspace() {
     addGraphBuilder(item);
     setActiveDataset(null);
     setActiveGraphBuilderId(id);
+    setActiveFitYByXId(null);
     setActiveTabulateId(null);
     markDirty();
     recordAction(t("history.newGraph", { name, source: ds.name }));
@@ -449,11 +468,38 @@ export function Workspace() {
     addTabulate(item);
     setActiveDataset(null);
     setActiveGraphBuilderId(null);
+    setActiveFitYByXId(null);
     setActiveTabulateId(id);
     markDirty();
     recordAction(t("history.newTabulate", { name: item.name, source: ds.name }));
     setRenamingId(id);
     setRenameValue(item.name);
+  };
+
+  const handleCreateFitYByX = () => {
+    if (readOnly) return;
+    if (!activeDatasetId) {
+      alert(t("alert.selectDatasetFirst"));
+      return;
+    }
+    setShowFitYByXDialog(true);
+  };
+
+  const handleCreateFitYByXItem = (item: FitYByXItem) => {
+    const reservedName = nextFitYByXName();
+    const name = item.name.trim() || reservedName;
+    const created = { ...item, name };
+    const source = datasets.find((dataset) => dataset.id === created.sourceDatasetId)?.name ?? created.sourceDatasetId;
+    addFitYByX(created);
+    setActiveDataset(null);
+    setActiveGraphBuilderId(null);
+    setActiveTabulateId(null);
+    setActiveFitYByXId(created.id);
+    setShowFitYByXDialog(false);
+    markDirty();
+    recordAction(t("history.newFitYByX", { name: created.name, source }));
+    setRenamingId(created.id);
+    setRenameValue(created.name);
   };
 
   const handleRenameSubmit = async (id: string) => {
@@ -487,6 +533,16 @@ export function Workspace() {
       setRenamingId(null);
       return;
     }
+    const fitYByX = useFitYByXStore.getState().items.find((it) => it.id === id);
+    if (fitYByX) {
+      if (trimmed !== fitYByX.name) {
+        renameFitYByX(id, trimmed);
+        markDirty();
+        recordAction(t("history.renameFitYByX", { old: fitYByX.name, new: trimmed }));
+      }
+      setRenamingId(null);
+      return;
+    }
     const oldName = datasets.find((d) => d.id === id)?.name;
     if (trimmed !== oldName) {
       await dataService.renameDataset(id, trimmed);
@@ -513,8 +569,19 @@ export function Workspace() {
     if (item) recordAction(t("history.deleteTabulate", { name: item.name }));
   };
 
+  const handleDeleteFitYByX = (id: string) => {
+    const item = useFitYByXStore.getState().items.find((entry) => entry.id === id);
+    deleteFitYByX(id);
+    if (activeFitYByXId === id) setActiveFitYByXId(null);
+    markDirty();
+    if (item) recordAction(t("history.deleteFitYByX", { name: item.name }));
+  };
+
   const handleDeleteDataset = async (id: string) => {
     const name = datasets.find((d) => d.id === id)?.name ?? id;
+    const activeFitYByX = activeFitYByXId
+      ? useFitYByXStore.getState().items.find((item) => item.id === activeFitYByXId)
+      : null;
     await dataService.deleteDataset(id);
     if (activeDatasetId === id) setActiveDataset(null);
     // 联动删除引用此数据表的图表
@@ -525,6 +592,8 @@ export function Workspace() {
         .items.find((it) => it.id === activeGraphBuilderId);
       if (!stillExists) setActiveGraphBuilderId(null);
     }
+    deleteFitYByXByDataset(id);
+    if (activeFitYByX?.sourceDatasetId === id) setActiveFitYByXId(null);
     await refreshDatasets();
     markDirty();
     recordAction(t("history.deleteTable", { name }));
@@ -660,6 +729,7 @@ export function Workspace() {
       // table lands at the project root. The user can drag it into a
       // folder afterwards.
       setActiveGraphBuilderId(null);
+      setActiveFitYByXId(null);
       setActiveTabulateId(null);
       setActiveDataset(result.id);
       markDirty();
@@ -708,6 +778,7 @@ export function Workspace() {
       }
       addGraphBuilder({ ...item, id });
       setActiveDataset(null);
+      setActiveFitYByXId(null);
       setActiveTabulateId(null);
       setActiveGraphBuilderId(id);
       markDirty();
@@ -788,6 +859,7 @@ export function Workspace() {
   const handleCloseProject = async () => {
     setActiveDataset(null);
     setActiveGraphBuilderId(null);
+    setActiveFitYByXId(null);
     setActiveTabulateId(null);
     resetHistory();
     resetGraphBuilders();
@@ -808,6 +880,7 @@ export function Workspace() {
     if (selected) {
       setActiveDataset(null);
       setActiveGraphBuilderId(null);
+      setActiveFitYByXId(null);
       setActiveTabulateId(null);
       resetHistory();
       resetGraphBuilders();
@@ -831,6 +904,7 @@ export function Workspace() {
         const result = await openProject(selected as string);
         setActiveDataset(null);
         setActiveGraphBuilderId(null);
+        setActiveFitYByXId(null);
         setActiveTabulateId(null);
         resetHistory();
         resetGraphBuilders();
@@ -1156,6 +1230,7 @@ export function Workspace() {
   type DragPayload =
     | { kind: "table"; id: string }
     | { kind: "graph"; id: string }
+    | { kind: "fitYByX"; id: string }
     | { kind: "tabulate"; id: string }
     | { kind: "folder"; path: string };
 
@@ -1190,6 +1265,7 @@ export function Workspace() {
     if (!canDropOn(payload, target)) return;
     if (payload.kind === "table") fsSetTableFolder(payload.id, target);
     else if (payload.kind === "graph") fsSetGraphFolder(payload.id, target);
+    else if (payload.kind === "fitYByX") fsSetFitYByXFolder(payload.id, target);
     else if (payload.kind === "tabulate") fsSetTabulateFolder(payload.id, target);
     else if (payload.kind === "folder") fsMoveFolder(payload.path, target);
     markDirty();
@@ -1211,8 +1287,7 @@ export function Workspace() {
   };
 
   // ---- Tree structure: group folders + items by parent --------------------
-  // Memoize on the (folders, tableFolders, graphFolders, tabulateFolders,
-  // datasets, graphBuilders, tabulates) tuple so we only rebuild when something actually changed.
+  // Memoize on the folder maps and live documents so we only rebuild when something actually changed.
   const tree = useMemo(() => {
     // Children per parent path. Root parent is the magic key `__root__`.
     const ROOT = "__root__";
@@ -1243,6 +1318,13 @@ export function Workspace() {
       arr.push(gb);
       graphsByParent.set(p, arr);
     }
+    const fitYByXByParent = new Map<string, FitYByXItem[]>();
+    for (const item of fitYByXItems) {
+      const p = fitYByXFolders[item.id] ?? ROOT;
+      const arr = fitYByXByParent.get(p) ?? [];
+      arr.push(item);
+      fitYByXByParent.set(p, arr);
+    }
     const tabulatesByParent = new Map<string, TabulateItem[]>();
     for (const item of tabulates) {
       const p = tabulateFolders[item.id] ?? ROOT;
@@ -1250,8 +1332,8 @@ export function Workspace() {
       arr.push(item);
       tabulatesByParent.set(p, arr);
     }
-    return { ROOT, childFolders, tablesByParent, graphsByParent, tabulatesByParent };
-  }, [folders, tableFolders, graphFolders, tabulateFolders, datasets, graphBuilders, tabulates]);
+    return { ROOT, childFolders, tablesByParent, graphsByParent, fitYByXByParent, tabulatesByParent };
+  }, [folders, tableFolders, graphFolders, fitYByXFolders, tabulateFolders, datasets, graphBuilders, fitYByXItems, tabulates]);
 
   /** Recursively render one folder level. */
   const renderFolderLevel = (parent: string | null, depth: number): React.ReactNode[] => {
@@ -1261,6 +1343,7 @@ export function Workspace() {
     const folderChildren = tree.childFolders.get(key) ?? [];
     const tableChildren = tree.tablesByParent.get(key) ?? [];
     const graphChildren = tree.graphsByParent.get(key) ?? [];
+    const fitYByXChildren = tree.fitYByXByParent.get(key) ?? [];
     const tabulateChildren = tree.tabulatesByParent.get(key) ?? [];
     // Folders first, then tables, then graphs, matching the prior visual order
     // (tables-then-graphs at the root level).
@@ -1334,6 +1417,7 @@ export function Workspace() {
           onDragStart={(e) => handleDragStart(e, { kind: "table", id: ds.id })}
           onClick={() => {
             setActiveGraphBuilderId(null);
+            setActiveFitYByXId(null);
             setActiveTabulateId(null);
             setActiveDataset(ds.id);
           }}
@@ -1382,6 +1466,7 @@ export function Workspace() {
           onClick={() => {
             setActiveDataset(null);
             setActiveTabulateId(null);
+            setActiveFitYByXId(null);
             setActiveGraphBuilderId(gb.id);
           }}
           onDoubleClick={() => {
@@ -1420,6 +1505,57 @@ export function Workspace() {
         </div>,
       );
     }
+    for (const item of fitYByXChildren) {
+      const sourceDs = datasets.find((dataset) => dataset.id === item.sourceDatasetId);
+      out.push(
+        <div
+          key={`fitYByX:${item.id}`}
+          className={`dataset-item ${activeFitYByXId === item.id ? "active" : ""}`}
+          style={{ paddingLeft: 8 + depth * 12 + 12 }}
+          draggable={!readOnly}
+          onDragStart={(event) => handleDragStart(event, { kind: "fitYByX", id: item.id })}
+          onClick={() => {
+            setActiveDataset(null);
+            setActiveGraphBuilderId(null);
+            setActiveTabulateId(null);
+            setActiveFitYByXId(item.id);
+          }}
+          onDoubleClick={() => {
+            if (readOnly) return;
+            setRenamingId(item.id);
+            setRenameValue(item.name);
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setCtxMenu({ kind: "fitYByX", id: item.id, x: event.clientX, y: event.clientY });
+          }}
+          title={sourceDs ? t("workspace.datasourceLabel", { name: sourceDs.name }) : t("fitYByX.sourceMissing")}
+        >
+          <i className="ds-icon fa-solid fa-chart-column" aria-hidden="true" />
+          {renamingId === item.id ? (
+            <input
+              ref={renameInputRef}
+              className="ds-rename-input"
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+              onBlur={() => handleRenameSubmit(item.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") handleRenameSubmit(item.id);
+                if (event.key === "Escape") setRenamingId(null);
+              }}
+              onClick={(event) => event.stopPropagation()}
+              autoFocus
+            />
+          ) : (
+            <span className="ds-name">{item.name}</span>
+          )}
+          <span className="ds-info gb-source-tag">
+            {sourceDs ? sourceDs.name : t("fitYByX.sourceMissing")}
+          </span>
+        </div>,
+      );
+    }
     for (const item of tabulateChildren) {
       const sourceDs = datasets.find((d) => d.id === item.sourceDatasetId);
       out.push(
@@ -1432,6 +1568,7 @@ export function Workspace() {
           onClick={() => {
             setActiveDataset(null);
             setActiveGraphBuilderId(null);
+            setActiveFitYByXId(null);
             setActiveTabulateId(item.id);
           }}
           onDoubleClick={() => {
@@ -1515,6 +1652,12 @@ export function Workspace() {
                 onClick={activeDatasetId && !readOnly ? handleCreateTabulate : undefined}
               >
                 {t("menu.tabulate")}
+              </div>
+              <div
+                className={`menu-item${activeDatasetId && !readOnly ? "" : " menu-item-disabled"}`}
+                onClick={activeDatasetId && !readOnly ? handleCreateFitYByX : undefined}
+              >
+                {t("menu.fitYByX")}
               </div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.help")}>
@@ -1624,7 +1767,7 @@ export function Workspace() {
                   }
                 }}
               >
-                {datasets.length === 0 && graphBuilders.length === 0 && tabulates.length === 0 && folders.length === 0 ? (
+                {datasets.length === 0 && graphBuilders.length === 0 && fitYByXItems.length === 0 && tabulates.length === 0 && folders.length === 0 ? (
                   <div className="empty-hint">{t("common.noContent")}</div>
                 ) : (
                   renderFolderLevel(null, 0)
@@ -1657,6 +1800,7 @@ export function Workspace() {
                     await refreshDatasets();
                     markDirty();
                     setActiveGraphBuilderId(null);
+                    setActiveFitYByXId(null);
                     setActiveTabulateId(null);
                     setActiveDataset(dataset.id);
                     recordAction(t("history.tabulateTableCreated", { name: dataset.name }));
@@ -1671,6 +1815,15 @@ export function Workspace() {
               const ds = datasets.find((d) => d.id === item.sourceDatasetId);
               if (!ds) return <div className="main-content"><div className="workspace-empty"><p>{t("workspace.datasourceDeleted")}</p></div></div>;
               return <GraphBuilderView item={item} dataset={ds} />;
+            })()
+          ) : activeFitYByXId ? (
+            (() => {
+              const item = fitYByXItems.find((entry) => entry.id === activeFitYByXId);
+              if (!item) {
+                return <div className="main-content"><div className="workspace-empty"><p>{t("workspace.fitYByXMissing")}</p></div></div>;
+              }
+              const ds = datasets.find((dataset) => dataset.id === item.sourceDatasetId);
+              return <FitYByXView item={item} dataset={ds} />;
             })()
           ) : activeDatasetId ? (
             <DataTableView key={tableKey} datasetId={activeDatasetId} onTableOp={setTableOp} />
@@ -1744,6 +1897,7 @@ export function Workspace() {
           onClose={() => setTableOp(null)}
           onCreated={async (ds) => {
             await refreshDatasets();
+            setActiveFitYByXId(null);
             setActiveDataset(ds.id);
             markDirty();
           }}
@@ -1763,11 +1917,21 @@ export function Workspace() {
           onCreated={async (dataset) => {
             await refreshDatasets();
             setActiveGraphBuilderId(null);
+            setActiveFitYByXId(null);
             setActiveDataset(dataset.id);
             markDirty();
             recordAction(t("history.sqlQueryTableCreated", { name: dataset.name }));
             setShowSqlQuery(false);
           }}
+        />
+      )}
+
+      {showFitYByXDialog && activeDatasetId && (
+        <FitYByXRoleDialog
+          dataset={datasets.find((dataset) => dataset.id === activeDatasetId)!}
+          defaultName={`Fit Y by X ${fitYByXCounter + 1}`}
+          onCancel={() => setShowFitYByXDialog(false)}
+          onCreate={handleCreateFitYByXItem}
         />
       )}
 
@@ -1840,6 +2004,7 @@ export function Workspace() {
                   setRenamingId(id);
                   setRenameValue(ds.name);
                   setActiveGraphBuilderId(null);
+                  setActiveFitYByXId(null);
                   setActiveTabulateId(null);
                   setActiveDataset(id);
                   setCtxMenu(null);
@@ -1864,11 +2029,32 @@ export function Workspace() {
                   setRenameValue(gb.name);
                   setActiveDataset(null);
                   setActiveTabulateId(null);
+                  setActiveFitYByXId(null);
                   setActiveGraphBuilderId(id);
                   setCtxMenu(null);
                 })}>{t("common.rename")}</div>
                 <div className="sp-ctx-sep" />
                 <div className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => { handleDeleteGraphBuilder(id); setCtxMenu(null); })}>{t("common.delete")}</div>
+              </>
+            );
+          })()}
+          {ctxMenu.kind === "fitYByX" && (() => {
+            const id = ctxMenu.id;
+            const item = fitYByXItems.find((entry) => entry.id === id);
+            if (!item) return null;
+            return (
+              <>
+                <div className={`sp-ctx-item${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => {
+                  setRenamingId(id);
+                  setRenameValue(item.name);
+                  setActiveDataset(null);
+                  setActiveGraphBuilderId(null);
+                  setActiveTabulateId(null);
+                  setActiveFitYByXId(id);
+                  setCtxMenu(null);
+                })}>{t("common.rename")}</div>
+                <div className="sp-ctx-sep" />
+                <div className={`sp-ctx-item sp-ctx-danger${readOnly ? " sp-ctx-item-disabled" : ""}`} onClick={readOnly ? undefined : (() => { handleDeleteFitYByX(id); setCtxMenu(null); })}>{t("common.delete")}</div>
               </>
             );
           })()}
@@ -1883,6 +2069,7 @@ export function Workspace() {
                   setRenameValue(item.name);
                   setActiveDataset(null);
                   setActiveGraphBuilderId(null);
+                  setActiveFitYByXId(null);
                   setActiveTabulateId(id);
                   setCtxMenu(null);
                 })}>{t("common.rename")}</div>
