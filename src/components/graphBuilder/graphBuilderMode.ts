@@ -1,6 +1,7 @@
 import type { ChartElement, FieldRef } from "@/graphCore";
 import { getLayerMode } from "@/components/graphBuilder/graphLayerConfig";
 import type {
+  EmbeddedGraphConfig,
   Graph2DSlotKey,
   Graph2DState,
   Graph3DSlotKey,
@@ -69,6 +70,22 @@ function clone<T>(value: T): T {
     return next as T;
   }
   return value;
+}
+
+export function createEmbeddedGraphItem(input: {
+  id: string;
+  name: string;
+  sourceDatasetId: string;
+  config: EmbeddedGraphConfig;
+  createdAt: string;
+}): GraphBuilderItem {
+  return normalizeGraphBuilderItem({
+    ...clone(input.config),
+    id: input.id,
+    name: input.name,
+    sourceDatasetId: input.sourceDatasetId,
+    createdAt: input.createdAt,
+  });
 }
 
 function withOptional<T extends object, K extends string, V>(
