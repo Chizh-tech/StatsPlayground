@@ -65,4 +65,38 @@ const item = createFitYByXItem({
 });
 assert.deepEqual(item.graph, config);
 
+assert.throws(
+  () => createFitYByXItem({
+    id: "invalid-response",
+    name: "Invalid response",
+    sourceDatasetId: "table-1",
+    response: factor,
+    factor: ordinal,
+    createdAt: "2026-08-30T00:00:00.000Z",
+  }),
+  /invalidResponse/,
+);
+assert.throws(
+  () => createFitYByXItem({
+    id: "invalid-factor",
+    name: "Invalid factor",
+    sourceDatasetId: "table-1",
+    response,
+    factor: invalidFactor,
+    createdAt: "2026-08-30T00:00:00.000Z",
+  }),
+  /invalidFactor/,
+);
+assert.throws(
+  () => createFitYByXItem({
+    id: "duplicate",
+    name: "Duplicate",
+    sourceDatasetId: "table-1",
+    response,
+    factor: duplicateFactor,
+    createdAt: "2026-08-30T00:00:00.000Z",
+  }),
+  /duplicateRole/,
+);
+
 console.log("fitYByXConfig contract tests passed");

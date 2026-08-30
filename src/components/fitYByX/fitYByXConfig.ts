@@ -9,6 +9,17 @@ export {
   type FitYByXValidationError,
   validateFitYByXRoles,
 } from "./fitYByXRoles";
+import { validateFitYByXRoles } from "./fitYByXRoles";
+
+export class FitYByXRoleValidationError extends Error {
+  readonly code: import("./fitYByXRoles").FitYByXValidationError;
+
+  constructor(code: import("./fitYByXRoles").FitYByXValidationError) {
+    super(`Invalid Fit Y by X roles: ${code}`);
+    this.name = "FitYByXRoleValidationError";
+    this.code = code;
+  }
+}
 
 function clone<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -62,6 +73,11 @@ export function createFitYByXItem(input: {
   factor: FieldRef;
   createdAt: string;
 }): FitYByXItem {
+  const validation = validateFitYByXRoles({ response: input.response, factor: input.factor });
+  if (!validation.ok) {
+    throw new FitYByXRoleValidationError(validation.error);
+  }
+
   return {
     id: input.id,
     name: input.name,

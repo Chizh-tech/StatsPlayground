@@ -4,11 +4,13 @@ import { resolve } from "node:path";
 
 import {
   assignFitYByXField,
+  deriveFitYByXFieldInfo,
   canCreateFitYByX,
   createFitYByXDialogState,
   filterFitYByXFields,
   type FitYByXFieldInfo,
 } from "../src/components/fitYByX/index.ts";
+import type { ColumnDisplayProps, ColumnMeta } from "../src/types/data.ts";
 
 const fitYByXBarrelSource = readFileSync(
   resolve(process.cwd(), "src/components/fitYByX/index.ts"),
@@ -65,6 +67,24 @@ const ordinalField: FitYByXFieldInfo = {
   modelingRole: "Ordinal",
   field: { name: "batch", type: "ordinal" },
 };
+
+const numericOrdinalColumn: ColumnMeta = {
+  colIndex: 0,
+  colName: "lot",
+  colType: "DOUBLE",
+  role: "continuous",
+  missingCount: 0,
+};
+const numericOrdinalDisplay: ColumnDisplayProps = {
+  colIndex: 0,
+  extras: { valueOrder: { values: ["1", "2"] } },
+};
+assert.deepEqual(deriveFitYByXFieldInfo(numericOrdinalColumn, numericOrdinalDisplay), {
+  name: "lot",
+  sqlType: "DOUBLE",
+  modelingRole: "Ordinal",
+  field: { name: "lot", type: "ordinal" },
+});
 
 let state = createFitYByXDialogState("Fit Y by X 1");
 assert.equal(canCreateFitYByX(state), false);
@@ -151,6 +171,21 @@ assert.equal(
   fitYByXViewSource.includes("dataset == null ? (") || fitYByXViewSource.includes("dataset === undefined ? ("),
   true,
   "FitYByXView must render the unavailable state inline instead of returning early before the surrounding analysis context",
+);
+
+const fitYByXRoleDialogSource = readFileSync(
+  resolve(process.cwd(), "src/components/fitYByX/FitYByXRoleDialog.tsx"),
+  "utf8",
+);
+assert.equal(
+  fitYByXRoleDialogSource.includes("assignResponseLabel") && fitYByXRoleDialogSource.includes("field: field.name"),
+  true,
+  "FitYByXRoleDialog must pass field for the locale assign-response aria label interpolation",
+);
+assert.equal(
+  fitYByXRoleDialogSource.includes("assignFactorLabel") && fitYByXRoleDialogSource.includes("field: field.name"),
+  true,
+  "FitYByXRoleDialog must pass field for the locale assign-factor aria label interpolation",
 );
 
 console.log("fitYByX dialog contract tests passed");

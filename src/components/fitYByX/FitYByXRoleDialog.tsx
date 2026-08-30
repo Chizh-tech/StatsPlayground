@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { inferFieldType, type FieldRef } from "@/graphCore/types";
 import { dataService } from "@/services/dataService";
-import type { ColumnDisplayProps, DatasetMeta } from "@/types/data";
+import type { ColumnDisplayProps, ColumnMeta, DatasetMeta } from "@/types/data";
 import type { FitYByXItem } from "@/types/fitYByX";
 
 import {
@@ -238,8 +238,8 @@ export function FitYByXRoleDialog({ dataset, defaultName, onCancel, onCreate }: 
                               className="sp-tabulate-inline-button"
                               onClick={() => handleAssign("response", field)}
                               aria-label={t("fitYByX.assignResponseLabel", {
-                                defaultValue: "Assign {{name}} as response",
-                                name: field.name,
+                                defaultValue: "Assign {{field}} as response",
+                                field: field.name,
                               })}
                               title={t("fitYByX.assignResponse", { defaultValue: "Assign as Y" })}
                             >
@@ -250,8 +250,8 @@ export function FitYByXRoleDialog({ dataset, defaultName, onCancel, onCreate }: 
                               className="sp-tabulate-inline-button"
                               onClick={() => handleAssign("factor", field)}
                               aria-label={t("fitYByX.assignFactorLabel", {
-                                defaultValue: "Assign {{name}} as factor",
-                                name: field.name,
+                                defaultValue: "Assign {{field}} as factor",
+                                field: field.name,
                               })}
                               title={t("fitYByX.assignFactor", { defaultValue: "Assign as X" })}
                             >
@@ -318,26 +318,39 @@ function buildFitYByXFieldInfoList(
 ): FitYByXFieldInfo[] {
   const propsByIndex = new Map(displayProps.map((entry) => [entry.colIndex, entry]));
   return columns.map(([name, sqlType], index) => {
-    const modelingRole = deriveModelingRole(sqlType, propsByIndex.get(index));
-    return {
-      name,
-      sqlType,
-      modelingRole: toModelingRoleLabel(modelingRole),
-      field: {
-        name,
-        type: modelingRole,
-      },
-    };
+    return deriveFitYByXFieldInfo({
+      colIndex: index,
+      colName: name,
+      colType: sqlType,
+      role: "continuous",
+      missingCount: 0,
+    }, propsByIndex.get(index));
   });
 }
 
+export function deriveFitYByXFieldInfo(
+  column: ColumnMeta,
+  displayProps?: ColumnDisplayProps,
+): FitYByXFieldInfo {
+  const modelingRole = deriveModelingRole(column.colType, displayProps);
+  return {
+    name: column.colName,
+    sqlType: column.colType,
+    modelingRole: toModelingRoleLabel(modelingRole),
+    field: {
+      name: column.colName,
+      type: modelingRole,
+    },
+  };
+}
+
 function deriveModelingRole(sqlType: string, displayProps?: ColumnDisplayProps): FieldRef["type"] {
+  if (hasValueOrder(displayProps)) {
+    return "ordinal";
+  }
   const inferred = inferFieldType(sqlType);
   if (inferred === "continuous" || inferred === "datetime") {
     return inferred;
-  }
-  if (hasValueOrder(displayProps)) {
-    return "ordinal";
   }
   return "nominal";
 }

@@ -1,7 +1,9 @@
 import { create } from "zustand";
 
 import { createFitYByXItem } from "@/components/fitYByX/fitYByXConfig";
+import { createEmbeddedGraphItem } from "@/components/graphBuilder/graphBuilderMode";
 import { useProjectStore } from "@/stores/useProjectStore";
+import type { EmbeddedGraphConfig } from "@/types/graphBuilder";
 import type { FitYByXItem } from "@/types/fitYByX";
 import { assertProjectMutable } from "@/utils/saveReadOnly";
 
@@ -30,8 +32,30 @@ function maxFitYByXSuffix(items: readonly FitYByXItem[]): number {
   }, 0);
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isLoadableEmbeddedGraphConfig(value: unknown): value is EmbeddedGraphConfig {
+  if (!isObject(value)) return false;
+  if (value.mode !== "2d" && value.mode !== "3d" && value.mode !== "multivariate") return false;
+  if (!isObject(value.modeStates)) return false;
+  return isObject(value.modeStates.twoD)
+    && isObject(value.modeStates.threeD)
+    && isObject(value.modeStates.multivariate);
+}
+
+function extractEmbeddedGraphConfig(item: ReturnType<typeof createEmbeddedGraphItem>): EmbeddedGraphConfig {
+  return {
+    mode: item.mode,
+    modeStates: item.modeStates,
+    filters: item.filters,
+    sampling: item.sampling,
+  };
+}
+
 function normalizeLoadedItem(item: FitYByXItem): FitYByXItem {
-  return createFitYByXItem({
+  const base = createFitYByXItem({
     id: item.id,
     name: item.name,
     sourceDatasetId: item.sourceDatasetId,
@@ -39,6 +63,21 @@ function normalizeLoadedItem(item: FitYByXItem): FitYByXItem {
     factor: item.factor,
     createdAt: item.createdAt,
   });
+
+  if (!isLoadableEmbeddedGraphConfig(item.graph)) {
+    return base;
+  }
+
+  return {
+    ...base,
+    graph: extractEmbeddedGraphConfig(createEmbeddedGraphItem({
+      id: `fit-y-by-x-graph:${base.id}`,
+      name: base.name,
+      sourceDatasetId: base.sourceDatasetId,
+      config: item.graph,
+      createdAt: base.createdAt,
+    })),
+  };
 }
 
 export const useFitYByXStore = create<FitYByXStore>((set, get) => ({

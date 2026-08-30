@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import { createFitYByXItem } from "../src/components/fitYByX/index.ts";
+import { createEmbeddedGraphItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
 import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
 import { useProjectStore } from "../src/stores/useProjectStore.ts";
 
@@ -38,24 +39,47 @@ const persistedGraph = {
     ...loadedBase.graph.modeStates,
     twoD: {
       ...loadedBase.graph.modeStates.twoD,
-      multiX: [{ name: "extra", type: "continuous" as const }],
-      multiY: [{ name: "drop", type: "continuous" as const }],
-      elements: [{ kind: "line", enabled: true }],
+      smootherLambda: 0.8,
+      elements: [{ kind: "points", enabled: false }],
+      hiddenGroups: ["site:B"],
+      yAxis: { min: 10, max: 20 },
     },
   },
 };
+const expectedPersistedGraph = createEmbeddedGraphItem({
+  id: "fit-y-by-x-graph:fit-2",
+  name: "Fit Y by X 2",
+  sourceDatasetId: "dataset-1",
+  config: persistedGraph,
+  createdAt,
+});
 
 useFitYByXStore.getState().loadFromProject([
   { ...loadedBase, graph: persistedGraph },
   loadedCustom,
+  { ...fitItem("fit-legacy", "Legacy fit"), graph: undefined } as never,
+  { ...fitItem("fit-malformed", "Malformed fit"), graph: { mode: "bogus" } } as never,
 ]);
 
 const loadedItem = useFitYByXStore.getState().items.find(({ id }) => id === "fit-2");
 assert.ok(loadedItem);
-assert.deepEqual(loadedItem?.graph, loadedBase.graph);
+assert.deepEqual(loadedItem?.graph, {
+  mode: expectedPersistedGraph.mode,
+  modeStates: expectedPersistedGraph.modeStates,
+  filters: expectedPersistedGraph.filters,
+  sampling: expectedPersistedGraph.sampling,
+});
 assert.deepEqual(loadedItem?.response, response);
 assert.deepEqual(loadedItem?.factor, factor);
 assert.equal(loadedItem?.createdAt, createdAt);
+assert.deepEqual(
+  useFitYByXStore.getState().items.find(({ id }) => id === "fit-legacy")?.graph,
+  fitItem("fit-legacy", "Legacy fit").graph,
+);
+assert.deepEqual(
+  useFitYByXStore.getState().items.find(({ id }) => id === "fit-malformed")?.graph,
+  fitItem("fit-malformed", "Malformed fit").graph,
+);
 assert.equal(useFitYByXStore.getState().nextName(), "Fit Y by X 3");
 assert.deepEqual(useGraphBuilderStore.getState().items, []);
 
@@ -84,7 +108,7 @@ assert.equal(useFitYByXStore.getState().items.some(({ id }) => id === "fit-2"), 
 useFitYByXStore.getState().deleteItem("fit-8");
 assert.deepEqual(
   useFitYByXStore.getState().items.map(({ id }) => id),
-  ["fit-custom"],
+  ["fit-custom", "fit-legacy", "fit-malformed"],
 );
 
 useProjectStore.setState({ readOnly: true });

@@ -1,4 +1,5 @@
 export { FitYByXRoleDialog } from "./FitYByXRoleDialog";
+export { deriveFitYByXFieldInfo } from "./FitYByXRoleDialog";
 export {
   FitYByXRoleZone,
   type FitYByXDragPayload,
