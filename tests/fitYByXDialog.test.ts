@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import type { FitYByXFieldInfo } from "../src/components/fitYByX/index.ts";
 import {
   assignFitYByXField,
   canCreateFitYByX,
   createFitYByXDialogState,
   filterFitYByXFields,
-} from "../src/components/fitYByX/FitYByXRoleDialog.tsx";
+  type FitYByXFieldInfo,
+} from "../src/components/fitYByX/index.ts";
 
 const responseField: FitYByXFieldInfo = {
   name: "height",
@@ -71,6 +71,21 @@ assert.equal(
   true,
   "FitYByXView must use the workspace unavailable-document presentation when the source dataset is missing",
 );
+assert.equal(
+  fitYByXViewSource.includes("{item.name}"),
+  true,
+  "FitYByXView must preserve the analysis header when the source dataset is missing",
+);
+assert.equal(
+  fitYByXViewSource.includes("dataset ?") && fitYByXViewSource.includes("workspace.datasourceLabel") && fitYByXViewSource.includes("workspace.datasourceDeleted"),
+  true,
+  "FitYByXView must preserve the source slot and switch it to the deleted-source label when the dataset is missing",
+);
+assert.equal(
+  fitYByXViewSource.includes("item.response.name") && fitYByXViewSource.includes("item.factor.name"),
+  true,
+  "FitYByXView must preserve response and factor summary context when the dataset is missing",
+);
 
 assert.equal(
   fitYByXViewSource.includes("useGraphBuilderStore"),
@@ -91,6 +106,11 @@ assert.equal(
   fitYByXViewSource.includes("dataset == null") || fitYByXViewSource.includes("dataset === undefined"),
   true,
   "FitYByXView must guard the missing-source case before mounting GraphRuntime",
+);
+assert.equal(
+  fitYByXViewSource.includes("dataset == null ? (") || fitYByXViewSource.includes("dataset === undefined ? ("),
+  true,
+  "FitYByXView must render the unavailable state inline instead of returning early before the surrounding analysis context",
 );
 
 console.log("fitYByX dialog contract tests passed");

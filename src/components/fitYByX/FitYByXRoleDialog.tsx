@@ -7,7 +7,14 @@ import type { ColumnDisplayProps, DatasetMeta } from "@/types/data";
 import type { FitYByXItem } from "@/types/fitYByX";
 
 import {
-  canAssignFitYByXRole,
+  assignFitYByXField,
+  canCreateFitYByX,
+  clearFitYByXField,
+  createFitYByXDialogState,
+  filterFitYByXFields,
+  type FitYByXFieldInfo,
+} from "./fitYByXDialogState";
+import {
   createFitYByXItem,
   type FitYByXRole,
   type FitYByXValidationError,
@@ -20,18 +27,8 @@ import {
   type FitYByXRoleZoneItem,
 } from "./FitYByXRoleZone";
 
-export interface FitYByXFieldInfo {
-  name: string;
-  sqlType: string;
-  modelingRole: "Continuous" | "Nominal" | "Ordinal" | "Datetime";
-  field: FieldRef;
-}
-
-export interface FitYByXDialogState {
-  name: string;
-  response?: FieldRef;
-  factor?: FieldRef;
-  validationError: FitYByXValidationError | null;
+if (typeof document !== "undefined") {
+  void import("./fitYByX.css");
 }
 
 export interface FitYByXRoleDialogProps {
@@ -39,61 +36,6 @@ export interface FitYByXRoleDialogProps {
   defaultName: string;
   onCancel: () => void;
   onCreate: (item: FitYByXItem) => void;
-}
-
-export function createFitYByXDialogState(defaultName: string): FitYByXDialogState {
-  return {
-    name: defaultName,
-    validationError: null,
-  };
-}
-
-export function assignFitYByXField(
-  state: FitYByXDialogState,
-  role: FitYByXRole,
-  field: FitYByXFieldInfo,
-): FitYByXDialogState {
-  const other = role === "response" ? state.factor : state.response;
-  const validation = canAssignFitYByXRole(role, field.field, other);
-  if (validation !== true) {
-    return {
-      ...state,
-      validationError: validation,
-    };
-  }
-
-  return {
-    ...state,
-    [role]: { ...field.field },
-    validationError: null,
-  };
-}
-
-export function clearFitYByXField(state: FitYByXDialogState, role: FitYByXRole): FitYByXDialogState {
-  return {
-    ...state,
-    [role]: undefined,
-    validationError: null,
-  };
-}
-
-export function filterFitYByXFields(fields: readonly FitYByXFieldInfo[], query: string): FitYByXFieldInfo[] {
-  const needle = query.trim().toLowerCase();
-  if (!needle) {
-    return [...fields];
-  }
-
-  return fields.filter(({ name, sqlType, modelingRole }) => {
-    const haystack = `${name} ${sqlType} ${modelingRole}`.toLowerCase();
-    return haystack.includes(needle);
-  });
-}
-
-export function canCreateFitYByX(state: FitYByXDialogState): boolean {
-  return state.name.trim().length > 0 && validateFitYByXRoles({
-    response: state.response,
-    factor: state.factor,
-  }).ok;
 }
 
 export function FitYByXRoleDialog({ dataset, defaultName, onCancel, onCreate }: FitYByXRoleDialogProps) {

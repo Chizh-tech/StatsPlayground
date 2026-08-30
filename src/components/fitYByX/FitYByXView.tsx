@@ -6,6 +6,10 @@ import { GraphRuntime } from "@/components/graphBuilder/GraphRuntime";
 import type { DatasetMeta } from "@/types/data";
 import type { FitYByXItem } from "@/types/fitYByX";
 
+if (typeof document !== "undefined") {
+  void import("./fitYByX.css");
+}
+
 export interface FitYByXViewProps {
   item: FitYByXItem;
   dataset: DatasetMeta | undefined;
@@ -25,24 +29,16 @@ export function FitYByXView({ item, dataset }: FitYByXViewProps) {
     [item],
   );
 
-  if (dataset == null) {
-    return (
-      <div className="main-content">
-        <div className="workspace-empty">
-          <p>{t("workspace.datasourceDeleted")}</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="sp-fit-y-by-x-view">
       <section className="sp-fit-y-by-x-summary">
         <div className="sp-panel-header">
           <div className="sp-tabulate-heading-copy">
             <span className="sp-panel-header-title">{item.name}</span>
-            <span className="sp-tabulate-source-label" title={dataset.name}>
-              {t("workspace.datasourceLabel", { defaultValue: "Source: {{name}}", name: dataset.name })}
+            <span className="sp-tabulate-source-label" title={dataset ? dataset.name : t("workspace.datasourceDeleted")}>
+              {dataset
+                ? t("workspace.datasourceLabel", { defaultValue: "Source: {{name}}", name: dataset.name })
+                : t("workspace.datasourceDeleted")}
             </span>
           </div>
         </div>
@@ -66,10 +62,18 @@ export function FitYByXView({ item, dataset }: FitYByXViewProps) {
         </div>
 
         <div className="sp-fit-y-by-x-runtime-shell">
-          <GraphRuntime
-            item={graphItem}
-            dataset={dataset}
-          />
+          {dataset == null ? (
+            <div className="main-content">
+              <div className="workspace-empty">
+                <p>{t("workspace.datasourceDeleted")}</p>
+              </div>
+            </div>
+          ) : (
+            <GraphRuntime
+              item={graphItem}
+              dataset={dataset}
+            />
+          )}
         </div>
       </section>
     </div>
