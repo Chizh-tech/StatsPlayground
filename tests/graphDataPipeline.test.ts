@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import ts from "typescript";
 import { SCATTER_RENDER_BUDGET } from "../src/graphCore/scatterBudget.ts";
 import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphData.ts";
@@ -23,7 +22,7 @@ import {
   deriveMultivariateSlotBinding,
   resolveCanvasDropSlot,
 } from "../src/components/graphBuilder/multivariateInteractions.ts";
-import { normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
+import { createEmbeddedGraphItem, normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
 import { createGraphStreamTransport } from "../src/services/graphDataTransport.ts";
 import type {
   GraphChunkHeader,
@@ -34,7 +33,7 @@ import type {
 } from "../src/types/graphData.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
 
-const TEST_FILE_DIR = dirname(fileURLToPath(import.meta.url));
+const TEST_FILE_DIR = resolve(process.cwd(), "tests");
 
 type JsonObject = Record<string, unknown>;
 
@@ -175,8 +174,8 @@ assert.equal(makeGraphRows(10).length, 10);
   assert.match(graphBuilderViewSource, /deriveMultivariateSlotBinding\(/);
   assert.match(
     graphBuilderViewSource,
-    /\{isMultivariateMode && !correlationColumnsReady \? \([\s\S]*?\)\s*:\s*[\s\S]*?\)\s*\}\s*\{correlationNoticeText && \(/,
-    "multivariate rejection status must render outside the correlationColumnsReady conditional",
+    /<GraphRuntime[\s\S]*onStateChange=\{setRuntimeState\}[\s\S]*\/?>[\s\S]*\{correlationNoticeText && \(/,
+    "GraphBuilderView must render the multivariate rejection status outside the extracted GraphRuntime block",
   );
   assert.doesNotMatch(graphBuilderViewSource, /isCorrelationMatrixItem\(item\)/);
   assert.equal(
@@ -1031,6 +1030,21 @@ function makeLegacyGraphBuilderItem(overrides: Record<string, unknown> = {}): Gr
   return makeGraphBuilderItem(raw);
 }
 
+function makeEquivalentEmbeddedGraphItem(item: GraphBuilderItem): GraphBuilderItem {
+  return createEmbeddedGraphItem({
+    id: `${item.id}-embedded`,
+    name: `${item.name} embedded`,
+    sourceDatasetId: item.sourceDatasetId,
+    createdAt: item.createdAt,
+    config: {
+      mode: item.mode,
+      modeStates: item.modeStates,
+      filters: item.filters,
+      sampling: item.sampling,
+    },
+  });
+}
+
 function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): string[] {
   return fields.filter((field) => field.role === role).map((field) => field.column);
 }
@@ -1064,6 +1078,42 @@ function makeProgressedChunk(
       },
     },
   };
+}
+
+{
+  const defaults = defaultModeStates();
+  const interactive = makeCanonicalGraphBuilderItem({
+    mode: "2d",
+    modeStates: {
+      twoD: {
+        encoding: {
+          x: { name: "site", type: "nominal" },
+          y: { name: "height", type: "continuous" },
+          overlay: { name: "batch", type: "ordinal" },
+        },
+        multiX: [],
+        multiY: [],
+        elements: [
+          { kind: "points", enabled: true },
+          { kind: "boxplot", enabled: true },
+        ],
+        smootherLambda: 0.4,
+      },
+      threeD: defaults.threeD,
+      multivariate: defaults.multivariate,
+    },
+    filters: [
+      { op: "AND", rule: { kind: "categorical", field: "site", selected: ["North", "South"] } },
+    ],
+    sampling: { mode: "full" },
+  });
+  const embedded = makeEquivalentEmbeddedGraphItem(interactive);
+
+  assert.deepEqual(
+    deriveGraphRequestParts(interactive),
+    deriveGraphRequestParts(embedded),
+    "equivalent interactive and embedded graph items must derive identical request parts",
+  );
 }
 
 {

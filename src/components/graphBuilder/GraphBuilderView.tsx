@@ -16,12 +16,10 @@
  *   └──────────────────────────────────────────────────────────────────┘
  */
 
-import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
-import { SCATTER_RENDER_BUDGET } from "@/graphCore/scatterBudget";
+import { isMissing, DEFAULT_GROUP_KEY, type FieldRef, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphBuilderMode, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -52,7 +50,8 @@ import {
   deriveMultivariateSlotBinding,
   resolveCanvasDropSlot,
 } from "./multivariateInteractions";
-import { useGraphDataPipeline } from "./useGraphDataPipeline";
+import { GraphRuntime, type GraphRuntimeState } from "./GraphRuntime";
+import { buildGraphRuntimeModel } from "./graphRuntimeModel";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -156,12 +155,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // a less-frequent mode used for navigating an already-zoomed view.
   const [cursorMode, setCursorMode] = useState<"pan" | "select">("select");
 
-  const [columns, setColumns] = useState<FieldRef[]>([]);
-  const [colSqlTypes, setColSqlTypes] = useState<string[]>([]);
-  const [metaLoading, setMetaLoading] = useState(true);
-  const [metaError, setMetaError] = useState<string | null>(null);
-  const [viewport, setViewport] = useState({ width: 1280, height: 720 });
-  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [runtimeState, setRuntimeState] = useState<GraphRuntimeState | null>(null);
+  const columns = runtimeState?.columns ?? [];
+  const colSqlTypes = runtimeState?.colSqlTypes ?? [];
+  const metaLoading = runtimeState?.metaLoading ?? true;
+  const metaError = runtimeState?.metaError ?? null;
   // Y-axis settings dialog open state. Opened by double-clicking the Y
   // axis (or its label/title area) in <Graph>; closed via the dialog's
   // Done button or overlay click.
@@ -169,23 +167,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // X-axis settings dialog open state. Mirrors `yAxisDialogOpen` —
   // opened by double-clicking the X axis (or its label / title strip).
   const [xAxisDialogOpen, setXAxisDialogOpen] = useState(false);
-  // Per-column user-defined value ordering, keyed by column name. Populated
-  // from the dataset's `ColumnDisplayProps.extras.valueOrder.values`. Used
-  // by <Graph> to reorder categorical X axes, legend entries, boxplot
-  // category positions, and faceted-panel ordering. Re-fetched on focus so
-  // edits made in DataTableView take effect when the user switches back to
-  // the graph tab.
-  const [valueOrders, setValueOrders] = useState<Record<string, string[]>>({});
-
-  // Per-column spec limits (LSL / Target / USL) pulled from the dataset's
-  // `ColumnDisplayProps.extras.spec`. Keyed by column name so the auto
-  // spec-limit overlay can look up the active Y column's limits in O(1).
-  // Only columns with at least one finite limit are included; an empty
-  // map means "no auto-spec-line overlay possible". Reloaded together
-  // with `valueOrders` so DataTableView edits round-trip on tab switch.
-  // Future multi-Y / facet-on-X work will fan this out by group key
-  // instead of by column name.
-  const [specByCol, setSpecByCol] = useState<Record<string, { lsl?: number; target?: number; usl?: number }>>({});
 
   // Multi-select state for the column list (left rail). Plain click =
   // single select; Ctrl/Cmd+click = toggle one; Shift+click = range
@@ -341,35 +322,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     [leftTopPct],
   );
 
-  useLayoutEffect(() => {
-    const host = canvasRef.current;
-    if (!host) return;
-
-    const commitSize = () => {
-      const rect = host.getBoundingClientRect();
-      const width = Math.max(1, Math.floor(rect.width));
-      const height = Math.max(1, Math.floor(rect.height));
-      setViewport((prev) => (
-        prev.width === width && prev.height === height
-          ? prev
-          : { width, height }
-      ));
-    };
-
-    commitSize();
-    const ro = new ResizeObserver(commitSize);
-    ro.observe(host);
-    return () => {
-      ro.disconnect();
-    };
-  }, []);
-
   // 编码状态从 store 派生
   const encoding = cartesianState.encoding as Partial<Record<SlotKey, FieldRef>>;
   const elements = isMultivariateMode
     ? [{ kind: "correlationMatrix", enabled: true, options: { correlationMethod: multivariate.correlationMethod } } as ChartElement]
     : cartesianState.elements;
-  const smootherLambda = cartesianState.smootherLambda;
   const multiX = twoD.multiX ?? [];
   const multiY = isMultivariateMode ? multivariate.columns : (twoD.multiY ?? []);
   const multivariateSlotBinding = deriveMultivariateSlotBinding(multivariate.columns);
@@ -382,6 +339,17 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // Filter rules (JMP-style Local Data Filter). Persist on the item so
   // they survive project save/load.
   const filters = useMemo(() => item.filters ?? [], [item.filters]);
+  const runtimeModel = useMemo(
+    () => buildGraphRuntimeModel(item, { columns: [], displayProps: [] }),
+    [item],
+  );
+  const meltInfo = runtimeModel.meltInfo;
+  const valueOrders = runtimeState?.valueOrders ?? {};
+  const frame = runtimeState?.frame ?? null;
+  const pipelineStatus = runtimeState?.status ?? "idle";
+  const pipelineError = runtimeState?.error ?? null;
+  const progress = runtimeState?.progress ?? null;
+  const rawPointNotice = runtimeState?.rawPointNotice ?? null;
 
   // Auto-close the manager when its slot is no longer manageable.
   // In 2D, management is meaningful only for 2+ columns (multi mode).
@@ -401,116 +369,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       setManagerOpenSlot(null);
     }
   }, [item.mode, managerOpenSlot, multiX, multiY]);
-
-  // ---- Multi-column melt (multi-mode rendering) ---------------------
-  //
-  // When the user drops 2+ numeric columns onto one axis at once,
-  // that axis enters "multi-mode": `item.multiX` or `item.multiY`
-  // holds the list of dropped columns. There are two render modes,
-  // chosen at render time based on whether the OTHER axis is bound:
-  //
-  //   - "axis" mode (other axis empty): the dropped column NAMES
-  //     become the multi-mode axis (categorical) and the dropped
-  //     column VALUES become the other axis (continuous). This lets
-  //     the user instantly compare similar-typed columns side by
-  //     side without a separate melt step.
-  //
-  //   - "merge" mode (other axis bound): all dropped column values
-  //     are concatenated into one anonymous series on the multi-mode
-  //     axis (continuous), against the bound other axis. Mirrors the
-  //     "long-form" data layout — every dropped column contributes
-  //     its rows to the same plotted series.
-  //
-  // The melt rewrites `filteredData` by:
-  //   - keeping all original columns (so legend/overlay/group still
-  //     reference the same data),
-  //   - appending two synthetic columns `__sp_variable__` (the
-  //     source column NAME) and `__sp_value__` (the per-row value
-  //     from that column),
-  //   - emitting N rows per original row, where N = number of
-  //     melted columns.
-  //
-  // The spec then sees a synthetic FieldRef for the affected axis /
-  // axes pointing at these synthetic columns, so transform.ts and
-  // ECharts don't need to know multi-mode exists. */
-  const MELT_VAR = "__sp_variable__";
-  const MELT_VAL = "__sp_value__";
-  const meltInfo = useMemo<
-    | {
-        slot: "x" | "y";
-        cols: FieldRef[];
-        mode: "axis" | "merge";
-        varField: FieldRef;
-        valField: FieldRef;
-      }
-    | null
-  >(() => {
-    if (item.mode !== "2d") return null;
-    // At most one axis can be in multi-mode at a time
-    // (setMultiAtSlot enforces this on the write side). On read,
-    // if both happen to be set (e.g. an older project file), prefer
-    // X — it's the more common axis to multi-drop on.
-    const mx = item.modeStates.twoD.multiX ?? [];
-    const my = item.modeStates.twoD.multiY ?? [];
-    const xActive = mx.length >= 2;
-    const yActive = my.length >= 2;
-    if (!xActive && !yActive) return null;
-    const slot: "x" | "y" = xActive ? "x" : "y";
-    const cols = slot === "x" ? mx : my;
-    const otherBound = slot === "x" ? !!item.modeStates.twoD.encoding.y : !!item.modeStates.twoD.encoding.x;
-    const mode: "axis" | "merge" = otherBound ? "merge" : "axis";
-    return {
-      slot,
-      cols,
-      mode,
-      varField: { name: MELT_VAR, type: "nominal" },
-      valField: { name: MELT_VAL, type: "continuous" },
-    };
-  }, [item.mode, item.modeStates.twoD.multiX, item.modeStates.twoD.multiY, item.modeStates.twoD.encoding.x, item.modeStates.twoD.encoding.y]);
-
-  // Build the effective encoding for the renderer. In multi-mode the
-  // synthetic FieldRefs replace the affected slot(s); other slots
-  // (overlay, group X/Y, etc.) pass through untouched. */
-  const effectiveEncoding = useMemo<typeof encoding>(() => {
-    if (!meltInfo) return encoding;
-    const enc = { ...encoding };
-    if (meltInfo.slot === "x") {
-      if (meltInfo.mode === "axis") {
-        enc.x = meltInfo.varField;
-        enc.y = meltInfo.valField;
-      } else {
-        enc.x = meltInfo.valField;
-        // enc.y stays as the user's bound Y field.
-      }
-    } else {
-      if (meltInfo.mode === "axis") {
-        enc.y = meltInfo.varField;
-        enc.x = meltInfo.valField;
-      } else {
-        enc.y = meltInfo.valField;
-        // enc.x stays as the user's bound X field.
-      }
-    }
-    return enc;
-  }, [encoding, meltInfo]);
-
-  const graphData = useMemo<GraphData>(() => {
-    const baseColumns = columns.map((c) => c.name);
-    if (!meltInfo) {
-      return { columns: baseColumns, rows: [] };
-    }
-    const out = [...baseColumns];
-    if (!out.includes(MELT_VAR)) out.push(MELT_VAR);
-    if (!out.includes(MELT_VAL)) out.push(MELT_VAL);
-    return { columns: out, rows: [] };
-  }, [columns, meltInfo]);
-
-  const {
-    frame,
-    status: pipelineStatus,
-    error: pipelineError,
-    progress,
-  } = useGraphDataPipeline(item, dataset, viewport);
 
   // User-saved CustomPalettes feed into legend default-color assignment:
   // when a group doesn't have an explicit style override yet, the renderer
@@ -624,251 +482,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     },
     [item.id, updateItem, markDirty],
   );
-
-  // 加载列信息和列显示属性（图形数据由 useGraphDataPipeline 提供）。
-  useEffect(() => {
-    let cancelled = false;
-    setMetaLoading(true);
-    setMetaError(null);
-    (async () => {
-      try {
-        const cols = await dataService.getColumns(dataset.id);
-        const fields: FieldRef[] = cols.map(([name, type]) => ({
-          name,
-          type: inferFieldType(type),
-        }));
-        const sqlTypes = cols.map(([, type]) => type);
-        // Pull per-column display props in parallel with data so the
-        // Value Order metadata is available on first render. Display
-        // props can legitimately be missing (older projects, fresh
-        // datasets) — treat any failure as "no value orders".
-        let displayProps: Awaited<ReturnType<typeof dataService.getColumnDisplayProps>> = [];
-        try {
-          displayProps = await dataService.getColumnDisplayProps(dataset.id);
-        } catch { /* ignore — empty value orders are fine */ }
-        if (cancelled) return;
-        // Build the colIndex → name map from `cols` (which already excludes
-        // internal `_row_id` because get_user_columns filters it out). The
-        // colIndex stored in ColumnDisplayProps is the visible-column
-        // index, so it indexes directly into `cols`.
-        const vo: Record<string, string[]> = {};
-        // Build the spec map in the same pass over displayProps so we
-        // only walk the array once. A column is added only if at least
-        // one of LSL / Target / USL is a finite number — columns whose
-        // spec extras are present but blank shouldn't trigger the auto
-        // overlay.
-        const sp: Record<string, { lsl?: number; target?: number; usl?: number }> = {};
-        for (const p of displayProps) {
-          const ex = p.extras as Record<string, unknown> | undefined;
-          const node = ex?.valueOrder as { values?: unknown } | undefined;
-          const vals = node?.values;
-          const colName = cols[p.colIndex]?.[0];
-          if (colName && Array.isArray(vals) && vals.length > 0) {
-            vo[colName] = vals.map((v) => String(v));
-          }
-          const specExtra = ex?.spec as { lsl?: unknown; target?: unknown; usl?: unknown } | undefined;
-          if (colName && specExtra) {
-            const out: { lsl?: number; target?: number; usl?: number } = {};
-            const lsl = Number(specExtra.lsl);
-            const target = Number(specExtra.target);
-            const usl = Number(specExtra.usl);
-            if (Number.isFinite(lsl)) out.lsl = lsl;
-            if (Number.isFinite(target)) out.target = target;
-            if (Number.isFinite(usl)) out.usl = usl;
-            if (out.lsl !== undefined || out.target !== undefined || out.usl !== undefined) {
-              sp[colName] = out;
-            }
-          }
-        }
-        setColumns(fields);
-        setColSqlTypes(sqlTypes);
-        setValueOrders(vo);
-        setSpecByCol(sp);
-      } catch (e) {
-        if (!cancelled) setMetaError(String(e));
-      } finally {
-        if (!cancelled) setMetaLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [dataset.id]);
-
-  /** Resolve final per-element options. The smoother layer used to be
-   *  driven by a single workspace-level `smootherLambda` slider; that
-   *  slider has been replaced by the per-layer SmootherOptions panel
-   *  (algorithm + per-algo params). For backwards compatibility we
-   *  still seed `lambda` from the workspace value when a smoother
-   *  element predates the per-layer panel — i.e. it has neither an
-   *  explicit algorithm choice nor its own `lambda`/`windowFraction`.
-   *  Brand-new layers and explicitly-configured ones are passed
-   *  through untouched so the panel's settings are not overwritten. */
-  const finalElements = useMemo<ChartElement[]>(() => {
-    return elements.map((el) => {
-      if (el.kind !== "smoother") return el;
-      const o = el.options ?? {};
-      if (
-        o.algo !== undefined ||
-        o.lambda !== undefined ||
-        o.windowFraction !== undefined
-      ) {
-        return el;
-      }
-      return { ...el, options: { ...o, lambda: smootherLambda } };
-    });
-  }, [elements, smootherLambda]);
-
-  const spec = useMemo<GraphSpec>(() => {
-    const enc: GraphSpec["encoding"] = {};
-    // Color / Size / Wrap encoding channels were removed in favour of the
-    // per-group Style editor. Drop them when building the spec so legacy
-    // projects don't surprise the user with auto-coloring or auto-sizing.
-    const SKIP_KEYS = new Set<SlotKey>(["color", "size", "wrap"]);
-    (Object.keys(effectiveEncoding) as SlotKey[]).forEach((k) => {
-      if (SKIP_KEYS.has(k)) return;
-      const v = effectiveEncoding[k];
-      if (v) (enc as any)[k] = v;
-    });
-    // Resolve the auto spec-limit overlay independently for each axis.
-    // X and Y each carry their OWN `autoSpecLinesX` / `autoSpecLinesY`
-    // flag, so a chart with two value columns (one on X, one on Y) can
-    // turn the overlay on for one axis, the other, or both —
-    // mirroring how each axis has its own ref-lines and axis-settings
-    // dialog. The legacy single `autoSpecLines` flag (pre-symmetric
-    // build) is used as a fallback for any per-axis field still
-    // `undefined`, so old projects keep their previous behavior on
-    // first load until the user touches either checkbox.
-    //
-    // In multi-mode the auto-spec overlay is handled differently —
-    // the single-column overlay (autoSpecY / autoSpecX) is disabled
-    // because there's no longer a single underlying column; instead
-    // each dropped column contributes its OWN LSL / Target / USL ref
-    // lines on the value axis (computed below). This way the user
-    // can see per-column spec limits side by side on the same axis
-    // even after the columns were merged via melt. */
-    const legacy = twoD.autoSpecLines;
-    const onY = !meltInfo && (twoD.autoSpecLinesY ?? legacy ?? false);
-    const onX = !meltInfo && (twoD.autoSpecLinesX ?? legacy ?? false);
-    const yName = effectiveEncoding.y?.name;
-    const xName = effectiveEncoding.x?.name;
-    const yLimits = onY && yName ? specByCol[yName] : undefined;
-    const xLimits = onX && xName ? specByCol[xName] : undefined;
-    const autoSpecY = yLimits ? { ...yLimits, colName: yName } : undefined;
-    const autoSpecX = xLimits ? { ...xLimits, colName: xName } : undefined;
-
-    // Multi-mode per-column auto-spec ref lines. Computed here (rather
-    // than persisted on the item) so toggling the checkbox in the
-    // axis-settings dialog doesn't pollute the user's editable
-    // ref-lines list. Each column contributes up to three lines (LSL,
-    // Target, USL) drawn on whichever axis ended up carrying the
-    // synthetic value column: in "axis" mode that's the axis opposite
-    // the multi-drop slot; in "merge" mode it's the multi-drop slot
-    // itself.
-    //
-    // Two rendering strategies, picked off `meltInfo.mode`:
-    //
-    //   - "axis" mode (variable column on the OTHER axis): every
-    //     melted column becomes its own category band on the variable
-    //     axis. Drawing full-width spec lines across all categories
-    //     would visually attribute one column's USL to every other
-    //     column AND let labels stack on top of one another when
-    //     limits sit close together. Emit `BandRefLine` entries
-    //     instead — each line is restricted to its source column's
-    //     band on the categorical axis, labels are suppressed (the
-    //     column's position on the cat axis already conveys identity),
-    //     and they ride a separate carrier series in the renderer.
-    //
-    //   - "merge" mode (value column on the multi slot, no variable
-    //     axis exists): there's no category axis to band against, so
-    //     fall back to full-width refLines with column-name labels —
-    //     same shape as a manually-added ref line. */
-    const extraRefLinesY: RefLineY[] = [];
-    const extraRefLinesX: RefLineX[] = [];
-    const extraBandRefLines: BandRefLine[] = [];
-    if (meltInfo) {
-      const valueAxis: "x" | "y" = meltInfo.mode === "axis"
-        ? (meltInfo.slot === "y" ? "x" : "y")
-        : meltInfo.slot;
-      const autoOn = valueAxis === "y"
-        ? (twoD.autoSpecLinesY ?? legacy ?? false)
-        : (twoD.autoSpecLinesX ?? legacy ?? false);
-      if (autoOn) {
-        let seq = 0;
-        if (meltInfo.mode === "axis") {
-          // Per-column band segments. `category` is the column name
-          // because in axis mode the variable axis is rendered as a
-          // category axis with one slot per column (the melt
-          // synthesizes a `__sp_variable__` column whose values are
-          // exactly the source column names).
-          const push = (col: string, kind: "LSL" | "Target" | "USL", v: number) => {
-            const id = `auto-spec-band-${col}-${kind}-${++seq}`;
-            const color = kind === "Target" ? "#00C853" : "#E60000";
-            extraBandRefLines.push({
-              id,
-              value: v,
-              category: col,
-              valueAxis,
-              color,
-              style: "dashed",
-              width: 1,
-            });
-          };
-          for (const c of meltInfo.cols) {
-            const sp = specByCol[c.name];
-            if (!sp) continue;
-            if (sp.lsl !== undefined) push(c.name, "LSL", sp.lsl);
-            if (sp.target !== undefined) push(c.name, "Target", sp.target);
-            if (sp.usl !== undefined) push(c.name, "USL", sp.usl);
-          }
-        } else {
-          // Merge mode: no category axis on the opposite side, so
-          // full-width labeled refLines are the only option. Keep
-          // the column name in the label so users can still tell
-          // which limit came from which column when several columns
-          // were merged onto the same value axis.
-          const push = (col: string, kind: "LSL" | "Target" | "USL", v: number) => {
-            const id = `auto-spec-multi-${col}-${kind}-${++seq}`;
-            const color = kind === "Target" ? "#00C853" : "#E60000";
-            const label = `${kind}[${col}] = ${Number(v.toPrecision(10))}`;
-            const base = { id, label, style: "dashed" as RefLineStyle, color, width: 1 };
-            if (valueAxis === "y") extraRefLinesY.push({ ...base, y: v });
-            else extraRefLinesX.push({ ...base, x: v });
-          };
-          for (const c of meltInfo.cols) {
-            const sp = specByCol[c.name];
-            if (!sp) continue;
-            if (sp.lsl !== undefined) push(c.name, "LSL", sp.lsl);
-            if (sp.target !== undefined) push(c.name, "Target", sp.target);
-            if (sp.usl !== undefined) push(c.name, "USL", sp.usl);
-          }
-        }
-      }
-    }
-    const finalRefLinesY = extraRefLinesY.length
-      ? [...refLinesY, ...extraRefLinesY]
-      : (refLinesY.length > 0 ? refLinesY : undefined);
-    const finalRefLinesX = extraRefLinesX.length
-      ? [...refLinesX, ...extraRefLinesX]
-      : (refLinesX.length > 0 ? refLinesX : undefined);
-    const finalBandRefLines = extraBandRefLines.length ? extraBandRefLines : undefined;
-    return {
-      datasetId: dataset.id,
-      datasetName: dataset.name,
-      encoding: enc,
-      elements: finalElements,
-      styles: effectiveStyles,
-      hiddenGroups: hiddenGroups.length > 0 ? hiddenGroups : undefined,
-      refLinesY: finalRefLinesY,
-      refLinesX: finalRefLinesX,
-      bandRefLines: finalBandRefLines,
-      autoSpecY,
-      autoSpecX,
-      yAxis: yAxisConfig,
-      xAxis: xAxisConfig,
-      threeD: isThreeDMode,
-    };
-  }, [effectiveEncoding, meltInfo, finalElements, dataset.id, dataset.name, effectiveStyles, hiddenGroups, refLinesY, refLinesX, yAxisConfig, xAxisConfig, twoD.autoSpecLines, twoD.autoSpecLinesY, twoD.autoSpecLinesX, isThreeDMode, specByCol, twoD]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -1484,11 +1097,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     markDirty();
   }, [item.id, updateItem, markDirty, sampleSeed, sampleSize]);
 
-  const rawPointNotice = useMemo(
-    () => getRawPointNotice(frame?.rawPointDisposition),
-    [frame?.rawPointDisposition],
-  );
-
   const setSampleSeed = useCallback((raw: number) => {
     const seed = Math.max(0, Math.trunc(raw) || 0);
     updateItem(item.id, {
@@ -1598,7 +1206,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   }, [pipelineStatus, metaError, metaLoading, t]);
 
   const activeKinds = new Set(
-    finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
+    elements.filter((e) => e.enabled !== false).map((e) => e.kind),
   );
 
   return (
@@ -1963,7 +1571,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             />
             <div
               className={`gb-canvas${isMultivariateMode ? " gb-canvas-correlation" : ""}`}
-              ref={canvasRef}
               onDragOver={(e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "copy";
@@ -1996,85 +1603,30 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 routeDropToSlot(slot, fields);
               }}
             >
-              {isMultivariateMode && !correlationColumnsReady ? (
-                <div className="gb-empty">
-                  {t("graph.correlation.requiresColumns", {
-                    min: CORRELATION_MIN_COLUMNS,
-                    max: CORRELATION_MAX_COLUMNS,
-                    defaultValue: "Correlation matrix requires {{min}}-{{max}} columns.",
-                  })}
-                </div>
-              ) : !isThreeDMode && !encoding.x && !encoding.y && !multiX.length && !multiY.length && !activeKinds.has("histogram") ? (
-                // Drag-hint shows only when neither axis is bound (and
-                // there's no histogram). Y-only renders a vertical strip
-                // and X-only renders a horizontal strip (mirror), so the
-                // moment either axis is bound we drop straight into the
-                // chart builder and let the renderer's horizontal-mode
-                // swap handle the X-only case (see `isHorizontal` /
-                // `xOnlyMirror` in transform.ts). Multi-mode also counts
-                // as "bound" — both axes are populated by the synthetic
-                // melt fields at render time.
-                <div className="gb-empty">{t("graph.dragHint")}</div>
-              ) : (
-                <>
-                  <Graph
-                    spec={spec}
-                    data={graphData}
-                    frame={frame}
-                    valueOrders={valueOrders}
-                    onYAxisDblClick={isMultivariateMode ? undefined : () => setYAxisDialogOpen(true)}
-                    onXAxisDblClick={isMultivariateMode ? undefined : () => setXAxisDialogOpen(true)}
-                    onAxisRangeChange={isMultivariateMode ? undefined : ((axis, min, max) => {
-                      // JMP-style direct-manipulation drag-zoom / drag-pan
-                      // on the axis strip. The renderer previews via
-                      // setOption during the gesture; on mouseup it hands
-                      // back the final numeric bounds, which we pin onto
-                      // the per-builder yAxis / xAxis config. Other
-                      // overrides (decimals / inverse / grid styling) are
-                      // preserved by spreading the existing config first.
-                      if (axis === "y") {
-                        setYAxisConfig({ ...(yAxisConfig ?? {}), min, max });
-                      } else {
-                        setXAxisConfig({ ...(xAxisConfig ?? {}), min, max });
-                      }
-                    })}
-                    onAxisContextMenu={isMultivariateMode ? undefined : ((axis, x, y) => setAxisCtxMenu({ axis, x, y }))}
-                    onPointClick={isMultivariateMode ? undefined : ((pick) => {
-                      pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
-                    })}
-                    brushMode={!isMultivariateMode && cursorMode === "select"}
-                    onBrushSelect={isMultivariateMode ? undefined : ((picks) => {
-                      pickCells(dataset.id, picks);
-                    })}
-                  />
-                  {pipelineStatus === "error" && pipelineError && (
-                    <div className="gb-canvas-overlay gb-canvas-overlay-error">{pipelineError}</div>
-                  )}
-                  {!isMultivariateMode && pipelineStatus === "ready" && rawPointNotice && (
-                    <div className="gb-point-budget-notice" role="status">
-                      <i className="fa-solid fa-circle-info" aria-hidden="true" />
-                      <span className="gb-point-budget-copy">
-                        <strong>{t("graph.sampling.pointsOmitted", {
-                          defaultValue: "Raw points were omitted",
-                        })}</strong>
-                        <span>{t("graph.sampling.pointBudgetCount", {
-                          valid: rawPointNotice.validRows.toLocaleString(),
-                          budget: rawPointNotice.budget.toLocaleString(),
-                          defaultValue: "{{valid}} valid rows; point budget {{budget}}",
-                        })}</span>
-                      </span>
-                      <button
-                        type="button"
-                        className="gb-point-budget-action"
-                        onClick={() => setSamplingMode("sample")}
-                      >
-                        <i className="fa-solid fa-shuffle" aria-hidden="true" />
-                        {t("graph.sampling.switchToSample", { defaultValue: "Switch to Sample" })}
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
+              <GraphRuntime
+                item={item}
+                dataset={dataset}
+                showPointBudgetAction={!isMultivariateMode}
+                onRequestSampleMode={!isMultivariateMode ? () => setSamplingMode("sample") : undefined}
+                onYAxisDblClick={isMultivariateMode ? undefined : () => setYAxisDialogOpen(true)}
+                onXAxisDblClick={isMultivariateMode ? undefined : () => setXAxisDialogOpen(true)}
+                onAxisRangeChange={isMultivariateMode ? undefined : ((axis, min, max) => {
+                  if (axis === "y") {
+                    setYAxisConfig({ ...(yAxisConfig ?? {}), min, max });
+                  } else {
+                    setXAxisConfig({ ...(xAxisConfig ?? {}), min, max });
+                  }
+                })}
+                onAxisContextMenu={isMultivariateMode ? undefined : ((axis, x, y) => setAxisCtxMenu({ axis, x, y }))}
+                onPointPick={isMultivariateMode ? undefined : ((pick) => {
+                  pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
+                })}
+                brushMode={!isMultivariateMode && cursorMode === "select"}
+                onBrushSelect={isMultivariateMode ? undefined : ((picks) => {
+                  pickCells(dataset.id, picks);
+                })}
+                onStateChange={setRuntimeState}
+              />
               {correlationNoticeText && (
                 <div className="gb-canvas-overlay gb-canvas-overlay-warn" role="status" aria-live="polite">
                   {correlationNoticeText}
@@ -2141,7 +1693,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
         {!isMultivariateMode && (
           <LegendStylePanel
-            data={graphData}
+            data={null}
             encoding={encoding}
             elements={elements}
             groupStyles={groupStyles}
