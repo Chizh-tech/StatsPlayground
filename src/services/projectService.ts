@@ -21,10 +21,12 @@ export interface SaveProjectRequest {
   history: unknown[];
   snapshots: unknown[];
   graphBuilders: unknown[];
+  fitYByX: unknown[];
   tabulates: unknown[];
   folders: string[];
   tableFolders: Record<string, string>;
   graphFolders: Record<string, string>;
+  fitYByXFolders: Record<string, string>;
   tabulateFolders: Record<string, string>;
 }
 

@@ -30,10 +30,12 @@ const request: SaveProjectRequest = {
   history: [],
   snapshots: [],
   graphBuilders: [],
+  fitYByX: [{ id: "fit-1", sourceDatasetId: "table-1" }],
   tabulates: [],
   folders: [],
   tableFolders: {},
   graphFolders: {},
+  fitYByXFolders: { "fit-1": "Analyses" },
   tabulateFolders: {},
 };
 
@@ -108,10 +110,12 @@ function resetGraphBuilderStore() {
         history: [],
         snapshots: [],
         graphBuilders: [],
+        fitYByX: [],
         tabulates: [],
         folders: [],
         tableFolders: {},
         graphFolders: {},
+        fitYByXFolders: {},
         tabulateFolders: {},
         datasetNameMigrations: [],
       }),
@@ -134,6 +138,11 @@ function resetGraphBuilderStore() {
   });
 
   await store.getState().saveProject({
+    ...request,
+    graphBuilders: useGraphBuilderStore.getState().items,
+  });
+
+  assert.deepEqual(capturedSaveRequest, {
     ...request,
     graphBuilders: useGraphBuilderStore.getState().items,
   });
@@ -180,10 +189,12 @@ function resetGraphBuilderStore() {
         history: [],
         snapshots: [],
         graphBuilders: [],
+        fitYByX: [],
         tabulates: [],
         folders: [],
         tableFolders: {},
         graphFolders: {},
+        fitYByXFolders: {},
         tabulateFolders: {},
         datasetNameMigrations: [],
       }),
@@ -237,7 +248,7 @@ function resetGraphBuilderStore() {
     projectService: {
       initProject: async () => savedProject,
       createProject: async () => savedProject,
-      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
+      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
       saveProject: (_request, onProgress) => {
         onProgressRef = onProgress;
         readOnlyAtInvoke = store.getState().readOnly;
@@ -277,13 +288,15 @@ function resetGraphBuilderStore() {
 
   const saveDeferred = deferred<ProjectInfo>();
   let onProgressRef: ((progress: SaveProgress) => void) | undefined;
+  let capturedSaveRequest: SaveProjectRequest | null = null;
 
   const store = createProjectStore({
     projectService: {
       initProject: async () => savedProject,
       createProject: async () => savedProject,
-      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
-      saveProject: (_request, onProgress) => {
+      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
+      saveProject: (saveRequest, onProgress) => {
+        capturedSaveRequest = saveRequest;
         onProgressRef = onProgress;
         return saveDeferred.promise;
       },
@@ -296,6 +309,8 @@ function resetGraphBuilderStore() {
   onProgressRef?.(makeProgress(0.4));
   saveDeferred.reject(new Error("save failed"));
   await assert.rejects(savePromise, /save failed/);
+
+  assert.deepEqual(capturedSaveRequest, request);
 
   assert.equal(store.getState().dirty, false);
   assert.match(store.getState().saveError ?? "", /save failed/);
@@ -316,7 +331,7 @@ function resetGraphBuilderStore() {
     projectService: {
       initProject: async () => savedProject,
       createProject: async () => savedProject,
-      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
+      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
       saveProject: () => saveDeferred.promise,
       getCurrentProject: async () => savedProject,
     },
