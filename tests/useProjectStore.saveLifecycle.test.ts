@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 
 import type { ProjectInfo } from "../src/types/project";
 import type { SaveProgress, SaveProjectRequest } from "../src/services/projectService";
-import { deriveElements } from "../src/components/graphBuilder/useGraphDataPipeline.ts";
 import { createProjectStore } from "../src/stores/useProjectStore.ts";
+import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
 
 interface Deferred<T> {
   promise: Promise<T>;
   resolve: (value: T) => void;
   reject: (reason?: unknown) => void;
+}
+
+function continuous(name: string) {
+  return { name, type: "continuous" as const };
 }
 
 function deferred<T>(): Deferred<T> {
@@ -56,26 +60,41 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+function resetGraphBuilderStore() {
+  useGraphBuilderStore.getState().reset();
+}
+
 {
+  resetGraphBuilderStore();
+
   const correlationGraph = {
     id: "graph-corr",
     name: "Correlation Graph",
     sourceDatasetId: "dataset-1",
-    encoding: {},
-    multiX: [
-      { name: "a", type: "continuous" },
-      { name: "b", type: "continuous" },
-    ],
-    elements: [
-      {
-        kind: "correlationMatrix",
-        enabled: true,
-        options: { correlationMethod: "kendall" },
+    mode: "multivariate",
+    modeStates: {
+      twoD: {
+        encoding: {},
+        multiX: [],
+        multiY: [],
+        elements: [{ kind: "points", enabled: true }],
+        smootherLambda: 0.4,
       },
-    ],
-    smootherLambda: 0.5,
+      threeD: {
+        encoding: {},
+        elements: [{ kind: "scatter3d", enabled: true }],
+        smootherLambda: 0.4,
+      },
+      multivariate: {
+        columns: [continuous("height"), continuous("weight")],
+        chartType: "correlationMatrix",
+        correlationMethod: "kendall",
+      },
+    },
     createdAt: new Date(0).toISOString(),
   };
+  const inputGraphs = [correlationGraph] as GraphBuilderItem[];
+  const baseline = JSON.stringify(inputGraphs);
 
   let capturedSaveRequest: SaveProjectRequest | null = null;
 
@@ -88,7 +107,7 @@ async function flushMicrotasks(): Promise<void> {
         datasets: [],
         history: [],
         snapshots: [],
-        graphBuilders: [correlationGraph],
+        graphBuilders: [],
         tabulates: [],
         folders: [],
         tableFolders: {},
@@ -104,24 +123,37 @@ async function flushMicrotasks(): Promise<void> {
     },
   });
 
-  const opened = await store.getState().openProject("C:/tmp/project.spprj");
-  assert.equal(
-    (opened.graphBuilders[0] as { elements?: Array<{ options?: { correlationMethod?: string } }> }).elements?.[0]?.options?.correlationMethod,
-    "kendall",
-  );
+  useGraphBuilderStore.getState().loadFromProject(inputGraphs);
+  const loaded = useGraphBuilderStore.getState().items[0] as GraphBuilderItem;
+
+  assert.equal(loaded.mode, "multivariate");
+  assert.deepEqual(loaded.modeStates.multivariate, {
+    columns: [continuous("height"), continuous("weight")],
+    chartType: "correlationMatrix",
+    correlationMethod: "kendall",
+  });
 
   await store.getState().saveProject({
     ...request,
-    graphBuilders: opened.graphBuilders,
+    graphBuilders: useGraphBuilderStore.getState().items,
   });
 
-  assert.equal(
-    (capturedSaveRequest?.graphBuilders[0] as { elements?: Array<{ options?: { correlationMethod?: string } }> }).elements?.[0]?.options?.correlationMethod,
-    "kendall",
-  );
+  const savedGraph = capturedSaveRequest?.graphBuilders[0] as GraphBuilderItem;
+  assert.equal(savedGraph.mode, "multivariate");
+  assert.deepEqual(savedGraph.modeStates.multivariate, {
+    columns: [continuous("height"), continuous("weight")],
+    chartType: "correlationMatrix",
+    correlationMethod: "kendall",
+  });
+  for (const legacyKey of ["threeD", "encoding", "multiX", "multiY", "elements"]) {
+    assert.equal(Object.hasOwn(savedGraph, legacyKey), false);
+  }
+  assert.equal(JSON.stringify(inputGraphs), baseline);
 }
 
 {
+  resetGraphBuilderStore();
+
   const legacyCorrelationGraph: GraphBuilderItem = {
     id: "graph-legacy-corr",
     name: "Legacy Correlation Graph",
@@ -136,6 +168,7 @@ async function flushMicrotasks(): Promise<void> {
     createdAt: new Date(0).toISOString(),
   };
   const baseline = JSON.stringify(legacyCorrelationGraph);
+  let capturedSaveRequest: SaveProjectRequest | null = null;
 
   const store = createProjectStore({
     projectService: {
@@ -146,7 +179,7 @@ async function flushMicrotasks(): Promise<void> {
         datasets: [],
         history: [],
         snapshots: [],
-        graphBuilders: [legacyCorrelationGraph],
+        graphBuilders: [],
         tabulates: [],
         folders: [],
         tableFolders: {},
@@ -154,24 +187,48 @@ async function flushMicrotasks(): Promise<void> {
         tabulateFolders: {},
         datasetNameMigrations: [],
       }),
-      saveProject: async () => savedProject,
+      saveProject: async (req) => {
+        capturedSaveRequest = req;
+        return savedProject;
+      },
       getCurrentProject: async () => savedProject,
     },
   });
 
-  const opened = await store.getState().openProject("C:/tmp/project.spprj");
-  const derived = deriveElements(opened.graphBuilders[0] as GraphBuilderItem);
-  assert.deepEqual(derived, [
-    { kind: "correlationMatrix", summaryStat: "none", correlationMethod: "pearson" },
-  ]);
-  assert.equal(
-    (opened.graphBuilders[0] as { elements?: Array<{ options?: { correlationMethod?: string } }> }).elements?.[0]?.options?.correlationMethod,
-    undefined,
-  );
+  useGraphBuilderStore.getState().loadFromProject([legacyCorrelationGraph]);
+  const loaded = useGraphBuilderStore.getState().items[0] as GraphBuilderItem;
+
+  assert.equal(loaded.mode, "multivariate");
+  assert.deepEqual(loaded.modeStates.multivariate, {
+    columns: [continuous("left"), continuous("right")],
+    chartType: "correlationMatrix",
+    correlationMethod: "pearson",
+  });
+  for (const legacyKey of ["threeD", "encoding", "multiX", "multiY", "elements"]) {
+    assert.equal(Object.hasOwn(loaded, legacyKey), false);
+  }
+
+  await store.getState().saveProject({
+    ...request,
+    graphBuilders: useGraphBuilderStore.getState().items,
+  });
+
+  const savedGraph = capturedSaveRequest?.graphBuilders[0] as GraphBuilderItem;
+  assert.equal(savedGraph.mode, "multivariate");
+  assert.deepEqual(savedGraph.modeStates.multivariate, {
+    columns: [continuous("left"), continuous("right")],
+    chartType: "correlationMatrix",
+    correlationMethod: "pearson",
+  });
+  for (const legacyKey of ["threeD", "encoding", "multiX", "multiY", "elements"]) {
+    assert.equal(Object.hasOwn(savedGraph, legacyKey), false);
+  }
   assert.equal(JSON.stringify(legacyCorrelationGraph), baseline);
 }
 
 {
+  resetGraphBuilderStore();
+
   const saveDeferred = deferred<ProjectInfo>();
   let onProgressRef: ((progress: SaveProgress) => void) | undefined;
   let readOnlyAtInvoke = false;
@@ -216,6 +273,8 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 {
+  resetGraphBuilderStore();
+
   const saveDeferred = deferred<ProjectInfo>();
   let onProgressRef: ((progress: SaveProgress) => void) | undefined;
 
@@ -249,6 +308,8 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 {
+  resetGraphBuilderStore();
+
   const saveDeferred = deferred<ProjectInfo>();
 
   const store = createProjectStore({

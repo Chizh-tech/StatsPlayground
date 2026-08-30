@@ -584,6 +584,16 @@
       "contour3d": "等高线"
     },
     "frequency": "频次",
+    "mode": {
+      "label": "图形模式",
+      "twoD": "二维",
+      "threeD": "三维",
+      "multivariate": "多变量"
+    },
+    "multivariate": {
+      "variables": "Y（变量）",
+      "chartType": "图形类型"
+    },
     "startOver": "重新开始",
     "swapXY": {
       "label": "交换 X / Y",
@@ -663,6 +673,10 @@
       "coefficient": "相关系数",
       "unavailableLabel": "不可用",
       "sampleCount": "样本数",
+      "dropReason": {
+        "duplicateField": "该列已在多变量列表中选中。",
+        "invalidFieldType": "多变量列表仅支持添加数值列。"
+      },
       "unavailableReason": {
         "insufficientData": "样本不足",
         "zeroVariance": "零方差",

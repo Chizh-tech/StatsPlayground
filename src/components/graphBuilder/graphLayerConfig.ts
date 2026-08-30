@@ -5,7 +5,7 @@ export interface GraphLayerDef {
   icon: string;
 }
 
-export type LayerDim = "2d" | "3d";
+export type LayerDim = "2d" | "3d" | "multivariate";
 
 export const GRAPH_LAYER_DEFS: GraphLayerDef[] = [
   { kind: "points", icon: "●" },
@@ -24,6 +24,7 @@ export const LAYER_DIM: Record<ElementKind, LayerDim> = {
   line: "2d",
   bar: "2d",
   heatmap: "2d",
+  correlationMatrix: "multivariate",
   histogram: "2d",
   boxplot: "2d",
   smoother: "2d",
@@ -32,6 +33,10 @@ export const LAYER_DIM: Record<ElementKind, LayerDim> = {
   surface: "3d",
   contour3d: "3d",
 };
+
+export function getLayerMode(kind: ElementKind): LayerDim {
+  return LAYER_DIM[kind];
+}
 
 export function defaultLayerOptions(
   kind: ElementKind,

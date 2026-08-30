@@ -23,7 +23,7 @@ import { dataService } from "@/services/dataService";
 import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
 import { SCATTER_RENDER_BUDGET } from "@/graphCore/scatterBudget";
 import type { DatasetMeta } from "@/types/data";
-import { isCorrelationMatrixItem, type GraphBuilderItem, type GraphSlotKey } from "@/types/graphBuilder";
+import type { GraphBuilderItem, GraphBuilderMode, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useProjectStore } from "@/stores/useProjectStore";
@@ -38,7 +38,20 @@ import {
   getRawPointNotice,
 } from "./graphSamplingPolicy";
 import { FilterPanel } from "@/components/filter";
-import { defaultLayerOptions, GRAPH_LAYER_DEFS } from "./graphLayerConfig";
+import { defaultLayerOptions, GRAPH_LAYER_DEFS, getLayerMode, type GraphLayerDef } from "./graphLayerConfig";
+import {
+  createDefaultGraph2DState,
+  createDefaultGraph3DState,
+  createDefaultMultivariateGraphState,
+} from "./graphBuilderMode";
+import {
+  MAX_MULTIVARIATE_COLUMNS,
+  updateMultivariateColumns,
+} from "./updateMultivariateColumns";
+import {
+  deriveMultivariateSlotBinding,
+  resolveCanvasDropSlot,
+} from "./multivariateInteractions";
 import { useGraphDataPipeline } from "./useGraphDataPipeline";
 
 interface GraphBuilderViewProps {
@@ -55,53 +68,23 @@ type SlotKey = GraphSlotKey;
 // Group X / Group Y are still exposed via the dedicated facet drop slots
 // surrounding the canvas, not via a side shelf.
 
-interface ChartTypeDef {
-  kind: ElementKind;
-  icon: string;
-}
-
-const CHART_TYPE_DEFS: ChartTypeDef[] = [
-  { kind: "points", icon: "●" },
-  { kind: "line", icon: "╱" },
-  { kind: "smoother", icon: "∿" },
-  { kind: "fitline", icon: "ƒ" },
-  { kind: "correlationMatrix", icon: "▦" },
-  { kind: "boxplot", icon: "⊟" },
-  { kind: "histogram", icon: "▥" },
-  { kind: "scatter3d", icon: "●" },
-  { kind: "surface", icon: "◪" },
-  { kind: "contour3d", icon: "≋" },
-];
-
-/** Per-layer dimensionality. 2D and 3D layers are fully separate sets:
- *  the layer panel + Add popover only show the set matching the current
- *  mode, and each layer card carries a 2D / 3D badge. Both sets persist
- *  on the item — switching mode just changes which subset is shown. */
-type LayerDim = "2d" | "3d";
-const LAYER_DIM: Record<ElementKind, LayerDim> = {
-  points: "2d",
-  line: "2d",
-  bar: "2d",
-  heatmap: "2d",
-  correlationMatrix: "2d",
-  histogram: "2d",
-  boxplot: "2d",
-  smoother: "2d",
-  fitline: "2d",
-  scatter3d: "3d",
-  surface: "3d",
-  contour3d: "3d",
-};
-const GRAPH_LAYER_DEFS_WITH_CORRELATION = GRAPH_LAYER_DEFS.some((def) => def.kind === "correlationMatrix")
+const GRAPH_LAYER_DEFS_WITH_CORRELATION: readonly GraphLayerDef[] = GRAPH_LAYER_DEFS.some((def) => def.kind === "correlationMatrix")
   ? GRAPH_LAYER_DEFS
-  : [...GRAPH_LAYER_DEFS, { kind: "correlationMatrix", icon: "▦" }];
+  : [...GRAPH_LAYER_DEFS, { kind: "correlationMatrix" as ElementKind, icon: "▦" }];
 const DRAG_MIME = "text/plain";
 const CORRELATION_MIN_COLUMNS = 2;
-const CORRELATION_MAX_COLUMNS = 20;
+const CORRELATION_MAX_COLUMNS = MAX_MULTIVARIATE_COLUMNS;
+type MultivariateDropNotice = "invalidFieldType" | "duplicateField" | "maxColumns";
 
 export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const { t } = useTranslation();
-  const isCorrelationMode = isCorrelationMatrixItem(item);
+  const isMultivariateMode = item.mode === "multivariate";
+  const isThreeDMode = item.mode === "3d";
+  const twoD = item.modeStates.twoD;
+  const threeD = item.modeStates.threeD;
+  const multivariate = item.modeStates.multivariate;
+  const cartesianState = isThreeDMode ? threeD : twoD;
+  const modeStates = item.modeStates;
   const updateItemRaw = useGraphBuilderStore((s) => s.updateItem);
   const markDirtyRaw = useProjectStore((s) => s.markDirty);
   const readOnly = useProjectStore((s) => s.readOnly);
@@ -113,6 +96,54 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     if (readOnly) return;
     updateItemRaw(id, patch);
   }, [readOnly, updateItemRaw]);
+  const setMode = useCallback((mode: GraphBuilderMode) => {
+    if (item.mode === mode) return;
+    updateItem(item.id, { mode });
+    markDirty();
+  }, [item.id, item.mode, updateItem, markDirty]);
+  const setTwoDState = useCallback(
+    (updater: typeof twoD | ((prev: typeof twoD) => typeof twoD)) => {
+      const next = typeof updater === "function" ? updater(twoD) : updater;
+      updateItem(item.id, {
+        modeStates: {
+          ...modeStates,
+          twoD: next,
+        },
+      });
+      markDirty();
+    },
+    [item.id, twoD, modeStates, updateItem, markDirty],
+  );
+  const setThreeDState = useCallback(
+    (updater: typeof threeD | ((prev: typeof threeD) => typeof threeD)) => {
+      const next = typeof updater === "function" ? updater(threeD) : updater;
+      updateItem(item.id, {
+        modeStates: {
+          ...modeStates,
+          threeD: next,
+        },
+      });
+      markDirty();
+    },
+    [item.id, threeD, modeStates, updateItem, markDirty],
+  );
+  const setMultivariateState = useCallback(
+    (
+      updater:
+        | typeof multivariate
+        | ((prev: typeof multivariate) => typeof multivariate),
+    ) => {
+      const next = typeof updater === "function" ? updater(multivariate) : updater;
+      updateItem(item.id, {
+        modeStates: {
+          ...modeStates,
+          multivariate: next,
+        },
+      });
+      markDirty();
+    },
+    [item.id, multivariate, modeStates, updateItem, markDirty],
+  );
   // Cross-view bridge: click a scatter point → highlight the matching
   // cell in the DataTableView for `dataset.id` next time it mounts.
   const pickCell = useTableSelectionStore((s) => s.pick);
@@ -174,7 +205,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // or non-numeric appended in multi-mode). The Slot component reads
   // this and adds a CSS class for ~400 ms.
   const [rejectFlashSlot, setRejectFlashSlot] = useState<SlotKey | null>(null);
-  const [correlationNotice, setCorrelationNotice] = useState<"tooManyColumns" | null>(null);
+  const [correlationNotice, setCorrelationNotice] = useState<MultivariateDropNotice | null>(null);
   const rejectFlashTimerRef = useRef<number | null>(null);
   const flashRejectOnSlot = useCallback((slot: SlotKey) => {
     setRejectFlashSlot(slot);
@@ -194,10 +225,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     };
   }, []);
   useEffect(() => {
-    if (!isCorrelationMode && correlationNotice) {
+    if (!isMultivariateMode && correlationNotice) {
       setCorrelationNotice(null);
     }
-  }, [isCorrelationMode, correlationNotice]);
+  }, [isMultivariateMode, correlationNotice]);
   // Which slot's multi-mode manager popover is currently open. null
   // means no manager is open. Only one manager can be open at a time
   // (they're mutually exclusive — opening one closes the other).
@@ -240,18 +271,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       document.removeEventListener("contextmenu", close);
     };
   }, [axisCtxMenu]);
-  // Auto-close the manager when its slot leaves multi-mode (cols
-  // dropped below 2 via deletion in the manager itself, slot-clear,
-  // swap XY, start-over, etc.). Without this, the next time the user
-  // re-enters multi-mode on the same slot the manager would pop open
-  // by itself because `managerOpenSlot` was still set from before.
-  useEffect(() => {
-    if (!managerOpenSlot) return;
-    const cols =
-      managerOpenSlot === "x" ? item.multiX : managerOpenSlot === "y" ? item.multiY : undefined;
-    if ((cols?.length ?? 0) < 2) setManagerOpenSlot(null);
-  }, [managerOpenSlot, item.multiX, item.multiY]);
-
   // Resizable side-rail widths. Mirror the Excel-grid splitter pattern
   // (DataTableView): clamp on drag and double-click to reset.
   const [leftWidth, setLeftWidth] = useState(220);
@@ -346,12 +365,42 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   }, []);
 
   // 编码状态从 store 派生
-  const encoding = item.encoding;
-  const elements = item.elements;
-  const smootherLambda = item.smootherLambda;
+  const encoding = cartesianState.encoding as Partial<Record<SlotKey, FieldRef>>;
+  const elements = isMultivariateMode
+    ? [{ kind: "correlationMatrix", enabled: true, options: { correlationMethod: multivariate.correlationMethod } } as ChartElement]
+    : cartesianState.elements;
+  const smootherLambda = cartesianState.smootherLambda;
+  const multiX = twoD.multiX ?? [];
+  const multiY = isMultivariateMode ? multivariate.columns : (twoD.multiY ?? []);
+  const multivariateSlotBinding = deriveMultivariateSlotBinding(multivariate.columns);
+  const groupStyles = cartesianState.groupStyles ?? {};
+  const hiddenGroups = cartesianState.hiddenGroups ?? [];
+  const yAxisConfig = twoD.yAxis;
+  const xAxisConfig = twoD.xAxis;
+  const refLinesY = twoD.refLinesY ?? [];
+  const refLinesX = twoD.refLinesX ?? [];
   // Filter rules (JMP-style Local Data Filter). Persist on the item so
   // they survive project save/load.
   const filters = useMemo(() => item.filters ?? [], [item.filters]);
+
+  // Auto-close the manager when its slot is no longer manageable.
+  // In 2D, management is meaningful only for 2+ columns (multi mode).
+  // In multivariate Y, 0/1/2+ are valid editable states, so keep the
+  // manager open for a single remaining variable and close only at 0.
+  useEffect(() => {
+    if (!managerOpenSlot) return;
+    const cols = managerOpenSlot === "x"
+      ? multiX
+      : managerOpenSlot === "y"
+        ? multiY
+        : undefined;
+    const minColumns = item.mode === "multivariate" && managerOpenSlot === "y"
+      ? 1
+      : 2;
+    if ((cols?.length ?? 0) < minColumns) {
+      setManagerOpenSlot(null);
+    }
+  }, [item.mode, managerOpenSlot, multiX, multiY]);
 
   // ---- Multi-column melt (multi-mode rendering) ---------------------
   //
@@ -396,18 +445,19 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       }
     | null
   >(() => {
+    if (item.mode !== "2d") return null;
     // At most one axis can be in multi-mode at a time
     // (setMultiAtSlot enforces this on the write side). On read,
     // if both happen to be set (e.g. an older project file), prefer
     // X — it's the more common axis to multi-drop on.
-    const mx = item.multiX ?? [];
-    const my = item.multiY ?? [];
+    const mx = item.modeStates.twoD.multiX ?? [];
+    const my = item.modeStates.twoD.multiY ?? [];
     const xActive = mx.length >= 2;
     const yActive = my.length >= 2;
     if (!xActive && !yActive) return null;
     const slot: "x" | "y" = xActive ? "x" : "y";
     const cols = slot === "x" ? mx : my;
-    const otherBound = slot === "x" ? !!item.encoding.y : !!item.encoding.x;
+    const otherBound = slot === "x" ? !!item.modeStates.twoD.encoding.y : !!item.modeStates.twoD.encoding.x;
     const mode: "axis" | "merge" = otherBound ? "merge" : "axis";
     return {
       slot,
@@ -416,14 +466,14 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       varField: { name: MELT_VAR, type: "nominal" },
       valField: { name: MELT_VAL, type: "continuous" },
     };
-  }, [item.multiX, item.multiY, item.encoding.x, item.encoding.y]);
+  }, [item.mode, item.modeStates.twoD.multiX, item.modeStates.twoD.multiY, item.modeStates.twoD.encoding.x, item.modeStates.twoD.encoding.y]);
 
   // Build the effective encoding for the renderer. In multi-mode the
   // synthetic FieldRefs replace the affected slot(s); other slots
   // (overlay, group X/Y, etc.) pass through untouched. */
-  const effectiveEncoding = useMemo<typeof item.encoding>(() => {
-    if (!meltInfo) return item.encoding;
-    const enc = { ...item.encoding };
+  const effectiveEncoding = useMemo<typeof encoding>(() => {
+    if (!meltInfo) return encoding;
+    const enc = { ...encoding };
     if (meltInfo.slot === "x") {
       if (meltInfo.mode === "axis") {
         enc.x = meltInfo.varField;
@@ -442,7 +492,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       }
     }
     return enc;
-  }, [item.encoding, meltInfo]);
+  }, [encoding, meltInfo]);
 
   const graphData = useMemo<GraphData>(() => {
     const baseColumns = columns.map((c) => c.name);
@@ -516,12 +566,12 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     () =>
       buildEffectiveStyles(
         groupKeys,
-        item.groupStyles ?? {},
+        groupStyles,
         customPalettes,
         !!encoding.overlay,
         elements.some((e) => e.kind === "boxplot" && e.enabled !== false),
       ),
-    [groupKeys, item.groupStyles, customPalettes, encoding.overlay, elements],
+    [groupKeys, groupStyles, customPalettes, encoding.overlay, elements],
   );
 
   const setEncoding = useCallback(
@@ -530,27 +580,35 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         | typeof encoding
         | ((prev: typeof encoding) => typeof encoding),
     ) => {
+      if (isMultivariateMode) return;
       const next =
         typeof updater === "function"
-          ? (updater as (p: typeof encoding) => typeof encoding)(item.encoding)
+          ? (updater as (p: typeof encoding) => typeof encoding)(encoding)
           : updater;
-      updateItem(item.id, { encoding: next });
-      markDirty();
+      if (isThreeDMode) {
+        setThreeDState((prev) => ({ ...prev, encoding: next }));
+      } else {
+        setTwoDState((prev) => ({ ...prev, encoding: next }));
+      }
     },
-    [item.id, item.encoding, updateItem, markDirty],
+    [encoding, isMultivariateMode, isThreeDMode, setThreeDState, setTwoDState],
   );
   const setElements = useCallback(
     (
       updater: ChartElement[] | ((prev: ChartElement[]) => ChartElement[]),
     ) => {
+      if (isMultivariateMode) return;
       const next =
         typeof updater === "function"
-          ? (updater as (p: ChartElement[]) => ChartElement[])(item.elements)
+          ? (updater as (p: ChartElement[]) => ChartElement[])(elements)
           : updater;
-      updateItem(item.id, { elements: next });
-      markDirty();
+      if (isThreeDMode) {
+        setThreeDState((prev) => ({ ...prev, elements: next }));
+      } else {
+        setTwoDState((prev) => ({ ...prev, elements: next }));
+      }
     },
-    [item.id, item.elements, updateItem, markDirty],
+    [elements, isMultivariateMode, isThreeDMode, setThreeDState, setTwoDState],
   );
   // NOTE: there is no longer a workspace-level "smoothness" slider —
   // that was replaced by the per-layer SmootherOptions panel which
@@ -689,9 +747,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     // lines on the value axis (computed below). This way the user
     // can see per-column spec limits side by side on the same axis
     // even after the columns were merged via melt. */
-    const legacy = item.autoSpecLines;
-    const onY = !meltInfo && (item.autoSpecLinesY ?? legacy ?? false);
-    const onX = !meltInfo && (item.autoSpecLinesX ?? legacy ?? false);
+    const legacy = twoD.autoSpecLines;
+    const onY = !meltInfo && (twoD.autoSpecLinesY ?? legacy ?? false);
+    const onX = !meltInfo && (twoD.autoSpecLinesX ?? legacy ?? false);
     const yName = effectiveEncoding.y?.name;
     const xName = effectiveEncoding.x?.name;
     const yLimits = onY && yName ? specByCol[yName] : undefined;
@@ -733,8 +791,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         ? (meltInfo.slot === "y" ? "x" : "y")
         : meltInfo.slot;
       const autoOn = valueAxis === "y"
-        ? (item.autoSpecLinesY ?? legacy ?? false)
-        : (item.autoSpecLinesX ?? legacy ?? false);
+        ? (twoD.autoSpecLinesY ?? legacy ?? false)
+        : (twoD.autoSpecLinesX ?? legacy ?? false);
       if (autoOn) {
         let seq = 0;
         if (meltInfo.mode === "axis") {
@@ -788,11 +846,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       }
     }
     const finalRefLinesY = extraRefLinesY.length
-      ? [...(item.refLinesY ?? []), ...extraRefLinesY]
-      : item.refLinesY;
+      ? [...refLinesY, ...extraRefLinesY]
+      : (refLinesY.length > 0 ? refLinesY : undefined);
     const finalRefLinesX = extraRefLinesX.length
-      ? [...(item.refLinesX ?? []), ...extraRefLinesX]
-      : item.refLinesX;
+      ? [...refLinesX, ...extraRefLinesX]
+      : (refLinesX.length > 0 ? refLinesX : undefined);
     const finalBandRefLines = extraBandRefLines.length ? extraBandRefLines : undefined;
     return {
       datasetId: dataset.id,
@@ -800,29 +858,32 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       encoding: enc,
       elements: finalElements,
       styles: effectiveStyles,
-      hiddenGroups: item.hiddenGroups,
+      hiddenGroups: hiddenGroups.length > 0 ? hiddenGroups : undefined,
       refLinesY: finalRefLinesY,
       refLinesX: finalRefLinesX,
       bandRefLines: finalBandRefLines,
       autoSpecY,
       autoSpecX,
-      yAxis: item.yAxis,
-      xAxis: item.xAxis,
-      threeD: item.threeD,
+      yAxis: yAxisConfig,
+      xAxis: xAxisConfig,
+      threeD: isThreeDMode,
     };
-  }, [effectiveEncoding, meltInfo, finalElements, dataset.id, dataset.name, effectiveStyles, item.hiddenGroups, item.refLinesY, item.refLinesX, item.yAxis, item.xAxis, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, item.threeD, specByCol]);
+  }, [effectiveEncoding, meltInfo, finalElements, dataset.id, dataset.name, effectiveStyles, hiddenGroups, refLinesY, refLinesX, yAxisConfig, xAxisConfig, twoD.autoSpecLines, twoD.autoSpecLinesY, twoD.autoSpecLinesX, isThreeDMode, specByCol, twoD]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
     (groupKey: string, next: GroupStyle | undefined) => {
-      const cur = item.groupStyles ?? {};
+      const cur = groupStyles;
       const updated: GroupStyleMap = { ...cur };
       if (next === undefined) delete updated[groupKey];
       else updated[groupKey] = next;
-      updateItem(item.id, { groupStyles: updated });
-      markDirty();
+      if (isThreeDMode) {
+        setThreeDState((prev) => ({ ...prev, groupStyles: updated }));
+      } else {
+        setTwoDState((prev) => ({ ...prev, groupStyles: updated }));
+      }
     },
-    [item.id, item.groupStyles, updateItem, markDirty],
+    [groupStyles, isThreeDMode, setThreeDState, setTwoDState],
   );
 
   /** Toggle a group's visibility in the legend (eye-icon button). Hidden
@@ -831,14 +892,17 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  from the shared-axis range calc so visible data fills the chart. */
   const toggleGroupHidden = useCallback(
     (groupKey: string) => {
-      const cur = item.hiddenGroups ?? [];
+      const cur = hiddenGroups;
       const next = cur.includes(groupKey)
         ? cur.filter((k) => k !== groupKey)
         : [...cur, groupKey];
-      updateItem(item.id, { hiddenGroups: next });
-      markDirty();
+      if (isThreeDMode) {
+        setThreeDState((prev) => ({ ...prev, hiddenGroups: next }));
+      } else {
+        setTwoDState((prev) => ({ ...prev, hiddenGroups: next }));
+      }
     },
-    [item.id, item.hiddenGroups, updateItem, markDirty],
+    [hiddenGroups, isThreeDMode, setThreeDState, setTwoDState],
   );
 
   /** Clear every per-group override at once — used by the STYLE editor's
@@ -846,10 +910,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  multi-group reset is a single atomic store write, instead of N writes
    *  that would each trigger a re-render. */
   const resetAllGroupStyles = useCallback(() => {
-    if (!item.groupStyles || Object.keys(item.groupStyles).length === 0) return;
-    updateItem(item.id, { groupStyles: {} });
-    markDirty();
-  }, [item.id, item.groupStyles, updateItem, markDirty]);
+    if (Object.keys(groupStyles).length === 0) return;
+    if (isThreeDMode) {
+      setThreeDState((prev) => ({ ...prev, groupStyles: {} }));
+    } else {
+      setTwoDState((prev) => ({ ...prev, groupStyles: {} }));
+    }
+  }, [groupStyles, isThreeDMode, setThreeDState, setTwoDState]);
 
   /** Replace the Y-axis reference-line list on this graph item. The
    *  RefLinesEditor below builds the next array (immutable add / patch /
@@ -857,10 +924,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  updateItem + markDirty pair used elsewhere. */
   const setRefLinesY = useCallback(
     (next: RefLineY[]) => {
-      updateItem(item.id, { refLinesY: next });
-      markDirty();
+      if (item.mode !== "2d") return;
+      setTwoDState((prev) => ({ ...prev, refLinesY: next }));
     },
-    [item.id, updateItem, markDirty],
+    [item.mode, setTwoDState],
   );
 
   /** Replace the X-axis reference-line list on this graph item. Mirror
@@ -871,10 +938,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  the moment X is rebound to a value column or the axes are swapped. */
   const setRefLinesX = useCallback(
     (next: RefLineX[]) => {
-      updateItem(item.id, { refLinesX: next });
-      markDirty();
+      if (item.mode !== "2d") return;
+      setTwoDState((prev) => ({ ...prev, refLinesX: next }));
     },
-    [item.id, updateItem, markDirty],
+    [item.mode, setTwoDState],
   );
 
   /** Toggle the auto spec-limit overlay on the **Y axis** only.
@@ -888,10 +955,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  per-line editor below dedicated to manual annotations. */
   const setAutoSpecLinesY = useCallback(
     (next: boolean) => {
-      updateItem(item.id, { autoSpecLinesY: next });
-      markDirty();
+      if (item.mode !== "2d") return;
+      setTwoDState((prev) => ({ ...prev, autoSpecLinesY: next }));
     },
-    [item.id, updateItem, markDirty],
+    [item.mode, setTwoDState],
   );
 
   /** Toggle the auto spec-limit overlay on the **X axis** only.
@@ -900,10 +967,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  the overlay when X is bound to a category / row-index column. */
   const setAutoSpecLinesX = useCallback(
     (next: boolean) => {
-      updateItem(item.id, { autoSpecLinesX: next });
-      markDirty();
+      if (item.mode !== "2d") return;
+      setTwoDState((prev) => ({ ...prev, autoSpecLinesX: next }));
     },
-    [item.id, updateItem, markDirty],
+    [item.mode, setTwoDState],
   );
 
   /** Replace the Y-axis configuration (range / tick density / decimals /
@@ -913,20 +980,20 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  fragment when every field is undefined. */
   const setYAxisConfig = useCallback(
     (next: YAxisConfig | undefined) => {
-      updateItem(item.id, { yAxis: next });
-      markDirty();
+      if (item.mode !== "2d") return;
+      setTwoDState((prev) => ({ ...prev, yAxis: next }));
     },
-    [item.id, updateItem, markDirty],
+    [item.mode, setTwoDState],
   );
 
   /** Replace the X-axis configuration. Mirrors `setYAxisConfig` — the
    *  shape of the override config is identical for both axes. */
   const setXAxisConfig = useCallback(
     (next: YAxisConfig | undefined) => {
-      updateItem(item.id, { xAxis: next });
-      markDirty();
+      if (item.mode !== "2d") return;
+      setTwoDState((prev) => ({ ...prev, xAxis: next }));
     },
-    [item.id, updateItem, markDirty],
+    [item.mode, setTwoDState],
   );
 
   // 拖放处理
@@ -1023,13 +1090,14 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  field bind always exits multi-mode for that slot. */
   const bindFieldToSlot = useCallback(
     (slot: SlotKey, field: FieldRef) => {
-      const prevField = item.encoding[slot];
+      if (item.mode === "multivariate") return;
+      const prevField = encoding[slot];
       const multiKey: "multiX" | "multiY" | null =
         slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
-      const hadMulti = multiKey ? (item[multiKey]?.length ?? 0) > 0 : false;
+      const hadMulti = multiKey ? ((slot === "x" ? multiX : multiY)?.length ?? 0) > 0 : false;
       const axisKey: "xAxis" | "yAxis" | null =
         slot === "x" ? "xAxis" : slot === "y" ? "yAxis" : null;
-      const prevAxis = axisKey ? item[axisKey] : undefined;
+      const prevAxis = axisKey === "xAxis" ? xAxisConfig : axisKey === "yAxis" ? yAxisConfig : undefined;
       const prepared = prepareAxisBinding(
         prevField?.name,
         field.name,
@@ -1038,17 +1106,19 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       );
       const { bindingChanged, axisConfig } = prepared;
       if (axisKey && bindingChanged) {
-        updateItem(item.id, {
-          encoding: { ...item.encoding, [slot]: field },
-          ...(axisKey ? { [axisKey]: axisConfig } : {}),
-          ...(multiKey ? { [multiKey]: undefined } : {}),
-        });
-        markDirty();
+        setTwoDState((prev) => ({
+          ...prev,
+          encoding: { ...prev.encoding, [slot]: field },
+          ...(axisKey === "xAxis" ? { xAxis: axisConfig } : {}),
+          ...(axisKey === "yAxis" ? { yAxis: axisConfig } : {}),
+          ...(multiKey === "multiX" ? { multiX: [] } : {}),
+          ...(multiKey === "multiY" ? { multiY: [] } : {}),
+        }));
         return;
       }
       setEncoding((prev) => ({ ...prev, [slot]: field }));
     },
-    [item.id, item.encoding, item.xAxis, item.yAxis, item.multiX, item.multiY, updateItem, markDirty, setEncoding],
+    [item.mode, encoding, multiX, multiY, xAxisConfig, yAxisConfig, setTwoDState, setEncoding],
   );
 
   /** Replace a slot's multi-mode list. Length 0 / undefined exits
@@ -1063,52 +1133,58 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  would otherwise produce an ambiguous render). */
   const setMultiAtSlot = useCallback(
     (slot: "x" | "y", next: FieldRef[] | undefined) => {
+      if (item.mode !== "2d") return;
       const multiKey: "multiX" | "multiY" = slot === "x" ? "multiX" : "multiY";
       const otherMultiKey: "multiX" | "multiY" = slot === "x" ? "multiY" : "multiX";
       const axisKey: "xAxis" | "yAxis" = slot === "x" ? "xAxis" : "yAxis";
       const list = (next ?? []).filter((f, i, arr) =>
         arr.findIndex((g) => g.name === f.name) === i,
       );
-      const prevAxis = item[axisKey];
+      const prevAxis = axisKey === "xAxis" ? xAxisConfig : yAxisConfig;
       const needsAxisReset =
         prevAxis !== undefined &&
         (prevAxis.min !== undefined ||
           prevAxis.max !== undefined ||
           prevAxis.tickInterval !== undefined);
-      const axisPatch =
-        needsAxisReset
-          ? { [axisKey]: { ...prevAxis, min: undefined, max: undefined, tickInterval: undefined } }
-          : {};
+      const axisPatch = needsAxisReset
+        ? { ...prevAxis, min: undefined, max: undefined, tickInterval: undefined }
+        : undefined;
       if (list.length === 0) {
-        updateItem(item.id, { [multiKey]: undefined, ...axisPatch });
-        markDirty();
+        setTwoDState((prev) => ({
+          ...prev,
+          [multiKey]: [],
+          ...(axisKey === "xAxis" && axisPatch ? { xAxis: axisPatch } : {}),
+          ...(axisKey === "yAxis" && axisPatch ? { yAxis: axisPatch } : {}),
+        }));
         return;
       }
       if (list.length === 1) {
         const only = list[0];
-        updateItem(item.id, {
-          [multiKey]: undefined,
-          encoding: { ...item.encoding, [slot]: only },
-          ...axisPatch,
-        });
-        markDirty();
+        setTwoDState((prev) => ({
+          ...prev,
+          [multiKey]: [],
+          encoding: { ...prev.encoding, [slot]: only },
+          ...(axisKey === "xAxis" && axisPatch ? { xAxis: axisPatch } : {}),
+          ...(axisKey === "yAxis" && axisPatch ? { yAxis: axisPatch } : {}),
+        }));
         return;
       }
       // ≥2 columns: stay in multi-mode. Clear `encoding[slot]` so the
       // single-field chip doesn't shadow the multi list. Also clear
       // any multi on the OTHER axis — only one axis can be in
       // multi-mode at a time.
-      const nextEncoding = { ...item.encoding };
+      const nextEncoding = { ...twoD.encoding };
       delete nextEncoding[slot];
-      updateItem(item.id, {
+      setTwoDState((prev) => ({
+        ...prev,
         [multiKey]: list,
-        [otherMultiKey]: undefined,
+        [otherMultiKey]: [],
         encoding: nextEncoding,
-        ...axisPatch,
-      });
-      markDirty();
+        ...(axisKey === "xAxis" && axisPatch ? { xAxis: axisPatch } : {}),
+        ...(axisKey === "yAxis" && axisPatch ? { yAxis: axisPatch } : {}),
+      }));
     },
-    [item.id, item.encoding, item.xAxis, item.yAxis, updateItem, markDirty],
+    [item.mode, xAxisConfig, yAxisConfig, twoD.encoding, setTwoDState],
   );
 
   /** Are all the given fields numeric (continuous)? Multi-mode is
@@ -1153,32 +1229,28 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const routeDropToSlot = useCallback(
     (slot: SlotKey, fields: FieldRef[]) => {
       if (fields.length === 0) return;
-      const isAxis = slot === "x" || slot === "y";
-      const multiKey: "multiX" | "multiY" | null =
-        slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
-      const existingMulti = multiKey ? item[multiKey] : undefined;
-      const inMulti = !!existingMulti && existingMulti.length >= 2;
 
-      if (isCorrelationMode && isAxis && multiKey) {
-        if (!allNumeric(fields)) {
-          flashRejectOnSlot(slot);
-          return;
-        }
-        const seed = existingMulti && existingMulti.length > 0
-          ? existingMulti
-          : (item.encoding[slot] ? [item.encoding[slot] as FieldRef] : []);
-        const merged = [...seed, ...fields].filter((f, i, arr) =>
-          arr.findIndex((g) => g.name === f.name) === i,
-        );
-        if (merged.length > CORRELATION_MAX_COLUMNS) {
-          flashRejectOnSlot(slot);
-          setCorrelationNotice("tooManyColumns");
+      if (item.mode === "multivariate") {
+        if (slot !== "y") return;
+        const next = updateMultivariateColumns(item.modeStates.multivariate.columns, {
+          type: "append",
+          fields,
+        });
+        if (next.error) {
+          flashRejectOnSlot("y");
+          setCorrelationNotice(next.error);
           return;
         }
         setCorrelationNotice(null);
-        setMultiAtSlot(slot, merged);
+        setMultivariateState((prev) => ({ ...prev, columns: next.columns }));
         return;
       }
+
+      const isAxis = slot === "x" || slot === "y";
+      const multiKey: "multiX" | "multiY" | null =
+        slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
+      const existingMulti = multiKey ? (slot === "x" ? multiX : multiY) : undefined;
+      const inMulti = !!existingMulti && existingMulti.length >= 2;
 
       // Already in multi-mode → all drops APPEND (single or multi).
       if (isAxis && inMulti && multiKey) {
@@ -1213,21 +1285,35 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       // Enter multi-mode with the dropped fields.
       setMultiAtSlot(slot, fields);
     },
-    [item.multiX, item.multiY, item.encoding, isCorrelationMode, bindFieldToSlot, setMultiAtSlot, allNumeric, flashRejectOnSlot],
+    [item.mode, item.modeStates.multivariate.columns, setMultivariateState, multiX, multiY, bindFieldToSlot, setMultiAtSlot, allNumeric, flashRejectOnSlot, setCorrelationNotice],
   );
 
   const clearSlot = (slot: SlotKey) => {
+    if (item.mode === "multivariate") {
+      if (slot !== "y") return;
+      setCorrelationNotice(null);
+      setMultivariateState((prev) => ({ ...prev, columns: [] }));
+      return;
+    }
     // Atomic: clear both single encoding AND any multi list on the
     // same slot so the slot returns to fully empty.
     const multiKey: "multiX" | "multiY" | null =
       slot === "x" ? "multiX" : slot === "y" ? "multiY" : null;
-    const nextEncoding = { ...item.encoding };
+    const nextEncoding = { ...encoding };
     delete nextEncoding[slot];
-    updateItem(item.id, {
+    if (isThreeDMode) {
+      setThreeDState((prev) => ({
+        ...prev,
+        encoding: nextEncoding,
+      }));
+      return;
+    }
+    setTwoDState((prev) => ({
+      ...prev,
       encoding: nextEncoding,
-      ...(multiKey ? { [multiKey]: undefined } : {}),
-    });
-    markDirty();
+      ...(multiKey === "multiX" ? { multiX: [] } : {}),
+      ...(multiKey === "multiY" ? { multiY: [] } : {}),
+    }));
   };
 
   /** Add a new layer (chart kind) — enables it if already present.
@@ -1236,34 +1322,17 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  smoother elements saved without an `algo` keep their previous
    *  Moving Average behaviour via the fallbacks in transform.ts. */
   const addElement = useCallback((kind: ElementKind) => {
+    if (item.mode === "multivariate") return;
     setElements((prev) => {
-      if (kind === "correlationMatrix") {
-        const preserved = prev.filter((e) => LAYER_DIM[e.kind] === "3d" || e.enabled === false);
-        return [
-          ...preserved.filter((e) => e.kind !== "correlationMatrix"),
-          {
-            kind: "correlationMatrix",
-            enabled: true,
-            options: { correlationMethod: "pearson" },
-          },
-        ];
-      }
-
-      const addingOrdinary2d = LAYER_DIM[kind] === "2d";
-      const correlationActive = prev.some((e) => e.enabled !== false && e.kind === "correlationMatrix");
-      const base = addingOrdinary2d && correlationActive
-        ? prev.filter((e) => e.kind !== "correlationMatrix")
-        : prev;
-
-      const idx = base.findIndex((e) => e.kind === kind);
+      const idx = prev.findIndex((e) => e.kind === kind);
       if (idx >= 0) {
-        return base.map((e, i) => (i === idx ? { ...e, enabled: true } : e));
+        return prev.map((e, i) => (i === idx ? { ...e, enabled: true } : e));
       }
       const next: ChartElement = { kind, enabled: true };
-      next.options = defaultLayerOptions(kind, base);
-      return [...base, next];
+      next.options = defaultLayerOptions(kind, prev);
+      return [...prev, next];
     });
-  }, [setElements]);
+  }, [item.mode, setElements]);
 
   /** Remove a layer entirely from the elements list. */
   const removeElement = useCallback((kind: ElementKind) => {
@@ -1297,23 +1366,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  intentionally preserved — those are session-level analysis
    *  controls, not part of the chart's visual content. */
   const startOver = useCallback(() => {
-    updateItem(item.id, {
-      encoding: {},
-      elements: [{ kind: "points", enabled: true }],
-      xAxis: undefined,
-      yAxis: undefined,
-      refLinesX: undefined,
-      refLinesY: undefined,
-      autoSpecLinesY: undefined,
-      autoSpecLinesX: undefined,
-      autoSpecLines: undefined,
-      hiddenGroups: undefined,
-      groupStyles: undefined,
-      multiX: undefined,
-      multiY: undefined,
-    });
-    markDirty();
-  }, [item.id, updateItem, markDirty]);
+    if (item.mode === "3d") {
+      setThreeDState(createDefaultGraph3DState());
+      return;
+    }
+    if (item.mode === "multivariate") {
+      setMultivariateState(createDefaultMultivariateGraphState());
+      return;
+    }
+    setTwoDState(createDefaultGraph2DState());
+  }, [item.mode, setThreeDState, setMultivariateState, setTwoDState]);
 
   /** Swap X and Y completely — encoding (axis + facet) plus axis
    *  settings and reference lines. The chart should read as if it had
@@ -1337,7 +1399,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
    *  mismatch and could trigger an inverse / range guard from the wrong
    *  axis. */
   const swapXY = useCallback(() => {
-    const enc = item.encoding;
+    if (item.mode !== "2d") return;
+    const enc = twoD.encoding;
     const nextEncoding = { ...enc };
     // x ↔ y
     if (enc.x !== undefined) nextEncoding.y = enc.x;
@@ -1352,7 +1415,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     // refLinesY ↔ refLinesX, with the field-name flip. Keep the same id
     // on each line so React's list-key stays stable across the swap and
     // any in-flight edit focus doesn't churn.
-    const nextRefLinesX: RefLineX[] | undefined = item.refLinesY?.map((r) => ({
+    const nextRefLinesX: RefLineX[] | undefined = twoD.refLinesY?.map((r) => ({
       id: r.id,
       x: r.y,
       label: r.label,
@@ -1360,7 +1423,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       color: r.color,
       width: r.width,
     }));
-    const nextRefLinesY: RefLineY[] | undefined = item.refLinesX?.map((r) => ({
+    const nextRefLinesY: RefLineY[] | undefined = twoD.refLinesX?.map((r) => ({
       id: r.id,
       y: r.x,
       label: r.label,
@@ -1368,35 +1431,19 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       color: r.color,
       width: r.width,
     }));
-    updateItem(item.id, {
+    setTwoDState((prev) => ({
+      ...prev,
       encoding: nextEncoding,
-      xAxis: item.yAxis,
-      yAxis: item.xAxis,
+      xAxis: twoD.yAxis,
+      yAxis: twoD.xAxis,
       refLinesX: nextRefLinesX,
       refLinesY: nextRefLinesY,
-      // Swap per-axis auto-spec flags too. We resolve the legacy
-      // `autoSpecLines` fallback at the read site so the swap stores
-      // explicit values — from this point on the per-axis fields are
-      // canonical (legacy field becomes shadowed).
-      autoSpecLinesY: item.autoSpecLinesX ?? item.autoSpecLines,
-      autoSpecLinesX: item.autoSpecLinesY ?? item.autoSpecLines,
-      // multiX ↔ multiY — mirror the encoding swap so a multi-mode
-      // axis stays in multi-mode on the other side after rotation.
-      multiX: item.multiY,
-      multiY: item.multiX,
-    });
-    markDirty();
-  }, [item.id, item.encoding, item.xAxis, item.yAxis, item.refLinesX, item.refLinesY, item.autoSpecLines, item.autoSpecLinesY, item.autoSpecLinesX, item.multiX, item.multiY, updateItem, markDirty]);
-
-  /** Toggle 3D mode. Flips `item.threeD`. Turning it OFF is
-   *  non-destructive: the 3D layers (surface / scatter3d) and the
-   *  Z / Group Z encodings stay in the item, just hidden while in 2D,
-   *  and reappear when 3D is re-enabled. 2D and 3D layer sets are fully
-   *  separate, so switching mode is always allowed. */
-  const toggleThreeD = useCallback(() => {
-    updateItem(item.id, { threeD: !item.threeD });
-    markDirty();
-  }, [item.id, item.threeD, updateItem, markDirty]);
+      autoSpecLinesY: twoD.autoSpecLinesX ?? twoD.autoSpecLines,
+      autoSpecLinesX: twoD.autoSpecLinesY ?? twoD.autoSpecLines,
+      multiX: twoD.multiY,
+      multiY: twoD.multiX,
+    }));
+  }, [item.mode, twoD, setTwoDState]);
 
   const samplingMode = item.sampling?.mode === "sample" ? "sample" : "full";
   const sampleSize = useMemo(() => {
@@ -1477,7 +1524,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         defaultValue: "Sampled: {{processed}} / {{source}} rows",
       });
     }
-    if (rawPointNotice) {
+    if (!isMultivariateMode && rawPointNotice) {
       return t("graph.rowStatus.pointsOmitted", {
         valid: rawPointNotice.validRows.toLocaleString(),
         budget: rawPointNotice.budget.toLocaleString(),
@@ -1488,19 +1535,42 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       processed: progress.processedRows,
       defaultValue: "Full Data: {{processed}} rows",
     });
-  }, [frame, pipelineStatus, progress, rawPointNotice, t]);
+  }, [frame, isMultivariateMode, pipelineStatus, progress, rawPointNotice, t]);
 
   const correlationColumnCount = useMemo(() => {
-    const multiX = item.multiX ?? [];
-    const multiY = item.multiY ?? [];
-    if (multiX.length > 0) return multiX.length;
-    if (multiY.length > 0) return multiY.length;
-    if (item.encoding.x || item.encoding.y) return 1;
+    if (item.mode === "multivariate") {
+      return item.modeStates.multivariate.columns.length;
+    }
+    const twoDColumnsX = item.modeStates.twoD.multiX ?? [];
+    const twoDColumnsY = item.modeStates.twoD.multiY ?? [];
+    if (twoDColumnsX.length > 0) return twoDColumnsX.length;
+    if (twoDColumnsY.length > 0) return twoDColumnsY.length;
+    if (item.modeStates.twoD.encoding.x || item.modeStates.twoD.encoding.y) return 1;
     return 0;
-  }, [item.multiX, item.multiY, item.encoding.x, item.encoding.y]);
+  }, [item.mode, item.modeStates.multivariate.columns, item.modeStates.twoD.multiX, item.modeStates.twoD.multiY, item.modeStates.twoD.encoding.x, item.modeStates.twoD.encoding.y]);
   const correlationColumnsReady =
     correlationColumnCount >= CORRELATION_MIN_COLUMNS &&
     correlationColumnCount <= CORRELATION_MAX_COLUMNS;
+
+  const correlationNoticeText = useMemo(() => {
+    if (!isMultivariateMode || !correlationNotice) {
+      return null;
+    }
+    if (correlationNotice === "duplicateField") {
+      return t("graph.correlation.dropReason.duplicateField", {
+        defaultValue: "Column already selected in multivariate variables.",
+      });
+    }
+    if (correlationNotice === "invalidFieldType") {
+      return t("graph.correlation.dropReason.invalidFieldType", {
+        defaultValue: "Only numeric columns can be added to multivariate variables.",
+      });
+    }
+    return t("graph.correlation.tooManyColumns", {
+      max: CORRELATION_MAX_COLUMNS,
+      defaultValue: "Correlation matrix supports up to {{max}} columns.",
+    });
+  }, [correlationNotice, isMultivariateMode, t]);
 
   const progressPercent = progress?.percent ?? null;
   const progressAriaProps = progressPercent === null
@@ -1537,15 +1607,17 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
       <div className="gb-toolbar">
         <div className="gb-toolbar-left">
           <button className="gb-tb-btn" onClick={startOver}>{t("graph.startOver")}</button>
-          <button
-            className="gb-tb-btn"
-            onClick={swapXY}
-            title={t("graph.swapXY.tooltip", {
-              defaultValue: "Swap the X and Y axes (encoding, facet rail, and axis settings) — like rotating the chart 90°.",
-            })}
-          >
-            {t("graph.swapXY.label", { defaultValue: "Swap X & Y" })}
-          </button>
+          {!isMultivariateMode && (
+            <button
+              className="gb-tb-btn"
+              onClick={swapXY}
+              title={t("graph.swapXY.tooltip", {
+                defaultValue: "Swap the X and Y axes (encoding, facet rail, and axis settings) — like rotating the chart 90°.",
+              })}
+            >
+              {t("graph.swapXY.label", { defaultValue: "Swap X & Y" })}
+            </button>
+          )}
           <button
             className={`gb-tb-btn${showFilters ? " gb-tb-btn-active" : ""}`}
             onClick={() => setShowFilters((v) => !v)}
@@ -1556,7 +1628,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               <span className="gb-tb-badge">{filters.length}</span>
             )}
           </button>
-          {!isCorrelationMode && (
+          {!isMultivariateMode && (
             <div
               className="gb-cursor-mode"
               role="radiogroup"
@@ -1592,45 +1664,51 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               </button>
             </div>
           )}
-          {/* 2D / 3D segmented toggle — styled like the cursor-mode pill. */}
-          {!isCorrelationMode && (
-            <div
-              className="gb-dim-mode"
-              role="radiogroup"
-              aria-label={t("graph.dimMode.label", { defaultValue: "2D / 3D mode" })}
+          <div
+            className="gb-dim-mode"
+            role="radiogroup"
+            aria-label={t("graph.mode.label", { defaultValue: "Graph mode" })}
+          >
+            <span
+              className={`gb-dim-mode-thumb gb-dim-mode-thumb-${item.mode}`}
+              aria-hidden="true"
+            />
+            <button
+              type="button"
+              role="radio"
+              aria-checked={item.mode === "2d"}
+              className={`gb-dim-mode-opt${item.mode === "2d" ? " is-active" : ""}`}
+              onClick={() => setMode("2d")}
+              title={t("graph.mode.twoD", { defaultValue: "2D" })}
             >
-              <span
-                className={`gb-dim-mode-thumb gb-dim-mode-thumb-${item.threeD ? "3d" : "2d"}`}
-                aria-hidden="true"
-              />
-              <button
-                type="button"
-                role="radio"
-                aria-checked={!item.threeD}
-                className={`gb-dim-mode-opt${!item.threeD ? " is-active" : ""}`}
-                onClick={() => { if (item.threeD) toggleThreeD(); }}
-                title={t("graph.dimMode.twoDTitle", { defaultValue: "2D mode" })}
-              >
-                2D
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={!!item.threeD}
-                className={`gb-dim-mode-opt${item.threeD ? " is-active" : ""}`}
-                onClick={() => { if (!item.threeD) toggleThreeD(); }}
-                title={t("graph.dimMode.threeDTitle", {
-                  defaultValue: "3D mode: adds Z and Group Z channels and renders a 3D surface from X / Y / Z.",
-                })}
-              >
-                3D
-              </button>
-            </div>
-          )}
+              {t("graph.mode.twoD", { defaultValue: "2D" })}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={item.mode === "3d"}
+              className={`gb-dim-mode-opt${item.mode === "3d" ? " is-active" : ""}`}
+              onClick={() => setMode("3d")}
+              title={t("graph.mode.threeD", { defaultValue: "3D" })}
+            >
+              {t("graph.mode.threeD", { defaultValue: "3D" })}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={item.mode === "multivariate"}
+              className={`gb-dim-mode-opt${item.mode === "multivariate" ? " is-active" : ""}`}
+              onClick={() => setMode("multivariate")}
+              title={t("graph.mode.multivariate", { defaultValue: "Multivariate" })}
+            >
+              {t("graph.mode.multivariate", { defaultValue: "Multivariate" })}
+            </button>
+          </div>
         </div>
         <div className="gb-toolbar-spacer" />
         <div className="gb-toolbar-right">
-          <div className="gb-sampling" role="radiogroup" aria-label={t("graph.sampling.label", { defaultValue: "Sampling mode" })}>
+          {!isMultivariateMode && (
+            <div className="gb-sampling" role="radiogroup" aria-label={t("graph.sampling.label", { defaultValue: "Sampling mode" })}>
             <button
               type="button"
               className={`gb-sampling-btn${samplingMode === "full" ? " is-active" : ""}`}
@@ -1668,7 +1746,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 />
               </>
             )}
-          </div>
+            </div>
+          )}
           <div className="gb-pipeline-status">
             <span className={`gb-pipeline-state gb-pipeline-state-${pipelineStatus}`}>{pipelineStatusLabel}</span>
             <div
@@ -1687,7 +1766,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         </div>
       </div>
 
-      <div className={`gb-body${isCorrelationMode ? " gb-body-correlation" : ""}`}>
+      <div className={`gb-body${isMultivariateMode ? " gb-body-correlation" : ""}`}>
         {/* Local Data Filter panel + splitter (leftmost, when toggled on). */}
         {showFilters && (
           <>
@@ -1755,39 +1834,68 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           {/* Layer cards: one per active chart kind, plus an add-card popover.
               Replaces the old per-chart-type sections and the top-toolbar
               chart-type toggle buttons. */}
-          <div
-            className="gb-layers"
-            style={{ flex: `0 0 ${100 - leftTopPct}%` }}
-          >
-            <div className="sp-panel-header">
-              <span className="sp-panel-header-title">{t("graph.layersSection")}</span>
-            </div>
-            <div className="gb-layers-list-wrap">
-              <div className="gb-layer-list">
-                {elements
-                  .filter((el) => el.enabled !== false)
-                  .filter((el) => LAYER_DIM[el.kind] === (item.threeD ? "3d" : "2d"))
-                  .map((el) => (
-                    <LayerCard
-                      key={el.kind}
-                      kind={el.kind}
-                      label={t(`graph.type.${el.kind}`)}
-                      options={el.options ?? {}}
-                      onChangeOptions={(patch) => updateElementOptions(el.kind, patch)}
-                      onRemove={() => removeElement(el.kind)}
-                      t={t}
-                    />
-                  ))}
-                <AddLayerCard
-                  availableKinds={GRAPH_LAYER_DEFS_WITH_CORRELATION.map((c) => c.kind).filter(
-                    (k) => !activeKinds.has(k) && LAYER_DIM[k] === (item.threeD ? "3d" : "2d"),
-                  )}
-                  onAdd={addElement}
-                  t={t}
-                />
+          {isMultivariateMode ? (
+            <div
+              className="gb-layers"
+              style={{ flex: `0 0 ${100 - leftTopPct}%` }}
+            >
+              <div className="sp-panel-header">
+                <span className="sp-panel-header-title">{t("graph.multivariate.chartType", { defaultValue: "Chart type" })}</span>
+              </div>
+              <div className="gb-layers-list-wrap">
+                <div className="gb-multivariate-panel">
+                  <div className="gb-multivariate-chip">
+                    {t("graph.type.correlationMatrix", { defaultValue: "Correlation Matrix" })}
+                  </div>
+                  <CorrelationMatrixOptions
+                    options={{ correlationMethod: multivariate.correlationMethod }}
+                    onChange={(patch) => {
+                      const method =
+                        patch.correlationMethod === "spearman" || patch.correlationMethod === "kendall"
+                          ? patch.correlationMethod
+                          : "pearson";
+                      setMultivariateState((prev) => ({ ...prev, correlationMethod: method }));
+                    }}
+                    t={t}
+                  />
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div
+              className="gb-layers"
+              style={{ flex: `0 0 ${100 - leftTopPct}%` }}
+            >
+              <div className="sp-panel-header">
+                <span className="sp-panel-header-title">{t("graph.layersSection")}</span>
+              </div>
+              <div className="gb-layers-list-wrap">
+                <div className="gb-layer-list">
+                  {elements
+                    .filter((el) => el.enabled !== false)
+                    .filter((el) => getLayerMode(el.kind) === (isThreeDMode ? "3d" : "2d"))
+                    .map((el) => (
+                      <LayerCard
+                        key={el.kind}
+                        kind={el.kind}
+                        label={t(`graph.type.${el.kind}`)}
+                        options={el.options ?? {}}
+                        onChangeOptions={(patch) => updateElementOptions(el.kind, patch)}
+                        onRemove={() => removeElement(el.kind)}
+                        t={t}
+                      />
+                    ))}
+                  <AddLayerCard
+                    availableKinds={GRAPH_LAYER_DEFS_WITH_CORRELATION.map((c) => c.kind).filter(
+                      (k) => !activeKinds.has(k) && getLayerMode(k) === (isThreeDMode ? "3d" : "2d"),
+                    )}
+                    onAdd={addElement}
+                    t={t}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Splitter: left | center */}
@@ -1799,9 +1907,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
         />
 
         {/* 中栏：画布 + X 轴槽 */}
-        <div className={`gb-center${isCorrelationMode ? " gb-center-correlation" : ""}`}>
+        <div className={`gb-center${isMultivariateMode ? " gb-center-correlation" : ""}`}>
           {/* 顶部分组槽 (Group X) — 横跨画布上方 */}
-          {!isCorrelationMode && (
+          {!isMultivariateMode && (
             <Slot
               slot="groupX"
               label="Group X"
@@ -1815,9 +1923,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
           {/* 画布 + 左侧 Y 轴槽 + 右侧 Group Y 槽 */}
           <div
-            className={`gb-canvas-row${isCorrelationMode ? " gb-canvas-row-correlation" : ""}`}
+            className={`gb-canvas-row${isMultivariateMode ? " gb-canvas-row-correlation" : ""}`}
             style={
-              item.threeD && !isCorrelationMode
+              isThreeDMode && !isMultivariateMode
                 ? // 3D: 追加 Z（最左）与 Group Z（最右）两条 28px 轨道，
                   // 保持 [Z][Y][canvas][GroupY][GroupZ] 五列布局。
                   { gridTemplateColumns: "28px 28px 1fr 28px 28px" }
@@ -1825,7 +1933,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             }
           >
             {/* Z 轴槽 — 仅 3D 模式，位于 Y 轴拖动区左侧 */}
-            {item.threeD && !isCorrelationMode && (
+            {isThreeDMode && !isMultivariateMode && (
               <Slot
                 slot="z"
                 label="Z"
@@ -1838,19 +1946,23 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             )}
             <Slot
               slot="y"
-              label="Y"
-              field={encoding.y}
-              fields={item.multiY}
+              label={isMultivariateMode ? t("graph.multivariate.variables", { defaultValue: "Y (Variables)" }) : "Y"}
+              field={isMultivariateMode ? multivariateSlotBinding.field : encoding.y}
+              fields={isMultivariateMode ? multivariateSlotBinding.columns : multiY}
               onDrop={(e) => handleDropOnSlot("y", e)}
               onClear={() => clearSlot("y")}
-              onOpenManager={() => setManagerOpenSlot("y")}
+              onOpenManager={
+                isMultivariateMode && !multivariateSlotBinding.showManager
+                  ? undefined
+                  : () => setManagerOpenSlot("y")
+              }
               onContextMenu={(x, y) => setSlotCtxMenu({ slot: "y", x, y })}
               orientation="vertical-left"
-              required
+              required={!isMultivariateMode}
               rejectFlash={rejectFlashSlot === "y"}
             />
             <div
-              className={`gb-canvas${isCorrelationMode ? " gb-canvas-correlation" : ""}`}
+              className={`gb-canvas${isMultivariateMode ? " gb-canvas-correlation" : ""}`}
               ref={canvasRef}
               onDragOver={(e) => {
                 e.preventDefault();
@@ -1872,17 +1984,19 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 // next canvas-drop falls through to Y. Route through
                 // `routeDropToSlot` so the single/multi/append cases
                 // get the same handling as a direct slot drop.
-                const xBound = !!encoding.x || (item.multiX?.length ?? 0) > 0;
-                const yBound = !!encoding.y || (item.multiY?.length ?? 0) > 0;
-                const slot: SlotKey = !xBound
-                  ? "x"
-                  : !yBound
-                    ? "y"
-                    : "y";
+                const xBound = !!encoding.x || multiX.length > 0;
+                const yBound = isMultivariateMode
+                  ? multivariateSlotBinding.columns.length > 0
+                  : (!!encoding.y || multiY.length > 0);
+                const slot = resolveCanvasDropSlot({
+                  isMultivariateMode,
+                  xBound,
+                  yBound,
+                });
                 routeDropToSlot(slot, fields);
               }}
             >
-              {isCorrelationMode && !correlationColumnsReady ? (
+              {isMultivariateMode && !correlationColumnsReady ? (
                 <div className="gb-empty">
                   {t("graph.correlation.requiresColumns", {
                     min: CORRELATION_MIN_COLUMNS,
@@ -1890,7 +2004,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     defaultValue: "Correlation matrix requires {{min}}-{{max}} columns.",
                   })}
                 </div>
-              ) : !item.threeD && !encoding.x && !encoding.y && !(item.multiX?.length) && !(item.multiY?.length) && !activeKinds.has("histogram") ? (
+              ) : !isThreeDMode && !encoding.x && !encoding.y && !multiX.length && !multiY.length && !activeKinds.has("histogram") ? (
                 // Drag-hint shows only when neither axis is bound (and
                 // there's no histogram). Y-only renders a vertical strip
                 // and X-only renders a horizontal strip (mirror), so the
@@ -1908,9 +2022,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                     data={graphData}
                     frame={frame}
                     valueOrders={valueOrders}
-                    onYAxisDblClick={isCorrelationMode ? undefined : () => setYAxisDialogOpen(true)}
-                    onXAxisDblClick={isCorrelationMode ? undefined : () => setXAxisDialogOpen(true)}
-                    onAxisRangeChange={isCorrelationMode ? undefined : ((axis, min, max) => {
+                    onYAxisDblClick={isMultivariateMode ? undefined : () => setYAxisDialogOpen(true)}
+                    onXAxisDblClick={isMultivariateMode ? undefined : () => setXAxisDialogOpen(true)}
+                    onAxisRangeChange={isMultivariateMode ? undefined : ((axis, min, max) => {
                       // JMP-style direct-manipulation drag-zoom / drag-pan
                       // on the axis strip. The renderer previews via
                       // setOption during the gesture; on mouseup it hands
@@ -1919,32 +2033,24 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                       // overrides (decimals / inverse / grid styling) are
                       // preserved by spreading the existing config first.
                       if (axis === "y") {
-                        setYAxisConfig({ ...(item.yAxis ?? {}), min, max });
+                        setYAxisConfig({ ...(yAxisConfig ?? {}), min, max });
                       } else {
-                        setXAxisConfig({ ...(item.xAxis ?? {}), min, max });
+                        setXAxisConfig({ ...(xAxisConfig ?? {}), min, max });
                       }
                     })}
-                    onAxisContextMenu={isCorrelationMode ? undefined : ((axis, x, y) => setAxisCtxMenu({ axis, x, y }))}
-                    onPointClick={isCorrelationMode ? undefined : ((pick) => {
+                    onAxisContextMenu={isMultivariateMode ? undefined : ((axis, x, y) => setAxisCtxMenu({ axis, x, y }))}
+                    onPointClick={isMultivariateMode ? undefined : ((pick) => {
                       pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
                     })}
-                    brushMode={!isCorrelationMode && cursorMode === "select"}
-                    onBrushSelect={isCorrelationMode ? undefined : ((picks) => {
+                    brushMode={!isMultivariateMode && cursorMode === "select"}
+                    onBrushSelect={isMultivariateMode ? undefined : ((picks) => {
                       pickCells(dataset.id, picks);
                     })}
                   />
-                  {isCorrelationMode && correlationNotice === "tooManyColumns" && (
-                    <div className="gb-canvas-overlay gb-canvas-overlay-warn">
-                      {t("graph.correlation.tooManyColumns", {
-                        max: CORRELATION_MAX_COLUMNS,
-                        defaultValue: "Correlation matrix supports up to {{max}} columns.",
-                      })}
-                    </div>
-                  )}
                   {pipelineStatus === "error" && pipelineError && (
                     <div className="gb-canvas-overlay gb-canvas-overlay-error">{pipelineError}</div>
                   )}
-                  {pipelineStatus === "ready" && rawPointNotice && (
+                  {!isMultivariateMode && pipelineStatus === "ready" && rawPointNotice && (
                     <div className="gb-point-budget-notice" role="status">
                       <i className="fa-solid fa-circle-info" aria-hidden="true" />
                       <span className="gb-point-budget-copy">
@@ -1969,8 +2075,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                   )}
                 </>
               )}
+              {correlationNoticeText && (
+                <div className="gb-canvas-overlay gb-canvas-overlay-warn" role="status" aria-live="polite">
+                  {correlationNoticeText}
+                </div>
+              )}
             </div>
-            {!isCorrelationMode && (
+            {!isMultivariateMode && (
               <Slot
                 slot="groupY"
                 label="Group Y"
@@ -1982,7 +2093,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               />
             )}
             {/* Group Z 槽 — 仅 3D 模式，位于 Group Y 右侧 */}
-            {item.threeD && !isCorrelationMode && (
+            {isThreeDMode && !isMultivariateMode && (
               <Slot
                 slot="groupZ"
                 label="Group Z"
@@ -1996,23 +2107,25 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           </div>
 
           {/* X 轴槽 */}
-          <Slot
-            slot="x"
-            label="X"
-            field={encoding.x}
-            fields={item.multiX}
-            onDrop={(e) => handleDropOnSlot("x", e)}
-            onClear={() => clearSlot("x")}
-            onOpenManager={() => setManagerOpenSlot("x")}
-            onContextMenu={(x, y) => setSlotCtxMenu({ slot: "x", x, y })}
-            orientation="horizontal-bottom"
-            required
-            rejectFlash={rejectFlashSlot === "x"}
-          />
+          {!isMultivariateMode && (
+            <Slot
+              slot="x"
+              label="X"
+              field={encoding.x}
+              fields={multiX}
+              onDrop={(e) => handleDropOnSlot("x", e)}
+              onClear={() => clearSlot("x")}
+              onOpenManager={() => setManagerOpenSlot("x")}
+              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "x", x, y })}
+              orientation="horizontal-bottom"
+              required
+              rejectFlash={rejectFlashSlot === "x"}
+            />
+          )}
         </div>
 
         {/* Splitter: center | right */}
-        {!isCorrelationMode && (
+        {!isMultivariateMode && (
           <div
             className="gb-splitter"
             onMouseDown={startSideResize("right")}
@@ -2026,15 +2139,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             - 中间图例列表：每行对应一个分组（无 Overlay 时显示 "All"）；
             - 底部样式编辑器：针对当前选中的图例条目，分别设置线/填充/点。
             无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
-        {!isCorrelationMode && (
+        {!isMultivariateMode && (
           <LegendStylePanel
             data={graphData}
             encoding={encoding}
             elements={elements}
-            groupStyles={item.groupStyles ?? {}}
+            groupStyles={groupStyles}
             groupKeys={groupKeys}
             effectiveStyles={effectiveStyles}
-            hiddenGroups={item.hiddenGroups ?? []}
+            hiddenGroups={hiddenGroups}
             toggleGroupHidden={toggleGroupHidden}
             setGroupStyle={setGroupStyle}
             resetAllGroupStyles={resetAllGroupStyles}
@@ -2042,7 +2155,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             onClearOverlay={() => clearSlot("overlay")}
             onOverlayContextMenu={(x, y) => setSlotCtxMenu({ slot: "overlay", x, y })}
             width={rightWidth}
-            threeD={!!item.threeD}
+            threeD={isThreeDMode}
             readOnly={readOnly}
           />
         )}
@@ -2055,12 +2168,12 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           addition. Today it has three categories: Axis (range / ticks /
           decimals / inverse), Tick Grid (major + minor gridlines),
           and Reference Lines. */}
-      {!isCorrelationMode && yAxisDialogOpen && (
+      {!isMultivariateMode && yAxisDialogOpen && (
         <AxisSettingsDialog
           axis="y"
-          refLines={item.refLinesY ?? []}
+          refLines={refLinesY}
           setRefLines={setRefLinesY}
-          autoSpecLines={!!(item.autoSpecLinesY ?? item.autoSpecLines)}
+          autoSpecLines={!!(twoD.autoSpecLinesY ?? twoD.autoSpecLines)}
           setAutoSpecLines={setAutoSpecLinesY}
           resolvedAutoSpec={spec.autoSpecY}
           autoSpecColName={encoding.y?.name}
@@ -2071,7 +2184,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               ? meltInfo.cols.length
               : 0
           }
-          axisConfig={item.yAxis}
+          axisConfig={yAxisConfig}
           setAxisConfig={setYAxisConfig}
           onClose={() => setYAxisDialogOpen(false)}
         />
@@ -2086,12 +2199,12 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           renderer silently skips X ref lines when the X axis is
           categorical (no meaningful position), so the editor stays
           available throughout. */}
-      {!isCorrelationMode && xAxisDialogOpen && (
+      {!isMultivariateMode && xAxisDialogOpen && (
         <AxisSettingsDialog
           axis="x"
-          refLines={item.refLinesX ?? []}
+          refLines={refLinesX}
           setRefLines={setRefLinesX}
-          autoSpecLines={!!(item.autoSpecLinesX ?? item.autoSpecLines)}
+          autoSpecLines={!!(twoD.autoSpecLinesX ?? twoD.autoSpecLines)}
           setAutoSpecLines={setAutoSpecLinesX}
           resolvedAutoSpec={spec.autoSpecX}
           autoSpecColName={encoding.x?.name}
@@ -2102,7 +2215,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               ? meltInfo.cols.length
               : 0
           }
-          axisConfig={item.xAxis}
+          axisConfig={xAxisConfig}
           setAxisConfig={setXAxisConfig}
           onClose={() => setXAxisDialogOpen(false)}
         />
@@ -2114,12 +2227,26 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           (length-1 collapses to single-field encoding, length-0
           clears the slot entirely). */}
       {managerOpenSlot && (managerOpenSlot === "x" || managerOpenSlot === "y") &&
-       ((managerOpenSlot === "x" ? item.multiX : item.multiY)?.length ?? 0) >= 2 && (
+       ((item.mode === "multivariate" && managerOpenSlot === "y")
+         ? (multiY.length >= 1)
+         : ((managerOpenSlot === "x" ? multiX : multiY)?.length ?? 0) >= 2) && (
         <MultiColManager
           slot={managerOpenSlot}
-          cols={(managerOpenSlot === "x" ? item.multiX : item.multiY) ?? []}
+          cols={(managerOpenSlot === "x" ? multiX : multiY) ?? []}
           datasetColumns={columns}
-          onChange={(next) => setMultiAtSlot(managerOpenSlot, next)}
+          onChange={(next) => {
+            if (item.mode === "multivariate") {
+              const result = updateMultivariateColumns(multivariate.columns, { type: "set", fields: next });
+              if (result.error) {
+                setCorrelationNotice(result.error);
+                return;
+              }
+              setCorrelationNotice(null);
+              setMultivariateState((prev) => ({ ...prev, columns: result.columns }));
+              return;
+            }
+            setMultiAtSlot(managerOpenSlot, next);
+          }}
           onClose={() => setManagerOpenSlot(null)}
         />
       )}
@@ -2154,7 +2281,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           - Reset zoom: clears the pinned min/max on that axis, restoring
             automatic bounds while preserving other axis overrides. The
             item is disabled when no manual range is currently pinned. */}
-      {!isCorrelationMode && axisCtxMenu && (
+      {!isMultivariateMode && axisCtxMenu && (
         <div
           ref={ctxMenuRef}
           className="sp-ctx-menu"
@@ -2173,7 +2300,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             {t("graph.axisCtx.settings", { defaultValue: "Axis settings" })}
           </div>
           {(() => {
-            const cfg = axisCtxMenu.axis === "y" ? item.yAxis : item.xAxis;
+            const cfg = axisCtxMenu.axis === "y" ? yAxisConfig : xAxisConfig;
             const zoomed = !!cfg && (cfg.min !== undefined || cfg.max !== undefined);
             return (
               <div
@@ -2233,7 +2360,8 @@ function Slot({ label, field, fields, onDrop, onClear, onOpenManager, onContextM
   // is auto-collapsed back to single mode on the write side, so we
   // never need to handle that case here. */
   const isMulti = !!fields && fields.length >= 2;
-  const filled = isMulti || !!field;
+  const canManage = !!fields && fields.length >= 1 && !!onOpenManager;
+  const filled = isMulti || !!field || !!(fields && fields.length > 0);
   return (
     <div
       className={`gb-slot gb-slot-${orientation}${over ? " gb-slot-over" : ""}${filled ? " gb-slot-filled" : ""}${isMulti ? " gb-slot-multi" : ""}${rejectFlash ? " gb-slot-reject" : ""}`}
@@ -2251,7 +2379,7 @@ function Slot({ label, field, fields, onDrop, onClear, onOpenManager, onContextM
         setOver(false);
         onDrop(e);
       }}
-      onClick={isMulti ? () => onOpenManager?.() : undefined}
+      onClick={canManage ? () => onOpenManager?.() : undefined}
       onContextMenu={(e) => {
         // Only intercept right-clicks on filled slots — empty slots
         // have nothing to act on so let the browser do its thing
@@ -2263,7 +2391,7 @@ function Slot({ label, field, fields, onDrop, onClear, onOpenManager, onContextM
         e.stopPropagation();
         onContextMenu(e.clientX, e.clientY);
       }}
-      title={isMulti ? t("graph.multiSlot.openManager", { defaultValue: "Click to manage columns" }) : undefined}
+      title={canManage ? t("graph.multiSlot.openManager", { defaultValue: "Click to manage columns" }) : undefined}
     >
       {!filled && (
         <span className="gb-slot-label">{label}{required ? " *" : ""}</span>
@@ -2631,13 +2759,20 @@ function LayerCard({
   t,
 }: LayerCardProps) {
   const def = GRAPH_LAYER_DEFS_WITH_CORRELATION.find((c) => c.kind === kind);
+  const layerMode = getLayerMode(kind);
+  const layerModeLabel =
+    layerMode === "3d"
+      ? "3D"
+      : layerMode === "multivariate"
+        ? t("graph.mode.multivariate", { defaultValue: "Multivariate" })
+        : "2D";
   return (
     <div className="gb-layer-card">
       <div className="gb-layer-head">
         <span className="gb-layer-icon">{def?.icon ?? "▦"}</span>
         <span className="gb-layer-title">{label}</span>
-        <span className={`gb-layer-dim gb-layer-dim-${LAYER_DIM[kind]}`}>
-          {LAYER_DIM[kind] === "3d" ? "3D" : "2D"}
+        <span className={`gb-layer-dim gb-layer-dim-${layerMode}`}>
+          {layerModeLabel}
         </span>
         <button
           className="gb-layer-x"

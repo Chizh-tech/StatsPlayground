@@ -25,6 +25,11 @@ import "./graphBuilder/graphBuilder.css";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";
 import type { GraphBuilderItem } from "@/types/graphBuilder";
+import {
+  createDefaultGraph2DState,
+  createDefaultGraph3DState,
+  createDefaultMultivariateGraphState,
+} from "@/components/graphBuilder/graphBuilderMode";
 import type { TabulateItem } from "@/types/tabulate";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
@@ -396,9 +401,12 @@ export function Workspace() {
       id,
       name,
       sourceDatasetId: ds.id,
-      encoding: {},
-      elements: [{ kind: "points", enabled: true }],
-      smootherLambda: 0.4,
+      mode: "2d",
+      modeStates: {
+        twoD: createDefaultGraph2DState(),
+        threeD: createDefaultGraph3DState(),
+        multivariate: createDefaultMultivariateGraphState(),
+      },
       createdAt: new Date().toISOString(),
     };
     addGraphBuilder(item);
