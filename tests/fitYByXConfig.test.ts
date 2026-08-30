@@ -14,6 +14,8 @@ import {
 const response = { name: "height", type: "continuous" as const };
 const factor = { name: "site", type: "nominal" as const };
 const ordinal = { name: "batch", type: "ordinal" as const };
+const duplicateFactor = { name: "height", type: "nominal" as const };
+const invalidFactor = { name: "site", type: "continuous" as const };
 
 assert.equal(canAssignFitYByXRole("response", response), true);
 assert.equal(canAssignFitYByXRole("factor", factor), true);
@@ -26,7 +28,9 @@ assert.equal(canAssignFitYByXRole("response", response, response), "duplicateRol
 assert.deepEqual(validateFitYByXRoles({ response, factor }), { ok: true });
 assert.deepEqual(validateFitYByXRoles({ response }), { ok: false, error: "missingFactor" });
 assert.deepEqual(validateFitYByXRoles({ factor }), { ok: false, error: "missingResponse" });
+assert.deepEqual(validateFitYByXRoles({ response, factor: duplicateFactor }), { ok: false, error: "duplicateRole" });
 assert.deepEqual(validateFitYByXRoles({ response: factor, factor: response }), { ok: false, error: "invalidResponse" });
+assert.deepEqual(validateFitYByXRoles({ response, factor: invalidFactor }), { ok: false, error: "invalidFactor" });
 
 const config = createDefaultFitYByXGraphConfig({ response, factor });
 assert.equal(config.mode, "2d");

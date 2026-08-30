@@ -84,7 +84,7 @@ export function createDefaultFitYByXGraphConfig(input: {
         multiX: [],
         multiY: [],
         elements: [
-          ...twoD.elements,
+          { kind: "points", enabled: true },
           { kind: "boxplot", enabled: true },
         ],
       },
