@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { createDefaultFitYByXGraphConfig } from "../src/components/fitYByX/fitYByXConfig.ts";
+import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
 import { createEmbeddedGraphItem, normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
 import { buildGraphRuntimeModel } from "../src/components/graphBuilder/graphRuntimeModel.ts";
 import { deriveGraphRequestParts } from "../src/components/graphBuilder/useGraphDataPipeline.ts";
@@ -84,15 +84,27 @@ function makeInteractiveGraphItem(): GraphBuilderItem {
 }
 
 const interactiveItem = makeInteractiveGraphItem();
-const embeddedItem = createEmbeddedGraphItem({
-  id: "fit-y-by-x-graph:fit-1",
+const fitYByXItem = createFitYByXItem({
+  id: "fit-1",
   name: "Fit Y by X 1",
   sourceDatasetId: dataset.id,
+  response: { name: "height", type: "continuous" },
+  factor: { name: "site", type: "nominal" },
   createdAt: interactiveItem.createdAt,
-  config: createDefaultFitYByXGraphConfig({
-    response: { name: "height", type: "continuous" },
-    factor: { name: "site", type: "nominal" },
-  }),
+});
+const interactiveFitYByXItem = normalizeGraphBuilderItem({
+  ...fitYByXItem.graph,
+  id: "fit-y-by-x-graph:interactive",
+  name: "Fit Y by X Interactive",
+  sourceDatasetId: fitYByXItem.sourceDatasetId,
+  createdAt: fitYByXItem.createdAt,
+});
+const embeddedItem = createEmbeddedGraphItem({
+  id: "fit-y-by-x-graph:fit-1",
+  name: fitYByXItem.name,
+  sourceDatasetId: fitYByXItem.sourceDatasetId,
+  createdAt: fitYByXItem.createdAt,
+  config: fitYByXItem.graph,
 });
 
 assert.deepEqual(
@@ -133,26 +145,15 @@ assert.deepEqual(
 );
 
 assert.deepEqual(
+  deriveGraphRequestParts(interactiveFitYByXItem),
   deriveGraphRequestParts(embeddedItem),
-  deriveGraphRequestParts(
-    normalizeGraphBuilderItem({
-      ...embeddedItem,
-      id: "fit-y-by-x-graph:interactive",
-      name: "Fit Y by X Interactive",
-    }),
-  ),
+  "interactive Fit Y by X and embedded Fit Y by X items must derive identical request parts",
 );
 
 assert.deepEqual(
+  buildGraphRuntimeModel(interactiveFitYByXItem, metadata),
   buildGraphRuntimeModel(embeddedItem, metadata),
-  buildGraphRuntimeModel(
-    normalizeGraphBuilderItem({
-      ...embeddedItem,
-      id: "fit-y-by-x-graph:interactive",
-      name: "Fit Y by X Interactive",
-    }),
-    metadata,
-  ),
+  "interactive Fit Y by X and embedded Fit Y by X items must build identical runtime models",
 );
 
 const graphRuntimeSource = readFileSync(

@@ -31,12 +31,10 @@ const MELT_VAR = "__sp_variable__";
 const MELT_VAL = "__sp_value__";
 const SKIP_SPEC_ENCODING_KEYS = new Set<GraphSlotKey>(["color", "size", "wrap"]);
 
-const STYLE_COLORS = [
-  "#000000", "#444444", "#888888", "#bbbbbb",
-  "#e74c3c", "#f39c12",
-  "#2ca678", "#27ae60",
-  "#3498db", "#4a6cf7",
-  "#9168d6", "#d56cb1",
+export const STYLE_COLORS = [
+  "#4a6cf7", "#ef8a3a", "#2ca678", "#e74c3c",
+  "#9168d6", "#c4ad36", "#d56cb1", "#3aa6b9",
+  "#5d8aa8", "#8c6e3a", "#b87333", "#7f8c8d",
 ];
 
 export const SHADE_RATIO_POINT = -0.2;

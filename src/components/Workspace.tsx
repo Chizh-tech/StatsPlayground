@@ -193,6 +193,7 @@ export function Workspace() {
   const folders = useFolderStore((s) => s.folders);
   const tableFolders = useFolderStore((s) => s.tableFolders);
   const graphFolders = useFolderStore((s) => s.graphFolders);
+  const fitYByXFolders = useFolderStore((s) => s.fitYByXFolders);
   const tabulateFolders = useFolderStore((s) => s.tabulateFolders);
   const collapsedFolders = useFolderStore((s) => s.collapsed);
   const fsCreateFolder = useFolderStore((s) => s.createFolder);
@@ -724,6 +725,7 @@ export function Workspace() {
       folders,
       tableFolders,
       graphFolders,
+      fitYByXFolders,
       tabulateFolders,
     };
     try {
@@ -739,10 +741,12 @@ export function Workspace() {
           history: [],
           snapshots,
           graphBuilders: gbItems,
+          fitYByX: fitYByXItems,
           tabulates,
           folders: folderPayload.folders,
           tableFolders: folderPayload.tableFolders,
           graphFolders: folderPayload.graphFolders,
+          fitYByXFolders: folderPayload.fitYByXFolders,
           tabulateFolders: folderPayload.tabulateFolders,
         });
       } else {
@@ -750,10 +754,12 @@ export function Workspace() {
           history: [],
           snapshots,
           graphBuilders: gbItems,
+          fitYByX: fitYByXItems,
           tabulates,
           folders: folderPayload.folders,
           tableFolders: folderPayload.tableFolders,
           graphFolders: folderPayload.graphFolders,
+          fitYByXFolders: folderPayload.fitYByXFolders,
           tabulateFolders: folderPayload.tabulateFolders,
         });
       }
@@ -845,6 +851,7 @@ export function Workspace() {
           folders: result.folders ?? [],
           tableFolders: result.tableFolders ?? {},
           graphFolders: result.graphFolders ?? {},
+          fitYByXFolders: result.fitYByXFolders ?? {},
           tabulateFolders: result.tabulateFolders ?? {},
         });
         if (result.datasetNameMigrations.length > 0) {

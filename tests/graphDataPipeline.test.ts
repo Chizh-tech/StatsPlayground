@@ -22,6 +22,7 @@ import {
   deriveMultivariateSlotBinding,
   resolveCanvasDropSlot,
 } from "../src/components/graphBuilder/multivariateInteractions.ts";
+import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
 import { createEmbeddedGraphItem, normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
 import { createGraphStreamTransport } from "../src/services/graphDataTransport.ts";
 import type {
@@ -1113,6 +1114,37 @@ function makeProgressedChunk(
     deriveGraphRequestParts(interactive),
     deriveGraphRequestParts(embedded),
     "equivalent interactive and embedded graph items must derive identical request parts",
+  );
+}
+
+{
+  const fitYByXItem = createFitYByXItem({
+    id: "fit-1",
+    name: "Fit Y by X 1",
+    sourceDatasetId: "dataset-1",
+    response: { name: "height", type: "continuous" },
+    factor: { name: "site", type: "nominal" },
+    createdAt: new Date(0).toISOString(),
+  });
+  const interactive = normalizeGraphBuilderItem({
+    ...fitYByXItem.graph,
+    id: "fit-y-by-x-graph:interactive",
+    name: "Fit Y by X Interactive",
+    sourceDatasetId: fitYByXItem.sourceDatasetId,
+    createdAt: fitYByXItem.createdAt,
+  });
+  const embedded = createEmbeddedGraphItem({
+    id: "fit-y-by-x-graph:fit-1",
+    name: fitYByXItem.name,
+    sourceDatasetId: fitYByXItem.sourceDatasetId,
+    createdAt: fitYByXItem.createdAt,
+    config: fitYByXItem.graph,
+  });
+
+  assert.deepEqual(
+    deriveGraphRequestParts(interactive),
+    deriveGraphRequestParts(embedded),
+    "interactive Fit Y by X and embedded Fit Y by X items must derive identical request parts",
   );
 }
 

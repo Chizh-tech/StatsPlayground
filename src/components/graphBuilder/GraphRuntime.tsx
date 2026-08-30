@@ -37,6 +37,8 @@ export interface GraphRuntimeProps {
 export interface GraphRuntimeState {
   columns: FieldRef[];
   colSqlTypes: string[];
+  graphData: ReturnType<typeof createGraphRuntimeData>;
+  spec: ReturnType<typeof buildGraphRuntimeModel>["spec"];
   frame: GraphDataFrame | null;
   status: GraphDataPipelineResult["status"];
   error: string | null;
@@ -60,6 +62,8 @@ function snapshotChanged(previous: GraphRuntimeState | null, next: GraphRuntimeS
   if (!previous) return true;
   return previous.columns !== next.columns
     || previous.colSqlTypes !== next.colSqlTypes
+    || previous.graphData !== next.graphData
+    || previous.spec !== next.spec
     || previous.frame !== next.frame
     || previous.status !== next.status
     || previous.error !== next.error
@@ -224,6 +228,8 @@ export function GraphRuntime({
   const runtimeState = useMemo<GraphRuntimeState>(() => ({
     columns,
     colSqlTypes,
+    graphData,
+    spec: runtimeSpec,
     frame,
     status,
     error,
@@ -232,7 +238,7 @@ export function GraphRuntime({
     metaError,
     valueOrders,
     rawPointNotice,
-  }), [colSqlTypes, columns, error, frame, metaError, metaLoading, progress, rawPointNotice, status, valueOrders]);
+  }), [colSqlTypes, columns, error, frame, graphData, metaError, metaLoading, progress, rawPointNotice, runtimeSpec, status, valueOrders]);
 
   useEffect(() => {
     if (!onStateChange) return;

@@ -16,10 +16,11 @@
  *   └──────────────────────────────────────────────────────────────────┘
  */
 
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { isMissing, DEFAULT_GROUP_KEY, type FieldRef, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { isMissing, DEFAULT_GROUP_KEY, type FieldRef, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { SCATTER_RENDER_BUDGET } from "@/graphCore/scatterBudget";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphBuilderMode, GraphSlotKey } from "@/types/graphBuilder";
 import type { FilterRuleItem } from "@/types/filter";
@@ -33,7 +34,6 @@ import { prepareAxisBinding } from "./axisBinding";
 import {
   clampSampleSize,
   DEFAULT_GRAPH_SAMPLE_SIZE,
-  getRawPointNotice,
 } from "./graphSamplingPolicy";
 import { FilterPanel } from "@/components/filter";
 import { defaultLayerOptions, GRAPH_LAYER_DEFS, getLayerMode, type GraphLayerDef } from "./graphLayerConfig";
@@ -51,7 +51,7 @@ import {
   resolveCanvasDropSlot,
 } from "./multivariateInteractions";
 import { GraphRuntime, type GraphRuntimeState } from "./GraphRuntime";
-import { buildGraphRuntimeModel } from "./graphRuntimeModel";
+import { buildGraphRuntimeModel, FILL_PALETTE, LINE_PALETTE, POINT_PALETTE, shade, SHADE_RATIO_FILL, SHADE_RATIO_LINE, SHADE_RATIO_POINT, STYLE_COLORS } from "./graphRuntimeModel";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -71,7 +71,6 @@ const GRAPH_LAYER_DEFS_WITH_CORRELATION: readonly GraphLayerDef[] = GRAPH_LAYER_
   ? GRAPH_LAYER_DEFS
   : [...GRAPH_LAYER_DEFS, { kind: "correlationMatrix" as ElementKind, icon: "▦" }];
 const DRAG_MIME = "text/plain";
-const CORRELATION_MIN_COLUMNS = 2;
 const CORRELATION_MAX_COLUMNS = MAX_MULTIVARIATE_COLUMNS;
 type MultivariateDropNotice = "invalidFieldType" | "duplicateField" | "maxColumns";
 
@@ -155,9 +154,16 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // a less-frequent mode used for navigating an already-zoomed view.
   const [cursorMode, setCursorMode] = useState<"pan" | "select">("select");
 
+  const runtimeModel = useMemo(
+    () => buildGraphRuntimeModel(item, { columns: [], displayProps: [] }),
+    [item],
+  );
+
   const [runtimeState, setRuntimeState] = useState<GraphRuntimeState | null>(null);
   const columns = runtimeState?.columns ?? [];
   const colSqlTypes = runtimeState?.colSqlTypes ?? [];
+  const graphData = runtimeState?.graphData ?? { columns: [], rows: [] };
+  const runtimeSpec = runtimeState?.spec ?? runtimeModel.spec;
   const metaLoading = runtimeState?.metaLoading ?? true;
   const metaError = runtimeState?.metaError ?? null;
   // Y-axis settings dialog open state. Opened by double-clicking the Y
@@ -339,15 +345,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // Filter rules (JMP-style Local Data Filter). Persist on the item so
   // they survive project save/load.
   const filters = useMemo(() => item.filters ?? [], [item.filters]);
-  const runtimeModel = useMemo(
-    () => buildGraphRuntimeModel(item, { columns: [], displayProps: [] }),
-    [item],
-  );
   const meltInfo = runtimeModel.meltInfo;
-  const valueOrders = runtimeState?.valueOrders ?? {};
   const frame = runtimeState?.frame ?? null;
   const pipelineStatus = runtimeState?.status ?? "idle";
-  const pipelineError = runtimeState?.error ?? null;
   const progress = runtimeState?.progress ?? null;
   const rawPointNotice = runtimeState?.rawPointNotice ?? null;
 
@@ -372,7 +372,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
   // User-saved CustomPalettes feed into legend default-color assignment:
   // when a group doesn't have an explicit style override yet, the renderer
-  // walks these palettes first before falling back to GROUP_COLORS.
+  // walks these palettes first before falling back to STYLE_COLORS.
   const customPalettes = useGraphPaletteStore((s) => s.palettes);
 
   const groupKeys = useMemo<string[]>(() => {
@@ -1145,21 +1145,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     });
   }, [frame, isMultivariateMode, pipelineStatus, progress, rawPointNotice, t]);
 
-  const correlationColumnCount = useMemo(() => {
-    if (item.mode === "multivariate") {
-      return item.modeStates.multivariate.columns.length;
-    }
-    const twoDColumnsX = item.modeStates.twoD.multiX ?? [];
-    const twoDColumnsY = item.modeStates.twoD.multiY ?? [];
-    if (twoDColumnsX.length > 0) return twoDColumnsX.length;
-    if (twoDColumnsY.length > 0) return twoDColumnsY.length;
-    if (item.modeStates.twoD.encoding.x || item.modeStates.twoD.encoding.y) return 1;
-    return 0;
-  }, [item.mode, item.modeStates.multivariate.columns, item.modeStates.twoD.multiX, item.modeStates.twoD.multiY, item.modeStates.twoD.encoding.x, item.modeStates.twoD.encoding.y]);
-  const correlationColumnsReady =
-    correlationColumnCount >= CORRELATION_MIN_COLUMNS &&
-    correlationColumnCount <= CORRELATION_MAX_COLUMNS;
-
   const correlationNoticeText = useMemo(() => {
     if (!isMultivariateMode || !correlationNotice) {
       return null;
@@ -1693,9 +1678,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
         {!isMultivariateMode && (
           <LegendStylePanel
-            data={null}
             encoding={encoding}
-            elements={elements}
             groupStyles={groupStyles}
             groupKeys={groupKeys}
             effectiveStyles={effectiveStyles}
@@ -1727,7 +1710,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           setRefLines={setRefLinesY}
           autoSpecLines={!!(twoD.autoSpecLinesY ?? twoD.autoSpecLines)}
           setAutoSpecLines={setAutoSpecLinesY}
-          resolvedAutoSpec={spec.autoSpecY}
+          resolvedAutoSpec={runtimeSpec.autoSpecY}
           autoSpecColName={encoding.y?.name}
           multiValueColCount={
             meltInfo &&
@@ -1758,7 +1741,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           setRefLines={setRefLinesX}
           autoSpecLines={!!(twoD.autoSpecLinesX ?? twoD.autoSpecLines)}
           setAutoSpecLines={setAutoSpecLinesX}
-          resolvedAutoSpec={spec.autoSpecX}
+          resolvedAutoSpec={runtimeSpec.autoSpecX}
           autoSpecColName={encoding.x?.name}
           multiValueColCount={
             meltInfo &&
@@ -3218,12 +3201,7 @@ function AddLayerCard({ availableKinds, onAdd, t }: AddLayerCardProps) {
 // border + median + whiskers use Line, its outliers use Point.
 
 interface LegendStylePanelProps {
-  data: GraphData | null;
   encoding: Partial<Record<GraphSlotKey, FieldRef>>;
-  /** Active layer kinds — used to pick a sensible Fill default in the
-   *  swatch (box plots want a colored fill even when ungrouped, while
-   *  scatter / line / bar prefer the JMP "hollow" look). */
-  elements: ChartElement[];
   groupStyles: GroupStyleMap;
   /** Group values driving the legend, computed at the parent level so
    *  the same list feeds both the renderer (via spec) and this panel. */
@@ -3252,15 +3230,8 @@ interface LegendStylePanelProps {
   readOnly: boolean;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD, readOnly }: LegendStylePanelProps) {
+function LegendStylePanel({ encoding, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD, readOnly }: LegendStylePanelProps) {
   const { t } = useTranslation();
-
-  // `data` and `elements` are still part of the public prop contract for
-  // historical reasons (other call sites can pass them through); reference
-  // them here so TS' noUnusedParameters check stays happy without forcing
-  // every caller to drop them.
-  void data;
-  void elements;
 
   const [selected, setSelected] = useState<string>(groupKeys[0] ?? DEFAULT_GROUP_KEY);
   // Keep the selection valid when the legend list changes underneath us.
@@ -4583,7 +4554,7 @@ type RefLinesEditorProps =
     };
 
 /** Saturated / primary-color palette for reference lines. The chart's
- *  GROUP_COLORS palette intentionally uses *muted* hues so data series
+ *  STYLE_COLORS palette intentionally uses *muted* hues so data series
  *  read as natural; ref lines (spec limits, targets, control bounds)
  *  need to *visually stand out* against that data, so we offer a parallel
  *  palette of high-saturation pure-ish colors. Users can still pick any
@@ -4913,15 +4884,6 @@ function normalizeHex(c: string | undefined): string {
   return "#888888";
 }
 
-/** Categorical palette for legend defaults — must match DEFAULT_CATEGORICAL
- *  in graphCore/theme.ts. Sorted by contrast: vivid hues first, muted/gray
- *  last, so auto-assigned legend colors stay maximally distinct. */
-const GROUP_COLORS = [
-  "#4a6cf7", "#ef8a3a", "#2ca678", "#e74c3c", // blue / orange / green / red
-  "#9168d6", "#c4ad36", "#d56cb1", "#3aa6b9", // purple / yellow / pink / teal
-  "#5d8aa8", "#8c6e3a", "#b87333", "#7f8c8d", // slate / brown / copper / gray
-];
-
 /** Build the fully-resolved per-group style map handed to the renderer
  *  (`spec.styles`) and to the legend swatches.
  *
@@ -4933,7 +4895,7 @@ const GROUP_COLORS = [
  *          (so users get THEIR favourite colors before falling back to
  *          the built-in palette). Palette.point/line/fill map straight
  *          onto the three sub-marks.
- *       b) Beyond that, derive shades from GROUP_COLORS — but offset
+ *       b) Beyond that, derive shades from STYLE_COLORS — but offset
  *          the index by the palette count so the first un-palette group
  *          still gets the highest-contrast built-in color.
  *    3. When not grouped (single DEFAULT_GROUP_KEY), fill with the JMP
@@ -4971,7 +4933,7 @@ function buildEffectiveStyles(
       autoPoint = { color: "#000000", fillColor: "#000000", marker: "circle", markerSize: 4, opacity: 1 };
       // Ungrouped single 3D surface: a default accent hue (not black,
       // which would render an unreadable dark surface).
-      autoGradient = { color: GROUP_COLORS[0], opacity: 1 };
+      autoGradient = { color: STYLE_COLORS[0], opacity: 1 };
     } else if (idx < customPalettes.length) {
       const p = customPalettes[idx];
       autoLine = { color: p.line, lineWidth: 1.5, opacity: 1 };
@@ -4979,8 +4941,8 @@ function buildEffectiveStyles(
       autoPoint = { color: p.point, fillColor: p.point, marker: "circle", markerSize: 4, opacity: 1 };
       autoGradient = { color: p.line, opacity: 1 };
     } else {
-      const fallbackIdx = (idx - customPalettes.length) % GROUP_COLORS.length;
-      const base = GROUP_COLORS[fallbackIdx];
+      const fallbackIdx = (idx - customPalettes.length) % STYLE_COLORS.length;
+      const base = STYLE_COLORS[fallbackIdx];
       autoLine = { color: shade(base, SHADE_RATIO_LINE), lineWidth: 1.5, opacity: 1 };
       autoFill = { color: shade(base, SHADE_RATIO_FILL), opacity: 1 };
       autoPoint = {
@@ -5130,46 +5092,6 @@ function MarkEditor({ title, mark, value, effective, onChange, fields }: MarkEdi
     </div>
   );
 }
-
-/** A small JMP-like preset palette used by the legend's color picker.
- *  This is the *base* (mid-shade) palette; per-mark pickers (Point / Line /
- *  Fill) derive darker / mid / lighter variants from these via `shade()`
- *  so a single applied theme stays visually layered (the fill doesn't
- *  swallow the line; the point still pops against both). */
-const STYLE_COLORS = [
-  "#000000", "#444444", "#888888", "#bbbbbb",
-  "#e74c3c", "#f39c12",
-  "#2ca678", "#27ae60",
-  "#3498db", "#4a6cf7",
-  "#9168d6", "#d56cb1",
-];
-
-/** Per-mark shade ratios — Point darkest, Line mid (base), Fill lightest.
- *  Picked so that applying one color family across all three sub-marks
- *  keeps each mark distinguishable from the others. */
-export const SHADE_RATIO_POINT = -0.2;
-export const SHADE_RATIO_LINE = 0;
-export const SHADE_RATIO_FILL = 0.55;
-
-/** Mix `hex` toward black (ratio<0) or white (ratio>0). ratio in [-1,1]. */
-export function shade(hex: string, ratio: number): string {
-  if (!hex || ratio === 0) return hex;
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
-  if (!m) return hex;
-  const hh = m[1];
-  const r = parseInt(hh.slice(0, 2), 16);
-  const g = parseInt(hh.slice(2, 4), 16);
-  const b = parseInt(hh.slice(4, 6), 16);
-  const mix = (c: number) =>
-    ratio < 0 ? Math.round(c * (1 + ratio)) : Math.round(c + (255 - c) * ratio);
-  const clamp = (n: number) => Math.max(0, Math.min(255, n));
-  const toHex = (n: number) => clamp(n).toString(16).padStart(2, "0");
-  return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`;
-}
-
-const POINT_PALETTE = STYLE_COLORS.map((c) => shade(c, SHADE_RATIO_POINT));
-const LINE_PALETTE = STYLE_COLORS.map((c) => shade(c, SHADE_RATIO_LINE));
-const FILL_PALETTE = STYLE_COLORS.map((c) => shade(c, SHADE_RATIO_FILL));
 
 const MARK_PALETTE: Record<"line" | "fill" | "point" | "gradient", string[]> = {
   line: LINE_PALETTE,
