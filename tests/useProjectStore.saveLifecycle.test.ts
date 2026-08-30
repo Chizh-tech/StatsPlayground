@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import type { ProjectInfo } from "../src/types/project";
-import type { SaveProgress, SaveProjectRequest } from "../src/services/projectService";
+import type { SaveProgress, SaveProjectFolders, SaveProjectRequest } from "../src/services/projectService";
 import { createProjectStore } from "../src/stores/useProjectStore.ts";
 import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
@@ -26,17 +26,21 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+const saveFolders: SaveProjectFolders = {
+  folders: [],
+  tableFolders: {},
+  graphFolders: {},
+  fitYByXFolders: { "fit-1": "Analyses" },
+  tabulateFolders: {},
+};
+
 const request: SaveProjectRequest = {
   history: [],
   snapshots: [],
   graphBuilders: [],
   fitYByX: [{ id: "fit-1", sourceDatasetId: "table-1" }],
   tabulates: [],
-  folders: [],
-  tableFolders: {},
-  graphFolders: {},
-  fitYByXFolders: { "fit-1": "Analyses" },
-  tabulateFolders: {},
+  ...saveFolders,
 };
 
 const savedProject: ProjectInfo = {

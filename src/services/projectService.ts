@@ -12,6 +12,8 @@ export interface SaveProjectFolders {
   tableFolders: Record<string, string>;
   /** graphId → folder path. Root graphs are simply absent. */
   graphFolders: Record<string, string>;
+  /** fitYByXId → folder path. Root analyses are simply absent. */
+  fitYByXFolders: Record<string, string>;
   /** tabulateId → folder path. Root tabulates are simply absent. */
   tabulateFolders: Record<string, string>;
 }
