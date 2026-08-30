@@ -23,6 +23,7 @@ import { GraphBuilderView } from "./graphBuilder";
 import { TabulateView } from "./tabulate";
 import "./graphBuilder/graphBuilder.css";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
+import { useFitYByXStore } from "@/stores/useFitYByXStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";
 import type { GraphBuilderItem } from "@/types/graphBuilder";
 import {
@@ -160,6 +161,7 @@ export function Workspace() {
   const { openProject } = useProjectStore();
   const { record: recordHistory, createSnapshot, restoreSnapshot, deleteSnapshot, reset: resetHistory } = useHistoryStore();
   const graphBuilders = useGraphBuilderStore((s) => s.items);
+  const fitYByXItems = useFitYByXStore((s) => s.items);
   const tabulates = useTabulateStore((s) => s.items);
   const addGraphBuilder = useGraphBuilderStore((s) => s.addItem);
   const renameGraphBuilder = useGraphBuilderStore((s) => s.renameItem);
@@ -303,8 +305,9 @@ export function Workspace() {
     const dsIds = new Set(datasets.map((d) => d.id));
     const gbIds = new Set(graphBuilders.map((g) => g.id));
     const tabulateIds = new Set(tabulates.map((item) => item.id));
-    fsPrune(dsIds, gbIds, tabulateIds);
-  }, [datasets, graphBuilders, tabulates, fsPrune]);
+    const fitYByXIds = new Set(fitYByXItems.map((item) => item.id));
+    fsPrune(dsIds, gbIds, tabulateIds, fitYByXIds);
+  }, [datasets, graphBuilders, tabulates, fitYByXItems, fsPrune]);
 
   // Cmd/Ctrl+,: open preferences
   useEffect(() => {
