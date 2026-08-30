@@ -31,6 +31,7 @@ import {
   createDefaultGraph3DState,
   createDefaultMultivariateGraphState,
 } from "@/components/graphBuilder/graphBuilderMode";
+import type { FitYByXItem } from "@/types/fitYByX";
 import type { TabulateItem } from "@/types/tabulate";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
@@ -162,6 +163,8 @@ export function Workspace() {
   const { record: recordHistory, createSnapshot, restoreSnapshot, deleteSnapshot, reset: resetHistory } = useHistoryStore();
   const graphBuilders = useGraphBuilderStore((s) => s.items);
   const fitYByXItems = useFitYByXStore((s) => s.items);
+  const resetFitYByX = useFitYByXStore((s) => s.reset);
+  const loadFitYByXFromProject = useFitYByXStore((s) => s.loadFromProject);
   const tabulates = useTabulateStore((s) => s.items);
   const addGraphBuilder = useGraphBuilderStore((s) => s.addItem);
   const renameGraphBuilder = useGraphBuilderStore((s) => s.renameItem);
@@ -787,6 +790,7 @@ export function Workspace() {
     setActiveTabulateId(null);
     resetHistory();
     resetGraphBuilders();
+    resetFitYByX();
     resetTabulates();
     fsReset();
     await initProject();
@@ -806,6 +810,7 @@ export function Workspace() {
       setActiveTabulateId(null);
       resetHistory();
       resetGraphBuilders();
+      resetFitYByX();
       resetTabulates();
       setBusyMessage(t("workspace.openingProject"));
       const unlisten = await listen<{
@@ -828,6 +833,7 @@ export function Workspace() {
         setActiveTabulateId(null);
         resetHistory();
         resetGraphBuilders();
+        resetFitYByX();
         resetTabulates();
         await refreshDatasets();
         tableCounter.current = 0;
@@ -843,6 +849,7 @@ export function Workspace() {
         if (result.graphBuilders && result.graphBuilders.length > 0) {
           loadGraphBuildersFromProject(result.graphBuilders as GraphBuilderItem[]);
         }
+        loadFitYByXFromProject((result.fitYByX ?? []) as FitYByXItem[]);
         loadTabulatesFromProject((result.tabulates ?? []) as TabulateItem[]);
         // Restore folder tree + table/graph→folder assignments. We do this
         // after datasets/graphs are loaded so a subsequent prune pass keeps

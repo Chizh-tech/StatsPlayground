@@ -150,6 +150,8 @@ function resetGraphBuilderStore() {
     ...request,
     graphBuilders: useGraphBuilderStore.getState().items,
   });
+  assert.deepEqual(capturedSaveRequest?.fitYByX, request.fitYByX);
+  assert.deepEqual(capturedSaveRequest?.fitYByXFolders, request.fitYByXFolders);
 
   const savedGraph = capturedSaveRequest?.graphBuilders[0] as GraphBuilderItem;
   assert.equal(savedGraph.mode, "multivariate");
