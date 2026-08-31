@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
 
-import { createFitYByXItem } from "../src/components/fitYByX/index.ts";
-import { createEmbeddedGraphItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
-import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
-import { useProjectStore } from "../src/stores/useProjectStore.ts";
+const [
+  { createFitYByXItem },
+  { createEmbeddedGraphItem },
+  { useGraphBuilderStore },
+  { useProjectStore },
+  { useFitYByXStore },
+] = await Promise.all([
+  import("../src/components/fitYByX/fitYByXConfig.ts"),
+  import("../src/components/graphBuilder/graphBuilderMode.ts"),
+  import("../src/stores/useGraphBuilderStore.ts"),
+  import("../src/stores/useProjectStore.ts"),
+  import("../src/stores/index.ts"),
+]);
 
 const response = { name: "height", type: "continuous" as const };
 const factor = { name: "site", type: "nominal" as const };
@@ -19,8 +28,6 @@ function fitItem(id: string, name: string, datasetId = "dataset-1") {
     createdAt,
   });
 }
-
-const { useFitYByXStore } = await import("../src/stores/index.ts");
 
 function resetStores() {
   useProjectStore.setState({ readOnly: false });
@@ -59,6 +66,17 @@ useFitYByXStore.getState().loadFromProject([
   loadedCustom,
   { ...fitItem("fit-legacy", "Legacy fit"), graph: undefined } as never,
   { ...fitItem("fit-malformed", "Malformed fit"), graph: { mode: "bogus" } } as never,
+  {
+    ...fitItem("fit-partial", "Partial fit"),
+    graph: {
+      mode: "2d",
+      modeStates: { twoD: {}, threeD: {}, multivariate: {} },
+    },
+  } as never,
+  {
+    ...fitItem("fit-invalid-roles", "Fit Y by X 99"),
+    response: factor,
+  } as never,
 ]);
 
 const loadedItem = useFitYByXStore.getState().items.find(({ id }) => id === "fit-2");
@@ -79,6 +97,14 @@ assert.deepEqual(
 assert.deepEqual(
   useFitYByXStore.getState().items.find(({ id }) => id === "fit-malformed")?.graph,
   fitItem("fit-malformed", "Malformed fit").graph,
+);
+assert.deepEqual(
+  useFitYByXStore.getState().items.find(({ id }) => id === "fit-partial")?.graph,
+  fitItem("fit-partial", "Partial fit").graph,
+);
+assert.equal(
+  useFitYByXStore.getState().items.some(({ id }) => id === "fit-invalid-roles"),
+  false,
 );
 assert.equal(useFitYByXStore.getState().nextName(), "Fit Y by X 3");
 assert.deepEqual(useGraphBuilderStore.getState().items, []);
@@ -108,7 +134,7 @@ assert.equal(useFitYByXStore.getState().items.some(({ id }) => id === "fit-2"), 
 useFitYByXStore.getState().deleteItem("fit-8");
 assert.deepEqual(
   useFitYByXStore.getState().items.map(({ id }) => id),
-  ["fit-custom", "fit-legacy", "fit-malformed"],
+  ["fit-custom", "fit-legacy", "fit-malformed", "fit-partial"],
 );
 
 useProjectStore.setState({ readOnly: true });
@@ -121,6 +147,17 @@ assert.throws(
   /Project is read-only while save is in progress\./,
 );
 useProjectStore.setState({ readOnly: false });
+
+const unexpectedItem = fitItem("fit-unexpected", "Unexpected fit");
+Object.defineProperty(unexpectedItem, "id", {
+  get() {
+    throw new Error("unexpected normalization failure");
+  },
+});
+assert.throws(
+  () => useFitYByXStore.getState().loadFromProject([unexpectedItem]),
+  /unexpected normalization failure/,
+);
 
 useFitYByXStore.getState().reset();
 assert.deepEqual(useFitYByXStore.getState().items, []);

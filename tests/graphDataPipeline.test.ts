@@ -22,7 +22,7 @@ import {
   deriveMultivariateSlotBinding,
   resolveCanvasDropSlot,
 } from "../src/components/graphBuilder/multivariateInteractions.ts";
-import { createFitYByXItem } from "../src/components/fitYByX/index.ts";
+import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
 import { createEmbeddedGraphItem, normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
 import { createGraphStreamTransport } from "../src/services/graphDataTransport.ts";
 import type {

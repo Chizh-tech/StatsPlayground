@@ -4,12 +4,12 @@ import { resolve } from "node:path";
 
 import {
   assignFitYByXField,
-  deriveFitYByXFieldInfo,
   canCreateFitYByX,
   createFitYByXDialogState,
   filterFitYByXFields,
   type FitYByXFieldInfo,
-} from "../src/components/fitYByX/index.ts";
+} from "../src/components/fitYByX/fitYByXDialogState.ts";
+import { deriveFitYByXFieldInfo } from "../src/components/fitYByX/FitYByXRoleDialog.tsx";
 import type { ColumnDisplayProps, ColumnMeta } from "../src/types/data.ts";
 
 const fitYByXBarrelSource = readFileSync(

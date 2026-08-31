@@ -1,6 +1,9 @@
 import { create } from "zustand";
 
-import { createFitYByXItem } from "@/components/fitYByX/fitYByXConfig";
+import {
+  createFitYByXItem,
+  FitYByXRoleValidationError,
+} from "@/components/fitYByX/fitYByXConfig";
 import { createEmbeddedGraphItem } from "@/components/graphBuilder/graphBuilderMode";
 import { useProjectStore } from "@/stores/useProjectStore";
 import type { EmbeddedGraphConfig } from "@/types/graphBuilder";
@@ -54,6 +57,20 @@ function extractEmbeddedGraphConfig(item: ReturnType<typeof createEmbeddedGraphI
   };
 }
 
+function isMatchingField(
+  actual: { name: string; type: string } | undefined,
+  expected: { name: string; type: string },
+): boolean {
+  return actual?.name === expected.name && actual.type === expected.type;
+}
+
+function isUsableFitYByXGraph(item: FitYByXItem, graph: EmbeddedGraphConfig): boolean {
+  if (graph.mode !== "2d") return false;
+  const twoD = graph.modeStates.twoD;
+  return isMatchingField(twoD.encoding.x, item.factor)
+    && isMatchingField(twoD.encoding.y, item.response);
+}
+
 function normalizeLoadedItem(item: FitYByXItem): FitYByXItem {
   const base = createFitYByXItem({
     id: item.id,
@@ -68,16 +85,15 @@ function normalizeLoadedItem(item: FitYByXItem): FitYByXItem {
     return base;
   }
 
-  return {
-    ...base,
-    graph: extractEmbeddedGraphConfig(createEmbeddedGraphItem({
-      id: `fit-y-by-x-graph:${base.id}`,
-      name: base.name,
-      sourceDatasetId: base.sourceDatasetId,
-      config: item.graph,
-      createdAt: base.createdAt,
-    })),
-  };
+  const graph = extractEmbeddedGraphConfig(createEmbeddedGraphItem({
+    id: `fit-y-by-x-graph:${base.id}`,
+    name: base.name,
+    sourceDatasetId: base.sourceDatasetId,
+    config: item.graph,
+    createdAt: base.createdAt,
+  }));
+
+  return isUsableFitYByXGraph(base, graph) ? { ...base, graph } : base;
 }
 
 export const useFitYByXStore = create<FitYByXStore>((set, get) => ({
@@ -121,9 +137,21 @@ export const useFitYByXStore = create<FitYByXStore>((set, get) => ({
         items: state.items.filter((item) => item.sourceDatasetId !== datasetId),
       }));
     },
-  loadFromProject: (items) => set({
-    items: items.map((item) => normalizeLoadedItem(item)),
-    counter: maxFitYByXSuffix(items),
+  loadFromProject: (items) => set(() => {
+    const normalized = items.flatMap((item) => {
+      try {
+        return [normalizeLoadedItem(item)];
+      } catch (error) {
+        if (error instanceof FitYByXRoleValidationError) {
+          return [];
+        }
+        throw error;
+      }
+    });
+    return {
+      items: normalized,
+      counter: maxFitYByXSuffix(normalized),
+    };
   }),
   reset: () => set({ items: [], counter: 0 }),
   nextName: () => {
