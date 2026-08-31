@@ -8033,16 +8033,16 @@ mod tests {
         let engine = DuckDbEngine::new_in_memory().unwrap();
         seed_fit_y_by_x_dataset(
             &engine,
-            "fit-wide-oneway",
+            "fit-signed-wide-oneway",
             &["response", "factor"],
-            &["DOUBLE", "UHUGEINT"],
+            &["DOUBLE", "HUGEINT"],
             r#"
-            INSERT INTO "dataset_fit_wide_oneway" (_row_id, response, factor) VALUES
-                (1, 10.0, CAST(340282366920938463463374607431768211450 AS UHUGEINT)),
-                (2, 12.0, CAST(340282366920938463463374607431768211450 AS UHUGEINT)),
-                (3, 9.0, CAST(340282366920938463463374607431768211451 AS UHUGEINT)),
-                (4, NULL, CAST(340282366920938463463374607431768211451 AS UHUGEINT)),
-                (5, 8.0, NULL);
+            INSERT INTO "dataset_fit_signed_wide_oneway" (_row_id, response, factor) VALUES
+                (1, CAST(10.25 AS DOUBLE), CAST(-9223372036854775809 AS HUGEINT)),
+                (2, CAST(12.50 AS DOUBLE), CAST(9223372036854775808 AS HUGEINT)),
+                (3, NULL, CAST(-9223372036854775809 AS HUGEINT)),
+                (4, CAST(8.75 AS DOUBLE), NULL),
+                (5, CAST(9.50 AS DOUBLE), CAST(9223372036854775808 AS HUGEINT));
             "#,
             5,
         );
@@ -8050,13 +8050,13 @@ mod tests {
             .conn()
             .execute(
                 "UPDATE _meta_columns SET role = $1 WHERE dataset_id = $2 AND col_name = $3",
-                params!["nominal", "fit-wide-oneway", "factor"],
+                params!["nominal", "fit-signed-wide-oneway", "factor"],
             )
             .expect("set nominal role");
 
         let result = engine
             .read_fit_y_by_x_rows(
-                "fit-wide-oneway",
+                "fit-signed-wide-oneway",
                 "response",
                 "factor",
                 FitYByXPersonality::Oneway,
@@ -8064,30 +8064,23 @@ mod tests {
             .expect("fit y by x rows");
 
         assert_eq!(result.source_rows, 5);
+        assert_eq!(result.rows.len(), 3);
         assert_eq!(
             result.rows,
             vec![
                 FitYByXRow::Oneway {
-                    y: 10.0,
-                    group: "340282366920938463463374607431768211450".into(),
+                    y: 10.25,
+                    group: "-9223372036854775809".into(),
                 },
                 FitYByXRow::Oneway {
-                    y: 12.0,
-                    group: "340282366920938463463374607431768211450".into(),
+                    y: 12.5,
+                    group: "9223372036854775808".into(),
                 },
                 FitYByXRow::Oneway {
-                    y: 9.0,
-                    group: "340282366920938463463374607431768211451".into(),
+                    y: 9.5,
+                    group: "9223372036854775808".into(),
                 },
             ]
-        );
-    }
-
-    #[test]
-    fn fit_y_by_x_display_value_formats_signed_hugeint_as_plain_decimal() {
-        assert_eq!(
-            fit_y_by_x_display_value(Value::HugeInt(-9_223_372_036_854_775_809_i128)),
-            Some("-9223372036854775809".into())
         );
     }
 
