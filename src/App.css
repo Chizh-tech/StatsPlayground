@@ -674,13 +674,16 @@
 .sp-fit-y-by-x-report-sections {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 10px;
 }
 
 .sp-fit-y-by-x-report-section {
+  max-width: 100%;
   border: 1px solid var(--border-main);
   border-radius: 6px;
   background: var(--bg-main);
+  overflow: hidden;
 }
 
 .sp-fit-y-by-x-report-section-summary {
@@ -705,10 +708,22 @@
 }
 
 .sp-fit-y-by-x-report-table {
-  width: 100%;
-  min-width: 520px;
+  width: max-content;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
+}
+
+.sp-fit-y-by-x-report-column-label {
+  width: 220px;
+}
+
+.sp-fit-y-by-x-report-column-value {
+  width: 150px;
+}
+
+.sp-fit-y-by-x-report-column-value-wide {
+  width: 360px;
 }
 
 .sp-fit-y-by-x-report-table th,

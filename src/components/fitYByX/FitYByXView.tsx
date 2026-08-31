@@ -1,12 +1,17 @@
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { AxisSettingsDialog, isAxisConfigEmpty } from "@/components/graphBuilder/AxisSettingsDialog";
 import { createEmbeddedGraphItem } from "@/components/graphBuilder/graphBuilderMode";
 import { GraphRuntime } from "@/components/graphBuilder/GraphRuntime";
+import type { RefLineX, RefLineY, YAxisConfig } from "@/graphCore";
+import { useFitYByXStore } from "@/stores/useFitYByXStore";
+import { useProjectStore } from "@/stores/useProjectStore";
 import type { DatasetMeta } from "@/types/data";
 import type { FitYByXItem } from "@/types/fitYByX";
 
 import { FitYByXReport } from "./FitYByXReport";
+import { updateEmbeddedGraph2D, type Graph2DUpdater } from "./fitYByXAxisInteractions";
 import { useFitYByXReport } from "./useFitYByXReport";
 
 export interface FitYByXViewProps {
@@ -16,7 +21,52 @@ export interface FitYByXViewProps {
 
 export function FitYByXView({ item, dataset }: FitYByXViewProps) {
   const { t } = useTranslation();
+  const updateItem = useFitYByXStore((state) => state.updateItem);
+  const markDirty = useProjectStore((state) => state.markDirty);
+  const readOnly = useProjectStore((state) => state.readOnly);
+  const [axisDialog, setAxisDialog] = useState<"x" | "y" | null>(null);
+  const [axisContextMenu, setAxisContextMenu] = useState<{ axis: "x" | "y"; x: number; y: number } | null>(null);
   const reportState = useFitYByXReport(dataset ? item : null, dataset?.updatedAt ?? null);
+  const twoD = item.graph.modeStates.twoD;
+
+  useEffect(() => {
+    if (!axisContextMenu) return;
+    const close = () => setAxisContextMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [axisContextMenu]);
+
+  const updateGraph = useCallback((updater: Graph2DUpdater) => {
+    if (readOnly) return;
+    const currentItem = useFitYByXStore.getState().items.find((candidate) => candidate.id === item.id) ?? item;
+    const nextGraph = updateEmbeddedGraph2D(currentItem.graph, updater);
+    updateItem(item.id, { graph: nextGraph });
+    markDirty();
+  }, [item, markDirty, readOnly, updateItem]);
+
+  const setAxisConfig = useCallback((axis: "x" | "y", config: YAxisConfig | undefined) => {
+    updateGraph(axis === "x" ? { xAxis: config } : { yAxis: config });
+  }, [updateGraph]);
+
+  const handleAxisRangeChange = useCallback((axis: "x" | "y", min: number, max: number) => {
+    updateGraph((current) => {
+      const axisConfig = axis === "x" ? current.xAxis : current.yAxis;
+      return axis === "x"
+        ? { xAxis: { ...(axisConfig ?? {}), min, max } }
+        : { yAxis: { ...(axisConfig ?? {}), min, max } };
+    });
+  }, [updateGraph]);
+
+  const resetAxisRange = useCallback((axis: "x" | "y") => {
+    const current = axis === "x" ? twoD.xAxis : twoD.yAxis;
+    const next = { ...(current ?? {}), min: undefined, max: undefined };
+    setAxisConfig(axis, isAxisConfigEmpty(next) ? undefined : next);
+    setAxisContextMenu(null);
+  }, [setAxisConfig, twoD.xAxis, twoD.yAxis]);
 
   const graphItem = useMemo(
     () => createEmbeddedGraphItem({
@@ -77,6 +127,10 @@ export function FitYByXView({ item, dataset }: FitYByXViewProps) {
               <GraphRuntime
                 item={graphItem}
                 dataset={dataset}
+                onYAxisDblClick={readOnly ? undefined : () => setAxisDialog("y")}
+                onXAxisDblClick={readOnly ? undefined : () => setAxisDialog("x")}
+                onAxisRangeChange={readOnly ? undefined : handleAxisRangeChange}
+                onAxisContextMenu={readOnly ? undefined : (axis, x, y) => setAxisContextMenu({ axis, x, y })}
               />
             )}
           </div>
@@ -84,6 +138,40 @@ export function FitYByXView({ item, dataset }: FitYByXViewProps) {
 
         <FitYByXReport item={item} state={reportState} datasetMissing={dataset == null} />
       </div>
+
+      {axisDialog && (
+        <AxisSettingsDialog
+          axis={axisDialog}
+          refLines={axisDialog === "x" ? twoD.refLinesX ?? [] : twoD.refLinesY ?? []}
+          setRefLines={axisDialog === "x"
+            ? (lines: RefLineX[]) => updateGraph({ refLinesX: lines })
+            : (lines: RefLineY[]) => updateGraph({ refLinesY: lines })}
+          autoSpecLines={axisDialog === "x" ? !!twoD.autoSpecLinesX : !!(twoD.autoSpecLinesY ?? twoD.autoSpecLines)}
+          setAutoSpecLines={(enabled) => updateGraph(axisDialog === "x" ? { autoSpecLinesX: enabled } : { autoSpecLinesY: enabled })}
+          axisConfig={axisDialog === "x" ? twoD.xAxis : twoD.yAxis}
+          setAxisConfig={(config) => setAxisConfig(axisDialog, config)}
+          onClose={() => setAxisDialog(null)}
+        />
+      )}
+
+      {axisContextMenu && (() => {
+        const config = axisContextMenu.axis === "x" ? twoD.xAxis : twoD.yAxis;
+        const zoomed = config?.min !== undefined || config?.max !== undefined;
+        return (
+          <div
+            className="sp-ctx-menu"
+            style={{ left: axisContextMenu.x, top: axisContextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sp-ctx-item" onClick={() => { setAxisDialog(axisContextMenu.axis); setAxisContextMenu(null); }}>
+              {t("graph.axisCtx.settings", { defaultValue: "Axis settings" })}
+            </div>
+            <div className={`sp-ctx-item${zoomed ? "" : " sp-ctx-disabled"}`} aria-disabled={!zoomed} onClick={() => { if (zoomed) resetAxisRange(axisContextMenu.axis); }}>
+              {t("graph.axisCtx.resetZoom", { defaultValue: "Reset zoom" })}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

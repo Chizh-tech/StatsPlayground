@@ -553,6 +553,16 @@ export function FitYByXReport({ item, state, datasetMissing }: FitYByXReportProp
               <summary className="sp-fit-y-by-x-report-section-summary">{section.title}</summary>
               <div className="sp-fit-y-by-x-report-table-wrap">
                 <table className="sp-fit-y-by-x-report-table" aria-label={section.title}>
+                  <colgroup>
+                    {section.columns.map((column, index) => {
+                      const columnClass = index === 0
+                        ? "sp-fit-y-by-x-report-column-label"
+                        : section.columns.length === 2
+                          ? "sp-fit-y-by-x-report-column-value-wide"
+                          : "sp-fit-y-by-x-report-column-value";
+                      return <col key={column} className={columnClass} />;
+                    })}
+                  </colgroup>
                   <thead>
                     <tr>
                       {section.columns.map((column) => (
