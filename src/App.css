@@ -633,6 +633,7 @@
 
 .sp-fit-y-by-x-runtime-panel,
 .sp-fit-y-by-x-report-panel {
+  flex: 0 0 auto;
   border: 1px solid var(--border-main);
   border-radius: 8px;
   overflow: hidden;
