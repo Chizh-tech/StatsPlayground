@@ -210,6 +210,7 @@
     "removeAssignmentFor": "移除 {{label}}",
     "graph": "圖形",
     "graphHint": "嵌入式執行視圖",
+    "personalityLabel": "分析類型",
     "missingResponse": "選擇一個連續反應",
     "missingFactor": "選擇一個連續、名義或有序 X",
     "duplicateRole": "反應和因子必須使用不同欄位",
@@ -218,6 +219,68 @@
     "personality": {
       "oneway": "單因素",
       "bivariate": "雙變量"
+    },
+    "report": {
+      "title": "報告",
+      "loading": "正在載入分析結果...",
+      "error": "載入分析結果失敗",
+      "sourceMissing": "來源資料表無法使用",
+      "personality": "分析類型",
+      "usedRows": "使用列數",
+      "excludedRows": "排除列數",
+      "notComputable": "無法計算",
+      "reasonLabel": "原因",
+      "undefinedValue": "—",
+      "section": {
+        "status": "狀態",
+        "summaryOfFit": "配適摘要",
+        "lackOfFit": "缺乏配適",
+        "analysisOfVariance": "變異數分析",
+        "parameterEstimates": "參數估計",
+        "groupSummary": "分組摘要",
+        "effectSize": "效果量"
+      },
+      "column": {
+        "metric": "指標",
+        "value": "數值",
+        "source": "來源",
+        "degreesOfFreedom": "自由度",
+        "sumOfSquares": "平方和",
+        "meanSquare": "均方",
+        "fRatio": "F 比",
+        "pValue": "p 值",
+        "term": "項目",
+        "estimate": "估計值",
+        "standardError": "標準誤",
+        "tRatio": "t 比",
+        "lowerConfidenceLimit": "95% 下限",
+        "upperConfidenceLimit": "95% 上限",
+        "group": "群組",
+        "count": "數量",
+        "mean": "平均值",
+        "standardDeviation": "標準差"
+      },
+      "summaryOfFit": {
+        "rSquared": "R 平方",
+        "adjustedRSquared": "調整後 R 平方",
+        "rootMeanSquareError": "均方根誤差",
+        "meanOfResponse": "反應平均值",
+        "observationCount": "觀測數"
+      },
+      "effectSize": {
+        "etaSquared": "Eta 平方",
+        "omegaSquared": "Omega 平方"
+      },
+      "lackOfFit": {
+        "notIdentifiable": "由於沒有重複的 X 值，因此無法識別缺乏配適。"
+      },
+      "reason": {
+        "insufficientValidRows": "排除缺失值後，剩餘有效列不足。",
+        "insufficientGroups": "單因素分析至少需要兩個非空群組。",
+        "constantFactor": "篩選後因子不再有變化。",
+        "noResidualDegreesOfFreedom": "此配適沒有可用的殘差自由度。",
+        "noWithinGroupDegreesOfFreedom": "此比較沒有可用的組內自由度。"
+      }
     },
     "validation": {
       "missingResponse": "選擇一個連續反應",

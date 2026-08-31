@@ -210,6 +210,7 @@
     "removeAssignmentFor": "Xóa {{label}}",
     "graph": "Biểu đồ",
     "graphHint": "Biểu đồ nhúng",
+    "personalityLabel": "Kiểu phân tích",
     "missingResponse": "Chọn một đáp ứng liên tục",
     "missingFactor": "Chọn một X liên tục, danh nghĩa hoặc thứ tự",
     "duplicateRole": "Đáp ứng và yếu tố phải dùng hai cột khác nhau",
@@ -218,6 +219,68 @@
     "personality": {
       "oneway": "Một chiều",
       "bivariate": "Hai biến"
+    },
+    "report": {
+      "title": "Báo cáo",
+      "loading": "Đang tải kết quả phân tích...",
+      "error": "Không thể tải kết quả phân tích",
+      "sourceMissing": "Bảng dữ liệu nguồn không khả dụng",
+      "personality": "Kiểu phân tích",
+      "usedRows": "Số hàng đã dùng",
+      "excludedRows": "Số hàng bị loại",
+      "notComputable": "Không thể tính toán",
+      "reasonLabel": "Lý do",
+      "undefinedValue": "—",
+      "section": {
+        "status": "Trạng thái",
+        "summaryOfFit": "Tóm tắt mô hình",
+        "lackOfFit": "Thiếu phù hợp",
+        "analysisOfVariance": "Phân tích phương sai",
+        "parameterEstimates": "Ước lượng tham số",
+        "groupSummary": "Tóm tắt nhóm",
+        "effectSize": "Kích thước ảnh hưởng"
+      },
+      "column": {
+        "metric": "Chỉ số",
+        "value": "Giá trị",
+        "source": "Nguồn",
+        "degreesOfFreedom": "DF",
+        "sumOfSquares": "Tổng bình phương",
+        "meanSquare": "Bình phương trung bình",
+        "fRatio": "Tỷ số F",
+        "pValue": "Giá trị p",
+        "term": "Hạng",
+        "estimate": "Ước lượng",
+        "standardError": "Sai số chuẩn",
+        "tRatio": "Tỷ số t",
+        "lowerConfidenceLimit": "Cận dưới 95%",
+        "upperConfidenceLimit": "Cận trên 95%",
+        "group": "Nhóm",
+        "count": "Số lượng",
+        "mean": "Trung bình",
+        "standardDeviation": "Độ lệch chuẩn"
+      },
+      "summaryOfFit": {
+        "rSquared": "R bình phương",
+        "adjustedRSquared": "R bình phương hiệu chỉnh",
+        "rootMeanSquareError": "Sai số RMS",
+        "meanOfResponse": "Trung bình đáp ứng",
+        "observationCount": "Số quan sát"
+      },
+      "effectSize": {
+        "etaSquared": "Eta bình phương",
+        "omegaSquared": "Omega bình phương"
+      },
+      "lackOfFit": {
+        "notIdentifiable": "Không thể xác định Thiếu phù hợp vì không có giá trị X lặp lại."
+      },
+      "reason": {
+        "insufficientValidRows": "Không còn đủ hàng hợp lệ sau khi loại các giá trị thiếu.",
+        "insufficientGroups": "Phân tích một chiều cần ít nhất hai nhóm không rỗng.",
+        "constantFactor": "Biến X không còn biến thiên sau khi lọc.",
+        "noResidualDegreesOfFreedom": "Không có bậc tự do phần dư cho mô hình này.",
+        "noWithinGroupDegreesOfFreedom": "Không có bậc tự do trong nhóm cho phép so sánh này."
+      }
     },
     "validation": {
       "missingResponse": "Chọn một đáp ứng liên tục",

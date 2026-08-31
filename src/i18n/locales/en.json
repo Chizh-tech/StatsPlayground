@@ -211,6 +211,7 @@
     "removeAssignmentFor": "Remove {{label}}",
     "graph": "Graph",
     "graphHint": "Embedded runtime",
+    "personalityLabel": "Personality",
     "missingResponse": "Choose a continuous response",
     "missingFactor": "Choose a continuous, nominal, or ordinal X",
     "duplicateRole": "Response and factor must use different columns",
@@ -219,6 +220,68 @@
     "personality": {
       "oneway": "Oneway",
       "bivariate": "Bivariate"
+    },
+    "report": {
+      "title": "Report",
+      "loading": "Loading analysis results...",
+      "error": "Failed to load analysis results",
+      "sourceMissing": "Source data table is unavailable",
+      "personality": "Personality",
+      "usedRows": "Used rows",
+      "excludedRows": "Excluded rows",
+      "notComputable": "Not computable",
+      "reasonLabel": "Reason",
+      "undefinedValue": "—",
+      "section": {
+        "status": "Status",
+        "summaryOfFit": "Summary of Fit",
+        "lackOfFit": "Lack of Fit",
+        "analysisOfVariance": "Analysis of Variance",
+        "parameterEstimates": "Parameter Estimates",
+        "groupSummary": "Group Summary",
+        "effectSize": "Effect Size"
+      },
+      "column": {
+        "metric": "Metric",
+        "value": "Value",
+        "source": "Source",
+        "degreesOfFreedom": "DF",
+        "sumOfSquares": "Sum of Squares",
+        "meanSquare": "Mean Square",
+        "fRatio": "F Ratio",
+        "pValue": "p-Value",
+        "term": "Term",
+        "estimate": "Estimate",
+        "standardError": "Std Error",
+        "tRatio": "t Ratio",
+        "lowerConfidenceLimit": "Lower 95%",
+        "upperConfidenceLimit": "Upper 95%",
+        "group": "Group",
+        "count": "Count",
+        "mean": "Mean",
+        "standardDeviation": "Std Dev"
+      },
+      "summaryOfFit": {
+        "rSquared": "R Square",
+        "adjustedRSquared": "Adj R Square",
+        "rootMeanSquareError": "Root Mean Square Error",
+        "meanOfResponse": "Mean of Response",
+        "observationCount": "Observations"
+      },
+      "effectSize": {
+        "etaSquared": "Eta Squared",
+        "omegaSquared": "Omega Squared"
+      },
+      "lackOfFit": {
+        "notIdentifiable": "Lack of Fit is not identifiable because replicated X values are unavailable."
+      },
+      "reason": {
+        "insufficientValidRows": "Not enough valid rows remain after excluding missing values.",
+        "insufficientGroups": "At least two non-empty groups are required for Oneway analysis.",
+        "constantFactor": "The factor has no variation after filtering.",
+        "noResidualDegreesOfFreedom": "Residual degrees of freedom are not available for this fit.",
+        "noWithinGroupDegreesOfFreedom": "Within-group degrees of freedom are not available for this comparison."
+      }
     },
     "validation": {
       "missingResponse": "Choose a continuous response",

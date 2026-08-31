@@ -6,6 +6,9 @@ import { GraphRuntime } from "@/components/graphBuilder/GraphRuntime";
 import type { DatasetMeta } from "@/types/data";
 import type { FitYByXItem } from "@/types/fitYByX";
 
+import { FitYByXReport } from "./FitYByXReport";
+import { useFitYByXReport } from "./useFitYByXReport";
+
 export interface FitYByXViewProps {
   item: FitYByXItem;
   dataset: DatasetMeta | undefined;
@@ -13,6 +16,7 @@ export interface FitYByXViewProps {
 
 export function FitYByXView({ item, dataset }: FitYByXViewProps) {
   const { t } = useTranslation();
+  const reportState = useFitYByXReport(dataset ? item : null, dataset?.updatedAt ?? null);
 
   const graphItem = useMemo(
     () => createEmbeddedGraphItem({
@@ -41,37 +45,45 @@ export function FitYByXView({ item, dataset }: FitYByXViewProps) {
 
         <div className="sp-fit-y-by-x-summary-body">
           <div className="sp-fit-y-by-x-summary-row">
-            <span className="sp-fit-y-by-x-summary-label">{t("fitYByX.response", { defaultValue: "Response (Y)" })}</span>
+            <span className="sp-fit-y-by-x-summary-label">{t("fitYByX.response")}</span>
             <span className="sp-fit-y-by-x-summary-value">{item.response.name}</span>
           </div>
           <div className="sp-fit-y-by-x-summary-row">
-            <span className="sp-fit-y-by-x-summary-label">{t("fitYByX.factor", { defaultValue: "Factor (X)" })}</span>
+            <span className="sp-fit-y-by-x-summary-label">{t("fitYByX.factor")}</span>
             <span className="sp-fit-y-by-x-summary-value">{item.factor.name}</span>
+          </div>
+          <div className="sp-fit-y-by-x-summary-row">
+            <span className="sp-fit-y-by-x-summary-label">{t("fitYByX.personalityLabel")}</span>
+            <span className="sp-fit-y-by-x-summary-value">{t(`fitYByX.personality.${item.personality}`)}</span>
           </div>
         </div>
       </section>
 
-      <section className="sp-fit-y-by-x-runtime-panel">
-        <div className="sp-panel-header">
-          <span className="sp-panel-header-title">{t("fitYByX.graph", { defaultValue: "Graph" })}</span>
-          <span className="sp-tabulate-header-hint">{t("fitYByX.graphHint", { defaultValue: "Embedded runtime" })}</span>
-        </div>
+      <div className="sp-fit-y-by-x-analysis-root">
+        <section className="sp-fit-y-by-x-runtime-panel">
+          <div className="sp-panel-header">
+            <span className="sp-panel-header-title">{t("fitYByX.graph")}</span>
+            <span className="sp-tabulate-header-hint">{t("fitYByX.graphHint")}</span>
+          </div>
 
-        <div className="sp-fit-y-by-x-runtime-shell">
-          {dataset == null ? (
-            <div className="main-content">
-              <div className="workspace-empty">
-                <p>{t("workspace.datasourceDeleted")}</p>
+          <div className="sp-fit-y-by-x-graph-shell">
+            {dataset == null ? (
+              <div className="main-content">
+                <div className="workspace-empty">
+                  <p>{t("workspace.datasourceDeleted")}</p>
+                </div>
               </div>
-            </div>
-          ) : (
-            <GraphRuntime
-              item={graphItem}
-              dataset={dataset}
-            />
-          )}
-        </div>
-      </section>
+            ) : (
+              <GraphRuntime
+                item={graphItem}
+                dataset={dataset}
+              />
+            )}
+          </div>
+        </section>
+
+        <FitYByXReport item={item} state={reportState} datasetMissing={dataset == null} />
+      </div>
     </div>
   );
 }

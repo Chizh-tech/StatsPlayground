@@ -211,6 +211,7 @@
     "removeAssignmentFor": "移除 {{label}}",
     "graph": "图形",
     "graphHint": "嵌入式运行视图",
+    "personalityLabel": "分析类型",
     "missingResponse": "选择一个连续响应",
     "missingFactor": "选择一个连续、名义或有序 X",
     "duplicateRole": "响应和因子必须使用不同列",
@@ -219,6 +220,68 @@
     "personality": {
       "oneway": "单因素",
       "bivariate": "双变量"
+    },
+    "report": {
+      "title": "报告",
+      "loading": "正在加载分析结果...",
+      "error": "加载分析结果失败",
+      "sourceMissing": "源数据表不可用",
+      "personality": "分析类型",
+      "usedRows": "使用行数",
+      "excludedRows": "排除行数",
+      "notComputable": "无法计算",
+      "reasonLabel": "原因",
+      "undefinedValue": "—",
+      "section": {
+        "status": "状态",
+        "summaryOfFit": "拟合摘要",
+        "lackOfFit": "失拟检验",
+        "analysisOfVariance": "方差分析",
+        "parameterEstimates": "参数估计",
+        "groupSummary": "分组摘要",
+        "effectSize": "效应量"
+      },
+      "column": {
+        "metric": "指标",
+        "value": "数值",
+        "source": "来源",
+        "degreesOfFreedom": "自由度",
+        "sumOfSquares": "平方和",
+        "meanSquare": "均方",
+        "fRatio": "F 比",
+        "pValue": "p 值",
+        "term": "项",
+        "estimate": "估计值",
+        "standardError": "标准误",
+        "tRatio": "t 比",
+        "lowerConfidenceLimit": "95% 下限",
+        "upperConfidenceLimit": "95% 上限",
+        "group": "组别",
+        "count": "数量",
+        "mean": "均值",
+        "standardDeviation": "标准差"
+      },
+      "summaryOfFit": {
+        "rSquared": "R 方",
+        "adjustedRSquared": "调整后 R 方",
+        "rootMeanSquareError": "均方根误差",
+        "meanOfResponse": "响应均值",
+        "observationCount": "观测数"
+      },
+      "effectSize": {
+        "etaSquared": "Eta 平方",
+        "omegaSquared": "Omega 平方"
+      },
+      "lackOfFit": {
+        "notIdentifiable": "由于没有重复的 X 值，失拟检验无法识别。"
+      },
+      "reason": {
+        "insufficientValidRows": "排除缺失值后，剩余有效行不足。",
+        "insufficientGroups": "单因素分析至少需要两个非空分组。",
+        "constantFactor": "筛选后因子不再有变化。",
+        "noResidualDegreesOfFreedom": "该拟合没有可用的残差自由度。",
+        "noWithinGroupDegreesOfFreedom": "该比较没有可用的组内自由度。"
+      }
     },
     "validation": {
       "missingResponse": "选择一个连续响应",

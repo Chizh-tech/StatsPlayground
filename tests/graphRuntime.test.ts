@@ -166,4 +166,19 @@ assert.equal(
   "GraphRuntime must not import or reference useGraphBuilderStore",
 );
 
+const fitYByXViewSource = readFileSync(
+  resolve(process.cwd(), "src/components/fitYByX/FitYByXView.tsx"),
+  "utf8",
+);
+assert.equal(
+  fitYByXViewSource.includes("createEmbeddedGraphItem"),
+  true,
+  "FitYByXView must continue to derive an embedded graph item for GraphRuntime rather than altering GraphRuntime behavior",
+);
+assert.equal(
+  fitYByXViewSource.includes("<GraphRuntime"),
+  true,
+  "FitYByXView must continue rendering GraphRuntime directly for the graph section",
+);
+
 console.log("graphRuntime contract tests passed");

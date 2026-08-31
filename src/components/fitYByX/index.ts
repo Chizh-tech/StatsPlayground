@@ -10,6 +10,15 @@ export {
   type FitYByXViewProps,
 } from "./FitYByXView";
 export {
+  FitYByXReport,
+  createFitYByXReportViewModel,
+  formatFitYByXReportPValue,
+  formatFitYByXReportValue,
+  type FitYByXReportProps,
+  type FitYByXReportSectionModel,
+  type FitYByXReportViewModel,
+} from "./FitYByXReport";
+export {
   canAssignFitYByXRole,
   createDefaultFitYByXGraphConfig,
   createFitYByXItem,
