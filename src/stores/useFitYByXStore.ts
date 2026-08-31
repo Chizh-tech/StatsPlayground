@@ -1,13 +1,15 @@
 import { create } from "zustand";
 
 import {
+  createDefaultFitYByXGraphConfig,
   createFitYByXItem,
   FitYByXRoleValidationError,
+  deriveFitYByXPersonality,
 } from "@/components/fitYByX/fitYByXConfig";
 import { createEmbeddedGraphItem } from "@/components/graphBuilder/graphBuilderMode";
 import { useProjectStore } from "@/stores/useProjectStore";
 import type { EmbeddedGraphConfig } from "@/types/graphBuilder";
-import type { FitYByXItem } from "@/types/fitYByX";
+import type { FitYByXItem, FitYByXPersonality } from "@/types/fitYByX";
 import { assertProjectMutable } from "@/utils/saveReadOnly";
 
 interface FitYByXStore {
@@ -64,14 +66,25 @@ function isMatchingField(
   return actual?.name === expected.name && actual.type === expected.type;
 }
 
-function isUsableFitYByXGraph(item: FitYByXItem, graph: EmbeddedGraphConfig): boolean {
+function isExpectedFamily(personality: FitYByXPersonality, graph: EmbeddedGraphConfig): boolean {
   if (graph.mode !== "2d") return false;
-  const twoD = graph.modeStates.twoD;
-  return isMatchingField(twoD.encoding.x, item.factor)
-    && isMatchingField(twoD.encoding.y, item.response);
+  const activeKinds = graph.modeStates.twoD.elements
+    .filter((element) => element.enabled !== false)
+    .map((element) => element.kind);
+  return personality === "bivariate"
+    ? activeKinds.includes("fitline")
+    : activeKinds.includes("boxplot");
+}
+
+function isUsableFitYByXGraph(item: FitYByXItem, graph: EmbeddedGraphConfig): boolean {
+  return graph.mode === "2d"
+    && isMatchingField(graph.modeStates.twoD.encoding.x, item.factor)
+    && isMatchingField(graph.modeStates.twoD.encoding.y, item.response)
+    && isExpectedFamily(item.personality, graph);
 }
 
 function normalizeLoadedItem(item: FitYByXItem): FitYByXItem {
+  const personality = deriveFitYByXPersonality(item.factor);
   const base = createFitYByXItem({
     id: item.id,
     name: item.name,
@@ -81,8 +94,17 @@ function normalizeLoadedItem(item: FitYByXItem): FitYByXItem {
     createdAt: item.createdAt,
   });
 
+  const normalizedBase: FitYByXItem = {
+    ...base,
+    personality,
+    graph: createDefaultFitYByXGraphConfig({
+      response: item.response,
+      factor: item.factor,
+    }),
+  };
+
   if (!isLoadableEmbeddedGraphConfig(item.graph)) {
-    return base;
+    return normalizedBase;
   }
 
   const graph = extractEmbeddedGraphConfig(createEmbeddedGraphItem({
@@ -93,7 +115,7 @@ function normalizeLoadedItem(item: FitYByXItem): FitYByXItem {
     createdAt: base.createdAt,
   }));
 
-  return isUsableFitYByXGraph(base, graph) ? { ...base, graph } : base;
+  return isUsableFitYByXGraph(normalizedBase, graph) ? { ...normalizedBase, graph } : normalizedBase;
 }
 
 export const useFitYByXStore = create<FitYByXStore>((set, get) => ({

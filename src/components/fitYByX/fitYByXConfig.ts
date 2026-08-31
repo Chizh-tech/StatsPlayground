@@ -2,7 +2,7 @@ import type { FieldRef } from "@/graphCore";
 
 import { createDefaultGraph2DState, createDefaultGraph3DState, createDefaultMultivariateGraphState } from "@/components/graphBuilder/graphBuilderMode";
 import type { EmbeddedGraphConfig } from "@/types/graphBuilder";
-import type { FitYByXItem } from "@/types/fitYByX";
+import type { FitYByXItem, FitYByXPersonality } from "@/types/fitYByX";
 export {
   canAssignFitYByXRole,
   type FitYByXRole,
@@ -35,7 +35,11 @@ function clone<T>(value: T): T {
   return value;
 }
 
-export function createDefaultFitYByXGraphConfig(input: {
+export function deriveFitYByXPersonality(factor: FieldRef): FitYByXPersonality {
+  return factor.type === "continuous" ? "bivariate" : "oneway";
+}
+
+function createOnewayFitYByXGraphConfig(input: {
   response: FieldRef;
   factor: FieldRef;
 }): EmbeddedGraphConfig {
@@ -65,6 +69,45 @@ export function createDefaultFitYByXGraphConfig(input: {
   };
 }
 
+function createBivariateFitYByXGraphConfig(input: {
+  response: FieldRef;
+  factor: FieldRef;
+}): EmbeddedGraphConfig {
+  const twoD = createDefaultGraph2DState();
+
+  return {
+    mode: "2d",
+    modeStates: {
+      twoD: {
+        ...twoD,
+        encoding: {
+          x: clone(input.factor),
+          y: clone(input.response),
+        },
+        multiX: [],
+        multiY: [],
+        elements: [
+          { kind: "points", enabled: true },
+          { kind: "fitline", enabled: true, options: { fitType: "polynomial", degree: 1, showFitCI: true } },
+        ],
+      },
+      threeD: createDefaultGraph3DState(),
+      multivariate: createDefaultMultivariateGraphState(),
+    },
+    filters: [],
+    sampling: { mode: "full" },
+  };
+}
+
+export function createDefaultFitYByXGraphConfig(input: {
+  response: FieldRef;
+  factor: FieldRef;
+}): EmbeddedGraphConfig {
+  return deriveFitYByXPersonality(input.factor) === "bivariate"
+    ? createBivariateFitYByXGraphConfig(input)
+    : createOnewayFitYByXGraphConfig(input);
+}
+
 export function createFitYByXItem(input: {
   id: string;
   name: string;
@@ -78,12 +121,15 @@ export function createFitYByXItem(input: {
     throw new FitYByXRoleValidationError(validation.error);
   }
 
+  const personality = deriveFitYByXPersonality(input.factor);
+
   return {
     id: input.id,
     name: input.name,
     sourceDatasetId: input.sourceDatasetId,
     response: clone(input.response),
     factor: clone(input.factor),
+    personality,
     graph: createDefaultFitYByXGraphConfig({
       response: input.response,
       factor: input.factor,

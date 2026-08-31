@@ -47,7 +47,10 @@ const persistedGraph = {
     twoD: {
       ...loadedBase.graph.modeStates.twoD,
       smootherLambda: 0.8,
-      elements: [{ kind: "points", enabled: false }],
+      elements: [
+        { kind: "points", enabled: false },
+        { kind: "boxplot", enabled: true },
+      ],
       hiddenGroups: ["site:B"],
       yAxis: { min: 10, max: 20 },
     },

@@ -13,7 +13,7 @@ function isContinuous(field: FieldRef): boolean {
 }
 
 function isFactor(field: FieldRef): boolean {
-  return field.type === "nominal" || field.type === "ordinal";
+  return field.type === "nominal" || field.type === "ordinal" || field.type === "continuous";
 }
 
 function isDuplicate(field: FieldRef, other?: FieldRef): boolean {
