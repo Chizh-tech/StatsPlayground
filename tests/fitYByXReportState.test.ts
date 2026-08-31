@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import type {
   FitYByXBivariateResult,
@@ -12,6 +14,19 @@ import {
   createFitYByXReportController,
   type FitYByXReportState,
 } from "../src/components/fitYByX/useFitYByXReport.ts";
+
+const HOOK_SOURCE_PATH = path.resolve(
+  process.cwd(),
+  "src/components/fitYByX/useFitYByXReport.ts",
+);
+
+function readHookSource(): string {
+  return readFileSync(HOOK_SOURCE_PATH, "utf8");
+}
+
+function assertMatches(source: string, pattern: RegExp, message: string): void {
+  assert.match(source, pattern, message);
+}
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -135,6 +150,51 @@ function expectError(state: FitYByXReportState, request: FitYByXRequest, message
   assert.equal(state.status, "error");
   assert.deepEqual(state.request, request);
   assert.equal(state.error, message);
+}
+
+function testHookSourceContractUsesGenerationSignalAndCleanup(): void {
+  const source = readHookSource();
+
+  assertMatches(
+    source,
+    /export function useFitYByXReport\(\s*item: FitYByXItem \| null \| undefined,\s*generationSignal:/s,
+    "useFitYByXReport should accept an explicit generationSignal parameter.",
+  );
+  assertMatches(
+    source,
+    /const \[state, setState\] = useState<FitYByXReportState>\(FIT_Y_BY_X_IDLE_REPORT_STATE\);/,
+    "hook should continue to own local report state.",
+  );
+  assertMatches(
+    source,
+    /return \(\) => \{\s*mounted = false;\s*controller\?\.dispose\(\);\s*\};/s,
+    "effect cleanup should fence unmount and dispose the controller.",
+  );
+  assertMatches(
+    source,
+    /\[\s*dependencies,\s*generationSignal,\s*item,\s*\]/s,
+    "effect dependencies should rerun on generationSignal changes.",
+  );
+}
+
+function testHookSourceContractFetchesGenerationAndGuardsResolutionFailures(): void {
+  const source = readHookSource();
+
+  assertMatches(
+    source,
+    /const generation = await options\.getDatasetGeneration\(pending\.datasetId\);/,
+    "controller should still fetch the authoritative dataset generation before building the request.",
+  );
+  assertMatches(
+    source,
+    /createFitYByXReportController\(\{\s*\.\.\.resolved,\s*onStateChange: setState,\s*\}\);/s,
+    "hook should continue wiring resolved dependencies into the controller.",
+  );
+  assertMatches(
+    source,
+    /catch \(error\) \{\s*if \(!mounted\) \{\s*return;\s*\}\s*setState\(\{\s*status: "error",/s,
+    "hook should convert dependency-resolution failures into an error state while respecting cleanup.",
+  );
 }
 
 async function testLaterRequestWinsWhenEarlierCompletionArrivesLast(): Promise<void> {
@@ -322,5 +382,7 @@ async function testReloadsSameItemWhenGenerationChangesAndIgnoresStaleGeneration
 await testLaterRequestWinsWhenEarlierCompletionArrivesLast();
 await testNormalizesErrorsAndIgnoresCancelAndUnmount();
 await testReloadsSameItemWhenGenerationChangesAndIgnoresStaleGenerationFetch();
+testHookSourceContractUsesGenerationSignalAndCleanup();
+testHookSourceContractFetchesGenerationAndGuardsResolutionFailures();
 
 console.log("fitYByX report state contract passed");

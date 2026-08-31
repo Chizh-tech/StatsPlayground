@@ -36,6 +36,8 @@ export interface FitYByXErrorReportState {
   error: string;
 }
 
+export type FitYByXReportGenerationSignal = string | number | boolean | null | undefined;
+
 export type FitYByXReportState =
   | FitYByXIdleReportState
   | FitYByXLoadingReportState
@@ -204,7 +206,7 @@ export function createFitYByXReportController(
   };
 }
 
-function normalizeFitYByXReportError(error: unknown): string {
+export function normalizeFitYByXReportError(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }
@@ -246,6 +248,7 @@ async function resolveFitYByXReportDependencies(
 
 export function useFitYByXReport(
   item: FitYByXItem | null | undefined,
+  generationSignal: FitYByXReportGenerationSignal,
   dependencies?: Partial<FitYByXReportDependencies>,
 ): FitYByXReportState {
   const [state, setState] = useState<FitYByXReportState>(FIT_Y_BY_X_IDLE_REPORT_STATE);
@@ -260,16 +263,30 @@ export function useFitYByXReport(
     let controller: FitYByXReportController | null = null;
 
     void (async () => {
-      const resolved = await resolveFitYByXReportDependencies(dependencies);
-      if (!mounted) {
-        return;
-      }
+      try {
+        const resolved = await resolveFitYByXReportDependencies(dependencies);
+        if (!mounted) {
+          return;
+        }
 
-      controller = createFitYByXReportController({
-        ...resolved,
-        onStateChange: setState,
-      });
-      await controller.load(item);
+        controller = createFitYByXReportController({
+          ...resolved,
+          onStateChange: setState,
+        });
+        await controller.load(item);
+      } catch (error) {
+        if (!mounted) {
+          return;
+        }
+
+        setState({
+          status: "error",
+          itemId: item.id,
+          datasetId: item.sourceDatasetId,
+          request: null,
+          error: normalizeFitYByXReportError(error),
+        });
+      }
     })();
 
     return () => {
@@ -278,6 +295,7 @@ export function useFitYByXReport(
     };
   }, [
     dependencies,
+    generationSignal,
     item,
   ]);
 
