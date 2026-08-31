@@ -262,11 +262,26 @@
         "standardDeviation": "Std Dev"
       },
       "summaryOfFit": {
+        "fittedEquation": "Fitted Equation",
+        "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
         "rSquared": "R Square",
         "adjustedRSquared": "Adj R Square",
         "rootMeanSquareError": "Root Mean Square Error",
         "meanOfResponse": "Mean of Response",
         "observationCount": "Observations"
+      },
+      "source": {
+        "Between": "Between",
+        "Within": "Within",
+        "Total": "Total",
+        "Model": "Model",
+        "Error": "Error",
+        "Lack Of Fit": "Lack Of Fit",
+        "Pure Error": "Pure Error",
+        "Total Error": "Total Error"
+      },
+      "term": {
+        "Intercept": "Intercept"
       },
       "effectSize": {
         "etaSquared": "Eta Squared",

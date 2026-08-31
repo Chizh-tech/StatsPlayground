@@ -261,11 +261,26 @@
         "standardDeviation": "Độ lệch chuẩn"
       },
       "summaryOfFit": {
+        "fittedEquation": "Phương trình khớp",
+        "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
         "rSquared": "R bình phương",
         "adjustedRSquared": "R bình phương hiệu chỉnh",
         "rootMeanSquareError": "Sai số RMS",
         "meanOfResponse": "Trung bình đáp ứng",
         "observationCount": "Số quan sát"
+      },
+      "source": {
+        "Between": "Giữa nhóm",
+        "Within": "Trong nhóm",
+        "Total": "Tổng cộng",
+        "Model": "Mô hình",
+        "Error": "Sai số",
+        "Lack Of Fit": "Thiếu phù hợp",
+        "Pure Error": "Sai số thuần",
+        "Total Error": "Tổng sai số"
+      },
+      "term": {
+        "Intercept": "Hệ số chặn"
       },
       "effectSize": {
         "etaSquared": "Eta bình phương",

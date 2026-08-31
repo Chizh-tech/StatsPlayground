@@ -261,11 +261,26 @@
         "standardDeviation": "標準差"
       },
       "summaryOfFit": {
+        "fittedEquation": "配適方程式",
+        "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
         "rSquared": "R 平方",
         "adjustedRSquared": "調整後 R 平方",
         "rootMeanSquareError": "均方根誤差",
         "meanOfResponse": "反應平均值",
         "observationCount": "觀測數"
+      },
+      "source": {
+        "Between": "組間",
+        "Within": "組內",
+        "Total": "總計",
+        "Model": "模型",
+        "Error": "誤差",
+        "Lack Of Fit": "缺乏配適",
+        "Pure Error": "純誤差",
+        "Total Error": "總誤差"
+      },
+      "term": {
+        "Intercept": "截距"
       },
       "effectSize": {
         "etaSquared": "Eta 平方",

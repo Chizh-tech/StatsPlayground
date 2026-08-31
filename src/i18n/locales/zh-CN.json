@@ -262,11 +262,26 @@
         "standardDeviation": "标准差"
       },
       "summaryOfFit": {
+        "fittedEquation": "拟合方程",
+        "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
         "rSquared": "R 方",
         "adjustedRSquared": "调整后 R 方",
         "rootMeanSquareError": "均方根误差",
         "meanOfResponse": "响应均值",
         "observationCount": "观测数"
+      },
+      "source": {
+        "Between": "组间",
+        "Within": "组内",
+        "Total": "总计",
+        "Model": "模型",
+        "Error": "误差",
+        "Lack Of Fit": "失拟",
+        "Pure Error": "纯误差",
+        "Total Error": "总误差"
+      },
+      "term": {
+        "Intercept": "截距"
       },
       "effectSize": {
         "etaSquared": "Eta 平方",

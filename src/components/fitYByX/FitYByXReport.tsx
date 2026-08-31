@@ -142,7 +142,7 @@ function createAnovaSection(
     rows: rows.map((row) => ({
       key: `${key}:${row.source}`,
       values: [
-        row.source,
+        translateStableReportLabel("source", row.source, t),
         formatCount(row.degreesOfFreedom, undefinedValue),
         formatFitYByXReportValue(row.sumOfSquares, undefinedValue),
         formatFitYByXReportValue(row.meanSquare, undefinedValue),
@@ -154,7 +154,41 @@ function createAnovaSection(
   };
 }
 
+function formatSignedEquation(
+  responseName: string,
+  factorName: string,
+  intercept: number,
+  slope: number,
+  t: Translate,
+  undefinedValue: string,
+): string {
+  const interceptLabel = formatFitYByXReportValue(intercept, undefinedValue);
+  const slopeLabel = formatFitYByXReportValue(slope, undefinedValue);
+
+  if (interceptLabel === undefinedValue || slopeLabel === undefinedValue) {
+    return undefinedValue;
+  }
+
+  return t("fitYByX.report.summaryOfFit.equationTemplate", {
+    response: responseName,
+    intercept: interceptLabel,
+    slope: slopeLabel,
+    factor: factorName,
+  }).replace(/\+\s+-/g, "- ");
+}
+
+function translateStableReportLabel(
+  scope: "source" | "term",
+  label: string,
+  t: Translate,
+): string {
+  const localized = t(`fitYByX.report.${scope}.${label}`);
+  return localized === `fitYByX.report.${scope}.${label}` ? label : localized;
+}
+
 function createSummaryOfFitSection(
+  item: FitYByXItem,
+  result: FitYByXBivariateResult,
   summaryOfFit: FitYByXSummaryOfFit,
   t: Translate,
   undefinedValue: string,
@@ -163,6 +197,18 @@ function createSummaryOfFitSection(
     "summaryOfFit",
     t("fitYByX.report.section.summaryOfFit"),
     [
+      {
+        key: "fittedEquation",
+        label: t("fitYByX.report.summaryOfFit.fittedEquation"),
+        value: formatSignedEquation(
+          item.response.name,
+          item.factor.name,
+          result.intercept,
+          result.slope,
+          t,
+          undefinedValue,
+        ),
+      },
       {
         key: "rSquared",
         label: t("fitYByX.report.summaryOfFit.rSquared"),
@@ -243,7 +289,7 @@ function createParameterEstimatesSection(
     rows: rows.map((row) => ({
       key: `estimate:${row.term}`,
       values: [
-        row.term,
+        translateStableReportLabel("term", row.term, t),
         formatFitYByXReportValue(row.estimate, undefinedValue),
         formatFitYByXReportValue(row.standardError, undefinedValue),
         formatFitYByXReportValue(row.tRatio, undefinedValue),
@@ -356,12 +402,13 @@ function createStatusSection(
 }
 
 function createBivariateSections(
+  item: FitYByXItem,
   result: FitYByXBivariateResult,
   t: Translate,
   undefinedValue: string,
 ): FitYByXReportSectionModel[] {
   return [
-    createSummaryOfFitSection(result.summaryOfFit, t, undefinedValue),
+    createSummaryOfFitSection(item, result, result.summaryOfFit, t, undefinedValue),
     createLackOfFitSection(result, t, undefinedValue),
     createAnovaSection(
       "analysisOfVariance",
@@ -435,7 +482,7 @@ export function createFitYByXReportViewModel(
     case "bivariate":
       return {
         summary,
-        sections: createBivariateSections(state.result, t, undefinedValue),
+        sections: createBivariateSections(item, state.result, t, undefinedValue),
       };
     case "oneway":
       return {
