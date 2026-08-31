@@ -730,7 +730,7 @@
     "startOver": "重新开始",
     "swapXY": {
       "label": "交换 X / Y",
-      "tooltip": "完全交换 X 轴与 Y 轴：编码、分面槽位、轴设置都互换，如同把图旋转 90°。"
+      "tooltip": "仅在视觉上转置图形，不改变数据绑定或后端请求。"
     },
     "datasetHeader": "{{name}} · {{n}} 列",
     "scatterSection": "散点",

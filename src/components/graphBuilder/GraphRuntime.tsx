@@ -255,6 +255,10 @@ export function GraphRuntime({
     && (item.modeStates.twoD.multiX?.length ?? 0) === 0
     && (item.modeStates.twoD.multiY?.length ?? 0) === 0
     && !activeKinds.has("histogram");
+  const axesTransposed = item.mode === "2d" && item.modeStates.twoD.transposed === true;
+  const screenAxis = (axis: "x" | "y"): "x" | "y" => (
+    axesTransposed ? (axis === "x" ? "y" : "x") : axis
+  );
 
   return (
     <div ref={canvasRef} style={{ width: "100%", height: "100%", position: "relative" }}>
@@ -275,10 +279,14 @@ export function GraphRuntime({
             data={graphData}
             frame={frame}
             valueOrders={valueOrders}
-            onYAxisDblClick={item.mode === "multivariate" ? undefined : onYAxisDblClick}
-            onXAxisDblClick={item.mode === "multivariate" ? undefined : onXAxisDblClick}
-            onAxisRangeChange={item.mode === "multivariate" ? undefined : onAxisRangeChange}
-            onAxisContextMenu={item.mode === "multivariate" ? undefined : onAxisContextMenu}
+            onYAxisDblClick={item.mode === "multivariate" ? undefined : (axesTransposed ? onXAxisDblClick : onYAxisDblClick)}
+            onXAxisDblClick={item.mode === "multivariate" ? undefined : (axesTransposed ? onYAxisDblClick : onXAxisDblClick)}
+            onAxisRangeChange={item.mode === "multivariate" || !onAxisRangeChange
+              ? undefined
+              : (axis, min, max) => onAxisRangeChange(screenAxis(axis), min, max)}
+            onAxisContextMenu={item.mode === "multivariate" || !onAxisContextMenu
+              ? undefined
+              : (axis, x, y) => onAxisContextMenu(screenAxis(axis), x, y)}
             onPointClick={item.mode === "multivariate" ? undefined : onPointPick}
             brushMode={item.mode !== "multivariate" && !!brushMode}
             onBrushSelect={item.mode === "multivariate" ? undefined : onBrushSelect}

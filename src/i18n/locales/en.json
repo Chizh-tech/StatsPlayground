@@ -730,7 +730,7 @@
     "startOver": "Start Over",
     "swapXY": {
       "label": "Swap X & Y",
-      "tooltip": "Swap the X and Y axes (encoding, facet rail, and axis settings) — like rotating the chart 90°."
+      "tooltip": "Transpose the chart visually without changing its data bindings."
     },
     "datasetHeader": "{{name}} · {{n}} columns",
     "scatterSection": "Scatter",
