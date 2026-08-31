@@ -684,6 +684,11 @@ pub fn build_bundle(
     history: Vec<Value>,
     snapshots: Vec<Value>,
 ) -> ProjectBundle {
+    let sanitized_fit_y_by_x: Vec<Value> = fit_y_by_x
+        .into_iter()
+        .map(strip_transient_fit_y_by_x_fields)
+        .collect();
+
     let mut table_refs: Vec<TableEntryRef> = Vec::with_capacity(tables.len());
     for t in tables.iter() {
         table_refs.push(TableEntryRef {
@@ -717,17 +722,28 @@ pub fn build_bundle(
             folders: normalized_folders,
             table_folders: Some(table_folders.clone()),
             graph_folders: Some(graph_folders.clone()),
-            fit_y_by_x: fit_y_by_x.clone(),
+            fit_y_by_x: sanitized_fit_y_by_x.clone(),
             fit_y_by_x_folders: fit_y_by_x_folders.clone(),
             tabulates: tabulates.clone(),
             tabulate_folders: tabulate_folders.clone(),
         },
         tables,
         graphs,
-        fit_y_by_x,
+        fit_y_by_x: sanitized_fit_y_by_x,
         tabulates,
         history,
         snapshots,
+    }
+}
+
+fn strip_transient_fit_y_by_x_fields(value: Value) -> Value {
+    match value {
+        Value::Object(mut map) => {
+            map.remove("result");
+            map.remove("reportState");
+            Value::Object(map)
+        }
+        other => other,
     }
 }
 
@@ -1226,8 +1242,49 @@ mod tests {
                 "filters": [],
                 "sampling": { "mode": "full" }
             },
+            "result": {
+                "kind": "bivariate",
+                "usedRows": 42,
+                "excludedRows": 3,
+                "summaryOfFit": {
+                    "rsquare": 0.91,
+                    "rsquareAdj": 0.9,
+                    "rootMeanSquareError": 1.25,
+                    "meanOfResponse": 18.4,
+                    "observations": 42
+                },
+                "parameterEstimates": [
+                    {
+                        "term": "Intercept",
+                        "estimate": 1.5,
+                        "stdError": 0.2,
+                        "tRatio": 7.5,
+                        "probGtAbsT": 0.001
+                    },
+                    {
+                        "term": "age",
+                        "estimate": 0.8,
+                        "stdError": 0.1,
+                        "tRatio": 8.0,
+                        "probGtAbsT": 0.001
+                    }
+                ]
+            },
+            "reportState": {
+                "selectedTab": "report",
+                "expandedSections": ["summaryOfFit", "parameterEstimates"]
+            },
             "createdAt": "2026-08-31T00:00:00.000Z"
         });
+        let mut expected_fit = fit.clone();
+        expected_fit
+            .as_object_mut()
+            .expect("fit should be an object")
+            .remove("result");
+        expected_fit
+            .as_object_mut()
+            .expect("fit should be an object")
+            .remove("reportState");
         let folders = HashMap::from([("fit-1".to_string(), "Analyses/Bivariate".to_string())]);
 
         let bundle = build_bundle(
@@ -1270,13 +1327,11 @@ mod tests {
         assert_eq!(persisted_fit.get("graph"), fit.get("graph"));
         assert_eq!(persisted_fit.get("createdAt"), fit.get("createdAt"));
         assert!(!persisted_fit.contains_key("result"));
-        assert!(!persisted_fit.contains_key("usedRows"));
-        assert!(!persisted_fit.contains_key("excludedRows"));
-        assert!(!persisted_fit.contains_key("summaryOfFit"));
-        assert!(!persisted_fit.contains_key("parameterEstimates"));
+        assert!(!persisted_fit.contains_key("reportState"));
 
         let loaded = read_project_file(path.to_str().unwrap()).unwrap();
-        assert_eq!(loaded.fit_y_by_x, vec![fit]);
+        assert_eq!(loaded.manifest.fit_y_by_x, vec![expected_fit.clone()]);
+        assert_eq!(loaded.fit_y_by_x, vec![expected_fit]);
 
         let _ = std::fs::remove_file(path);
     }
