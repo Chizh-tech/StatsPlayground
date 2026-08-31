@@ -715,6 +715,7 @@
 .sp-fit-y-by-x-report-table td {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-main);
+  border-right: 1px solid var(--border-main);
   text-align: left;
   vertical-align: top;
 }
@@ -723,7 +724,13 @@
   color: var(--fg-secondary);
   font-weight: 600;
   background: color-mix(in srgb, var(--bg-header) 55%, transparent);
+  border-right-color: var(--border-header-h);
   white-space: nowrap;
+}
+
+.sp-fit-y-by-x-report-table th:last-child,
+.sp-fit-y-by-x-report-table td:last-child {
+  border-right: none;
 }
 
 .sp-fit-y-by-x-report-cell-numeric {

@@ -16,4 +16,22 @@ assert.match(
   "Fit Y by X graph and report panels must not shrink and clip their contents",
 );
 
+assert.match(
+  appCss,
+  /\.sp-fit-y-by-x-report-table th,\s*\.sp-fit-y-by-x-report-table td\s*\{[^}]*border-right:\s*1px solid var\(--border-main\);/s,
+  "Fit Y by X report cells must have vertical separators",
+);
+
+assert.match(
+  appCss,
+  /\.sp-fit-y-by-x-report-table th\s*\{[^}]*border-right-color:\s*var\(--border-header-h\);/s,
+  "Fit Y by X report headers must use a distinct separator",
+);
+
+assert.match(
+  appCss,
+  /\.sp-fit-y-by-x-report-table th:last-child,\s*\.sp-fit-y-by-x-report-table td:last-child\s*\{[^}]*border-right:\s*none;/s,
+  "Fit Y by X report tables must not draw a duplicate trailing separator",
+);
+
 console.log("Fit Y by X layout contract passed");
