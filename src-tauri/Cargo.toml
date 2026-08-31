@@ -32,6 +32,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 sqlparser = "0.62.0"
+statrs = "0.19.1"
 
 [profile.dev]
 incremental = true
