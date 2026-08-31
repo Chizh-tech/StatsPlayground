@@ -7514,10 +7514,12 @@ fn fit_y_by_x_display_value(value: Value) -> Option<String> {
         Value::SmallInt(inner) => Some(inner.to_string()),
         Value::Int(inner) => Some(inner.to_string()),
         Value::BigInt(inner) => Some(inner.to_string()),
+        Value::HugeInt(inner) => Some(inner.to_string()),
         Value::UTinyInt(inner) => Some(inner.to_string()),
         Value::USmallInt(inner) => Some(inner.to_string()),
         Value::UInt(inner) => Some(inner.to_string()),
         Value::UBigInt(inner) => Some(inner.to_string()),
+        Value::UHugeInt(inner) => Some(inner.to_string()),
         Value::Float(inner) if inner.is_finite() => Some(inner.to_string()),
         Value::Double(inner) if inner.is_finite() => Some(inner.to_string()),
         Value::Text(inner) => Some(inner),
@@ -8021,6 +8023,61 @@ mod tests {
                 FitYByXRow::Bivariate {
                     x: 9_223_372_036_854_775_810.0,
                     y: 15.75,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn read_fit_y_by_x_rows_uses_plain_wide_integer_labels_for_nominal_oneway() {
+        let engine = DuckDbEngine::new_in_memory().unwrap();
+        seed_fit_y_by_x_dataset(
+            &engine,
+            "fit-wide-oneway",
+            &["response", "factor"],
+            &["DOUBLE", "UHUGEINT"],
+            r#"
+            INSERT INTO "dataset_fit_wide_oneway" (_row_id, response, factor) VALUES
+                (1, 10.0, CAST(340282366920938463463374607431768211450 AS UHUGEINT)),
+                (2, 12.0, CAST(340282366920938463463374607431768211450 AS UHUGEINT)),
+                (3, 9.0, CAST(340282366920938463463374607431768211451 AS UHUGEINT)),
+                (4, NULL, CAST(340282366920938463463374607431768211451 AS UHUGEINT)),
+                (5, 8.0, NULL);
+            "#,
+            5,
+        );
+        engine
+            .conn()
+            .execute(
+                "UPDATE _meta_columns SET role = $1 WHERE dataset_id = $2 AND col_name = $3",
+                params!["nominal", "fit-wide-oneway", "factor"],
+            )
+            .expect("set nominal role");
+
+        let result = engine
+            .read_fit_y_by_x_rows(
+                "fit-wide-oneway",
+                "response",
+                "factor",
+                FitYByXPersonality::Oneway,
+            )
+            .expect("fit y by x rows");
+
+        assert_eq!(result.source_rows, 5);
+        assert_eq!(
+            result.rows,
+            vec![
+                FitYByXRow::Oneway {
+                    y: 10.0,
+                    group: "340282366920938463463374607431768211450".into(),
+                },
+                FitYByXRow::Oneway {
+                    y: 12.0,
+                    group: "340282366920938463463374607431768211450".into(),
+                },
+                FitYByXRow::Oneway {
+                    y: 9.0,
+                    group: "340282366920938463463374607431768211451".into(),
                 },
             ]
         );

@@ -401,6 +401,7 @@ function testLocaleParityForKnownReportLabels(): void {
     "fitYByX.report.source.Pure Error",
     "fitYByX.report.source.Total Error",
     "fitYByX.report.term.Intercept",
+    "fitYByX.report.term.Slope",
   ];
 
   for (const locale of ["en", "vi", "zh-CN", "zh-TW"]) {
@@ -448,7 +449,7 @@ function testKnownBivariateLabelsLocalizeOutsideEnglishAndUnknownLabelsPassThrou
           upperConfidenceLimit: 1.357913579,
         },
         {
-          term: "温度",
+          term: "Slope",
           estimate: 0.0000123456789,
           standardError: 0,
           tRatio: null,
@@ -499,7 +500,7 @@ function testKnownBivariateLabelsLocalizeOutsideEnglishAndUnknownLabelsPassThrou
   assert.equal(model.sections[2]?.rows[0]?.values[0], "模型");
   assert.equal(model.sections[2]?.rows[1]?.values[0], "Mystery Source");
   assert.equal(model.sections[3]?.rows[0]?.values[0], "截距");
-  assert.equal(model.sections[3]?.rows[1]?.values[0], "温度");
+  assert.equal(model.sections[3]?.rows[1]?.values[0], "斜率");
 
   const rendered = model.sections.flatMap((section) => section.rows).flatMap((row) => row.values);
   assert.equal(rendered.includes("Model"), false);
@@ -507,6 +508,7 @@ function testKnownBivariateLabelsLocalizeOutsideEnglishAndUnknownLabelsPassThrou
   assert.equal(rendered.includes("Pure Error"), false);
   assert.equal(rendered.includes("Total Error"), false);
   assert.equal(rendered.includes("Intercept"), false);
+  assert.equal(rendered.includes("Slope"), false);
 }
 
 function testKnownOnewaySourcesLocalizeOutsideEnglish(): void {

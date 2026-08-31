@@ -280,7 +280,8 @@
         "Total Error": "Tổng sai số"
       },
       "term": {
-        "Intercept": "Hệ số chặn"
+        "Intercept": "Hệ số chặn",
+        "Slope": "Hệ số góc"
       },
       "effectSize": {
         "etaSquared": "Eta bình phương",

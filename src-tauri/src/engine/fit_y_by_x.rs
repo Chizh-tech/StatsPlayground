@@ -301,7 +301,7 @@ fn parameter_estimates(
     residual_df: u64,
     confidence_level: f64,
 ) -> Vec<EstimateRow> {
-    let maybe_scale = root_mean_square_error.filter(|value| *value > 0.0);
+    let maybe_scale = root_mean_square_error.filter(|value| value.is_finite() && *value >= 0.0);
     let maybe_t_critical = t_critical(residual_df, confidence_level);
     let intercept_standard_error = maybe_scale.map(|rmse| {
         normalize_signed_zero(rmse * (1.0 / (rows.len() as f64) + square(mean_x) / sxx).sqrt())
@@ -656,14 +656,23 @@ mod tests {
         );
         assert_close(bivariate.anova[0].sum_of_squares, 20.0, 1e-12);
         assert_close(bivariate.anova[1].sum_of_squares, 0.0, 1e-12);
-        assert!(bivariate
-            .parameter_estimates
-            .iter()
-            .all(|row| row.standard_error.is_none()));
-        assert!(bivariate
-            .parameter_estimates
-            .iter()
-            .all(|row| row.p_value.is_none()));
+        assert_eq!(bivariate.parameter_estimates.len(), 2);
+
+        let intercept = &bivariate.parameter_estimates[0];
+        assert_eq!(intercept.term, "Intercept");
+        assert_eq!(intercept.standard_error, Some(0.0));
+        assert_eq!(intercept.t_ratio, None);
+        assert_eq!(intercept.p_value, None);
+        assert_eq!(intercept.lower_confidence_limit, Some(intercept.estimate));
+        assert_eq!(intercept.upper_confidence_limit, Some(intercept.estimate));
+
+        let slope = &bivariate.parameter_estimates[1];
+        assert_eq!(slope.term, "Slope");
+        assert_eq!(slope.standard_error, Some(0.0));
+        assert_eq!(slope.t_ratio, None);
+        assert_eq!(slope.p_value, None);
+        assert_eq!(slope.lower_confidence_limit, Some(slope.estimate));
+        assert_eq!(slope.upper_confidence_limit, Some(slope.estimate));
     }
 
     #[test]

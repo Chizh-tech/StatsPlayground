@@ -281,7 +281,8 @@
         "Total Error": "Total Error"
       },
       "term": {
-        "Intercept": "Intercept"
+        "Intercept": "Intercept",
+        "Slope": "Slope"
       },
       "effectSize": {
         "etaSquared": "Eta Squared",

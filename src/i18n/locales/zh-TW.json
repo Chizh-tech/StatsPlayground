@@ -280,7 +280,8 @@
         "Total Error": "總誤差"
       },
       "term": {
-        "Intercept": "截距"
+        "Intercept": "截距",
+        "Slope": "斜率"
       },
       "effectSize": {
         "etaSquared": "Eta 平方",
