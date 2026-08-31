@@ -148,6 +148,7 @@ The request is deliberately small and recomputable:
 ```ts
 interface FitYByXRequest {
   datasetId: string;
+  generation: number;
   responseColumn: string;
   factorColumn: string;
   personality: FitYByXPersonality;
@@ -228,9 +229,10 @@ focused hook; computed results are not persisted in Zustand or the project
 archive.
 
 Each request captures the analysis ID, dataset ID, dataset generation, and a
-local request generation. A response is applied only if all captured values
-still match. Switching documents, changing the source data, or unmounting the
-view invalidates stale responses.
+local request generation. The backend verifies the requested generation after
+acquiring the database lock and before reading rows. A response is applied only
+if all captured values still match. Switching documents, changing the source
+data, or unmounting the view invalidates stale responses.
 
 The report has explicit loading, success, not-computable, and error states. An
 IPC failure does not remove or cover the graph. A graph-data failure does not
