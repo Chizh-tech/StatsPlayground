@@ -91,7 +91,7 @@ pub struct OnewayGroupSummary {
 #[serde(rename_all = "camelCase")]
 pub struct OnewayEffectSizes {
     pub eta_squared: f64,
-    pub omega_squared: f64,
+    pub omega_squared: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -211,5 +211,37 @@ mod tests {
         let value = serde_json::to_value(&lack_of_fit).expect("serialization should succeed");
         assert_eq!(value["state"], "available");
         assert!(value["rows"].is_array());
+
+        let oneway = FitYByXResult::Oneway(OnewayResult {
+            used_rows: 2,
+            excluded_rows: 1,
+            confidence_level: 0.95,
+            group_summaries: vec![OnewayGroupSummary {
+                group: "A".into(),
+                count: 1,
+                mean: 1.0,
+                standard_deviation: None,
+                standard_error: None,
+                lower_confidence_limit: None,
+                upper_confidence_limit: None,
+            }],
+            anova: vec![AnovaRow {
+                source: "Within".into(),
+                degrees_of_freedom: 0,
+                sum_of_squares: 0.0,
+                mean_square: None,
+                f_ratio: None,
+                p_value: None,
+            }],
+            effect_sizes: OnewayEffectSizes {
+                eta_squared: 1.0,
+                omega_squared: None,
+            },
+        });
+
+        let oneway_value = serde_json::to_value(&oneway).expect("serialization should succeed");
+        assert_eq!(oneway_value["kind"], "oneway");
+        assert_eq!(oneway_value["effectSizes"]["etaSquared"], 1.0);
+        assert!(oneway_value["effectSizes"]["omegaSquared"].is_null());
     }
 }

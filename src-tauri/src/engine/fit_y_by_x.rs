@@ -48,15 +48,6 @@ pub fn calculate_oneway(
 
     let total_groups = groups.len() as u64;
     let within_df = used_rows.saturating_sub(total_groups);
-    if within_df == 0 {
-        return not_computable(
-            FitYByXPersonality::Oneway,
-            FitYByXNotComputableReason::NoWithinGroupDegreesOfFreedom,
-            used_rows,
-            excluded_rows,
-            confidence_level,
-        );
-    }
 
     let overall_mean = mean(groups.values().flat_map(|values| values.iter().copied()));
 
@@ -111,12 +102,17 @@ pub fn calculate_oneway(
         0.0
     };
     let omega_squared = if ss_total > 0.0 {
-        let ms_within_value = ms_within.unwrap_or(0.0);
-        let estimate =
-            (ss_between - (between_df as f64) * ms_within_value) / (ss_total + ms_within_value);
-        normalize_signed_zero(estimate.max(0.0))
+        ms_within.and_then(|ms_within_value| {
+            let denominator = ss_total + ms_within_value;
+            if denominator <= 0.0 {
+                None
+            } else {
+                let estimate = (ss_between - (between_df as f64) * ms_within_value) / denominator;
+                Some(normalize_signed_zero(estimate.max(0.0)))
+            }
+        })
     } else {
-        0.0
+        Some(0.0)
     };
 
     FitYByXResult::Oneway(OnewayResult {
@@ -632,7 +628,11 @@ mod tests {
         assert_close(oneway.anova[2].sum_of_squares, 10.0, 1e-12);
         assert_close(oneway.anova[0].f_ratio.unwrap_or(f64::NAN), 18.0, 1e-12);
         assert_close(oneway.effect_sizes.eta_squared, 0.9, 1e-12);
-        assert_close(oneway.effect_sizes.omega_squared, 0.8095238095, 1e-10);
+        assert_close(
+            oneway.effect_sizes.omega_squared.unwrap_or(f64::NAN),
+            0.8095238095,
+            1e-10,
+        );
     }
 
     #[test]
@@ -714,8 +714,65 @@ mod tests {
             .available()
             .expect("expected available state");
         assert_eq!(lack_of_fit.rows.len(), 3);
-        assert!(lack_of_fit.rows[0].f_ratio.unwrap_or(f64::NAN).is_finite());
-        assert!(lack_of_fit.rows[0].p_value.unwrap_or(f64::NAN).is_finite());
+        assert_close(bivariate.intercept, 0.016666666666666607, 1e-12);
+        assert_close(bivariate.slope, 1.225, 1e-12);
+        assert_close(bivariate.anova[0].sum_of_squares, 6.0025, 1e-12);
+        assert_close(bivariate.anova[1].sum_of_squares, 0.7508333333333334, 1e-12);
+        assert_close(bivariate.anova[2].sum_of_squares, 6.753333333333334, 1e-12);
+        assert_close(
+            bivariate.anova[0].mean_square.unwrap_or(f64::NAN),
+            6.0025,
+            1e-12,
+        );
+        assert_close(
+            bivariate.anova[1].mean_square.unwrap_or(f64::NAN),
+            0.18770833333333337,
+            1e-12,
+        );
+        assert_close(
+            lack_of_fit.rows[0].sum_of_squares,
+            0.02083333333333337,
+            1e-12,
+        );
+        assert_eq!(lack_of_fit.rows[0].degrees_of_freedom, 1);
+        assert_close(
+            lack_of_fit.rows[0].mean_square.unwrap_or(f64::NAN),
+            0.02083333333333337,
+            1e-12,
+        );
+        assert_close(lack_of_fit.rows[1].sum_of_squares, 0.73, 1e-12);
+        assert_eq!(lack_of_fit.rows[1].degrees_of_freedom, 3);
+        assert_close(
+            lack_of_fit.rows[1].mean_square.unwrap_or(f64::NAN),
+            0.24333333333333332,
+            1e-12,
+        );
+        assert_eq!(lack_of_fit.rows[2].degrees_of_freedom, 4);
+        assert_close(
+            lack_of_fit.rows[2].sum_of_squares,
+            0.7508333333333334,
+            1e-12,
+        );
+        assert_close(
+            lack_of_fit.rows[0].f_ratio.unwrap_or(f64::NAN),
+            0.08561643835616453,
+            1e-12,
+        );
+        assert_close(
+            lack_of_fit.rows[0].p_value.unwrap_or(f64::NAN),
+            0.7888961295528955,
+            1e-12,
+        );
+        assert_close(
+            bivariate.anova[0].sum_of_squares + bivariate.anova[1].sum_of_squares,
+            bivariate.anova[2].sum_of_squares,
+            1e-12,
+        );
+        assert_close(
+            lack_of_fit.rows[0].sum_of_squares + lack_of_fit.rows[1].sum_of_squares,
+            lack_of_fit.rows[2].sum_of_squares,
+            1e-12,
+        );
     }
 
     #[test]
@@ -792,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn oneway_zero_within_group_degrees_of_freedom_is_not_computable() {
+    fn oneway_zero_within_group_degrees_of_freedom_preserves_partial_results() {
         let rows = vec![
             FitYByXRow::Oneway {
                 y: 1.0,
@@ -806,15 +863,42 @@ mod tests {
 
         let result = calculate_oneway(rows, 1, 0.95);
 
-        assert_eq!(
-            result,
-            FitYByXResult::NotComputable(NotComputableResult {
-                personality: FitYByXPersonality::Oneway,
-                reason: FitYByXNotComputableReason::NoWithinGroupDegreesOfFreedom,
-                used_rows: 2,
-                excluded_rows: 1,
-                confidence_level: 0.95,
-            })
-        );
+        let FitYByXResult::Oneway(oneway) = result else {
+            panic!("expected oneway result");
+        };
+
+        assert_eq!(oneway.used_rows, 2);
+        assert_eq!(oneway.excluded_rows, 1);
+        assert_eq!(oneway.confidence_level, 0.95);
+        assert_eq!(oneway.group_summaries.len(), 2);
+        assert_eq!(oneway.group_summaries[0].group, "A");
+        assert_eq!(oneway.group_summaries[0].count, 1);
+        assert_close(oneway.group_summaries[0].mean, 1.0, 1e-12);
+        assert!(oneway.group_summaries[0].standard_deviation.is_none());
+        assert!(oneway.group_summaries[0].standard_error.is_none());
+        assert!(oneway.group_summaries[0].lower_confidence_limit.is_none());
+        assert!(oneway.group_summaries[0].upper_confidence_limit.is_none());
+        assert_eq!(oneway.group_summaries[1].group, "B");
+        assert_eq!(oneway.group_summaries[1].count, 1);
+        assert_close(oneway.group_summaries[1].mean, 2.0, 1e-12);
+        assert_eq!(oneway.anova.len(), 3);
+        assert_eq!(oneway.anova[0].source, "Between");
+        assert_eq!(oneway.anova[0].degrees_of_freedom, 1);
+        assert_close(oneway.anova[0].sum_of_squares, 0.5, 1e-12);
+        assert_close(oneway.anova[0].mean_square.unwrap_or(f64::NAN), 0.5, 1e-12);
+        assert!(oneway.anova[0].f_ratio.is_none());
+        assert!(oneway.anova[0].p_value.is_none());
+        assert_eq!(oneway.anova[1].source, "Within");
+        assert_eq!(oneway.anova[1].degrees_of_freedom, 0);
+        assert_close(oneway.anova[1].sum_of_squares, 0.0, 1e-12);
+        assert!(oneway.anova[1].mean_square.is_none());
+        assert!(oneway.anova[1].f_ratio.is_none());
+        assert!(oneway.anova[1].p_value.is_none());
+        assert_eq!(oneway.anova[2].source, "Total");
+        assert_eq!(oneway.anova[2].degrees_of_freedom, 1);
+        assert_close(oneway.anova[2].sum_of_squares, 0.5, 1e-12);
+        assert!(oneway.anova[2].mean_square.is_none());
+        assert_close(oneway.effect_sizes.eta_squared, 1.0, 1e-12);
+        assert!(oneway.effect_sizes.omega_squared.is_none());
     }
 }
