@@ -11,10 +11,18 @@ pub enum FitYByXPersonality {
 #[serde(rename_all = "camelCase")]
 pub struct FitYByXRequest {
     pub dataset_id: String,
+    pub generation: u64,
     pub response_column: String,
     pub factor_column: String,
     pub personality: FitYByXPersonality,
     pub confidence_level: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitYByXRows {
+    pub source_rows: u64,
+    pub rows: Vec<FitYByXRow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -187,6 +195,7 @@ mod tests {
     fn fit_y_by_x_request_and_nested_tags_deserialize_from_camel_case_json() {
         let request: FitYByXRequest = serde_json::from_value(serde_json::json!({
             "datasetId": "ds1",
+            "generation": 7,
             "responseColumn": "y",
             "factorColumn": "x",
             "personality": "oneway",
@@ -195,6 +204,7 @@ mod tests {
         .expect("request should deserialize");
 
         assert_eq!(request.dataset_id, "ds1");
+        assert_eq!(request.generation, 7);
         assert_eq!(request.personality, FitYByXPersonality::Oneway);
 
         let lack_of_fit = LackOfFitResult::Available(LackOfFitAvailable {

@@ -8,6 +8,7 @@ use duckdb::{params, params_from_iter, Config, Connection};
 use crate::engine::correlation::{correlate, CorrelationFailure, StatisticalMethod};
 use crate::engine::sql_query::{normalize_identifier, validate_read_only_query};
 use crate::error::AppError;
+use crate::models::fit_y_by_x::{FitYByXPersonality, FitYByXRow, FitYByXRows};
 use crate::models::graph_data::{
     BoxPlotEntry, BoxPlotOutlier, BoxPlotPacket, CorrelationMatrixCell, CorrelationMatrixPacket,
     CorrelationMethod, CorrelationUnavailableReason, GraphAggregatePacket, GraphDataRequest,
@@ -7072,6 +7073,122 @@ impl DuckDbEngine {
         Ok(cols)
     }
 
+    pub fn read_fit_y_by_x_rows(
+        &self,
+        dataset_id: &str,
+        response_column: &str,
+        factor_column: &str,
+        personality: FitYByXPersonality,
+    ) -> Result<FitYByXRows, AppError> {
+        self.get_dataset_meta(dataset_id)?;
+
+        let user_columns = self.get_user_columns(dataset_id)?;
+        let response_type = user_columns
+            .iter()
+            .find(|(name, _)| name == response_column)
+            .map(|(_, column_type)| column_type.clone())
+            .ok_or_else(|| {
+                AppError::InvalidParam(format!("unknown response column: {response_column}"))
+            })?;
+        let factor_type = user_columns
+            .iter()
+            .find(|(name, _)| name == factor_column)
+            .map(|(_, column_type)| column_type.clone())
+            .ok_or_else(|| {
+                AppError::InvalidParam(format!("unknown factor column: {factor_column}"))
+            })?;
+
+        if response_column == factor_column {
+            return Err(AppError::InvalidParam(
+                "response and factor columns must not be the same".into(),
+            ));
+        }
+        if !is_numeric_type(&response_type) {
+            return Err(AppError::InvalidParam(format!(
+                "response column must be numeric: {response_column}"
+            )));
+        }
+
+        let factor_role = self.fit_y_by_x_column_role(dataset_id, factor_column)?;
+        match personality {
+            FitYByXPersonality::Oneway => {
+                if is_numeric_type(&factor_type) && factor_role.eq_ignore_ascii_case("continuous") {
+                    return Err(AppError::InvalidParam(format!(
+                        "oneway requires a categorical factor column: {factor_column}"
+                    )));
+                }
+            }
+            FitYByXPersonality::Bivariate => {
+                if !is_numeric_type(&factor_type) || !factor_role.eq_ignore_ascii_case("continuous")
+                {
+                    return Err(AppError::InvalidParam(format!(
+                        "bivariate requires a continuous numeric factor column: {factor_column}"
+                    )));
+                }
+            }
+        }
+
+        let table_name = Self::quote_identifier(&Self::internal_table_name(dataset_id));
+        let response_identifier = Self::quote_identifier(response_column);
+        let factor_identifier = Self::quote_identifier(factor_column);
+        let query_sql =
+            format!("SELECT {response_identifier}, {factor_identifier} FROM {table_name}");
+
+        let mut stmt = self.conn.prepare(&query_sql)?;
+        let mut source_rows = 0_u64;
+        let mut rows = Vec::new();
+        let mut query_rows = stmt.query([])?;
+        while let Some(row) = query_rows.next()? {
+            source_rows += 1;
+
+            let response_value = row.get::<_, Value>(0)?;
+            let factor_value = row.get::<_, Value>(1)?;
+            let response_numeric = fit_y_by_x_numeric_value(response_value);
+
+            match personality {
+                FitYByXPersonality::Oneway => {
+                    let Some(y) = response_numeric.filter(|value| value.is_finite()) else {
+                        continue;
+                    };
+                    let Some(group) = fit_y_by_x_display_value(factor_value) else {
+                        continue;
+                    };
+                    rows.push(FitYByXRow::Oneway { y, group });
+                }
+                FitYByXPersonality::Bivariate => {
+                    let Some(y) = response_numeric.filter(|value| value.is_finite()) else {
+                        continue;
+                    };
+                    let Some(x) =
+                        fit_y_by_x_numeric_value(factor_value).filter(|value| value.is_finite())
+                    else {
+                        continue;
+                    };
+                    rows.push(FitYByXRow::Bivariate { x, y });
+                }
+            }
+        }
+
+        Ok(FitYByXRows { source_rows, rows })
+    }
+
+    fn fit_y_by_x_column_role(
+        &self,
+        dataset_id: &str,
+        column_name: &str,
+    ) -> Result<String, AppError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT role FROM _meta_columns WHERE dataset_id = $1 AND col_name = $2")?;
+        let mut rows = stmt.query(params![dataset_id, column_name])?;
+        let Some(row) = rows.next()? else {
+            return Err(AppError::InvalidParam(format!(
+                "unknown column role metadata: {column_name}"
+            )));
+        };
+        row.get(0).map_err(AppError::from)
+    }
+
     pub(crate) fn prepare_archive_keyset_read(
         &self,
         dataset_id: &str,
@@ -7361,6 +7478,59 @@ fn numeric_cell_value(value: Value) -> Result<Option<f64>, AppError> {
             "Unexpected non-numeric aggregate value: {:?}",
             other
         ))),
+    }
+}
+
+fn fit_y_by_x_numeric_value(value: Value) -> Option<f64> {
+    match value {
+        Value::Null => None,
+        Value::TinyInt(inner) => Some(inner as f64),
+        Value::SmallInt(inner) => Some(inner as f64),
+        Value::Int(inner) => Some(inner as f64),
+        Value::BigInt(inner) => Some(inner as f64),
+        Value::UTinyInt(inner) => Some(inner as f64),
+        Value::USmallInt(inner) => Some(inner as f64),
+        Value::UInt(inner) => Some(inner as f64),
+        Value::UBigInt(inner) => Some(inner as f64),
+        Value::Float(inner) => Some(inner as f64),
+        Value::Double(inner) => Some(inner),
+        _ => None,
+    }
+}
+
+fn fit_y_by_x_display_value(value: Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::Boolean(inner) => Some(inner.to_string()),
+        Value::TinyInt(inner) => Some(inner.to_string()),
+        Value::SmallInt(inner) => Some(inner.to_string()),
+        Value::Int(inner) => Some(inner.to_string()),
+        Value::BigInt(inner) => Some(inner.to_string()),
+        Value::UTinyInt(inner) => Some(inner.to_string()),
+        Value::USmallInt(inner) => Some(inner.to_string()),
+        Value::UInt(inner) => Some(inner.to_string()),
+        Value::UBigInt(inner) => Some(inner.to_string()),
+        Value::Float(inner) if inner.is_finite() => Some(inner.to_string()),
+        Value::Double(inner) if inner.is_finite() => Some(inner.to_string()),
+        Value::Text(inner) => Some(inner),
+        Value::Decimal(inner) => Some(inner.to_string()),
+        Value::Date32(inner) => Some(inner.to_string()),
+        Value::Time64(_, inner) => Some(inner.to_string()),
+        Value::Timestamp(_, inner) => Some(inner.to_string()),
+        Value::Blob(inner) => Some(
+            inner
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        ),
+        Value::List(inner) => Some(format!("{:?}", inner)),
+        Value::Enum(inner) => Some(format!("{:?}", inner)),
+        Value::Struct(inner) => Some(format!("{:?}", inner)),
+        Value::Map(inner) => Some(format!("{:?}", inner)),
+        Value::Array(inner) => Some(format!("{:?}", inner)),
+        Value::Union(inner) => Some(format!("{:?}", inner)),
+        Value::Float(_) | Value::Double(_) => None,
+        other => Some(format!("{:?}", other)),
     }
 }
 
