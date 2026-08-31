@@ -149,6 +149,10 @@ mod tests {
                 "commands::stats_commands::get_descriptive_stats",
                 CommandClass::ReadOnly,
             ),
+            (
+                "commands::fit_y_by_x_commands::fit_y_by_x",
+                CommandClass::ReadOnly,
+            ),
             ("commands::tabulate_commands::tabulate", CommandClass::ReadOnly),
             ("commands::io_commands::export_csv", CommandClass::ReadOnly),
             ("commands::io_commands::import_sqlite", CommandClass::Mutation),

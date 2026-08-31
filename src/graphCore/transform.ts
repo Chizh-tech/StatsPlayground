@@ -11,7 +11,6 @@ import { DEFAULT_GROUP_KEY } from "./types.ts";
 import { buildAxisCommon, buildCorrelationDivergingPalette, type GraphTheme } from "./theme.ts";
 import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand.ts";
 import type { BoxPlotPacket, CorrelationMatrixPacket, GraphDataFrame, GraphAggregatePacket, HeatmapPacket, HistogramPacket, SummaryPacket } from "../types/graphData.ts";
-import type { RawPointPanelDescriptor } from "./rawPoints.ts";
 import { buildFrameScatterItems, type FrameScatterItem } from "./frameScatter.ts";
 import {
   computeJitterOffsets as computeStableJitterOffsets,
@@ -6909,7 +6908,6 @@ export function buildGraph(
       panels: [{
         title: spec.title || "",
         option: buildSingleOption(spec, frameSafeData, theme, undefined, valueOrders, undefined, frame?.aggregates),
-        rawPoints: null,
         groupXValue: null,
         groupYValue: null,
       }],

@@ -582,6 +582,18 @@ export function deriveElements(item: GraphBuilderItem): GraphElementRequest[] {
     });
 }
 
+function isFitYByXAnalysisGraph(
+  item: GraphBuilderItem,
+  elements: readonly GraphElementRequest[],
+): boolean {
+  if (item.mode !== "2d" || !item.id.startsWith("fit-y-by-x-graph:")) {
+    return false;
+  }
+
+  const kinds = new Set(elements.map((element) => String(element.kind).toLowerCase()));
+  return kinds.has("boxplot") || kinds.has("fitline");
+}
+
 export function deriveGraphRequestParts(item: GraphBuilderItem): {
   fields: GraphFieldBinding[];
   filters: TableWindowFilter[];
@@ -593,7 +605,7 @@ export function deriveGraphRequestParts(item: GraphBuilderItem): {
     fields: deriveFields(item),
     filters: serializeFilters(item.filters ?? []),
     elements,
-    sampling: item.mode === "multivariate"
+    sampling: item.mode === "multivariate" || isFitYByXAnalysisGraph(item, elements)
       ? { mode: "full" }
       : resolveEffectiveGraphSampling(item.sampling, elements),
   };

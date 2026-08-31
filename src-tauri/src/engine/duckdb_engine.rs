@@ -2,12 +2,13 @@ use std::collections::{BTreeMap, HashSet};
 use std::mem;
 use std::time::Instant;
 
-use duckdb::types::{OrderedMap, TimeUnit, Value};
+use duckdb::types::{Decimal, OrderedMap, TimeUnit, Value};
 use duckdb::{params, params_from_iter, Config, Connection};
 
 use crate::engine::correlation::{correlate, CorrelationFailure, StatisticalMethod};
 use crate::engine::sql_query::{normalize_identifier, validate_read_only_query};
 use crate::error::AppError;
+use crate::models::fit_y_by_x::{FitYByXPersonality, FitYByXRow, FitYByXRows};
 use crate::models::graph_data::{
     BoxPlotEntry, BoxPlotOutlier, BoxPlotPacket, CorrelationMatrixCell, CorrelationMatrixPacket,
     CorrelationMethod, CorrelationUnavailableReason, GraphAggregatePacket, GraphDataRequest,
@@ -717,7 +718,12 @@ impl DuckDbEngine {
                     updated_at: row.get(7)?,
                 })
             },
-        )?;
+        ).map_err(|error| match error {
+            duckdb::Error::QueryReturnedNoRows => {
+                AppError::InvalidParam(format!("unknown dataset: {id}"))
+            }
+            other => AppError::from(other),
+        })?;
         Ok(meta)
     }
 
@@ -947,15 +953,10 @@ impl DuckDbEngine {
             for (column_index, (value, column_type)) in
                 row.iter().zip(canonical_types.iter()).enumerate()
             {
-                let duckdb_value = Self::json_scalar_to_duckdb_value(
-                    value,
-                    row_index + 1,
-                    column_index + 1,
-                )?;
-                let validation_sql = format!(
-                    "SELECT {}",
-                    Self::typed_parameter_expression(column_type)
-                );
+                let duckdb_value =
+                    Self::json_scalar_to_duckdb_value(value, row_index + 1, column_index + 1)?;
+                let validation_sql =
+                    format!("SELECT {}", Self::typed_parameter_expression(column_type));
                 self.conn
                     .query_row(&validation_sql, params![duckdb_value], |_| Ok(()))
                     .map_err(|error| {
@@ -7072,6 +7073,122 @@ impl DuckDbEngine {
         Ok(cols)
     }
 
+    pub fn read_fit_y_by_x_rows(
+        &self,
+        dataset_id: &str,
+        response_column: &str,
+        factor_column: &str,
+        personality: FitYByXPersonality,
+    ) -> Result<FitYByXRows, AppError> {
+        self.get_dataset_meta(dataset_id)?;
+
+        let user_columns = self.get_user_columns(dataset_id)?;
+        let response_type = user_columns
+            .iter()
+            .find(|(name, _)| name == response_column)
+            .map(|(_, column_type)| column_type.clone())
+            .ok_or_else(|| {
+                AppError::InvalidParam(format!("unknown response column: {response_column}"))
+            })?;
+        let factor_type = user_columns
+            .iter()
+            .find(|(name, _)| name == factor_column)
+            .map(|(_, column_type)| column_type.clone())
+            .ok_or_else(|| {
+                AppError::InvalidParam(format!("unknown factor column: {factor_column}"))
+            })?;
+
+        if response_column == factor_column {
+            return Err(AppError::InvalidParam(
+                "response and factor columns must not be the same".into(),
+            ));
+        }
+        if !is_numeric_type(&response_type) {
+            return Err(AppError::InvalidParam(format!(
+                "response column must be numeric: {response_column}"
+            )));
+        }
+
+        let factor_role = self.fit_y_by_x_column_role(dataset_id, factor_column)?;
+        match personality {
+            FitYByXPersonality::Oneway => {
+                if is_numeric_type(&factor_type) && factor_role.eq_ignore_ascii_case("continuous") {
+                    return Err(AppError::InvalidParam(format!(
+                        "oneway requires a categorical factor column: {factor_column}"
+                    )));
+                }
+            }
+            FitYByXPersonality::Bivariate => {
+                if !is_numeric_type(&factor_type) || !factor_role.eq_ignore_ascii_case("continuous")
+                {
+                    return Err(AppError::InvalidParam(format!(
+                        "bivariate requires a continuous numeric factor column: {factor_column}"
+                    )));
+                }
+            }
+        }
+
+        let table_name = Self::quote_identifier(&Self::internal_table_name(dataset_id));
+        let response_identifier = Self::quote_identifier(response_column);
+        let factor_identifier = Self::quote_identifier(factor_column);
+        let query_sql =
+            format!("SELECT {response_identifier}, {factor_identifier} FROM {table_name}");
+
+        let mut stmt = self.conn.prepare(&query_sql)?;
+        let mut source_rows = 0_u64;
+        let mut rows = Vec::new();
+        let mut query_rows = stmt.query([])?;
+        while let Some(row) = query_rows.next()? {
+            source_rows += 1;
+
+            let response_value = row.get::<_, Value>(0)?;
+            let factor_value = row.get::<_, Value>(1)?;
+            let response_numeric = fit_y_by_x_numeric_value(response_value);
+
+            match personality {
+                FitYByXPersonality::Oneway => {
+                    let Some(y) = response_numeric.filter(|value| value.is_finite()) else {
+                        continue;
+                    };
+                    let Some(group) = fit_y_by_x_display_value(factor_value) else {
+                        continue;
+                    };
+                    rows.push(FitYByXRow::Oneway { y, group });
+                }
+                FitYByXPersonality::Bivariate => {
+                    let Some(y) = response_numeric.filter(|value| value.is_finite()) else {
+                        continue;
+                    };
+                    let Some(x) =
+                        fit_y_by_x_numeric_value(factor_value).filter(|value| value.is_finite())
+                    else {
+                        continue;
+                    };
+                    rows.push(FitYByXRow::Bivariate { x, y });
+                }
+            }
+        }
+
+        Ok(FitYByXRows { source_rows, rows })
+    }
+
+    fn fit_y_by_x_column_role(
+        &self,
+        dataset_id: &str,
+        column_name: &str,
+    ) -> Result<String, AppError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT role FROM _meta_columns WHERE dataset_id = $1 AND col_name = $2")?;
+        let mut rows = stmt.query(params![dataset_id, column_name])?;
+        let Some(row) = rows.next()? else {
+            return Err(AppError::InvalidParam(format!(
+                "unknown column role metadata: {column_name}"
+            )));
+        };
+        row.get(0).map_err(AppError::from)
+    }
+
     pub(crate) fn prepare_archive_keyset_read(
         &self,
         dataset_id: &str,
@@ -7361,6 +7478,69 @@ fn numeric_cell_value(value: Value) -> Result<Option<f64>, AppError> {
             "Unexpected non-numeric aggregate value: {:?}",
             other
         ))),
+    }
+}
+
+fn fit_y_by_x_numeric_value(value: Value) -> Option<f64> {
+    match value {
+        Value::Null => None,
+        Value::TinyInt(inner) => Some(inner as f64),
+        Value::SmallInt(inner) => Some(inner as f64),
+        Value::Int(inner) => Some(inner as f64),
+        Value::BigInt(inner) => Some(inner as f64),
+        Value::HugeInt(inner) => Some(inner as f64),
+        Value::UHugeInt(inner) => Some(inner as f64),
+        Value::UTinyInt(inner) => Some(inner as f64),
+        Value::USmallInt(inner) => Some(inner as f64),
+        Value::UInt(inner) => Some(inner as f64),
+        Value::UBigInt(inner) => Some(inner as f64),
+        Value::Float(inner) => Some(inner as f64),
+        Value::Double(inner) => Some(inner),
+        Value::Decimal(inner) => fit_y_by_x_decimal_value(inner),
+        _ => None,
+    }
+}
+
+fn fit_y_by_x_decimal_value(value: Decimal) -> Option<f64> {
+    let scale_factor = 10_f64.powi(i32::from(value.scale()));
+    Some((value.value() as f64) / scale_factor)
+}
+
+fn fit_y_by_x_display_value(value: Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::Boolean(inner) => Some(inner.to_string()),
+        Value::TinyInt(inner) => Some(inner.to_string()),
+        Value::SmallInt(inner) => Some(inner.to_string()),
+        Value::Int(inner) => Some(inner.to_string()),
+        Value::BigInt(inner) => Some(inner.to_string()),
+        Value::HugeInt(inner) => Some(inner.to_string()),
+        Value::UTinyInt(inner) => Some(inner.to_string()),
+        Value::USmallInt(inner) => Some(inner.to_string()),
+        Value::UInt(inner) => Some(inner.to_string()),
+        Value::UBigInt(inner) => Some(inner.to_string()),
+        Value::UHugeInt(inner) => Some(inner.to_string()),
+        Value::Float(inner) if inner.is_finite() => Some(inner.to_string()),
+        Value::Double(inner) if inner.is_finite() => Some(inner.to_string()),
+        Value::Text(inner) => Some(inner),
+        Value::Decimal(inner) => Some(inner.to_string()),
+        Value::Date32(inner) => Some(inner.to_string()),
+        Value::Time64(_, inner) => Some(inner.to_string()),
+        Value::Timestamp(_, inner) => Some(inner.to_string()),
+        Value::Blob(inner) => Some(
+            inner
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        ),
+        Value::List(inner) => Some(format!("{:?}", inner)),
+        Value::Enum(inner) => Some(format!("{:?}", inner)),
+        Value::Struct(inner) => Some(format!("{:?}", inner)),
+        Value::Map(inner) => Some(format!("{:?}", inner)),
+        Value::Array(inner) => Some(format!("{:?}", inner)),
+        Value::Union(inner) => Some(format!("{:?}", inner)),
+        Value::Float(_) | Value::Double(_) => None,
+        other => Some(format!("{:?}", other)),
     }
 }
 
@@ -7711,6 +7891,7 @@ fn dedupe_sqlite_table_name(base: &str, used: &mut std::collections::HashSet<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::fit_y_by_x::{FitYByXPersonality, FitYByXRow};
     use crate::models::graph_data::{
         GraphDataRequest, GraphElementRequest, GraphFieldBinding, GraphSampling, GraphViewport,
     };
@@ -7749,6 +7930,158 @@ mod tests {
             filters: Vec::new(),
             generation: 0,
         }
+    }
+
+    fn seed_fit_y_by_x_dataset(
+        engine: &DuckDbEngine,
+        dataset_id: &str,
+        column_names: &[&str],
+        column_types: &[&str],
+        insert_sql: &str,
+        row_count: i64,
+    ) {
+        engine
+            .create_empty_table(
+                dataset_id,
+                dataset_id,
+                &column_names
+                    .iter()
+                    .map(|name| (*name).to_string())
+                    .collect::<Vec<_>>(),
+                &column_types
+                    .iter()
+                    .map(|column_type| (*column_type).to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .expect("fit y by x fixture metadata");
+        engine
+            .conn()
+            .execute_batch(insert_sql)
+            .expect("fit y by x fixture rows");
+        engine
+            .conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
+                params![row_count, dataset_id],
+            )
+            .expect("fit y by x fixture row count");
+    }
+
+    #[test]
+    fn read_fit_y_by_x_rows_maps_unknown_dataset_to_invalid_param() {
+        let engine = DuckDbEngine::new_in_memory().unwrap();
+
+        let error = engine
+            .read_fit_y_by_x_rows(
+                "missing-dataset",
+                "response",
+                "factor",
+                FitYByXPersonality::Oneway,
+            )
+            .expect_err("unknown dataset must fail");
+
+        assert!(
+            matches!(error, AppError::InvalidParam(message) if message.contains("unknown dataset"))
+        );
+    }
+
+    #[test]
+    fn read_fit_y_by_x_rows_keeps_decimal_and_hugeint_bivariate_rows() {
+        let engine = DuckDbEngine::new_in_memory().unwrap();
+        seed_fit_y_by_x_dataset(
+            &engine,
+            "fit-wide-bivariate",
+            &["response", "factor"],
+            &["DECIMAL(18,2)", "HUGEINT"],
+            r#"
+            INSERT INTO "dataset_fit_wide_bivariate" (_row_id, response, factor) VALUES
+                (1, CAST(12.50 AS DECIMAL(18,2)), CAST(9223372036854775808 AS HUGEINT)),
+                (2, CAST(15.75 AS DECIMAL(18,2)), CAST(9223372036854775810 AS HUGEINT)),
+                (3, NULL, CAST(9223372036854775812 AS HUGEINT)),
+                (4, CAST(18.00 AS DECIMAL(18,2)), NULL);
+            "#,
+            4,
+        );
+
+        let result = engine
+            .read_fit_y_by_x_rows(
+                "fit-wide-bivariate",
+                "response",
+                "factor",
+                FitYByXPersonality::Bivariate,
+            )
+            .expect("fit y by x rows");
+
+        assert_eq!(result.source_rows, 4);
+        assert_eq!(
+            result.rows,
+            vec![
+                FitYByXRow::Bivariate {
+                    x: 9_223_372_036_854_775_808.0,
+                    y: 12.5,
+                },
+                FitYByXRow::Bivariate {
+                    x: 9_223_372_036_854_775_810.0,
+                    y: 15.75,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn read_fit_y_by_x_rows_uses_plain_wide_integer_labels_for_nominal_oneway() {
+        let engine = DuckDbEngine::new_in_memory().unwrap();
+        seed_fit_y_by_x_dataset(
+            &engine,
+            "fit-signed-wide-oneway",
+            &["response", "factor"],
+            &["DOUBLE", "HUGEINT"],
+            r#"
+            INSERT INTO "dataset_fit_signed_wide_oneway" (_row_id, response, factor) VALUES
+                (1, CAST(10.25 AS DOUBLE), CAST(-9223372036854775809 AS HUGEINT)),
+                (2, CAST(12.50 AS DOUBLE), CAST(9223372036854775808 AS HUGEINT)),
+                (3, NULL, CAST(-9223372036854775809 AS HUGEINT)),
+                (4, CAST(8.75 AS DOUBLE), NULL),
+                (5, CAST(9.50 AS DOUBLE), CAST(9223372036854775808 AS HUGEINT));
+            "#,
+            5,
+        );
+        engine
+            .conn()
+            .execute(
+                "UPDATE _meta_columns SET role = $1 WHERE dataset_id = $2 AND col_name = $3",
+                params!["nominal", "fit-signed-wide-oneway", "factor"],
+            )
+            .expect("set nominal role");
+
+        let result = engine
+            .read_fit_y_by_x_rows(
+                "fit-signed-wide-oneway",
+                "response",
+                "factor",
+                FitYByXPersonality::Oneway,
+            )
+            .expect("fit y by x rows");
+
+        assert_eq!(result.source_rows, 5);
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(
+            result.rows,
+            vec![
+                FitYByXRow::Oneway {
+                    y: 10.25,
+                    group: "-9223372036854775809".into(),
+                },
+                FitYByXRow::Oneway {
+                    y: 12.5,
+                    group: "9223372036854775808".into(),
+                },
+                FitYByXRow::Oneway {
+                    y: 9.5,
+                    group: "9223372036854775808".into(),
+                },
+            ]
+        );
     }
 
     #[test]

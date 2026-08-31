@@ -105,6 +105,11 @@ export interface GraphBuilderItem {
   createdAt: string;
 }
 
+export type EmbeddedGraphConfig = Pick<
+  GraphBuilderItem,
+  "mode" | "modeStates" | "filters" | "sampling"
+>;
+
 export function isCorrelationMatrixItem(item: GraphBuilderItem): boolean {
   const asUnknown = item as unknown as {
     mode?: GraphBuilderMode;

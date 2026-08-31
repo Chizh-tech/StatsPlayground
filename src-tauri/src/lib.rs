@@ -65,6 +65,7 @@ pub fn run() {
             commands::data_commands::set_column_display_props,
             commands::stats_commands::get_column_stats,
             commands::stats_commands::get_descriptive_stats,
+            commands::fit_y_by_x_commands::fit_y_by_x,
             commands::tabulate_commands::tabulate,
             commands::io_commands::export_csv,
             commands::io_commands::import_sqlite,
