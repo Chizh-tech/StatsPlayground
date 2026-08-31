@@ -252,6 +252,8 @@ export function useFitYByXReport(
   dependencies?: Partial<FitYByXReportDependencies>,
 ): FitYByXReportState {
   const [state, setState] = useState<FitYByXReportState>(FIT_Y_BY_X_IDLE_REPORT_STATE);
+  const getDatasetGeneration = dependencies?.getDatasetGeneration;
+  const run = dependencies?.run;
 
   useEffect(() => {
     if (item == null) {
@@ -264,7 +266,10 @@ export function useFitYByXReport(
 
     void (async () => {
       try {
-        const resolved = await resolveFitYByXReportDependencies(dependencies);
+        const resolved = await resolveFitYByXReportDependencies({
+          getDatasetGeneration,
+          run,
+        });
         if (!mounted) {
           return;
         }
@@ -294,9 +299,10 @@ export function useFitYByXReport(
       controller?.dispose();
     };
   }, [
-    dependencies,
+    getDatasetGeneration,
     generationSignal,
     item,
+    run,
   ]);
 
   return state;

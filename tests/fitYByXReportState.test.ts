@@ -172,8 +172,27 @@ function testHookSourceContractUsesGenerationSignalAndCleanup(): void {
   );
   assertMatches(
     source,
-    /\[\s*dependencies,\s*generationSignal,\s*item,\s*\]/s,
-    "effect dependencies should rerun on generationSignal changes.",
+    /const getDatasetGeneration = dependencies\?\.getDatasetGeneration;/,
+    "hook should snapshot the getDatasetGeneration override reference outside the effect.",
+  );
+  assertMatches(
+    source,
+    /const run = dependencies\?\.run;/,
+    "hook should snapshot the run override reference outside the effect.",
+  );
+  assertMatches(
+    source,
+    /\[\s*getDatasetGeneration,\s*generationSignal,\s*item,\s*run,\s*\]/s,
+    "effect dependencies should use only the override function refs plus generationSignal and item.",
+  );
+  assert.ok(
+    !/\[\s*dependencies\s*,/s.test(source),
+    "effect dependencies should not include the raw dependencies object.",
+  );
+  assertMatches(
+    source,
+    /\[\s*getDatasetGeneration,\s*generationSignal,\s*item,\s*run,\s*\]/s,
+    "effect dependencies should rerun on generationSignal changes without depending on the raw dependencies object.",
   );
 }
 
