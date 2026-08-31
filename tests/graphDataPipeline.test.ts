@@ -2132,6 +2132,26 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(activeMultiX, "multiX1"), ["mx1"]);
   assert.deepEqual(roleColumns(activeMultiX, "multiX2"), ["mx2"]);
 
+  const multiXAxisItem = makeLegacyGraphBuilderItem({
+    encoding: {},
+    multiX: [
+      { name: "203-A6", type: "continuous" },
+      { name: "203-A7", type: "continuous" },
+      { name: "203-A8", type: "continuous" },
+      { name: "203-A9", type: "continuous" },
+    ],
+    elements: [
+      { kind: "points", enabled: true },
+      { kind: "boxplot", enabled: true },
+    ],
+  });
+  const multiXAxisParts = deriveGraphRequestParts(multiXAxisItem);
+  assert.equal(
+    canExecuteGraphRequest(multiXAxisItem, multiXAxisParts.fields, multiXAxisParts.elements),
+    true,
+    "multi-X axis mode must issue a graph data request",
+  );
+
   const activeMultiY = deriveFields(
     makeLegacyGraphBuilderItem({
       encoding: {

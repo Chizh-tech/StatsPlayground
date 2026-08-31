@@ -930,21 +930,18 @@ fn request_is_correlation_aggregate_only(
             .all(|packet| matches!(packet, GraphAggregatePacket::CorrelationMatrix(_)))
 }
 
-fn is_renderable_xy(
-    metadata: &ProjectionMetadata,
-    values: &[Value],
-) -> Result<bool, AppError> {
-    let x = values.get(metadata.x_index).ok_or_else(|| {
-        AppError::Database("x value missing from graph projection".to_string())
-    })?;
+fn is_renderable_xy(metadata: &ProjectionMetadata, values: &[Value]) -> Result<bool, AppError> {
+    let x = values
+        .get(metadata.x_index)
+        .ok_or_else(|| AppError::Database("x value missing from graph projection".to_string()))?;
     let x_valid = match metadata.x_payload_type {
         GraphPayloadType::F64 => value_to_f64(x).is_some(),
         GraphPayloadType::U32 => value_to_category(x).is_some(),
         _ => false,
     };
-    let y = values.get(metadata.y_index).ok_or_else(|| {
-        AppError::Database("y value missing from graph projection".to_string())
-    })?;
+    let y = values
+        .get(metadata.y_index)
+        .ok_or_else(|| AppError::Database("y value missing from graph projection".to_string()))?;
     Ok(x_valid && value_to_f64(y).is_some())
 }
 
@@ -979,9 +976,7 @@ impl ProjectionMetadata {
         }
 
         let x_column = role_columns.get("x");
-        let y_column = role_columns
-            .get("y")
-            .ok_or_else(|| AppError::InvalidParam("graph request is missing role y".to_string()))?;
+        let y_column = role_columns.get("y");
 
         let has_backend_projection_aliases = stats
             .projected_columns
@@ -1019,8 +1014,12 @@ impl ProjectionMetadata {
             "__sp_y"
         } else if has_melt_value_alias {
             "__sp_value__"
+        } else if let Some(column) = y_column {
+            column
         } else {
-            y_column
+            return Err(AppError::InvalidParam(
+                "graph request is missing role y".to_string(),
+            ));
         };
 
         let x_index = stats
@@ -2171,6 +2170,34 @@ mod tests {
             }
         }
 
+        fn multi_x_axis_request(dataset_id: &str, generation: u64) -> GraphDataRequest {
+            let mut request = aggregate_melt_request(dataset_id, generation);
+            request.fields = vec![
+                GraphFieldBinding {
+                    role: "multiX0".to_string(),
+                    column: "m1".to_string(),
+                },
+                GraphFieldBinding {
+                    role: "multiX1".to_string(),
+                    column: "m2".to_string(),
+                },
+            ];
+            request.filters.clear();
+            request.elements = vec![
+                GraphElementRequest {
+                    kind: "points".to_string(),
+                    summary_stat: "none".to_string(),
+                    correlation_method: None,
+                },
+                GraphElementRequest {
+                    kind: "boxplot".to_string(),
+                    summary_stat: "none".to_string(),
+                    correlation_method: None,
+                },
+            ];
+            request
+        }
+
         fn direct_filtered_rows(state: &AppState, dataset_id: &str) -> i64 {
             let db = state.db.lock().expect("db lock");
             let table = format!("dataset_{}", dataset_id.replace('-', "_"));
@@ -3057,6 +3084,50 @@ mod tests {
         }
 
         #[test]
+        fn raw_chunks_project_multi_x_columns_as_categorical_axis_values() {
+            let state = AppState::new().expect("state");
+            let dataset_id = "multi-x-axis";
+            seed_faceted_dataset(&state, dataset_id);
+
+            let service = GraphDataService::new(&state);
+            let request = multi_x_axis_request(dataset_id, 0);
+            let chunks = service.collect_for_test(&request).expect("chunks");
+
+            assert_eq!(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.header.row_count)
+                    .sum::<usize>(),
+                8,
+            );
+            assert!(chunks
+                .iter()
+                .all(|chunk| chunk.header.x_encoding == GraphAxisEncoding::Categorical));
+            let x_values = chunks
+                .iter()
+                .flat_map(|chunk| chunk.header.dictionaries.get("x").into_iter().flatten())
+                .cloned()
+                .collect::<HashSet<_>>();
+            assert_eq!(
+                x_values,
+                HashSet::from(["m1".to_string(), "m2".to_string()])
+            );
+
+            let packets = service
+                .collect_aggregates_for_test(&request)
+                .expect("aggregate packets");
+            let boxplot = packets
+                .iter()
+                .find_map(|packet| match packet {
+                    GraphAggregatePacket::BoxPlot(value) => Some(value),
+                    _ => None,
+                })
+                .expect("boxplot packet");
+            assert_eq!(boxplot.entries.len(), 2);
+            assert!(boxplot.entries.iter().all(|entry| entry.count == 4));
+        }
+
+        #[test]
         fn aggregate_packets_include_explicit_facet_and_group_dimensions() {
             let state = AppState::new().expect("state");
             let dataset_id = "agg-facet-dims";
@@ -3728,11 +3799,7 @@ mod tests {
     #[test]
     fn sample_within_budget_includes_raw_chunks() {
         let state = AppState::new().expect("state");
-        seed_dataset(
-            &state,
-            "points-sample-budget",
-            30_000,
-        );
+        seed_dataset(&state, "points-sample-budget", 30_000);
         let service = GraphDataService::new(&state);
         let mut request = build_request("points-sample-budget", 0);
         request.sampling = GraphSampling::Sample {

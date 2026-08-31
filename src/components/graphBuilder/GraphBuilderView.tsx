@@ -382,6 +382,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // Filter rules (JMP-style Local Data Filter). Persist on the item so
   // they survive project save/load.
   const filters = useMemo(() => item.filters ?? [], [item.filters]);
+  const getGraphCategoricalValues = useCallback(async (field: string, search: string) => {
+    const generation = await dataService.getDatasetGeneration(dataset.id);
+    return dataService.queryTableFilterValues(dataset.id, field, search, 500, generation);
+  }, [dataset.id]);
 
   // Auto-close the manager when its slot is no longer manageable.
   // In 2D, management is meaningful only for 2+ columns (multi mode).
@@ -1777,6 +1781,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               onChange={setFilters}
               onClose={() => setShowFilters(false)}
               width={filterWidth}
+              categoricalMode="exclude"
+              getCategoricalValues={getGraphCategoricalValues}
             />
             <div
               className="gb-splitter"
