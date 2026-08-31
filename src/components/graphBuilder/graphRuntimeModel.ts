@@ -375,6 +375,7 @@ export function buildGraphRuntimeModel(
     meltInfo,
     spec: {
       datasetId: item.sourceDatasetId,
+      transpose: item.mode === "2d" && twoD.transposed === true,
       encoding: specEncoding,
       elements: finalElements,
       styles: groupStyles,

@@ -33,6 +33,7 @@ import { AddPaletteDialog } from "./AddPaletteDialog";
 import { AxisSettingsDialog, isAxisConfigEmpty } from "./AxisSettingsDialog";
 import { prepareAxisBinding } from "./axisBinding";
 import { updateGraphBuilder2D } from "./graphBuilderAxisInteractions";
+import { resolveVisualGraphSlots } from "./graphBuilderSlotLayout";
 import {
   clampSampleSize,
   DEFAULT_GRAPH_SAMPLE_SIZE,
@@ -84,6 +85,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const threeD = item.modeStates.threeD;
   const multivariate = item.modeStates.multivariate;
   const cartesianState = isThreeDMode ? threeD : twoD;
+  const visualSlots = resolveVisualGraphSlots(item.mode === "2d" && twoD.transposed === true);
   const modeStates = item.modeStates;
   const updateItemRaw = useGraphBuilderStore((s) => s.updateItem);
   const markDirtyRaw = useProjectStore((s) => s.markDirty);
@@ -990,73 +992,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     setTwoDState(createDefaultGraph2DState());
   }, [item.mode, setThreeDState, setMultivariateState, setTwoDState]);
 
-  /** Swap X and Y completely — encoding (axis + facet) plus axis
-   *  settings and reference lines. The chart should read as if it had
-   *  been rotated 90°.
-   *
-   *  Swapped:
-   *    - encoding.x ↔ encoding.y          (axis content)
-   *    - encoding.groupX ↔ encoding.groupY (facet rails)
-   *    - xAxis ↔ yAxis                     (range / ticks / inverse / gridlines)
-   *    - refLinesX ↔ refLinesY            (with `{x}` ↔ `{y}` field rename)
-   *
-   *  Intentionally NOT swapped:
-   *    - color / size / overlay / wrap / elements / styles / hiddenGroups /
-   *      filters / smootherLambda — these are orientation-agnostic.
-   *    - autoSpecLinesY / autoSpecLinesX swap with each other (mirror
-   *      of refLinesY / refLinesX) so the rotated chart shows the same
-   *      spec overlay on the same column as before the swap.
-   *
-   *  Done as a single atomic `updateItem` so the encoding, axis configs,
-   *  and ref lines re-render in lockstep — partial swaps would briefly
-   *  mismatch and could trigger an inverse / range guard from the wrong
-   *  axis. */
   const swapXY = useCallback(() => {
     if (item.mode !== "2d") return;
-    const enc = twoD.encoding;
-    const nextEncoding = { ...enc };
-    // x ↔ y
-    if (enc.x !== undefined) nextEncoding.y = enc.x;
-    else delete nextEncoding.y;
-    if (enc.y !== undefined) nextEncoding.x = enc.y;
-    else delete nextEncoding.x;
-    // groupX ↔ groupY
-    if (enc.groupX !== undefined) nextEncoding.groupY = enc.groupX;
-    else delete nextEncoding.groupY;
-    if (enc.groupY !== undefined) nextEncoding.groupX = enc.groupY;
-    else delete nextEncoding.groupX;
-    // refLinesY ↔ refLinesX, with the field-name flip. Keep the same id
-    // on each line so React's list-key stays stable across the swap and
-    // any in-flight edit focus doesn't churn.
-    const nextRefLinesX: RefLineX[] | undefined = twoD.refLinesY?.map((r) => ({
-      id: r.id,
-      x: r.y,
-      label: r.label,
-      style: r.style,
-      color: r.color,
-      width: r.width,
-    }));
-    const nextRefLinesY: RefLineY[] | undefined = twoD.refLinesX?.map((r) => ({
-      id: r.id,
-      y: r.x,
-      label: r.label,
-      style: r.style,
-      color: r.color,
-      width: r.width,
-    }));
     setTwoDState((prev) => ({
       ...prev,
-      encoding: nextEncoding,
-      xAxis: twoD.yAxis,
-      yAxis: twoD.xAxis,
-      refLinesX: nextRefLinesX,
-      refLinesY: nextRefLinesY,
-      autoSpecLinesY: twoD.autoSpecLinesX ?? twoD.autoSpecLines,
-      autoSpecLinesX: twoD.autoSpecLinesY ?? twoD.autoSpecLines,
-      multiX: twoD.multiY,
-      multiY: twoD.multiX,
+      transposed: !prev.transposed,
     }));
-  }, [item.mode, twoD, setTwoDState]);
+  }, [item.mode, setTwoDState]);
 
   const samplingMode = item.sampling?.mode === "sample" ? "sample" : "full";
   const sampleSize = useMemo(() => {
@@ -1205,7 +1147,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               className="gb-tb-btn"
               onClick={swapXY}
               title={t("graph.swapXY.tooltip", {
-                defaultValue: "Swap the X and Y axes (encoding, facet rail, and axis settings) — like rotating the chart 90°.",
+                defaultValue: "Transpose the chart visually without changing its data bindings.",
               })}
             >
               {t("graph.swapXY.label", { defaultValue: "Swap X & Y" })}
@@ -1501,15 +1443,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
         {/* 中栏：画布 + X 轴槽 */}
         <div className={`gb-center${isMultivariateMode ? " gb-center-correlation" : ""}`}>
-          {/* 顶部分组槽 (Group X) — 横跨画布上方 */}
+          {/* 顶部分组槽 — 转置后显示原 Group Y。 */}
           {!isMultivariateMode && (
             <Slot
-              slot="groupX"
-              label="Group X"
-              field={encoding.groupX}
-              onDrop={(e) => handleDropOnSlot("groupX", e)}
-              onClear={() => clearSlot("groupX")}
-              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupX", x, y })}
+              slot={visualSlots.top}
+              label={visualSlots.top === "groupX" ? "Group X" : "Group Y"}
+              field={encoding[visualSlots.top]}
+              onDrop={(e) => handleDropOnSlot(visualSlots.top, e)}
+              onClear={() => clearSlot(visualSlots.top)}
+              onContextMenu={(x, y) => setSlotCtxMenu({ slot: visualSlots.top, x, y })}
               orientation="horizontal-top"
             />
           )}
@@ -1538,21 +1480,25 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               />
             )}
             <Slot
-              slot="y"
-              label={isMultivariateMode ? t("graph.multivariate.variables", { defaultValue: "Y (Variables)" }) : "Y"}
-              field={isMultivariateMode ? multivariateSlotBinding.field : encoding.y}
-              fields={isMultivariateMode ? multivariateSlotBinding.columns : multiY}
-              onDrop={(e) => handleDropOnSlot("y", e)}
-              onClear={() => clearSlot("y")}
+              slot={visualSlots.left}
+              label={isMultivariateMode
+                ? t("graph.multivariate.variables", { defaultValue: "Y (Variables)" })
+                : visualSlots.left.toUpperCase()}
+              field={isMultivariateMode ? multivariateSlotBinding.field : encoding[visualSlots.left]}
+              fields={isMultivariateMode
+                ? multivariateSlotBinding.columns
+                : (visualSlots.left === "x" ? multiX : multiY)}
+              onDrop={(e) => handleDropOnSlot(visualSlots.left, e)}
+              onClear={() => clearSlot(visualSlots.left)}
               onOpenManager={
                 isMultivariateMode && !multivariateSlotBinding.showManager
                   ? undefined
-                  : () => setManagerOpenSlot("y")
+                  : () => setManagerOpenSlot(visualSlots.left)
               }
-              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "y", x, y })}
+              onContextMenu={(x, y) => setSlotCtxMenu({ slot: visualSlots.left, x, y })}
               orientation="vertical-left"
               required={!isMultivariateMode}
-              rejectFlash={rejectFlashSlot === "y"}
+              rejectFlash={rejectFlashSlot === visualSlots.left}
             />
             <div
               className={`gb-canvas${isMultivariateMode ? " gb-canvas-correlation" : ""}`}
@@ -1620,12 +1566,12 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             </div>
             {!isMultivariateMode && (
               <Slot
-                slot="groupY"
-                label="Group Y"
-                field={encoding.groupY}
-                onDrop={(e) => handleDropOnSlot("groupY", e)}
-                onClear={() => clearSlot("groupY")}
-                onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupY", x, y })}
+                slot={visualSlots.right}
+                label={visualSlots.right === "groupX" ? "Group X" : "Group Y"}
+                field={encoding[visualSlots.right]}
+                onDrop={(e) => handleDropOnSlot(visualSlots.right, e)}
+                onClear={() => clearSlot(visualSlots.right)}
+                onContextMenu={(x, y) => setSlotCtxMenu({ slot: visualSlots.right, x, y })}
                 orientation="vertical-right"
               />
             )}
@@ -1643,20 +1589,20 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             )}
           </div>
 
-          {/* X 轴槽 */}
+          {/* 底部轴槽 — 转置后显示原 Y。 */}
           {!isMultivariateMode && (
             <Slot
-              slot="x"
-              label="X"
-              field={encoding.x}
-              fields={multiX}
-              onDrop={(e) => handleDropOnSlot("x", e)}
-              onClear={() => clearSlot("x")}
-              onOpenManager={() => setManagerOpenSlot("x")}
-              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "x", x, y })}
+              slot={visualSlots.bottom}
+              label={visualSlots.bottom.toUpperCase()}
+              field={encoding[visualSlots.bottom]}
+              fields={visualSlots.bottom === "x" ? multiX : multiY}
+              onDrop={(e) => handleDropOnSlot(visualSlots.bottom, e)}
+              onClear={() => clearSlot(visualSlots.bottom)}
+              onOpenManager={() => setManagerOpenSlot(visualSlots.bottom)}
+              onContextMenu={(x, y) => setSlotCtxMenu({ slot: visualSlots.bottom, x, y })}
               orientation="horizontal-bottom"
               required
-              rejectFlash={rejectFlashSlot === "x"}
+              rejectFlash={rejectFlashSlot === visualSlots.bottom}
             />
           )}
         </div>

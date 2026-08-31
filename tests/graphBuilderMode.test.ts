@@ -227,6 +227,19 @@ assert.deepEqual(currentTwoDSingleMultiCollapse.modeStates.twoD.multiY, []);
 const currentTwoDSingleMultiIdempotent = normalizeGraphBuilderItem(currentTwoDSingleMultiCollapse);
 assert.deepEqual(currentTwoDSingleMultiIdempotent, currentTwoDSingleMultiCollapse);
 
+const currentTransposed = normalizeGraphBuilderItem({
+  ...legacy2d,
+  modeStates: {
+    ...legacy2d.modeStates,
+    twoD: {
+      ...legacy2d.modeStates.twoD,
+      transposed: true,
+    },
+  },
+});
+assert.equal(currentTransposed.modeStates.twoD.transposed, true);
+assert.deepEqual(normalizeGraphBuilderItem(currentTransposed), currentTransposed);
+
 const idempotenceCases: GraphBuilderItem[] = [
   legacy2d,
   legacy3d,

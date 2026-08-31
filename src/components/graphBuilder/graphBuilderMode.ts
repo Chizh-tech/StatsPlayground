@@ -257,6 +257,7 @@ function normalizeCurrentModeItem(item: GraphBuilderItem): GraphBuilderItem {
   const twoDCore: Graph2DState = {
     ...twoDDefault,
     encoding: normalizedTwoDAxes.encoding,
+    ...(twoDInput.transposed === true ? { transposed: true } : {}),
     multiX: normalizedTwoDAxes.multiX,
     multiY: normalizedTwoDAxes.multiY,
     elements: toElements(twoDInput.elements).filter((element) => getLayerMode(element.kind) === "2d"),

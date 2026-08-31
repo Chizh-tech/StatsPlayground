@@ -311,6 +311,8 @@ export interface GraphSpec {
   datasetId?: string;
   /** 数据集名称（标题用） */
   datasetName?: string;
+  /** Transpose the completed chart visually without changing data roles. */
+  transpose?: boolean;
   /** 编码 */
   encoding: Encoding;
   /** 图形元素列表（按层叠绘） */

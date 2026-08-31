@@ -84,6 +84,27 @@ function makeInteractiveGraphItem(): GraphBuilderItem {
 }
 
 const interactiveItem = makeInteractiveGraphItem();
+const transposedInteractiveItem: GraphBuilderItem = {
+  ...interactiveItem,
+  modeStates: {
+    ...interactiveItem.modeStates,
+    twoD: {
+      ...interactiveItem.modeStates.twoD,
+      transposed: true,
+    },
+  },
+};
+
+assert.deepEqual(
+  deriveGraphRequestParts(transposedInteractiveItem),
+  deriveGraphRequestParts(interactiveItem),
+  "visual X/Y transpose must not change the backend graph request",
+);
+
+const transposedRuntimeModel = buildGraphRuntimeModel(transposedInteractiveItem, metadata);
+assert.equal(transposedRuntimeModel.spec.transpose, true);
+assert.deepEqual(transposedRuntimeModel.spec.encoding, buildGraphRuntimeModel(interactiveItem, metadata).spec.encoding);
+
 const fitYByXItem = createFitYByXItem({
   id: "fit-1",
   name: "Fit Y by X 1",
