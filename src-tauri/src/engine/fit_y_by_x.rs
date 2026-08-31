@@ -101,8 +101,8 @@ pub fn calculate_oneway(
     } else {
         0.0
     };
-    let omega_squared = if ss_total > 0.0 {
-        ms_within.and_then(|ms_within_value| {
+    let omega_squared = ms_within.and_then(|ms_within_value| {
+        if ss_total > 0.0 {
             let denominator = ss_total + ms_within_value;
             if denominator <= 0.0 {
                 None
@@ -110,10 +110,10 @@ pub fn calculate_oneway(
                 let estimate = (ss_between - (between_df as f64) * ms_within_value) / denominator;
                 Some(normalize_signed_zero(estimate.max(0.0)))
             }
-        })
-    } else {
-        Some(0.0)
-    };
+        } else {
+            Some(0.0)
+        }
+    });
 
     FitYByXResult::Oneway(OnewayResult {
         used_rows,
@@ -899,6 +899,39 @@ mod tests {
         assert_close(oneway.anova[2].sum_of_squares, 0.5, 1e-12);
         assert!(oneway.anova[2].mean_square.is_none());
         assert_close(oneway.effect_sizes.eta_squared, 1.0, 1e-12);
+        assert!(oneway.effect_sizes.omega_squared.is_none());
+    }
+
+    #[test]
+    fn oneway_two_singleton_groups_with_identical_values_keeps_omega_squared_null() {
+        let rows = vec![
+            FitYByXRow::Oneway {
+                y: 1.0,
+                group: "A".into(),
+            },
+            FitYByXRow::Oneway {
+                y: 1.0,
+                group: "B".into(),
+            },
+        ];
+
+        let result = calculate_oneway(rows, 0, 0.95);
+
+        let FitYByXResult::Oneway(oneway) = result else {
+            panic!("expected oneway result");
+        };
+
+        assert_eq!(oneway.used_rows, 2);
+        assert_eq!(oneway.excluded_rows, 0);
+        assert_eq!(oneway.confidence_level, 0.95);
+        assert_eq!(oneway.group_summaries.len(), 2);
+        assert_close(oneway.group_summaries[0].mean, 1.0, 1e-12);
+        assert_close(oneway.group_summaries[1].mean, 1.0, 1e-12);
+        assert_close(oneway.anova[0].sum_of_squares, 0.0, 1e-12);
+        assert_close(oneway.anova[1].sum_of_squares, 0.0, 1e-12);
+        assert_close(oneway.anova[2].sum_of_squares, 0.0, 1e-12);
+        assert!(oneway.anova[0].mean_square.unwrap_or(f64::NAN).is_finite());
+        assert!(oneway.anova[1].mean_square.is_none());
         assert!(oneway.effect_sizes.omega_squared.is_none());
     }
 }
