@@ -198,15 +198,15 @@
     "noFieldsAvailable": "No columns available for this source.",
     "noFieldsMatchSearch": "No columns match the current search.",
     "assignResponseHelp": "Assign a continuous response field for Y.",
-    "assignFactorHelp": "Assign a nominal or ordinal factor field for X.",
+    "assignFactorHelp": "Assign a continuous, nominal, or ordinal field for X.",
     "assignResponseLabel": "Assign {{field}} as Y",
     "assignFactorLabel": "Assign {{field}} as X",
     "assignResponse": "Assign as Y",
     "assignFactor": "Assign as X",
     "responseHint": "Continuous",
-    "factorHint": "Nominal or ordinal",
+    "factorHint": "Continuous, nominal, or ordinal",
     "responseEmpty": "Drop or assign one continuous field.",
-    "factorEmpty": "Drop or assign one nominal or ordinal field.",
+    "factorEmpty": "Drop or assign one continuous, nominal, or ordinal field.",
     "removeAssignment": "Remove assignment",
     "removeAssignmentFor": "Remove {{label}}",
     "graph": "Graph",
@@ -215,13 +215,17 @@
     "missingFactor": "Choose a nominal or ordinal factor",
     "duplicateRole": "Response and factor must use different columns",
     "invalidResponse": "Response must be continuous",
-    "invalidFactor": "Factor must be nominal or ordinal",
+    "invalidFactor": "Factor must be continuous, nominal, or ordinal",
+    "personality": {
+      "oneway": "Oneway",
+      "bivariate": "Bivariate"
+    },
     "validation": {
       "missingResponse": "Choose a continuous response",
       "missingFactor": "Choose a nominal or ordinal factor",
       "duplicateRole": "Response and factor must use different columns",
       "invalidResponse": "Response must be continuous",
-      "invalidFactor": "Factor must be nominal or ordinal"
+      "invalidFactor": "Factor must be continuous, nominal, or ordinal"
     }
   },
   "tabulate": {

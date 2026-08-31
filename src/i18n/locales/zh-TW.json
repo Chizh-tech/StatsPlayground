@@ -197,15 +197,15 @@
     "noFieldsAvailable": "此來源沒有可用欄位。",
     "noFieldsMatchSearch": "沒有欄位符合目前搜尋。",
     "assignResponseHelp": "為 Y 指派一個連續反應欄位。",
-    "assignFactorHelp": "為 X 指派一個名義或有序因子欄位。",
+    "assignFactorHelp": "為 X 指派一個連續、名義或有序欄位。",
     "assignResponseLabel": "將 {{field}} 指派為 Y",
     "assignFactorLabel": "將 {{field}} 指派為 X",
     "assignResponse": "指派為 Y",
     "assignFactor": "指派為 X",
     "responseHint": "連續",
-    "factorHint": "名義或有序",
+    "factorHint": "連續、名義或有序",
     "responseEmpty": "拖放或指派一個連續欄位。",
-    "factorEmpty": "拖放或指派一個名義或有序欄位。",
+    "factorEmpty": "拖放或指派一個連續、名義或有序欄位。",
     "removeAssignment": "移除指派",
     "removeAssignmentFor": "移除 {{label}}",
     "graph": "圖形",
@@ -214,13 +214,17 @@
     "missingFactor": "選擇一個名義或有序因子",
     "duplicateRole": "反應和因子必須使用不同欄位",
     "invalidResponse": "反應必須為連續欄位",
-    "invalidFactor": "因子必須為名義或有序欄位",
+    "invalidFactor": "因子必須為連續、名義或有序欄位",
+    "personality": {
+      "oneway": "單因素",
+      "bivariate": "雙變量"
+    },
     "validation": {
       "missingResponse": "選擇一個連續反應",
       "missingFactor": "選擇一個名義或有序因子",
       "duplicateRole": "反應和因子必須使用不同欄位",
       "invalidResponse": "反應必須為連續欄位",
-      "invalidFactor": "因子必須為名義或有序欄位"
+      "invalidFactor": "因子必須為連續、名義或有序欄位"
     }
   },
   "tabulate": {

@@ -18,6 +18,7 @@ import {
   createFitYByXItem,
   type FitYByXRole,
   type FitYByXValidationError,
+  deriveFitYByXPersonality,
   validateFitYByXRoles,
 } from "./fitYByXConfig";
 import {
@@ -99,11 +100,11 @@ export function FitYByXRoleDialog({ dataset, defaultName, onCancel, onCreate }: 
     ? null
     : assignmentValidation.error === "missingResponse"
       ? t("fitYByX.assignResponseHelp", { defaultValue: "Assign a continuous response field for Y." })
-      : t("fitYByX.assignFactorHelp", { defaultValue: "Assign a nominal or ordinal factor field for X." });
+      : t("fitYByX.assignFactorHelp", { defaultValue: "Assign a continuous, nominal, or ordinal field for X." });
   const createDisabled = loading || !canCreateFitYByX(draft);
 
   const responseItem = toRoleZoneItem(draft.response, fieldsByName);
-  const factorItem = toRoleZoneItem(draft.factor, fieldsByName);
+  const factorItem = toFactorRoleZoneItem(draft.factor, fieldsByName, t);
   const assignedNames = new Set(
     [draft.response?.name, draft.factor?.name].filter((name): name is string => !!name),
   );
@@ -279,8 +280,8 @@ export function FitYByXRoleDialog({ dataset, defaultName, onCancel, onCreate }: 
               <FitYByXRoleZone
                 role="factor"
                 title={t("fitYByX.factor", { defaultValue: "Factor (X)" })}
-                subtitle={t("fitYByX.factorHint", { defaultValue: "Nominal or ordinal" })}
-                emptyHint={t("fitYByX.factorEmpty", { defaultValue: "Drop or assign one nominal or ordinal field." })}
+                subtitle={t("fitYByX.factorHint", { defaultValue: "Continuous, nominal, or ordinal" })}
+                emptyHint={t("fitYByX.factorEmpty", { defaultValue: "Drop or assign one continuous, nominal, or ordinal field." })}
                 item={factorItem}
                 onDropPayload={handleDropPayload}
                 onClear={() => setDraft((current) => clearFitYByXField(current, "factor"))}
@@ -381,6 +382,27 @@ function toRoleZoneItem(
   };
 }
 
+function toFactorRoleZoneItem(
+  field: FieldRef | undefined,
+  fieldsByName: ReadonlyMap<string, FitYByXFieldInfo>,
+  t: ReturnType<typeof useTranslation>["t"],
+): FitYByXRoleZoneItem | null {
+  const item = toRoleZoneItem(field, fieldsByName);
+  if (!item || !field) {
+    return item;
+  }
+
+  const personality = deriveFitYByXPersonality(field);
+  const personalityLabel = t(`fitYByX.personality.${personality}`, {
+    defaultValue: personality === "bivariate" ? "Bivariate" : "Oneway",
+  });
+
+  return {
+    ...item,
+    hint: `${item.hint} · ${personalityLabel}`,
+  };
+}
+
 function validationErrorText(
   t: ReturnType<typeof useTranslation>["t"],
   error: FitYByXValidationError,
@@ -389,7 +411,7 @@ function validationErrorText(
     case "duplicateRole":
       return t("fitYByX.duplicateRole", { defaultValue: "Response and factor must use different columns." });
     case "invalidFactor":
-      return t("fitYByX.invalidFactor", { defaultValue: "Factor must be nominal or ordinal." });
+      return t("fitYByX.invalidFactor", { defaultValue: "Factor must be continuous, nominal, or ordinal." });
     case "invalidResponse":
       return t("fitYByX.invalidResponse", { defaultValue: "Response must be continuous." });
     case "missingFactor":

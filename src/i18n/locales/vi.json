@@ -197,15 +197,15 @@
     "noFieldsAvailable": "Không có cột nào cho nguồn này.",
     "noFieldsMatchSearch": "Không có cột nào khớp với tìm kiếm hiện tại.",
     "assignResponseHelp": "Gán một cột đáp ứng liên tục cho Y.",
-    "assignFactorHelp": "Gán một cột yếu tố danh nghĩa hoặc thứ tự cho X.",
+    "assignFactorHelp": "Gán một cột cho X có thể là liên tục, danh nghĩa hoặc thứ tự.",
     "assignResponseLabel": "Gán {{field}} làm Y",
     "assignFactorLabel": "Gán {{field}} làm X",
     "assignResponse": "Gán làm Y",
     "assignFactor": "Gán làm X",
     "responseHint": "Liên tục",
-    "factorHint": "Danh nghĩa hoặc thứ tự",
+    "factorHint": "Liên tục, danh nghĩa hoặc thứ tự",
     "responseEmpty": "Thả hoặc gán một cột liên tục.",
-    "factorEmpty": "Thả hoặc gán một cột danh nghĩa hoặc thứ tự.",
+    "factorEmpty": "Thả hoặc gán một cột liên tục, danh nghĩa hoặc thứ tự.",
     "removeAssignment": "Xóa gán vai trò",
     "removeAssignmentFor": "Xóa {{label}}",
     "graph": "Biểu đồ",
@@ -214,13 +214,17 @@
     "missingFactor": "Chọn một yếu tố danh nghĩa hoặc thứ tự",
     "duplicateRole": "Đáp ứng và yếu tố phải dùng hai cột khác nhau",
     "invalidResponse": "Đáp ứng phải là cột liên tục",
-    "invalidFactor": "Yếu tố phải là danh nghĩa hoặc thứ tự",
+    "invalidFactor": "Yếu tố phải là liên tục, danh nghĩa hoặc thứ tự",
+    "personality": {
+      "oneway": "Một chiều",
+      "bivariate": "Hai biến"
+    },
     "validation": {
       "missingResponse": "Chọn một đáp ứng liên tục",
       "missingFactor": "Chọn một yếu tố danh nghĩa hoặc thứ tự",
       "duplicateRole": "Đáp ứng và yếu tố phải dùng hai cột khác nhau",
       "invalidResponse": "Đáp ứng phải là cột liên tục",
-      "invalidFactor": "Yếu tố phải là danh nghĩa hoặc thứ tự"
+      "invalidFactor": "Yếu tố phải là liên tục, danh nghĩa hoặc thứ tự"
     }
   },
   "tabulate": {

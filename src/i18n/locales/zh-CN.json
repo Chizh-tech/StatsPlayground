@@ -198,15 +198,15 @@
     "noFieldsAvailable": "此数据源没有可用列。",
     "noFieldsMatchSearch": "没有列匹配当前搜索。",
     "assignResponseHelp": "为 Y 分配一个连续响应字段。",
-    "assignFactorHelp": "为 X 分配一个名义或有序因子字段。",
+    "assignFactorHelp": "为 X 分配一个连续、名义或有序字段。",
     "assignResponseLabel": "将 {{field}} 分配为 Y",
     "assignFactorLabel": "将 {{field}} 分配为 X",
     "assignResponse": "分配为 Y",
     "assignFactor": "分配为 X",
     "responseHint": "连续",
-    "factorHint": "名义或有序",
+    "factorHint": "连续、名义或有序",
     "responseEmpty": "拖放或分配一个连续字段。",
-    "factorEmpty": "拖放或分配一个名义或有序字段。",
+    "factorEmpty": "拖放或分配一个连续、名义或有序字段。",
     "removeAssignment": "移除分配",
     "removeAssignmentFor": "移除 {{label}}",
     "graph": "图形",
@@ -215,13 +215,17 @@
     "missingFactor": "选择一个名义或有序因子",
     "duplicateRole": "响应和因子必须使用不同列",
     "invalidResponse": "响应必须为连续列",
-    "invalidFactor": "因子必须为名义或有序列",
+    "invalidFactor": "因子必须为连续、名义或有序列",
+    "personality": {
+      "oneway": "单因素",
+      "bivariate": "双变量"
+    },
     "validation": {
       "missingResponse": "选择一个连续响应",
       "missingFactor": "选择一个名义或有序因子",
       "duplicateRole": "响应和因子必须使用不同列",
       "invalidResponse": "响应必须为连续列",
-      "invalidFactor": "因子必须为名义或有序列"
+      "invalidFactor": "因子必须为连续、名义或有序列"
     }
   },
   "tabulate": {

@@ -16,6 +16,7 @@ const [
 
 const response = { name: "height", type: "continuous" as const };
 const factor = { name: "site", type: "nominal" as const };
+const bivariateFactor = { name: "age", type: "continuous" as const };
 const createdAt = "2026-08-30T00:00:00.000Z";
 
 function fitItem(id: string, name: string, datasetId = "dataset-1") {
@@ -25,6 +26,17 @@ function fitItem(id: string, name: string, datasetId = "dataset-1") {
     sourceDatasetId: datasetId,
     response,
     factor,
+    createdAt,
+  });
+}
+
+function bivariateFitItem(id: string, name: string, datasetId = "dataset-1") {
+  return createFitYByXItem({
+    id,
+    name,
+    sourceDatasetId: datasetId,
+    response,
+    factor: bivariateFactor,
     createdAt,
   });
 }
@@ -39,6 +51,7 @@ resetStores();
 
 const loadedBase = fitItem("fit-2", "Fit Y by X 2");
 const loadedCustom = fitItem("fit-custom", "Custom fit", "dataset-2");
+const loadedBivariate = bivariateFitItem("fit-bivar", "Fit Y by X 4", "dataset-4");
 const persistedGraph = {
   ...loadedBase.graph,
   mode: "2d" as const,
@@ -56,6 +69,24 @@ const persistedGraph = {
     },
   },
 };
+const persistedBivariateGraph = {
+  ...loadedBivariate.graph,
+  mode: "2d" as const,
+  modeStates: {
+    ...loadedBivariate.graph.modeStates,
+    twoD: {
+      ...loadedBivariate.graph.modeStates.twoD,
+      smootherLambda: 0.15,
+      hiddenGroups: ["age:3"],
+      xAxis: { title: { text: "Age" } },
+      yAxis: { min: 2, max: 12 },
+      elements: [
+        { kind: "points", enabled: false },
+        { kind: "fitline", enabled: true, options: { fitType: "polynomial", degree: 1, showFitCI: true } },
+      ],
+    },
+  },
+};
 const expectedPersistedGraph = createEmbeddedGraphItem({
   id: "fit-y-by-x-graph:fit-2",
   name: "Fit Y by X 2",
@@ -63,9 +94,17 @@ const expectedPersistedGraph = createEmbeddedGraphItem({
   config: persistedGraph,
   createdAt,
 });
+const expectedPersistedBivariateGraph = createEmbeddedGraphItem({
+  id: "fit-y-by-x-graph:fit-bivar",
+  name: "Fit Y by X 4",
+  sourceDatasetId: "dataset-4",
+  config: persistedBivariateGraph,
+  createdAt,
+});
 
 useFitYByXStore.getState().loadFromProject([
   { ...loadedBase, graph: persistedGraph },
+  { ...loadedBivariate, graph: persistedBivariateGraph },
   loadedCustom,
   { ...fitItem("fit-legacy", "Legacy fit"), graph: undefined } as never,
   { ...fitItem("fit-malformed", "Malformed fit"), graph: { mode: "bogus" } } as never,
@@ -93,6 +132,15 @@ assert.deepEqual(loadedItem?.graph, {
 assert.deepEqual(loadedItem?.response, response);
 assert.deepEqual(loadedItem?.factor, factor);
 assert.equal(loadedItem?.createdAt, createdAt);
+const loadedBivariateItem = useFitYByXStore.getState().items.find(({ id }) => id === "fit-bivar");
+assert.ok(loadedBivariateItem);
+assert.equal(loadedBivariateItem?.personality, "bivariate");
+assert.deepEqual(loadedBivariateItem?.graph, {
+  mode: expectedPersistedBivariateGraph.mode,
+  modeStates: expectedPersistedBivariateGraph.modeStates,
+  filters: expectedPersistedBivariateGraph.filters,
+  sampling: expectedPersistedBivariateGraph.sampling,
+});
 assert.deepEqual(
   useFitYByXStore.getState().items.find(({ id }) => id === "fit-legacy")?.graph,
   fitItem("fit-legacy", "Legacy fit").graph,
@@ -109,7 +157,7 @@ assert.equal(
   useFitYByXStore.getState().items.some(({ id }) => id === "fit-invalid-roles"),
   false,
 );
-assert.equal(useFitYByXStore.getState().nextName(), "Fit Y by X 3");
+assert.equal(useFitYByXStore.getState().nextName(), "Fit Y by X 5");
 assert.deepEqual(useGraphBuilderStore.getState().items, []);
 
 useFitYByXStore.getState().addItem(fitItem("fit-8", "Fit Y by X 8"));
@@ -137,7 +185,7 @@ assert.equal(useFitYByXStore.getState().items.some(({ id }) => id === "fit-2"), 
 useFitYByXStore.getState().deleteItem("fit-8");
 assert.deepEqual(
   useFitYByXStore.getState().items.map(({ id }) => id),
-  ["fit-custom", "fit-legacy", "fit-malformed", "fit-partial"],
+  ["fit-bivar", "fit-custom", "fit-legacy", "fit-malformed", "fit-partial"],
 );
 
 useProjectStore.setState({ readOnly: true });

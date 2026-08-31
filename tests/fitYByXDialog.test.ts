@@ -178,6 +178,11 @@ const fitYByXRoleDialogSource = readFileSync(
   "utf8",
 );
 assert.equal(
+  fitYByXRoleDialogSource.includes("deriveFitYByXPersonality"),
+  true,
+  "FitYByXRoleDialog must derive the X personality from the assigned factor",
+);
+assert.equal(
   fitYByXRoleDialogSource.includes("assignResponseLabel") && fitYByXRoleDialogSource.includes("field: field.name"),
   true,
   "FitYByXRoleDialog must pass field for the locale assign-response aria label interpolation",
@@ -187,5 +192,31 @@ assert.equal(
   true,
   "FitYByXRoleDialog must pass field for the locale assign-factor aria label interpolation",
 );
+assert.equal(
+  fitYByXRoleDialogSource.includes("Assign a continuous, nominal, or ordinal field for X.")
+    && fitYByXRoleDialogSource.includes("Continuous, nominal, or ordinal")
+    && fitYByXRoleDialogSource.includes("Drop or assign one continuous, nominal, or ordinal field.")
+    && fitYByXRoleDialogSource.includes("Factor must be continuous, nominal, or ordinal."),
+  true,
+  "FitYByXRoleDialog must update the X copy for continuous, nominal, and ordinal factors",
+);
+assert.equal(
+  fitYByXRoleDialogSource.includes("fitYByX.personality.${personality}")
+    && fitYByXRoleDialogSource.includes("Bivariate")
+    && fitYByXRoleDialogSource.includes("Oneway"),
+  true,
+  "FitYByXRoleDialog must localize the derived personality labels",
+);
+
+for (const localeFile of ["en.json", "zh-CN.json", "zh-TW.json", "vi.json"]) {
+  const localeSource = readFileSync(resolve(process.cwd(), `src/i18n/locales/${localeFile}`), "utf8");
+  assert.equal(
+    localeSource.includes('"personality": {')
+      && localeSource.includes('"oneway":')
+      && localeSource.includes('"bivariate":'),
+    true,
+    `Locale ${localeFile} must include the derived personality labels`,
+  );
+}
 
 console.log("fitYByX dialog contract tests passed");
