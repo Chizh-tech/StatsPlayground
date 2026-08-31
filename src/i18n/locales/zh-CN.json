@@ -212,7 +212,7 @@
     "graph": "图形",
     "graphHint": "嵌入式运行视图",
     "missingResponse": "选择一个连续响应",
-    "missingFactor": "选择一个名义或有序因子",
+    "missingFactor": "选择一个连续、名义或有序 X",
     "duplicateRole": "响应和因子必须使用不同列",
     "invalidResponse": "响应必须为连续列",
     "invalidFactor": "因子必须为连续、名义或有序列",
@@ -222,7 +222,7 @@
     },
     "validation": {
       "missingResponse": "选择一个连续响应",
-      "missingFactor": "选择一个名义或有序因子",
+      "missingFactor": "选择一个连续、名义或有序 X",
       "duplicateRole": "响应和因子必须使用不同列",
       "invalidResponse": "响应必须为连续列",
       "invalidFactor": "因子必须为连续、名义或有序列"

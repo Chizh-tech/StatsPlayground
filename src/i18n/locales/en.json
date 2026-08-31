@@ -212,7 +212,7 @@
     "graph": "Graph",
     "graphHint": "Embedded runtime",
     "missingResponse": "Choose a continuous response",
-    "missingFactor": "Choose a nominal or ordinal factor",
+    "missingFactor": "Choose a continuous, nominal, or ordinal X",
     "duplicateRole": "Response and factor must use different columns",
     "invalidResponse": "Response must be continuous",
     "invalidFactor": "Factor must be continuous, nominal, or ordinal",
@@ -222,7 +222,7 @@
     },
     "validation": {
       "missingResponse": "Choose a continuous response",
-      "missingFactor": "Choose a nominal or ordinal factor",
+      "missingFactor": "Choose a continuous, nominal, or ordinal X",
       "duplicateRole": "Response and factor must use different columns",
       "invalidResponse": "Response must be continuous",
       "invalidFactor": "Factor must be continuous, nominal, or ordinal"

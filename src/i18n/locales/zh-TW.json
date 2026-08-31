@@ -211,7 +211,7 @@
     "graph": "圖形",
     "graphHint": "嵌入式執行視圖",
     "missingResponse": "選擇一個連續反應",
-    "missingFactor": "選擇一個名義或有序因子",
+    "missingFactor": "選擇一個連續、名義或有序 X",
     "duplicateRole": "反應和因子必須使用不同欄位",
     "invalidResponse": "反應必須為連續欄位",
     "invalidFactor": "因子必須為連續、名義或有序欄位",
@@ -221,7 +221,7 @@
     },
     "validation": {
       "missingResponse": "選擇一個連續反應",
-      "missingFactor": "選擇一個名義或有序因子",
+      "missingFactor": "選擇一個連續、名義或有序 X",
       "duplicateRole": "反應和因子必須使用不同欄位",
       "invalidResponse": "反應必須為連續欄位",
       "invalidFactor": "因子必須為連續、名義或有序欄位"

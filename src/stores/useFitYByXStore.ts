@@ -72,8 +72,8 @@ function isExpectedFamily(personality: FitYByXPersonality, graph: EmbeddedGraphC
     .filter((element) => element.enabled !== false)
     .map((element) => element.kind);
   return personality === "bivariate"
-    ? activeKinds.includes("fitline")
-    : activeKinds.includes("boxplot");
+    ? activeKinds.includes("fitline") && !activeKinds.includes("boxplot")
+    : activeKinds.includes("boxplot") && !activeKinds.includes("fitline");
 }
 
 function isUsableFitYByXGraph(item: FitYByXItem, graph: EmbeddedGraphConfig): boolean {

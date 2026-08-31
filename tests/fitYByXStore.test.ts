@@ -52,6 +52,8 @@ resetStores();
 const loadedBase = fitItem("fit-2", "Fit Y by X 2");
 const loadedCustom = fitItem("fit-custom", "Custom fit", "dataset-2");
 const loadedBivariate = bivariateFitItem("fit-bivar", "Fit Y by X 4", "dataset-4");
+const mixedOneway = fitItem("fit-mixed-oneway", "Mixed oneway");
+const mixedBivariate = bivariateFitItem("fit-mixed-bivariate", "Mixed bivariate");
 const persistedGraph = {
   ...loadedBase.graph,
   mode: "2d" as const,
@@ -105,6 +107,38 @@ const expectedPersistedBivariateGraph = createEmbeddedGraphItem({
 useFitYByXStore.getState().loadFromProject([
   { ...loadedBase, graph: persistedGraph },
   { ...loadedBivariate, graph: persistedBivariateGraph },
+  {
+    ...mixedOneway,
+    graph: {
+      ...mixedOneway.graph,
+      modeStates: {
+        ...mixedOneway.graph.modeStates,
+        twoD: {
+          ...mixedOneway.graph.modeStates.twoD,
+          elements: [
+            ...mixedOneway.graph.modeStates.twoD.elements,
+            { kind: "fitline", enabled: true as const },
+          ],
+        },
+      },
+    },
+  },
+  {
+    ...mixedBivariate,
+    graph: {
+      ...mixedBivariate.graph,
+      modeStates: {
+        ...mixedBivariate.graph.modeStates,
+        twoD: {
+          ...mixedBivariate.graph.modeStates.twoD,
+          elements: [
+            ...mixedBivariate.graph.modeStates.twoD.elements,
+            { kind: "boxplot", enabled: true as const },
+          ],
+        },
+      },
+    },
+  },
   loadedCustom,
   { ...fitItem("fit-legacy", "Legacy fit"), graph: undefined } as never,
   { ...fitItem("fit-malformed", "Malformed fit"), graph: { mode: "bogus" } } as never,
@@ -141,6 +175,14 @@ assert.deepEqual(loadedBivariateItem?.graph, {
   filters: expectedPersistedBivariateGraph.filters,
   sampling: expectedPersistedBivariateGraph.sampling,
 });
+assert.deepEqual(
+  useFitYByXStore.getState().items.find(({ id }) => id === "fit-mixed-oneway")?.graph,
+  mixedOneway.graph,
+);
+assert.deepEqual(
+  useFitYByXStore.getState().items.find(({ id }) => id === "fit-mixed-bivariate")?.graph,
+  mixedBivariate.graph,
+);
 assert.deepEqual(
   useFitYByXStore.getState().items.find(({ id }) => id === "fit-legacy")?.graph,
   fitItem("fit-legacy", "Legacy fit").graph,
@@ -185,7 +227,15 @@ assert.equal(useFitYByXStore.getState().items.some(({ id }) => id === "fit-2"), 
 useFitYByXStore.getState().deleteItem("fit-8");
 assert.deepEqual(
   useFitYByXStore.getState().items.map(({ id }) => id),
-  ["fit-bivar", "fit-custom", "fit-legacy", "fit-malformed", "fit-partial"],
+  [
+    "fit-bivar",
+    "fit-mixed-oneway",
+    "fit-mixed-bivariate",
+    "fit-custom",
+    "fit-legacy",
+    "fit-malformed",
+    "fit-partial",
+  ],
 );
 
 useProjectStore.setState({ readOnly: true });

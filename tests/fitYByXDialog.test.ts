@@ -208,8 +208,18 @@ assert.equal(
   "FitYByXRoleDialog must localize the derived personality labels",
 );
 
-for (const localeFile of ["en.json", "zh-CN.json", "zh-TW.json", "vi.json"]) {
+const expectedMissingFactorCopy = {
+  "en.json": "Choose a continuous, nominal, or ordinal X",
+  "zh-CN.json": "选择一个连续、名义或有序 X",
+  "zh-TW.json": "選擇一個連續、名義或有序 X",
+  "vi.json": "Chọn một X liên tục, danh nghĩa hoặc thứ tự",
+} as const;
+
+for (const localeFile of ["en.json", "zh-CN.json", "zh-TW.json", "vi.json"] as const) {
   const localeSource = readFileSync(resolve(process.cwd(), `src/i18n/locales/${localeFile}`), "utf8");
+  const locale = JSON.parse(localeSource) as {
+    fitYByX: { missingFactor: string; validation: { missingFactor: string } };
+  };
   assert.equal(
     localeSource.includes('"personality": {')
       && localeSource.includes('"oneway":')
@@ -217,6 +227,8 @@ for (const localeFile of ["en.json", "zh-CN.json", "zh-TW.json", "vi.json"]) {
     true,
     `Locale ${localeFile} must include the derived personality labels`,
   );
+  assert.equal(locale.fitYByX.missingFactor, expectedMissingFactorCopy[localeFile]);
+  assert.equal(locale.fitYByX.validation.missingFactor, expectedMissingFactorCopy[localeFile]);
 }
 
 console.log("fitYByX dialog contract tests passed");
