@@ -8084,6 +8084,14 @@ mod tests {
     }
 
     #[test]
+    fn fit_y_by_x_display_value_formats_signed_hugeint_as_plain_decimal() {
+        assert_eq!(
+            fit_y_by_x_display_value(Value::HugeInt(-9_223_372_036_854_775_809_i128)),
+            Some("-9223372036854775809".into())
+        );
+    }
+
+    #[test]
     fn sample_projection_stratifies_by_all_active_categorical_roles() {
         let db = DuckDbEngine::new_in_memory().unwrap();
         db.create_empty_table(
