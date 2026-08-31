@@ -13,6 +13,7 @@ import {
 import { dataService } from "@/services/dataService";
 import { ioService } from "@/services/ioService";
 import { projectService } from "@/services/projectService";
+import { distributionService } from "@/services/distributionService";
 import { DataTableView } from "./DataTableView";
 import { HistoryPanel, type SnapshotMenuData } from "./HistoryPanel";
 import { PreferencesDialog } from "./PreferencesDialog";
@@ -21,13 +22,26 @@ import { HelpDialog } from "./HelpDialog";
 import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
 import { GraphBuilderView } from "./graphBuilder";
 import { TabulateView } from "./tabulate";
-import { DistributionWorkspace } from "./distribution";
+import {
+  DistributionDialog,
+  DistributionDirectoryItem,
+  DistributionWorkspace,
+} from "./distribution";
+import {
+  createDefaultDistributionContinuousFitConfig,
+  isDistributionMenuEnabled,
+} from "./distribution/distributionConfig";
+import { applyContinuousFitChange } from "./distribution/continuousFitRun";
 import "./graphBuilder/graphBuilder.css";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";
 import { useDistributionStore } from "@/stores/useDistributionStore";
 import type { GraphBuilderItem } from "@/types/graphBuilder";
-import type { DistributionDocV1 } from "@/types/distribution";
+import type {
+  DistributionAnalysisConfigV1,
+  DistributionColumnInfoV1,
+  DistributionDocV1,
+} from "@/types/distribution";
 import type { TabulateItem } from "@/types/tabulate";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
@@ -153,9 +167,26 @@ export function Workspace() {
   const derivedFormulas = useDistributionStore((s) => s.derivedFormulas);
   const distributionIssues = useDistributionStore((s) => s.issues);
   const distributionBootstrap = useDistributionStore((s) => s.bootstrap);
+  const setDistributionBootstrap = useDistributionStore((s) => s.setBootstrap);
   const distributionRunState = useDistributionStore((s) => s.runState);
+  const distributionRunStateByAnalysisId = useDistributionStore((s) => s.runStateByAnalysisId);
+  const distributionResultByAnalysisId = useDistributionStore((s) => s.resultByAnalysisId);
+  const distributionFailureByAnalysisId = useDistributionStore((s) => s.failureByAnalysisId);
   const selectedDistributionId = useDistributionStore((s) => s.selectedAnalysisId);
   const selectDistribution = useDistributionStore((s) => s.selectItem);
+  const createDistribution = useDistributionStore((s) => s.createItem);
+  const commitDistributionConfig = useDistributionStore((s) => s.commitConfig);
+  const updateDistributionReportPreferences = useDistributionStore(
+    (s) => s.updateReportPreferences,
+  );
+  const copyDistribution = useDistributionStore((s) => s.copyItem);
+  const renameDistribution = useDistributionStore((s) => s.renameItem);
+  const deleteDistribution = useDistributionStore((s) => s.deleteItem);
+  const beginDistributionRun = useDistributionStore((s) => s.beginRun);
+  const cancelDistributionRun = useDistributionStore((s) => s.cancelRun);
+  const updateDistributionProgress = useDistributionStore((s) => s.updateProgress);
+  const acceptDistributionResult = useDistributionStore((s) => s.acceptResult);
+  const failDistributionRun = useDistributionStore((s) => s.failRun);
   const resetDistributions = useDistributionStore((s) => s.reset);
   const loadDistributionsFromProject = useDistributionStore((s) => s.loadFromProject);
   const addGraphBuilder = useGraphBuilderStore((s) => s.addItem);
@@ -179,10 +210,49 @@ export function Workspace() {
   const [renameValue, setRenameValue] = useState("");
   const [showPrefs, setShowPrefs] = useState(false);
   const [showSqlQuery, setShowSqlQuery] = useState(false);
+  const [distributionDialog, setDistributionDialog] = useState<{
+    datasetId: string;
+    columns: DistributionColumnInfoV1[];
+    analysisId?: string;
+    baseConfigRevision?: number;
+    initialConfig?: DistributionAnalysisConfigV1;
+  } | null>(null);
   const [helpDialog, setHelpDialog] = useState<"about" | "license" | null>(null);
   const [tableOp, setTableOp] = useState<TableOpType | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void distributionService.bootstrapWorkspace()
+      .then((bootstrap) => {
+        if (!cancelled) setDistributionBootstrap(bootstrap);
+      })
+      .catch(() => {
+        if (!cancelled) setDistributionBootstrap(null);
+      });
+    return () => { cancelled = true; };
+  }, [datasets.length, setDistributionBootstrap]);
+
+  useEffect(() => {
+    const unlisteners = Promise.all([
+      listen<import("@/types/distribution").DistributionProgressV1>(
+        "distribution-progress",
+        ({ payload }) => updateDistributionProgress(payload),
+      ),
+      listen<import("@/types/distribution").DistributionResultEnvelopeV1>(
+        "distribution-completed",
+        ({ payload }) => { acceptDistributionResult(payload); },
+      ),
+      listen<import("@/types/distribution").DistributionRunFailureV1>(
+        "distribution-failed",
+        ({ payload }) => { failDistributionRun(payload); },
+      ),
+    ]);
+    return () => {
+      void unlisteners.then((items) => items.forEach((unlisten) => unlisten()));
+    };
+  }, [acceptDistributionResult, failDistributionRun, updateDistributionProgress]);
 
   // Folder tree state ------------------------------------------------------
   const folders = useFolderStore((s) => s.folders);
@@ -219,6 +289,7 @@ export function Workspace() {
     | { kind: "table"; id: string; x: number; y: number }
     | { kind: "graph"; id: string; x: number; y: number }
     | { kind: "tabulate"; id: string; x: number; y: number }
+    | { kind: "distribution"; id: string; x: number; y: number }
     | { kind: "folder"; path: string; x: number; y: number }
     | { kind: "empty"; x: number; y: number };
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
@@ -442,6 +513,23 @@ export function Workspace() {
     setRenameValue(item.name);
   };
 
+  const handleOpenDistribution = async () => {
+    if (!activeDatasetId) return;
+    const rawColumns = await dataService.getDistributionColumns(activeDatasetId);
+    const columns = rawColumns.map((column): DistributionColumnInfoV1 => {
+      const { columnId, name, sqlType, role, index } = column;
+      const normalizedType = sqlType.toUpperCase();
+      const integerCompatible = /^(?:U?INT(?:8|16|32|64|128)?|TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT)$/.test(normalizedType);
+      const modelingType = /DATE|TIME/.test(normalizedType)
+        ? "datetime" as const
+        : /CHAR|TEXT|STRING|ENUM|BOOLEAN/.test(normalizedType)
+          ? "nominal" as const
+          : "continuous" as const;
+      return { columnId, name, sqlType, role, index, modelingType, integerCompatible };
+    });
+    setDistributionDialog({ datasetId: activeDatasetId, columns });
+  };
+
   const handleRenameSubmit = async (id: string) => {
     const trimmed = renameValue.trim();
     if (!trimmed) {
@@ -465,6 +553,17 @@ export function Workspace() {
         renameTabulate(id, trimmed);
         markDirty();
         recordAction(t("history.renameTabulate", { old: tabulate.name, new: trimmed }));
+      }
+      setRenamingId(null);
+      return;
+    }
+    const distribution = useDistributionStore.getState().items.find(
+      (item) => item.analysisId === id,
+    );
+    if (distribution) {
+      if (trimmed !== distribution.name) {
+        renameDistribution(id, trimmed);
+        markDirty();
       }
       setRenamingId(null);
       return;
@@ -493,6 +592,168 @@ export function Workspace() {
     if (activeTabulateId === id) setActiveTabulateId(null);
     markDirty();
     if (item) recordAction(t("history.deleteTabulate", { name: item.name }));
+  };
+
+  const handleCopyDistribution = (analysisId: string) => {
+    const copy = copyDistribution(analysisId);
+    if (!copy) return;
+    fsSetDistributionFolder(copy.analysisId, distributionFolders[analysisId] ?? null);
+    selectDistribution(copy.analysisId);
+    setActiveDataset(null);
+    setActiveGraphBuilderId(null);
+    setActiveTabulateId(null);
+    markDirty();
+  };
+
+  const handleDeleteDistribution = async (analysisId: string) => {
+    const run = distributionRunStateByAnalysisId[analysisId];
+    if (run?.status === "running") {
+      try {
+        await distributionService.cancelRun({ cancelToken: run.cancelToken });
+      } catch {
+        // Local deletion still wins if the backend run already completed.
+      }
+    }
+    deleteDistribution(analysisId);
+    fsSetDistributionFolder(analysisId, null);
+    markDirty();
+  };
+
+  const handleEditDistributionInputs = async (item: DistributionDocV1) => {
+    if (item.loadStatus !== "ready" && item.loadStatus !== "missingSource") return;
+    const datasetId = datasets.some((dataset) => dataset.id === item.sourceDatasetId)
+      ? item.sourceDatasetId
+      : datasets[0]?.id;
+    if (!datasetId) return;
+    const rawColumns = await dataService.getDistributionColumns(datasetId);
+    const columns = rawColumns.map((column): DistributionColumnInfoV1 => {
+      const { columnId, name, sqlType, role, index } = column;
+      const normalizedType = sqlType.toUpperCase();
+      const integerCompatible = /^(?:U?INT(?:8|16|32|64|128)?|TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT)$/.test(normalizedType);
+      const modelingType = /DATE|TIME/.test(normalizedType)
+        ? "datetime" as const
+        : /CHAR|TEXT|STRING|ENUM|BOOLEAN/.test(normalizedType)
+          ? "nominal" as const
+          : "continuous" as const;
+      return { columnId, name, sqlType, role, index, modelingType, integerCompatible };
+    });
+    setDistributionDialog({
+      datasetId,
+      columns,
+      analysisId: item.analysisId,
+      baseConfigRevision: item.configRevision,
+      initialConfig: { ...item.currentConfig, sourceDatasetId: datasetId },
+    });
+  };
+
+  const handleDistributionDatasetChange = async (datasetId: string) => {
+    const rawColumns = await dataService.getDistributionColumns(datasetId);
+    const columns = rawColumns.map((column): DistributionColumnInfoV1 => {
+      const { columnId, name, sqlType, role, index } = column;
+      const normalizedType = sqlType.toUpperCase();
+      const integerCompatible = /^(?:U?INT(?:8|16|32|64|128)?|TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT)$/.test(normalizedType);
+      const modelingType = /DATE|TIME/.test(normalizedType)
+        ? "datetime" as const
+        : /CHAR|TEXT|STRING|ENUM|BOOLEAN/.test(normalizedType)
+          ? "nominal" as const
+          : "continuous" as const;
+      return { columnId, name, sqlType, role, index, modelingType, integerCompatible };
+    });
+    setDistributionDialog((current) => current ? {
+      ...current,
+      datasetId,
+      columns,
+      initialConfig: current.initialConfig
+        ? { ...current.initialConfig, sourceDatasetId: datasetId }
+        : undefined,
+    } : null);
+  };
+
+  const handleStartDistributionRun = async (item: DistributionDocV1) => {
+    if (item.loadStatus !== "ready" || !distributionBootstrap) return;
+    const previousRun = useDistributionStore.getState().runStateByAnalysisId[item.analysisId];
+    if (previousRun?.status === "running") {
+      try {
+        await distributionService.cancelRun({ cancelToken: previousRun.cancelToken });
+      } finally {
+        cancelDistributionRun(previousRun.cancelToken);
+      }
+    }
+    const request = {
+      schemaVersion: "1",
+      analysisId: item.analysisId,
+      configRevision: item.configRevision,
+      sourceDatasetId: item.sourceDatasetId,
+      sourceDataVersion: null,
+      mode: "continuous",
+      yColumns: item.currentConfig.yColumns,
+      weightColumnId: item.currentConfig.weightColumnId,
+      frequencyColumnId: item.currentConfig.frequencyColumnId,
+      byColumnIds: item.currentConfig.byColumnIds,
+      filterExpr: item.currentConfig.filterExpr,
+      confidenceLevel: item.currentConfig.confidenceLevel,
+      histogramsOnly: item.currentConfig.histogramsOnly,
+      continuousFit: item.currentConfig.continuousFit ??
+        createDefaultDistributionContinuousFitConfig(),
+      visualDiagnostics: item.currentConfig.visualDiagnostics ?? {
+        histogram: {
+          method: "jmpAuto",
+          fixedCount: null,
+          fixedWidth: null,
+        },
+        normalQuantileConfidenceLevel: 0.95,
+      },
+      enabledCapabilityIds: item.currentConfig.enabledCapabilityIds,
+      capabilityOverrides: item.currentConfig.capabilityOverrides,
+      observationPolicy: distributionBootstrap.observationPolicy,
+      resourceBudget: { ...distributionBootstrap.resourceBudget, cancelToken: null },
+      exact: true,
+    } as const;
+    const accepted = await distributionService.startRun(request);
+    beginDistributionRun({
+      ...accepted,
+      status: "running",
+      progress: null,
+    });
+    try {
+      const result = await distributionService.executeRun(request, accepted);
+      acceptDistributionResult(result);
+    } catch {
+      failDistributionRun({
+        analysisId: accepted.analysisId,
+        configRevision: accepted.configRevision,
+        runId: accepted.runId,
+        snapshotId: accepted.snapshotId,
+        code: "distribution.run.failed",
+        messageKey: "distribution.run.failed",
+      });
+    }
+  };
+
+  const handleCancelDistributionRun = async (analysisId: string) => {
+    const run = distributionRunStateByAnalysisId[analysisId];
+    if (!run || run.status !== "running") return;
+    await distributionService.cancelRun({ cancelToken: run.cancelToken });
+    cancelDistributionRun(run.cancelToken);
+  };
+
+  const handleContinuousFitChange = async (
+    item: DistributionDocV1,
+    continuousFit: NonNullable<DistributionAnalysisConfigV1["continuousFit"]>,
+  ) => {
+    await applyContinuousFitChange(item, continuousFit, {
+      getRun: (analysisId) => useDistributionStore.getState().runStateByAnalysisId[analysisId],
+      cancelBackendRun: async (cancelToken) => {
+        await distributionService.cancelRun({ cancelToken });
+      },
+      cancelStoreRun: cancelDistributionRun,
+      commitConfig: commitDistributionConfig,
+      getItem: (analysisId) => useDistributionStore.getState().items.find(
+        (entry) => entry.analysisId === analysisId,
+      ),
+      markDirty,
+      startRun: handleStartDistributionRun,
+    });
   };
 
   const handleDeleteDataset = async (id: string) => {
@@ -758,7 +1019,15 @@ export function Workspace() {
     }, durationMs);
   };
 
+  const cancelActiveDistributionRuns = async () => {
+    const activeRuns = Object.values(useDistributionStore.getState().runStateByAnalysisId)
+      .filter((run) => run.status === "running");
+    await Promise.allSettled(activeRuns.map((run) =>
+      distributionService.cancelRun({ cancelToken: run.cancelToken })));
+  };
+
   const handleCloseProject = async () => {
+    await cancelActiveDistributionRuns();
     setActiveDataset(null);
     setActiveGraphBuilderId(null);
     setActiveTabulateId(null);
@@ -780,6 +1049,7 @@ export function Workspace() {
       multiple: false,
     });
     if (selected) {
+      await cancelActiveDistributionRuns();
       setActiveDataset(null);
       setActiveGraphBuilderId(null);
       setActiveTabulateId(null);
@@ -1471,32 +1741,36 @@ export function Workspace() {
     for (const item of distributionChildren) {
       const sourceDataset = datasets.find((dataset) => dataset.id === item.sourceDatasetId);
       out.push(
-        <div
+        <DistributionDirectoryItem
           key={`distribution:${item.analysisId}`}
-          className={`dataset-item ${selectedDistributionId === item.analysisId ? "active" : ""}`}
-          style={{ paddingLeft: 8 + depth * 12 + 12 }}
-          draggable
+          item={item}
+          sourceName={sourceDataset ? sourceDataset.name : t("workspace.datasourceMissing")}
+          selected={selectedDistributionId === item.analysisId}
+          paddingLeft={8 + depth * 12 + 12}
           onDragStart={(event) =>
             handleDragStart(event, { kind: "distribution", id: item.analysisId })
           }
-          onClick={() => {
+          onSelect={() => {
             setActiveDataset(null);
             setActiveGraphBuilderId(null);
             setActiveTabulateId(null);
             selectDistribution(item.analysisId);
           }}
-          title={
-            sourceDataset
-              ? t("workspace.datasourceLabel", { name: sourceDataset.name })
-              : t("workspace.datasourceDeleted")
-          }
-        >
-          <i className="ds-icon fa-solid fa-chart-column" aria-hidden="true" />
-          <span className="ds-name">{item.name}</span>
-          <span className="ds-info gb-source-tag">
-            {sourceDataset ? sourceDataset.name : t("workspace.datasourceMissing")}
-          </span>
-        </div>,
+          onRename={(analysisId, name) => {
+            renameDistribution(analysisId, name);
+            markDirty();
+          }}
+          onCopy={handleCopyDistribution}
+          onDelete={(analysisId) => void handleDeleteDistribution(analysisId)}
+          onOpenSource={(analysisId) => {
+            const distribution = distributions.find((entry) => entry.analysisId === analysisId);
+            if (!distribution || !datasets.some((dataset) => dataset.id === distribution.sourceDatasetId)) return;
+            selectDistribution(null);
+            setActiveGraphBuilderId(null);
+            setActiveTabulateId(null);
+            setActiveDataset(distribution.sourceDatasetId);
+          }}
+        />,
       );
     }
     return out;
@@ -1544,6 +1818,12 @@ export function Workspace() {
                 onClick={activeDatasetId ? handleCreateTabulate : undefined}
               >
                 {t("menu.tabulate")}
+              </div>
+              <div
+                className={`menu-item${isDistributionMenuEnabled(activeDatasetId) ? "" : " menu-item-disabled"}`}
+                onClick={isDistributionMenuEnabled(activeDatasetId) ? () => void handleOpenDistribution() : undefined}
+              >
+                {t("menu.distribution")}
               </div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.help")}>
@@ -1668,10 +1948,36 @@ export function Workspace() {
         {/* Right: Main Content */}
         <div className="main-area">
           {selectedDistributionId ? (
-            <DistributionWorkspace
-              bootstrap={distributionBootstrap}
-              runState={distributionRunState}
-            />
+            (() => {
+              const item = distributions.find(
+                (distribution) => distribution.analysisId === selectedDistributionId,
+              );
+              if (!item) return null;
+              return (
+                <DistributionWorkspace
+                  item={item}
+                  sourceAvailable={datasets.some((dataset) => dataset.id === item.sourceDatasetId)}
+                  bootstrap={distributionBootstrap}
+                  runState={distributionRunStateByAnalysisId[item.analysisId] ?? distributionRunState}
+                  result={distributionResultByAnalysisId[item.analysisId] ?? null}
+                  failure={distributionFailureByAnalysisId[item.analysisId] ?? null}
+                  onEditInputs={() => void handleEditDistributionInputs(item)}
+                  onRun={() => void handleStartDistributionRun(item)}
+                  onCancel={() => void handleCancelDistributionRun(item.analysisId)}
+                  onReportPreferencesChange={(yColumnId, preferences) => {
+                    updateDistributionReportPreferences(
+                      item.analysisId,
+                      yColumnId,
+                      preferences,
+                    );
+                    markDirty();
+                  }}
+                  onContinuousFitChange={(continuousFit) => {
+                    void handleContinuousFitChange(item, continuousFit);
+                  }}
+                />
+              );
+            })()
           ) : activeTabulateId ? (
             (() => {
               const item = tabulates.find((entry) => entry.id === activeTabulateId);
@@ -1727,6 +2033,64 @@ export function Workspace() {
       </div>
 
       {showPrefs && <PreferencesDialog onClose={() => setShowPrefs(false)} />}
+
+      {distributionDialog && (
+        <DistributionDialog
+          open
+          datasetId={distributionDialog.datasetId}
+          columns={distributionDialog.columns}
+          initialConfig={distributionDialog.initialConfig}
+          recallConfig={distributionDialog.initialConfig}
+          datasets={datasets.map((dataset) => ({ id: dataset.id, name: dataset.name }))}
+          onDatasetChange={handleDistributionDatasetChange}
+          bootstrap={distributionBootstrap}
+          onCancel={() => setDistributionDialog(null)}
+          onSave={(config) => {
+            const existingAnalysisId = distributionDialog.analysisId;
+            if (existingAnalysisId && distributionDialog.baseConfigRevision !== undefined) {
+              const result = commitDistributionConfig(
+                existingAnalysisId,
+                distributionDialog.baseConfigRevision,
+                config,
+              );
+              if (!result.ok) return;
+            } else {
+              const item = createDistribution(config);
+              selectDistribution(item.analysisId);
+            }
+            setDistributionDialog(null);
+            setActiveDataset(null);
+            setActiveGraphBuilderId(null);
+            setActiveTabulateId(null);
+            markDirty();
+          }}
+          onRun={async (config) => {
+            const existingAnalysisId = distributionDialog.analysisId;
+            let item: DistributionDocV1 | undefined;
+            if (existingAnalysisId && distributionDialog.baseConfigRevision !== undefined) {
+              const result = commitDistributionConfig(
+                existingAnalysisId,
+                distributionDialog.baseConfigRevision,
+                config,
+              );
+              if (!result.ok) return;
+              item = useDistributionStore.getState().items.find(
+                (entry) => entry.analysisId === existingAnalysisId,
+              );
+            } else {
+              item = createDistribution(config);
+            }
+            if (!item) return;
+            setDistributionDialog(null);
+            setActiveDataset(null);
+            setActiveGraphBuilderId(null);
+            setActiveTabulateId(null);
+            selectDistribution(item.analysisId);
+            markDirty();
+            await handleStartDistributionRun(item);
+          }}
+        />
+      )}
 
       {helpDialog && <HelpDialog mode={helpDialog} onClose={() => setHelpDialog(null)} />}
 
@@ -1882,6 +2246,33 @@ export function Workspace() {
                 }}>{t("common.rename")}</div>
                 <div className="sp-ctx-sep" />
                 <div className="sp-ctx-item sp-ctx-danger" onClick={() => { handleDeleteTabulate(id); setCtxMenu(null); }}>{t("common.delete")}</div>
+              </>
+            );
+          })()}
+          {ctxMenu.kind === "distribution" && (() => {
+            const id = ctxMenu.id;
+            const item = distributions.find((entry) => entry.analysisId === id);
+            if (!item) return null;
+            return (
+              <>
+                <div className="sp-ctx-item" onClick={() => {
+                  setRenamingId(id);
+                  setRenameValue(item.name);
+                  selectDistribution(id);
+                  setActiveDataset(null);
+                  setActiveGraphBuilderId(null);
+                  setActiveTabulateId(null);
+                  setCtxMenu(null);
+                }}>{t("common.rename")}</div>
+                <div className="sp-ctx-item" onClick={() => {
+                  handleCopyDistribution(id);
+                  setCtxMenu(null);
+                }}>{t("common.copy", { defaultValue: "Copy" })}</div>
+                <div className="sp-ctx-sep" />
+                <div className="sp-ctx-item sp-ctx-danger" onClick={() => {
+                  void handleDeleteDistribution(id);
+                  setCtxMenu(null);
+                }}>{t("common.delete")}</div>
               </>
             );
           })()}

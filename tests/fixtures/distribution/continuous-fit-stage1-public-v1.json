@@ -1,0 +1,215 @@
+{
+  "schemaVersion": "1",
+  "cases": [
+    {
+      "caseId": "normal.unique.v1",
+      "distributionId": "normal",
+      "methodId": "fit.normal.mle.v1",
+      "parameterizationId": "normal.locationScale.v1",
+      "values": [1.0, 2.0, 3.0, 4.0, 5.0],
+      "frequencies": null,
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "location", "value": 3.0 },
+        { "parameterId": "scale", "value": 1.4142135623730951 }
+      ],
+      "expectedLogLikelihood": -8.827560617423227,
+      "replicationGroup": null
+    },
+    {
+      "caseId": "normal.frequency.compact.v1",
+      "distributionId": "normal",
+      "methodId": "fit.normal.mle.v1",
+      "parameterizationId": "normal.locationScale.v1",
+      "values": [1.0, 5.0],
+      "frequencies": [2.0, 1.0],
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "location", "value": 2.3333333333333335 },
+        { "parameterId": "scale", "value": 1.8856180831641267 }
+      ],
+      "expectedLogLikelihood": -6.159582587809279,
+      "replicationGroup": "normal.frequency.v1"
+    },
+    {
+      "caseId": "normal.frequency.expanded.v1",
+      "distributionId": "normal",
+      "methodId": "fit.normal.mle.v1",
+      "parameterizationId": "normal.locationScale.v1",
+      "values": [1.0, 1.0, 5.0],
+      "frequencies": null,
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "location", "value": 2.3333333333333335 },
+        { "parameterId": "scale", "value": 1.8856180831641267 }
+      ],
+      "expectedLogLikelihood": -6.159582587809279,
+      "replicationGroup": "normal.frequency.v1"
+    },
+    {
+      "caseId": "normal.weighted.v1",
+      "distributionId": "normal",
+      "methodId": "fit.normal.mle.v1",
+      "parameterizationId": "normal.locationScale.v1",
+      "values": [1.0, 4.0],
+      "frequencies": null,
+      "weights": [1.0, 3.0],
+      "expectedParameters": [
+        { "parameterId": "location", "value": 3.25 },
+        { "parameterId": "scale", "value": 1.299038105676658 }
+      ],
+      "expectedLogLikelihood": -6.722250420347787,
+      "replicationGroup": null
+    },
+    {
+      "caseId": "lognormal.unique.v1",
+      "distributionId": "lognormal",
+      "methodId": "fit.lognormal.mle.v1",
+      "parameterizationId": "lognormal.logLocationLogScale.v1",
+      "values": [1.0, 2.0, 4.0, 8.0],
+      "frequencies": null,
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "logLocation", "value": 1.0397207708399179 },
+        { "parameterId": "logScale", "value": 0.7749621070721792 }
+      ],
+      "expectedLogLikelihood": -8.814872636480125,
+      "replicationGroup": null
+    },
+    {
+      "caseId": "lognormal.weighted.v1",
+      "distributionId": "lognormal",
+      "methodId": "fit.lognormal.mle.v1",
+      "parameterizationId": "lognormal.logLocationLogScale.v1",
+      "values": [1.0, 7.38905609893065],
+      "frequencies": null,
+      "weights": [1.0, 3.0],
+      "expectedParameters": [
+        { "parameterId": "logLocation", "value": 1.5 },
+        { "parameterId": "logScale", "value": 0.8660254037844386 }
+      ],
+      "expectedLogLikelihood": -11.1003899879151,
+      "replicationGroup": null
+    },
+    {
+      "caseId": "lognormal.frequency.compact.v1",
+      "distributionId": "lognormal",
+      "methodId": "fit.lognormal.mle.v1",
+      "parameterizationId": "lognormal.logLocationLogScale.v1",
+      "values": [1.0, 4.0],
+      "frequencies": [2.0, 1.0],
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "logLocation", "value": 0.46209812037329684 },
+        { "parameterId": "logScale", "value": 0.6535054289790315 }
+      ],
+      "expectedLogLikelihood": -4.36689664550434,
+      "replicationGroup": "lognormal.frequency.v1"
+    },
+    {
+      "caseId": "lognormal.frequency.expanded.v1",
+      "distributionId": "lognormal",
+      "methodId": "fit.lognormal.mle.v1",
+      "parameterizationId": "lognormal.logLocationLogScale.v1",
+      "values": [1.0, 1.0, 4.0],
+      "frequencies": null,
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "logLocation", "value": 0.46209812037329684 },
+        { "parameterId": "logScale", "value": 0.6535054289790315 }
+      ],
+      "expectedLogLikelihood": -4.36689664550434,
+      "replicationGroup": "lognormal.frequency.v1"
+    },
+    {
+      "caseId": "exponential.unique.v1",
+      "distributionId": "exponential",
+      "methodId": "fit.exponential.location0.mle.v1",
+      "parameterizationId": "exponential.scaleLocation0.v1",
+      "values": [1.0, 2.0, 4.0],
+      "frequencies": null,
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "scale", "value": 2.3333333333333335 },
+        { "parameterId": "location", "value": 0.0 }
+      ],
+      "expectedLogLikelihood": -5.541893581161611,
+      "replicationGroup": null
+    },
+    {
+      "caseId": "exponential.frequency.compact.v1",
+      "distributionId": "exponential",
+      "methodId": "fit.exponential.location0.mle.v1",
+      "parameterizationId": "exponential.scaleLocation0.v1",
+      "values": [1.0, 4.0],
+      "frequencies": [2.0, 1.0],
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "scale", "value": 2.0 },
+        { "parameterId": "location", "value": 0.0 }
+      ],
+      "expectedLogLikelihood": -5.079441541679836,
+      "replicationGroup": "exponential.frequency.v1"
+    },
+    {
+      "caseId": "exponential.frequency.expanded.v1",
+      "distributionId": "exponential",
+      "methodId": "fit.exponential.location0.mle.v1",
+      "parameterizationId": "exponential.scaleLocation0.v1",
+      "values": [1.0, 1.0, 4.0],
+      "frequencies": null,
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "scale", "value": 2.0 },
+        { "parameterId": "location", "value": 0.0 }
+      ],
+      "expectedLogLikelihood": -5.079441541679836,
+      "replicationGroup": "exponential.frequency.v1"
+    },
+    {
+      "caseId": "exponential.weighted.v1",
+      "distributionId": "exponential",
+      "methodId": "fit.exponential.location0.mle.v1",
+      "parameterizationId": "exponential.scaleLocation0.v1",
+      "values": [1.0, 4.0],
+      "frequencies": null,
+      "weights": [1.0, 3.0],
+      "expectedParameters": [
+        { "parameterId": "scale", "value": 3.25 },
+        { "parameterId": "location", "value": 0.0 }
+      ],
+      "expectedLogLikelihood": -8.714619985366586,
+      "replicationGroup": null
+    },
+    {
+      "caseId": "gamma.unique.v1",
+      "distributionId": "gamma",
+      "methodId": "fit.gamma.shapeScale.mle.v1",
+      "parameterizationId": "gamma.shapeScale.location0.v1",
+      "values": [0.8, 1.2, 2.5, 4.0, 5.5],
+      "frequencies": null,
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "shape", "value": 2.268465952976047 },
+        { "parameterId": "scale", "value": 1.234314315507633 }
+      ],
+      "expectedLogLikelihood": -9.376377969021933,
+      "replicationGroup": null
+    },
+    {
+      "caseId": "weibull.unique.v1",
+      "distributionId": "weibull",
+      "methodId": "fit.weibull.shapeScale.mle.v1",
+      "parameterizationId": "weibull.shapeScale.location0.v1",
+      "values": [0.6, 1.1, 2.0, 3.7, 6.3],
+      "frequencies": null,
+      "weights": null,
+      "expectedParameters": [
+        { "parameterId": "shape", "value": 1.3535355482111221 },
+        { "parameterId": "scale", "value": 3.0027074519050858 }
+      ],
+      "expectedLogLikelihood": -9.716163857621432,
+      "replicationGroup": null
+    }
+  ]
+}

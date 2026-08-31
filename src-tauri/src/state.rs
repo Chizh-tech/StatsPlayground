@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::{Mutex, RwLock};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::engine::duckdb_engine::DuckDbEngine;
 use crate::error::AppError;
@@ -11,6 +12,7 @@ pub struct AppState {
     pub project: RwLock<Option<ProjectInfo>>,
     /// Per-dataset column display properties (dataset_id → vec of props)
     pub column_display: Mutex<HashMap<String, Vec<ColumnDisplayProps>>>,
+    pub distribution_run_cancellations: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -20,6 +22,7 @@ impl AppState {
             db: Mutex::new(engine),
             project: RwLock::new(None),
             column_display: Mutex::new(HashMap::new()),
+            distribution_run_cancellations: Mutex::new(HashMap::new()),
         })
     }
 
@@ -36,6 +39,11 @@ impl AppState {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         display.clear();
+        let mut cancellations = self
+            .distribution_run_cancellations
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        cancellations.clear();
         Ok(())
     }
 }

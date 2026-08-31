@@ -152,12 +152,14 @@ impl DuckDbEngine {
 
             CREATE TABLE IF NOT EXISTS _meta_columns (
                 dataset_id  TEXT,
+                column_id   TEXT NOT NULL DEFAULT (CAST(uuid() AS VARCHAR)),
                 col_index   INTEGER,
                 col_name    TEXT,
                 col_type    TEXT,
                 role        TEXT DEFAULT 'continuous',
                 missing_count BIGINT DEFAULT 0,
-                PRIMARY KEY (dataset_id, col_index)
+                PRIMARY KEY (dataset_id, col_index),
+                UNIQUE (column_id)
             );
 
             CREATE TABLE IF NOT EXISTS _history_change_sets (
@@ -5253,6 +5255,29 @@ impl DuckDbEngine {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(cols)
+    }
+
+    pub fn get_distribution_columns(
+        &self,
+        dataset_id: &str,
+    ) -> Result<Vec<crate::models::distribution::DistributionColumnDescriptorV1>, AppError> {
+        self.get_dataset_meta(dataset_id)?;
+        let mut statement = self.conn.prepare(
+            "SELECT column_id, col_name, col_type, role, col_index
+             FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
+        )?;
+        statement
+            .query_map(params![dataset_id], |row| {
+                Ok(crate::models::distribution::DistributionColumnDescriptorV1 {
+                    column_id: row.get(0)?,
+                    name: row.get(1)?,
+                    sql_type: row.get(2)?,
+                    role: row.get(3)?,
+                    index: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::from)
     }
 
     /// Helper: convert DuckDB value to string for transpose

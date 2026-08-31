@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type {
   DerivedFormulaDocV1,
   DistributionDocV1,
+  DistributionContinuousFitConfigV1,
 } from "../src/types/distribution.ts";
 
 const distribution: DistributionDocV1 = {
@@ -23,8 +24,53 @@ const distribution: DistributionDocV1 = {
     filterExpr: { kind: "isNull", fieldId: "region", negate: true },
     confidenceLevel: 0.95,
     histogramsOnly: false,
-    enabledCapabilityIds: [],
-    capabilityOverrides: [],
+    continuousFit: {
+      enabledDistributionIds: ["normal", "weibull"],
+      fitAll: false,
+      diagnostics: {
+        goodnessOfFit: false,
+        qqPlot: false,
+        cdfPlot: false,
+        ppPlot: false,
+      },
+    } satisfies DistributionContinuousFitConfigV1,
+    visualDiagnostics: {
+      histogram: {
+        method: "fixedWidth",
+        fixedCount: null,
+        fixedWidth: 0.25,
+      },
+      normalQuantileConfidenceLevel: 0.95,
+    },
+    enabledCapabilityIds: ["capability.normal.individuals"],
+    capabilityOverrides: [{
+      schemaVersion: "1",
+      capabilityId: "capability.normal.individuals",
+      payloadSchemaVersion: "1",
+      payload: { lsl: 10, target: 15, usl: 20 },
+    }],
+    reportPreferences: {
+      "sales-amount-id": {
+        overview: true,
+        histogram: true,
+        outlierBoxPlot: true,
+        specificationLines: true,
+        quantiles: true,
+        summary: true,
+        horizontalTables: false,
+        normalQuantilePlot: true,
+        quantileBoxPlot: false,
+        stemAndLeaf: false,
+        ecdf: true,
+        processCapability: true,
+        histogramScale: "density",
+        capabilityHistogram: false,
+        capabilityProcessSummary: true,
+        capabilityWithin: false,
+        capabilityOverall: true,
+        capabilityNonconformance: false,
+      },
+    },
   },
 };
 const formula: DerivedFormulaDocV1 = {
@@ -107,6 +153,10 @@ assert.deepEqual(invokeCalls[0], {
 });
 assert.deepEqual(reopened.distributions, [distribution]);
 assert.deepEqual(reopened.derivedFormulas, [formula]);
+assert.deepEqual(
+  reopened.distributions[0]?.currentConfig.continuousFit,
+  distribution.currentConfig.continuousFit,
+);
 assert.deepEqual(reopened.distributionFolders, {
   "dist-001": "Analyses/Revenue",
 });
@@ -120,6 +170,10 @@ useDistributionStore.getState().loadFromProject(
 );
 assert.deepEqual(useDistributionStore.getState().items, [distribution]);
 assert.deepEqual(useDistributionStore.getState().derivedFormulas, [formula]);
+assert.deepEqual(
+  useDistributionStore.getState().items[0]?.currentConfig.continuousFit,
+  distribution.currentConfig.continuousFit,
+);
 assert.equal(useDistributionStore.getState().selectedAnalysisId, null);
 
 useFolderStore.getState().loadFromProject({
@@ -133,6 +187,23 @@ assert.deepEqual(useFolderStore.getState().distributionFolders, {
   "dist-001": "Analyses/Revenue",
 });
 assert.deepEqual(useFolderStore.getState().folders, ["Analyses", "Analyses/Revenue"]);
+
+useFolderStore.getState().setDistributionFolder("dist-001", "Analyses/Regional");
+assert.equal(
+  useFolderStore.getState().distributionFolders["dist-001"],
+  "Analyses/Regional",
+);
+const copiedDistribution = useDistributionStore.getState().copyItem("dist-001");
+assert.ok(copiedDistribution);
+useFolderStore.getState().setDistributionFolder(
+  copiedDistribution.analysisId,
+  useFolderStore.getState().distributionFolders["dist-001"] ?? null,
+);
+assert.notEqual(copiedDistribution.analysisId, "dist-001");
+assert.equal(
+  useFolderStore.getState().distributionFolders[copiedDistribution.analysisId],
+  "Analyses/Regional",
+);
 
 useDistributionStore.getState().reset();
 useFolderStore.getState().reset();

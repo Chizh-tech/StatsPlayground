@@ -498,11 +498,11 @@ impl<'a> ProjectService<'a> {
         let table_name = format!("dataset_{}", dataset_id.replace('-', "_"));
 
         let mut col_stmt = db.conn().prepare(
-            "SELECT col_name, col_type FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
+            "SELECT column_id, col_name, col_type FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
         )?;
-        let base_columns: Vec<(String, String)> = col_stmt
+        let base_columns: Vec<(String, String, String)> = col_stmt
             .query_map(duckdb::params![dataset_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -510,9 +510,10 @@ impl<'a> ProjectService<'a> {
         let columns: Vec<TableColumn> = base_columns
             .iter()
             .enumerate()
-            .map(|(i, (name, col_type))| {
+            .map(|(i, (column_id, name, col_type))| {
                 let dp = ds_display.and_then(|v| v.iter().find(|p| p.col_index == i));
                 TableColumn {
+                    column_id: Some(column_id.clone()),
                     name: name.clone(),
                     col_type: col_type.clone(),
                     width: dp.and_then(|p| p.width),
@@ -570,7 +571,7 @@ impl<'a> ProjectService<'a> {
             id: dataset_id.to_string(),
             name: meta.name,
             source_type: meta.source_type,
-            version: "2".to_string(),
+            version: "3".to_string(),
             columns,
             rows,
         })
@@ -588,7 +589,7 @@ impl<'a> ProjectService<'a> {
         doc: &TableDoc,
         progress_cb: Option<&dyn Fn(usize, usize)>,
     ) -> Result<String, AppError> {
-        if doc.version != "1" && doc.version != "2" {
+        if doc.version != "1" && doc.version != "2" && doc.version != "3" {
             return Err(AppError::InvalidParam(format!(
                 "unsupported table document version: {}",
                 doc.version
@@ -609,6 +610,14 @@ impl<'a> ProjectService<'a> {
         db.conn().execute_batch("BEGIN TRANSACTION")?;
         let restore_result = (|| -> Result<(), AppError> {
             db.create_empty_table(&doc.id, &doc.name, &col_names, &col_types)?;
+            for (index, column) in doc.columns.iter().enumerate() {
+                if let Some(column_id) = &column.column_id {
+                    db.conn().execute(
+                        "UPDATE _meta_columns SET column_id = $1 WHERE dataset_id = $2 AND col_index = $3",
+                        duckdb::params![column_id, &doc.id, index as i32],
+                    )?;
+                }
+            }
             let canonical_columns = db.get_user_columns(&doc.id)?;
 
             if !doc.rows.is_empty() {
@@ -625,7 +634,7 @@ impl<'a> ProjectService<'a> {
                                 .checked_sub(1)
                                 .map(|column_index| canonical_columns[column_index].1.as_str());
                             let decode_v2_tag = index > 0
-                                && doc.version == "2"
+                                && (doc.version == "2" || doc.version == "3")
                                 && !is_archive_scalar_type(&canonical_columns[index - 1].1);
                             json_to_duckdb_param(value, decode_v2_tag, column_type)
                         })
@@ -1270,6 +1279,7 @@ mod tests {
             source_type: "manual".into(),
             version: "2".into(),
             columns: vec![TableColumn {
+                column_id: None,
                 name: "value".into(),
                 col_type: "BIGINT".into(),
                 width: None,
@@ -1331,6 +1341,7 @@ mod tests {
             source_type: "manual".into(),
             version: "1".into(),
             columns: vec![TableColumn {
+                column_id: None,
                 name: "payload".into(),
                 col_type: "STRUCT(\"$duckdbValue\" VARCHAR)".into(),
                 width: None,
@@ -1360,6 +1371,7 @@ mod tests {
         let service = ProjectService::new(&state);
         let mut doc = table_doc("malformed-id", "Malformed");
         doc.columns.push(TableColumn {
+            column_id: None,
             name: "value".into(),
             col_type: "INTEGER".into(),
             width: None,
@@ -1379,11 +1391,65 @@ mod tests {
         let state = AppState::new().unwrap();
         let service = ProjectService::new(&state);
         let mut doc = table_doc("future-id", "Future");
-        doc.version = "3".into();
+        doc.version = "4".into();
 
         assert!(matches!(service.restore_table_doc(&doc), Err(crate::error::AppError::InvalidParam(_))));
         let db = state.db.lock().unwrap();
         assert!(db.get_dataset_meta("future-id").is_err());
+    }
+
+    #[test]
+    fn table_document_round_trip_preserves_stable_column_ids() {
+        let source_state = AppState::new().unwrap();
+        {
+            let db = source_state.db.lock().unwrap();
+            db.create_empty_table(
+                "stable-columns",
+                "Stable Columns",
+                &["value".into(), "group".into()],
+                &["DOUBLE".into(), "VARCHAR".into()],
+            )
+            .unwrap();
+        }
+        let doc = ProjectService::new(&source_state)
+            .compose_table_doc("stable-columns")
+            .unwrap();
+        assert_eq!(doc.version, "3");
+        let expected_ids = doc
+            .columns
+            .iter()
+            .map(|column| column.column_id.clone().expect("v3 column ID"))
+            .collect::<Vec<_>>();
+
+        let restored_state = AppState::new().unwrap();
+        ProjectService::new(&restored_state)
+            .restore_table_doc(&doc)
+            .unwrap();
+        let restored_ids = restored_state
+            .db
+            .lock()
+            .unwrap()
+            .get_distribution_columns("stable-columns")
+            .unwrap()
+            .into_iter()
+            .map(|column| column.column_id)
+            .collect::<Vec<_>>();
+        assert_eq!(restored_ids, expected_ids);
+
+        let mut legacy = table_doc("legacy-columns", "Legacy Columns");
+        legacy.version = "2".into();
+        assert!(legacy.columns.iter().all(|column| column.column_id.is_none()));
+        ProjectService::new(&restored_state)
+            .restore_table_doc(&legacy)
+            .unwrap();
+        assert!(restored_state
+            .db
+            .lock()
+            .unwrap()
+            .get_distribution_columns("legacy-columns")
+            .unwrap()
+            .iter()
+            .all(|column| uuid::Uuid::parse_str(&column.column_id).is_ok()));
     }
 
     #[test]
@@ -1402,6 +1468,7 @@ mod tests {
         let valid = table_doc("valid-id", "Valid");
         let mut malformed = table_doc("bad-id", "Bad");
         malformed.columns.push(TableColumn {
+            column_id: None,
             name: "value".into(),
             col_type: "INTEGER".into(),
             width: None,

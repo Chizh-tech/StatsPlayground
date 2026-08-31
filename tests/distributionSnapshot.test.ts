@@ -37,7 +37,10 @@ useDistributionStore.getState().startRun({
   cancelToken: "cancel-1",
 });
 useDistributionStore.getState().updateProgress({
+  analysisId: item.analysisId,
+  configRevision: 1,
   runId: "run-1",
+  snapshotId: "snapshot-1",
   phase: "prepare",
   current: 4,
   total: 10,
@@ -45,7 +48,10 @@ useDistributionStore.getState().updateProgress({
   percent: 40,
 });
 useDistributionStore.getState().updateProgress({
+  analysisId: item.analysisId,
+  configRevision: 1,
   runId: "run-1",
+  snapshotId: "snapshot-1",
   phase: "prepare",
   current: 3,
   total: 10,

@@ -15,6 +15,14 @@ pub fn get_columns(
 }
 
 #[tauri::command]
+pub fn get_distribution_columns(
+    state: State<'_, AppState>,
+    dataset_id: String,
+) -> Result<Vec<crate::models::distribution::DistributionColumnDescriptorV1>, AppError> {
+    DataService::new(&state).get_distribution_columns(&dataset_id)
+}
+
+#[tauri::command]
 pub fn sort_table(
     state: State<'_, AppState>,
     source_id: String,

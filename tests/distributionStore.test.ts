@@ -81,9 +81,37 @@ assert.equal(
   "completed",
 );
 
+useDistributionStore.getState().updateReportPreferences(first.analysisId, "col-y", {
+  overview: true,
+  quantiles: true,
+  summary: true,
+  ecdf: true,
+  processCapability: true,
+  capabilityHistogram: true,
+  capabilityProcessSummary: true,
+  capabilityWithin: true,
+  capabilityOverall: true,
+  capabilityNonconformance: true,
+});
+const presentationUpdated = useDistributionStore.getState().items.find(
+  (item) => item.analysisId === first.analysisId,
+);
+assert.equal(presentationUpdated?.configRevision, 2);
+assert.equal(presentationUpdated?.currentConfig.reportPreferences?.["col-y"]?.ecdf, true);
+assert.deepEqual(useDistributionStore.getState().resultByAnalysisId[first.analysisId], result);
+assert.equal(
+  useDistributionStore.getState().runStateByAnalysisId[first.analysisId]?.status,
+  "completed",
+);
+
 const nextRun = { ...run, runId: "run-2", snapshotId: "snapshot-2", status: "running" as const };
 assert.equal(useDistributionStore.getState().beginRun(nextRun), true);
 assert.equal(useDistributionStore.getState().acceptResult(result), false);
+assert.equal(useDistributionStore.getState().acceptResult({
+  ...result,
+  runId: "run-2",
+  snapshotId: "snapshot-forged",
+}), false);
 assert.deepEqual(useDistributionStore.getState().resultByAnalysisId[first.analysisId], result);
 
 assert.deepEqual(
@@ -139,12 +167,30 @@ const secondRun = {
 assert.equal(useDistributionStore.getState().beginRun(cancellableRun), true);
 assert.equal(useDistributionStore.getState().beginRun(secondRun), true);
 useDistributionStore.getState().updateProgress({
+  analysisId: first.analysisId,
+  configRevision: 3,
   runId: "run-4",
+  snapshotId: "snapshot-4",
   phase: "prepare",
   current: 1,
   total: 2,
   messageKey: "distribution.prepare",
   percent: 50,
+});
+assert.equal(
+  useDistributionStore.getState().runStateByAnalysisId[first.analysisId]?.progress?.current,
+  1,
+);
+useDistributionStore.getState().updateProgress({
+  analysisId: first.analysisId,
+  configRevision: 3,
+  runId: "run-4",
+  snapshotId: "snapshot-forged",
+  phase: "prepare",
+  current: 2,
+  total: 2,
+  messageKey: "distribution.prepare",
+  percent: 100,
 });
 assert.equal(
   useDistributionStore.getState().runStateByAnalysisId[first.analysisId]?.progress?.current,
@@ -195,6 +241,23 @@ useDistributionStore.getState().loadFromProject([loaded, preserved], [], []);
 assert.deepEqual(useDistributionStore.getState().runStateByAnalysisId, {});
 assert.deepEqual(useDistributionStore.getState().resultByAnalysisId, {});
 assert.equal(useDistributionStore.getState().copyItem(preserved.analysisId), null);
+const missing: LoadedDistributionDocV1 = {
+  ...loaded,
+  analysisId: "missing-1",
+  sourceDatasetId: "deleted-dataset",
+  loadStatus: "missingSource",
+  currentConfig: config("deleted-dataset"),
+};
+useDistributionStore.getState().loadFromProject([missing], [], []);
+assert.deepEqual(
+  useDistributionStore.getState().commitConfig(
+    missing.analysisId,
+    missing.configRevision,
+    config("replacement-dataset"),
+  ),
+  { ok: true, configRevision: 5 },
+);
+assert.equal(useDistributionStore.getState().items[0]?.loadStatus, "ready");
 assert.equal(useDistributionStore.getState().createItem(config(), "Custom Analysis").name,
   "Custom Analysis");
 assert.equal(useDistributionStore.getState().createItem(config()).name, "Distribution 9");

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 
 import {
+  createDefaultDistributionVisualDiagnosticsConfig,
   createCapabilityOverrideRegistry,
+  isDistributionMenuEnabled,
+  validateDistributionVisualDiagnosticsConfig,
   validateDistributionConfig,
 } from "../src/components/distribution/distributionConfig.ts";
 import type {
@@ -53,9 +56,52 @@ const config: DistributionAnalysisConfigV1 = {
   filterExpr: { kind: "isNull", fieldId: "col-group", negate: true },
   confidenceLevel: 0.95,
   histogramsOnly: false,
+  visualDiagnostics: {
+    histogram: {
+      method: "jmpAuto",
+      fixedCount: null,
+      fixedWidth: null,
+    },
+    normalQuantileConfidenceLevel: 0.95,
+  },
   enabledCapabilityIds: [],
   capabilityOverrides: [],
+  reportPreferences: {
+    "col-y": {
+      overview: true,
+      histogram: true,
+      outlierBoxPlot: true,
+      specificationLines: true,
+      quantiles: true,
+      summary: true,
+      horizontalTables: true,
+      normalQuantilePlot: false,
+      quantileBoxPlot: false,
+      stemAndLeaf: false,
+      ecdf: false,
+      processCapability: true,
+      histogramScale: "count",
+    },
+  },
 };
+
+const defaultVisualDiagnostics = createDefaultDistributionVisualDiagnosticsConfig();
+assert.equal(defaultVisualDiagnostics.histogram.method, "jmpAuto");
+assert.equal(config.reportPreferences?.["col-y"]?.normalQuantilePlot, false);
+assert.equal(
+  validateDistributionVisualDiagnosticsConfig({
+    histogram: {
+      method: "fixedCount",
+      fixedCount: 0,
+      fixedWidth: null,
+    },
+    normalQuantileConfidenceLevel: 0.95,
+  })[0]?.fieldPath,
+  "visualDiagnostics.histogram.fixedCount",
+);
+
+assert.equal(isDistributionMenuEnabled(null), false);
+assert.equal(isDistributionMenuEnabled("dataset-1"), true);
 
 assert.deepEqual(validateDistributionConfig(config, columns), []);
 assert.deepEqual(

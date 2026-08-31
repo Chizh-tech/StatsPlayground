@@ -24,6 +24,7 @@ export type {
 	DistributionIssueV1,
 	DistributionLoadStatusV1,
 	DistributionProgressV1,
+	DistributionRunAcceptedV1,
 	DistributionRunStateV1,
 	DistributionResultEnvelopeV1,
 	DistributionRunFailureV1,

@@ -9,12 +9,15 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:distribution:contracts": "tsx tests/distributionContracts.test.ts && tsx tests/distributionArchive.test.ts && tsx tests/distributionIsolation.test.ts && tsx tests/distributionSnapshot.test.ts",
+    "test:distribution:typecheck": "tsc -p tests/tsconfig.contracts.json",
+    "test:distribution:contracts": "tsx tests/distributionContracts.test.ts && tsx tests/distributionRunContract.test.ts && tsx tests/distributionArchive.test.ts && tsx tests/distributionIsolation.test.ts && tsx tests/distributionSnapshot.test.ts && tsx tests/distributionContinuousFitRun.test.ts",
     "test:distribution:adapter": "tsx tests/distributionGraphAdapter.test.ts",
+    "test:distribution:compatibility": "tsx tests/distributionVisualCompatibility.test.ts",
+    "test:distribution:report": "tsx tests/distributionReportWiring.test.ts",
     "test:distribution:golden": "tsx tests/distributionGolden.test.ts",
     "test:distribution:blackbox": "tsx tests/distributionBlackBox.test.ts",
     "test:distribution:ui": "playwright test -c playwright-ct.config.ts",
-    "test:distribution": "npm run test:distribution:contracts && npm run test:distribution:adapter && npm run test:distribution:golden && npm run test:distribution:blackbox && npm run test:distribution:ui"
+    "test:distribution": "npm run test:distribution:typecheck && npm run test:distribution:contracts && npm run test:distribution:compatibility && npm run test:distribution:adapter && npm run test:distribution:report && npm run test:distribution:golden && npm run test:distribution:blackbox && npm run test:distribution:ui"
   },
   "dependencies": {
     "@fortawesome/fontawesome-free": "file:vendor/fortawesome-fontawesome-free-6.7.2.tgz",

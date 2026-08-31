@@ -1,7 +1,7 @@
 # Analyze Distribution 批准范围与验收台账
 
 **日期：** 2026-08-26
-**状态：** 产品范围与首批 V1 specs 已批准，统计实现尚未开始
+**状态：** Platform Workflow、Continuous Descriptive 与 Normal Capability V1 已实现并通过自动门禁；正式 UI 验收待执行
 **范围批准人：** 产品负责人
 **关联跟踪：** GitHub Issue #49（仅作为需求跟踪入口；其图片和第三方素材不属于实现资料）
 **总体设计：** [2026-08-25-analysis-distribution-design.md](2026-08-25-analysis-distribution-design.md)
@@ -87,43 +87,70 @@
 
 | ID | 功能 | developmentStatus | automationStatus | uiAcceptance | 验收重点 |
 | --- | --- | --- | --- | --- | --- |
-| BASE-01 | `Analyze > Distribution` 启动入口与角色对话框 | specified | notStarted | notReady | 仅活动数据集且项目可修改时启用 |
-| BASE-02 | 一个或多个 Y 与建模类型识别 | specified | notStarted | notReady | 稳定 column ID，不传 SQL/表达式 |
-| BASE-03 | 可选 Weight、Freq、By | specified | notStarted | notReady | 观测贡献语义必须一致 |
-| BASE-04 | 列搜索、Remove、Recall、Histograms Only | specified | notStarted | notReady | Cancel 不修改现有分析 |
-| BASE-05 | Run 创建 `Distribution N` Directory 项 | specified | notStarted | notReady | 原子保存配置并启动 revision |
-| BASE-06 | 重命名、移动、复制、删除、Edit Inputs、打开源表 | specified | notStarted | notReady | 项目 dirty 与 history 行为一致 |
-| BASE-07 | save/open 后恢复配置并按当前数据重算 | specified | notStarted | notReady | 不持久化统计结果 |
-| BASE-08 | progress、cancel、旧结果丢弃和旧有效报告保留 | specified | notStarted | notReady | UI 实际长任务场景 |
+| BASE-01 | `Analyze > Distribution` 启动入口与角色对话框 | implemented | passing | pending | 有活动数据集时启用；正式 Tauri UI 待验收 |
+| BASE-02 | 一个或多个 Y 与建模类型识别 | implemented | passing | pending | 使用稳定 column ID；类型与冲突由 versioned config validator 校验 |
+| BASE-03 | 可选 Weight、Freq、By | implemented | passing | pending | Weight/Freq singleton、By multi-role；真实统计贡献待 methods 验收 |
+| BASE-04 | 列搜索、Remove、Recall、Histograms Only | implemented | passing | pending | CT 已覆盖 Cancel 不保存；正式 UI 待验收 |
+| BASE-05 | Run 创建 `Distribution N` Directory 项 | implemented | passing | pending | 配置可原子保存为 Directory 项；空 registry 下 Run 按设计禁用 |
+| BASE-06 | 重命名、移动、复制、删除、Edit Inputs、打开源表 | implemented | passing | pending | stable analysis ID；active run 删除前发送 cancel；正式 UI 待验收 |
+| BASE-07 | save/open 后恢复配置并按当前数据重算 | implemented | passing | pending | archive/config 恢复已自动验证；registry 为空时不执行统计重算 |
+| BASE-08 | progress、cancel、旧结果丢弃和旧有效报告保留 | implemented | passing | pending | 四键 identity 与状态机自动验证；真实长任务待 methods/UI 验收 |
 
 ### 4.2 连续描述统计与图表数据
 
 | ID | 功能 | developmentStatus | automationStatus | uiAcceptance | 验收重点 |
 | --- | --- | --- | --- | --- | --- |
-| DESC-01 | Histogram count、probability、density chart-data | specified | notStarted | notReady | 全量精确 bins；Graph Builder 只渲染 |
-| DESC-02 | Tukey box plot、outliers、均值区间 chart-data | specified | notStarted | notReady | quartiles/whiskers 在后端计算 |
-| DESC-03 | 批准概率点的 Quantiles | specified | notStarted | notReady | Hyndman-Fan Type 6 独立 method spec |
-| DESC-04 | Mean、sample Std Dev、Std Error、Mean CI、N、N Missing | specified | notStarted | notReady | Weight/Freq/n=0/1 语义 |
-| DESC-05 | Minimum、Maximum、Median、Mode、Range、IQR、MAD | specified | notStarted | notReady | 缺失、常数和重复值 |
-| DESC-09 | ECDF/CDF chart-data | specified | notStarted | notReady | 坐标由 Distribution 输出 |
+| DESC-01 | Histogram count、probability、density chart-data | implemented | passing | pending | 后端冻结 bins；Overview 与 Capability chart 只映射预计算数据 |
+| DESC-02 | Tukey box plot、outliers、均值区间 chart-data | implemented | passing | pending | 后端计算 quartiles/whiskers/outliers；与 Histogram 组合渲染 |
+| DESC-03 | 批准概率点的 Quantiles | implemented | passing | pending | 11 个 Hyndman-Fan Type 6 概率点 |
+| DESC-04 | Mean、sample Std Dev、Std Error、Mean CI、N、N Missing | implemented | passing | pending | Rust kernel 与正式报告表格覆盖 |
+| DESC-05 | Minimum、Maximum、Median、Mode、Range、IQR、MAD | implemented | passing | pending | 缺失、常数和重复值由 kernel 测试覆盖 |
+| DESC-09 | ECDF/CDF chart-data | implemented | passing | pending | 后端输出坐标；UI 默认隐藏并可恢复显示偏好 |
 
 ### 4.3 Normal Process Capability
 
 | ID | 功能 | developmentStatus | automationStatus | uiAcceptance | 验收重点 |
 | --- | --- | --- | --- | --- | --- |
-| CAP-01 | 当前分析中手工输入 LSL/Target/USL | specified | notStarted | notReady | 有效 LSL 或 USL 才启用 |
-| CAP-02 | 自动读取 Table 列属性规格限 | specified | notStarted | notReady | 列属性为默认来源 |
-| CAP-03 | 手工值覆盖当前分析且不回写 Table | specified | notStarted | notReady | save/open 后保持覆盖来源 |
-| CAP-04 | 双侧、单侧、无 Target、无规格状态 | specified | notStarted | notReady | 无规格时不自动生成报告 |
-| CAP-05 | Process Summary：N、Mean、Within/Overall Sigma | specified | notStarted | notReady | Sigma method 必须版本化 |
-| CAP-06 | Within：Cp、Cpk、Cpl、Cpu、Cpm | specified | notStarted | notReady | 只显示定义成立的指标 |
-| CAP-07 | Overall：Pp、Ppk、Ppl、Ppu、Cpm | specified | notStarted | notReady | 与 Within 明确区分 |
-| CAP-08 | 能力指数置信区间 | specified | notStarted | notReady | 公式、DF、尾部与容差冻结 |
-| CAP-09 | Below LSL、Above USL、Total Outside | specified | notStarted | notReady | 单侧时仅输出适用字段 |
-| CAP-10 | Observed、Expected Within、Expected Overall | specified | notStarted | notReady | observed/expected 口径明确 |
-| CAP-11 | Expected PPM | specified | notStarted | notReady | 数值与比例换算一致 |
-| CAP-12 | Histogram、规格限线、Normal density chart-data | specified | notStarted | notReady | Graph Builder 渲染与导出 |
-| CAP-13 | Within Sigma：average moving range | specified | notStarted | notReady | MR 定义与短样本失败状态冻结 |
+| CAP-01 | 当前分析中手工输入 LSL/Target/USL | implemented | passing | pending | 分析级 override 编辑器；有效 LSL 或 USL 才生成报告 |
+| CAP-02 | 自动读取 Table 列属性规格限 | implemented | passing | pending | 后端按稳定 column UUID 读取权威 extras |
+| CAP-03 | 手工值覆盖当前分析且不回写 Table | implemented | passing | pending | override 与项目配置保存；不调用 Table 写入路径 |
+| CAP-04 | 双侧、单侧、无 Target、无规格状态 | implemented | passing | pending | typed state 与规格解析测试覆盖 |
+| CAP-05 | Process Summary：N、Mean、Within/Overall Sigma | implemented | passing | pending | Normal Individuals V1 |
+| CAP-06 | Within：Cp、Cpk、Cpl、Cpu、Cpm | implemented | passing | pending | typed point estimate 与 CI 表格 |
+| CAP-07 | Overall：Pp、Ppk、Ppl、Ppu、Cpm | implemented | passing | pending | 与 Within 分区展示 |
+| CAP-08 | 能力指数置信区间 | implemented | passing | pending | chi-square/Wald；Cpm CI 按规格标记 deferred |
+| CAP-09 | Below LSL、Above USL、Total Outside | implemented | passing | pending | 严格边界和单侧 typed state |
+| CAP-10 | Observed、Expected Within、Expected Overall | implemented | passing | pending | Wilson 与 Normal tails |
+| CAP-11 | Expected PPM | implemented | passing | pending | 比例与 PPM 同源输出 |
+| CAP-12 | Histogram、规格限线、Normal density chart-data | implemented | passing | pending | 后端 density/spec payload；ECharts canvas pixel test |
+| CAP-13 | Within Sigma：average moving range | implemented | passing | pending | source row order MR window 2 |
+
+### 4.4 Visual Diagnostics V1
+
+| ID | 功能 | developmentStatus | automationStatus | uiAcceptance | 验收重点 |
+| --- | --- | --- | --- | --- | --- |
+| VIS-01 | Display 与 Histogram 分组菜单 | implemented | passing | pending | 只显示真实 backend 能力；显示偏好不增加 revision |
+| VIS-02 | Histogram methods、scale 与 JMP Auto 兼容矩阵 | implemented | passing | pending | 公开 methods 为 `intentionalDifference`；`jmpAuto` 为 FD fallback 且 `compatibilityPending` |
+| VIS-03 | Normal Quantile Plot | implemented | passing | pending | $r_i/(N+1)$ normal scores 为 `documentedCompatible`；line/band 为 `compatibilityPending` |
+| VIS-04 | Quantile Box Plot | implemented | passing | pending | 公开 letter-value Type-6 方法，明确 `intentionalDifference` |
+| DESC-08 | Stem-and-leaf | implemented | passing | pending | 公开 decimal 方法与有界显示，明确 `intentionalDifference` |
+| DESC-10 | Normal Q-Q、通用 Q-Q、P-P | implemented | passing | pending | 本阶段仅实现 Normal Quantile Plot；其他 Q-Q/P-P 仍 deferred |
+| VIS-05 | Overview/Capability axis 与规格线修复 | implemented | passing | pending | extent 隔离；LSL/Target/USL 可见且线型两两不同 |
+| VIS-06 | Quantiles/Summary 横向表格与紧凑 Nonconformance | implemented | passing | pending | 响应式双栏、单线表格、三行五列 Nonconformance |
+
+### 4.5 Visual compatibility evidence matrix（Task 1）
+
+- Fixture：`tests/fixtures/distribution/jmp19-visual-diagnostics-v1.json`。
+- Comparator：`tests/distributionVisualCompatibility.test.ts`。
+- Case 只允许机器字段：`caseId`、`methodId`、`inputHash`、`input`、`expected`、`jmpVersion`、`compatibilityStatus`、`schemaVersion`。
+- 明确禁止字段与内容：截图、帮助正文、绝对路径、可见列名、自由文本。
+- `normalScore.documented.*` deterministic cases 可标 `documentedCompatible`。
+- `histogram.jmpAuto.*`、`quantileBox.jmp19.*`、`stemLeaf.jmp19.*` 在黑盒证据到位前只能是 machine-only `compatibilityPending`，且 comparator 必须判定 `compatible=false`。
+- Task 1 已建立 pending marker coverage：
+	- Histogram pending class 覆盖 `constant`、`narrowDecimal`、`mixedSign`、`outlier`、`boundary`，并覆盖 `count`、`probability`、`density` markers。
+	- Quantile Box pending class 覆盖 `n1To20`、`ties`、`outlier`、`freq`、`weight`。
+	- Stem and Leaf pending class 覆盖 `positive`、`negative`、`zero`、`decimal`、`repeated`、`extremeScale`、`freq`、`weight`。
+- 当前仍缺 JMP 桌面黑盒 numeric breadth：上述 pending 仅为 machine marker 覆盖，不代表 bins/layers/stems 的数值兼容已冻结。
 
 ## 5. 暂缓功能清单
 
@@ -133,22 +160,20 @@
 | --- | --- | --- | --- |
 | DESC-06 | Sum、Variance、Skewness、Kurtosis、CV、N Unique/Zero 等扩展摘要 | deferred | 首版控制报告密度；按用户需求恢复 |
 | DESC-07 | Geometric/trimmed/Huber robust mean、robust Std Dev | deferred | 使用频率较低，需独立方法规格 |
-| DESC-08 | Stem-and-leaf | deferred | 使用频率较低 |
-| DESC-10 | Normal Q-Q、通用 Q-Q、P-P | deferred | 连续描述稳定后进入推断诊断阶段 |
 | TEST-01 | Test Mean 与均值区间检验报告 | deferred | 连续描述稳定后评审 |
 | TEST-02 | Test Std Dev 与方差区间 | deferred | 连续描述稳定后评审 |
 | TEST-03 | Wilcoxon signed-rank | deferred | 需独立 method spec |
 | TEST-04 | Equivalence tests | deferred | 本期明确暂缓 |
 | TEST-05 | Prediction intervals | deferred | 本期不交付 |
 | TEST-06 | Tolerance intervals | deferred | 本期明确暂缓 |
-| FIT-01 | Normal、Lognormal、Weibull、Exponential、Gamma 通用拟合 UI | deferred | Normal capability 只实现其所需 Normal 模型；通用拟合另行批准 |
+| FIT-01 | Normal、Lognormal、Weibull、Exponential、Gamma 通用拟合 UI | implemented | Stage 1 自动门禁通过；五模型 registry、MLE、参数表与 PDF overlay 已交付，人工 UI 验收 pending |
 | FIT-02 | Poisson、Negative Binomial、Binomial | deferred | 离散分布阶段另行批准 |
-| FIT-03 | Anderson-Darling、Shapiro-Wilk、Pearson chi-square | deferred | 随通用拟合能力恢复 |
-| FIT-04 | Fit All、AIC/AICc/BIC 稳定排序 | deferred | 通用拟合稳定后恢复 |
-| FIT-05 | Cauchy、Student t、极值、Johnson、Beta | deferred | 高级拟合明确暂缓 |
+| FIT-03 | Anderson-Darling、Shapiro-Wilk、Pearson chi-square | approved | Continuous Fit Stage 2；Shapiro-Wilk 仅用于 Normal 辅助诊断 |
+| FIT-04 | Fit All、AIC/AICc/BIC 稳定排序 | implemented | Stage 1 五模型 Fit All、partial failure 与稳定排序已通过；Stage 2 再扩展候选与 GOF |
+| FIT-05 | Cauchy、Student t、极值、Johnson、Beta | approved | Cauchy、Student t 属 Stage 2；Johnson 属 Stage 3；未列明模型仍不进入 registry |
 | FIT-06 | Zero-inflated 系列 | deferred | 本期明确暂缓 |
-| FIT-07 | sinh-arcsinh 系列 | deferred | 高级拟合明确暂缓 |
-| FIT-08 | EMG、Normal mixtures、nonparametric density | deferred | 高级拟合和 mixtures 明确暂缓 |
+| FIT-07 | sinh-arcsinh 系列 | approved | Continuous Fit Stage 3，先冻结参数化与优化约束 |
+| FIT-08 | EMG、Normal mixtures、nonparametric density | approved | Stage 3 交付 Normal mixtures 与 Smooth Curve；EMG 需另行 method spec 后才注册 |
 | CAP-14 | 其他 Within Sigma 估计方法 | deferred | 首版只用 average moving range |
 | CAP-15 | Stability Index | deferred | 定义与适用条件尚未冻结 |
 | CAP-16 | Nonnormal capability | deferred | 首版只支持 Normal capability |

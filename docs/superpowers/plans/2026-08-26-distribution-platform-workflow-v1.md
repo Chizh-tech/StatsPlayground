@@ -146,19 +146,19 @@ git commit -m "feat(distribution): add analysis lifecycle store"
 - `DistributionDialog({dataset, columns, initialConfig, capabilities, onRun, onCancel})`.
 - `onRun(config)` only fires after local validation.
 
-- [ ] **Step 1: Write failing component tests**
+- [x] **Step 1: Write failing component tests**
 
 Mount with synthetic columns; verify search, Y multi-drop, Weight/Freq singleton, By multi-drop, Remove, Recall, confidence 95%, Cancel no callback, invalid Run blocked. Verify Analyze menu disabled without active dataset.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run `npm run test:distribution:ui`. Expected: component/module missing.
 
-- [ ] **Step 3: Implement dialog using existing workspace visual patterns**
+- [x] **Step 3: Implement dialog using existing workspace visual patterns**
 
 Use native inputs/selects, existing drag payload convention, no nested cards, stable dimensions. Do not clone competitor layout or text. Add all locale keys.
 
-- [ ] **Step 4: Run GREEN, localization JSON parse, build**
+- [x] **Step 4: Run GREEN, localization JSON parse, build**
 
 Run CT, parse all locale JSON files, run build.
 
@@ -184,19 +184,19 @@ git commit -m "feat(distribution): add role configuration dialog"
 - Produces async `start_distribution_run` and `cancel_distribution_run` commands.
 - Method execution is a registry dispatch; empty registry returns stable `distribution.run.noImplementedCapabilities` before acceptance.
 
-- [ ] **Step 1: Write failing command/service contract tests**
+- [x] **Step 1: Write failing command/service contract tests**
 
 Assert command registration, camelCase envelope, opaque cancel, no-capability rejection, and four-key event identity. Assert command has `#[tauri::command(async)]`.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run focused cargo test and TS service contract. Expected: commands absent.
 
-- [ ] **Step 3: Implement coordinator without statistics**
+- [x] **Step 3: Implement coordinator without statistics**
 
 Validate config/roles, take snapshot, allocate run/cancel IDs, dispatch implemented method IDs, emit monotonic events. Do not add fake report blocks. Keep locks short and never run DuckDB work on Tauri main thread.
 
-- [ ] **Step 4: Run GREEN and full Rust suite**
+- [x] **Step 4: Run GREEN and full Rust suite**
 
 Run focused tests then `cargo test`.
 
@@ -220,19 +220,19 @@ git commit -m "feat(distribution): add run coordination boundary"
 - Directory context actions consume stable analysis ID.
 - Workspace renders empty/ready/running/updating/cancelled/failed/missing/unknown/corrupt states.
 
-- [ ] **Step 1: Write failing CT tests**
+- [x] **Step 1: Write failing CT tests**
 
 Verify create selects item, rename, folder move, copy new ID, delete, Edit Inputs recall, missing source disabled run, unknown/corrupt read-only, stale completion ignored, old result visible while updating.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run UI suite. Expected: missing menu/actions/state rendering.
 
-- [ ] **Step 3: Implement Directory actions and workspace state machine**
+- [x] **Step 3: Implement Directory actions and workspace state machine**
 
 Reuse existing table/graph/tabulate menu patterns. Cancel active run on close/delete. No result view is fabricated while registry is empty.
 
-- [ ] **Step 4: Run GREEN, save/open regression, build**
+- [x] **Step 4: Run GREEN, save/open regression, build**
 
 Run CT, archive/store tests, build.
 
@@ -249,11 +249,11 @@ git commit -m "feat(distribution): wire directory analysis workflow"
 - Modify: `docs/superpowers/specs/2026-08-26-analysis-distribution-approved-scope.md`
 - Create: `docs/superpowers/artifacts/2026-08-26-distribution-platform-acceptance.md`
 
-- [ ] **Step 1: Run automated gates**
+- [x] **Step 1: Run automated gates**
 
 Run `npm run test:distribution`, `npm run build`, and `cargo test`.
 
-- [ ] **Step 2: Record automatic results**
+- [x] **Step 2: Record automatic results**
 
 Set BASE-01..08 `developmentStatus=implemented`, `automationStatus=passing`, `uiAcceptance=pending`; record commit and commands in artifact.
 

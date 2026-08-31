@@ -10,6 +10,7 @@ import type {
   DistributionRunFailureV1,
   DistributionRunStateV1,
   DistributionWorkspaceBootstrapV1,
+  DistributionYReportPreferencesV1,
   LoadedDistributionDocV1,
 } from "@/types/distribution";
 
@@ -49,6 +50,11 @@ interface DistributionStore {
     baseConfigRevision: number,
     config: DistributionAnalysisConfigV1,
   ) => DistributionConfigCommitResultV1;
+  updateReportPreferences: (
+    analysisId: string,
+    yColumnId: string,
+    preferences: DistributionYReportPreferencesV1,
+  ) => void;
   beginRun: (runState: DistributionRunStateV1) => boolean;
   acceptResult: (result: DistributionResultEnvelopeV1) => boolean;
   failRun: (failure: DistributionRunFailureV1) => boolean;
@@ -201,6 +207,8 @@ export const useDistributionStore = create<DistributionStore>((set, get) => ({
           return {
             ...entry,
             sourceDatasetId: config.sourceDatasetId,
+            status: "ready",
+            loadStatus: "ready",
             currentConfig: structuredClone(config),
             configRevision,
           };
@@ -213,6 +221,22 @@ export const useDistributionStore = create<DistributionStore>((set, get) => ({
     });
     return { ok: true, configRevision };
   },
+  updateReportPreferences: (analysisId, yColumnId, preferences) =>
+    set((state) => ({
+      items: state.items.map((item) => {
+        if (item.analysisId !== analysisId || !isLoadedDistributionDoc(item)) return item;
+        return {
+          ...item,
+          currentConfig: {
+            ...item.currentConfig,
+            reportPreferences: {
+              ...item.currentConfig.reportPreferences,
+              [yColumnId]: structuredClone(preferences),
+            },
+          },
+        };
+      }),
+    })),
   beginRun: (runState) => {
     const item = get().items.find((entry) => entry.analysisId === runState.analysisId);
     if (!isLoadedDistributionDoc(item) || item.configRevision !== runState.configRevision) {
@@ -303,20 +327,21 @@ export const useDistributionStore = create<DistributionStore>((set, get) => ({
   startRun: (runState) => get().beginRun(runState),
   updateProgress: (progress) =>
     set((state) => {
-      const entry = Object.entries(state.runStateByAnalysisId)
-        .find(([, run]) => run.runId === progress.runId);
-      if (!entry) return state;
-      const [analysisId, run] = entry;
+      const run = state.runStateByAnalysisId[progress.analysisId];
+      const item = state.items.find((candidate) => candidate.analysisId === progress.analysisId);
+      if (!runMatches(item, run, progress)) return state;
       const previous = run.progress;
       if (previous && (progress.current < previous.current || progress.percent < previous.percent)) {
         return state;
       }
       const updated = { ...run, progress };
       return {
-        runState: state.runState?.runId === progress.runId ? updated : state.runState,
+        runState: runMatches(item, state.runState ?? undefined, progress)
+          ? updated
+          : state.runState,
         runStateByAnalysisId: {
           ...state.runStateByAnalysisId,
-          [analysisId]: updated,
+          [progress.analysisId]: updated,
         },
       };
     }),

@@ -10,8 +10,11 @@ import type {
   TableWindowRequest,
   TableWindowResult,
 } from "@/types/data";
+import type { DistributionColumnDescriptorV1 } from "@/types/distribution";
 
 export const dataService = {
+  getDistributionColumns: (datasetId: string) =>
+    invoke<DistributionColumnDescriptorV1[]>("get_distribution_columns", { datasetId }),
   /** 执行 SQL 查询（分页） */
   executeSqlQuery: (sql: string, page: number, pageSize = 200) =>
     invoke<SqlQueryResult>("execute_sql_query", { sql, page, pageSize }),

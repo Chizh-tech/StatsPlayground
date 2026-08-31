@@ -219,6 +219,8 @@ pub struct TableDoc {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TableColumn {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_id: Option<String>,
     pub name: String,
     pub col_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

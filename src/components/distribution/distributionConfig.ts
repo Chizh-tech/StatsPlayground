@@ -3,6 +3,10 @@ import type {
   DistributionAnalysisConfigV1,
   DistributionColumnInfoV1,
   DistributionConfigErrorV1,
+  DistributionContinuousFitConfigV1,
+  DistributionFitCapabilityV1,
+  ContinuousDistributionIdV1,
+  DistributionVisualDiagnosticsConfigV1,
 } from "@/types/distribution";
 
 export interface CapabilityOverrideValidatorV1 {
@@ -17,11 +21,170 @@ export interface CapabilityOverrideRegistryV1 {
   validate: (envelope: CapabilityOverrideEnvelopeV1) => DistributionConfigErrorV1[];
 }
 
+export const DISTRIBUTION_FIT_CAPABILITY_REGISTRY: DistributionFitCapabilityV1[] = [
+  {
+    distributionId: "normal",
+    methodId: "fit.normal.mle.v1",
+    methodVersion: "1.0.0",
+    parameterizationId: "normal.locationScale.v1",
+    implemented: true,
+    compatibilityStatus: "compatibilityPending",
+  },
+  {
+    distributionId: "lognormal",
+    methodId: "fit.lognormal.mle.v1",
+    methodVersion: "1.0.0",
+    parameterizationId: "lognormal.logLocationLogScale.v1",
+    implemented: true,
+    compatibilityStatus: "compatibilityPending",
+  },
+  {
+    distributionId: "exponential",
+    methodId: "fit.exponential.location0.mle.v1",
+    methodVersion: "1.0.0",
+    parameterizationId: "exponential.scaleLocation0.v1",
+    implemented: true,
+    compatibilityStatus: "compatibilityPending",
+  },
+  {
+    distributionId: "gamma",
+    methodId: "fit.gamma.shapeScale.mle.v1",
+    methodVersion: "1.0.0",
+    parameterizationId: "gamma.shapeScale.location0.v1",
+    implemented: true,
+    compatibilityStatus: "compatibilityPending",
+  },
+  {
+    distributionId: "weibull",
+    methodId: "fit.weibull.shapeScale.mle.v1",
+    methodVersion: "1.0.0",
+    parameterizationId: "weibull.shapeScale.location0.v1",
+    implemented: true,
+    compatibilityStatus: "compatibilityPending",
+  },
+] as const;
+
 const error = (
   code: string,
   messageKey: string,
   fieldPath: string,
 ): DistributionConfigErrorV1 => ({ code, messageKey, fieldPath });
+
+export function createDefaultDistributionVisualDiagnosticsConfig(): DistributionVisualDiagnosticsConfigV1 {
+  return {
+    histogram: {
+      method: "jmpAuto",
+      fixedCount: null,
+      fixedWidth: null,
+    },
+    normalQuantileConfidenceLevel: 0.95,
+  };
+}
+
+export function createDefaultDistributionContinuousFitConfig(): DistributionContinuousFitConfigV1 {
+  return {
+    enabledDistributionIds: [],
+    fitAll: false,
+    diagnostics: {
+      goodnessOfFit: false,
+      qqPlot: false,
+      cdfPlot: false,
+      ppPlot: false,
+    },
+  };
+}
+
+export function normalizeDistributionAnalysisConfig(
+  config: DistributionAnalysisConfigV1,
+): DistributionAnalysisConfigV1 {
+  return {
+    ...config,
+    continuousFit: config.continuousFit ?? createDefaultDistributionContinuousFitConfig(),
+    visualDiagnostics: config.visualDiagnostics ?? createDefaultDistributionVisualDiagnosticsConfig(),
+  };
+}
+
+export function validateDistributionContinuousFitConfig(
+  continuousFit: DistributionContinuousFitConfigV1,
+): DistributionConfigErrorV1[] {
+  const errors: DistributionConfigErrorV1[] = [];
+  const implementedIds = new Set(
+    DISTRIBUTION_FIT_CAPABILITY_REGISTRY
+      .filter((capability) => capability.implemented)
+      .map((capability) => capability.distributionId),
+  );
+  const seenDistributionIds = new Set<ContinuousDistributionIdV1>();
+  continuousFit.enabledDistributionIds.forEach((distributionId, index) => {
+    if (!implementedIds.has(distributionId)) {
+      errors.push(error(
+        "distribution.config.unknownContinuousFitCapability",
+        "distribution.errors.unknownContinuousFitCapability",
+        `continuousFit.enabledDistributionIds[${index}]`,
+      ));
+      return;
+    }
+    if (seenDistributionIds.has(distributionId)) {
+      errors.push(error(
+        "distribution.config.duplicateContinuousFitCapability",
+        "distribution.errors.duplicateContinuousFitCapability",
+        `continuousFit.enabledDistributionIds[${index}]`,
+      ));
+    }
+    seenDistributionIds.add(distributionId);
+  });
+  return errors;
+}
+
+export function validateDistributionVisualDiagnosticsConfig(
+  visualDiagnostics: DistributionVisualDiagnosticsConfigV1,
+): DistributionConfigErrorV1[] {
+  const errors: DistributionConfigErrorV1[] = [];
+  const histogram = visualDiagnostics.histogram;
+
+  if (histogram.method === "fixedCount") {
+    if (
+      histogram.fixedCount === null ||
+      !Number.isFinite(histogram.fixedCount) ||
+      !Number.isInteger(histogram.fixedCount) ||
+      histogram.fixedCount < 1 ||
+      histogram.fixedCount > 1000
+    ) {
+      errors.push(error(
+        "distribution.config.histogramFixedCountOutOfRange",
+        "distribution.errors.histogramFixedCountOutOfRange",
+        "visualDiagnostics.histogram.fixedCount",
+      ));
+    }
+  }
+
+  if (histogram.method === "fixedWidth") {
+    if (
+      histogram.fixedWidth === null ||
+      !Number.isFinite(histogram.fixedWidth) ||
+      histogram.fixedWidth <= 0
+    ) {
+      errors.push(error(
+        "distribution.config.histogramFixedWidthInvalid",
+        "distribution.errors.histogramFixedWidthInvalid",
+        "visualDiagnostics.histogram.fixedWidth",
+      ));
+    }
+  }
+
+  if (
+    !Number.isFinite(visualDiagnostics.normalQuantileConfidenceLevel) ||
+    visualDiagnostics.normalQuantileConfidenceLevel <= 0 ||
+    visualDiagnostics.normalQuantileConfidenceLevel >= 1
+  ) {
+    errors.push(error(
+      "distribution.config.normalQuantileConfidenceOutOfRange",
+      "distribution.errors.normalQuantileConfidenceOutOfRange",
+      "visualDiagnostics.normalQuantileConfidenceLevel",
+    ));
+  }
+
+  return errors;
+}
 
 export function createCapabilityOverrideRegistry(
   validators: readonly CapabilityOverrideValidatorV1[],
@@ -67,9 +230,66 @@ export function createCapabilityOverrideRegistry(
 }
 
 const EMPTY_REGISTRY = createCapabilityOverrideRegistry([]);
+export const NORMAL_CAPABILITY_ID = "capability.normal.individuals";
+
+const normalCapabilityValidator: CapabilityOverrideValidatorV1 = {
+  capabilityId: NORMAL_CAPABILITY_ID,
+  payloadSchemaVersion: "1",
+  validate: (payload) => {
+    const errors: DistributionConfigErrorV1[] = [];
+    const allowed = new Set(["lsl", "target", "usl"]);
+    if (Object.keys(payload).some((key) => !allowed.has(key))) {
+      errors.push(error(
+        "capability.invalidOverride.v1",
+        "distribution.errors.invalidCapabilityOverride",
+        "",
+      ));
+      return errors;
+    }
+    const read = (key: "lsl" | "target" | "usl") => {
+      const value = payload[key];
+      if (value === null || value === undefined) return null;
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        errors.push(error(
+          "capability.invalidOverride.v1",
+          "distribution.errors.invalidCapabilityOverride",
+          key,
+        ));
+        return null;
+      }
+      return value;
+    };
+    const lsl = read("lsl");
+    const target = read("target");
+    const usl = read("usl");
+    if (lsl !== null && usl !== null && lsl >= usl) {
+      errors.push(error(
+        "capability.invalidOverride.v1",
+        "distribution.errors.invalidCapabilityOverride",
+        "usl",
+      ));
+    }
+    if ((lsl !== null && target !== null && target < lsl) ||
+        (usl !== null && target !== null && target > usl)) {
+      errors.push(error(
+        "capability.invalidOverride.v1",
+        "distribution.errors.invalidCapabilityOverride",
+        "target",
+      ));
+    }
+    return errors;
+  },
+};
+
+export const DISTRIBUTION_CAPABILITY_OVERRIDE_REGISTRY =
+  createCapabilityOverrideRegistry([normalCapabilityValidator]);
 
 const isNumeric = (column: DistributionColumnInfoV1) =>
   column.modelingType === "continuous" || column.modelingType === "discreteNumeric";
+
+export function isDistributionMenuEnabled(activeDatasetId: string | null): boolean {
+  return activeDatasetId !== null;
+}
 
 export function validateDistributionConfig(
   config: DistributionAnalysisConfigV1,
@@ -122,6 +342,13 @@ export function validateDistributionConfig(
       "confidenceLevel",
     ));
   }
+
+  const visualDiagnostics =
+    config.visualDiagnostics ?? createDefaultDistributionVisualDiagnosticsConfig();
+  errors.push(...validateDistributionVisualDiagnosticsConfig(visualDiagnostics));
+
+  const continuousFit = config.continuousFit ?? createDefaultDistributionContinuousFitConfig();
+  errors.push(...validateDistributionContinuousFitConfig(continuousFit));
 
   const occupied = new Set(yIds);
   const validateSingleton = (

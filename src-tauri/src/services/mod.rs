@@ -1,5 +1,8 @@
 pub mod data_service;
+pub mod distribution_fit;
 pub mod distribution_service;
+pub mod distribution_kernel;
+pub mod normal_capability;
 pub mod io_service;
 pub mod project_service;
 pub mod spprj_archive;
