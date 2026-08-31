@@ -299,6 +299,40 @@ assert.equal(makeGraphRows(10).length, 10);
 }
 
 {
+  const fit = createFitYByXItem({
+    id: "fit-bivariate-request",
+    name: "Fit Y by X 1",
+    sourceDatasetId: "dataset-fit",
+    response: { name: "height", type: "continuous" },
+    factor: { name: "age", type: "continuous" },
+    createdAt: new Date(0).toISOString(),
+  });
+  const graphItem = createEmbeddedGraphItem({
+    id: `fit-y-by-x-graph:${fit.id}`,
+    name: fit.name,
+    sourceDatasetId: fit.sourceDatasetId,
+    config: fit.graph,
+    createdAt: fit.createdAt,
+  });
+
+  const { fields, filters, elements, sampling } = deriveGraphRequestParts(graphItem);
+
+  assert.deepEqual(graphItem.modeStates.twoD.encoding.x, { name: "age", type: "continuous" });
+  assert.deepEqual(graphItem.modeStates.twoD.encoding.y, { name: "height", type: "continuous" });
+  assert.deepEqual(fields, [
+    { role: "x", column: "age" },
+    { role: "y", column: "height" },
+  ]);
+  assert.deepEqual(filters, []);
+  assert.deepEqual(elements, [
+    { kind: "points", summaryStat: "none" },
+    { kind: "fitline", summaryStat: "none" },
+  ]);
+  assert.deepEqual(sampling, { mode: "full" });
+  assert.equal(canExecuteGraphRequest(graphItem, fields, elements), true);
+}
+
+{
   const en = readJson("../src/i18n/locales/en.json");
   const vi = readJson("../src/i18n/locales/vi.json");
   const zhCn = readJson("../src/i18n/locales/zh-CN.json");

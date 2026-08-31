@@ -1183,6 +1183,105 @@ mod tests {
     }
 
     #[test]
+    fn fit_y_by_x_archive_preserves_definition_fields_without_computed_results() {
+        let path = temp_project_path("fit-y-by-x-definition-only");
+        let fit = json!({
+            "id": "fit-1",
+            "name": "Fit Y by X 2",
+            "sourceDatasetId": "table-1",
+            "response": { "name": "height", "type": "continuous" },
+            "factor": { "name": "age", "type": "continuous" },
+            "personality": "bivariate",
+            "graph": {
+                "mode": "2d",
+                "modeStates": {
+                    "twoD": {
+                        "encoding": {
+                            "x": { "name": "age", "type": "continuous" },
+                            "y": { "name": "height", "type": "continuous" }
+                        },
+                        "multiX": [],
+                        "multiY": [],
+                        "elements": [
+                            { "kind": "points", "enabled": true },
+                            {
+                                "kind": "fitline",
+                                "enabled": true,
+                                "options": { "fitType": "polynomial", "degree": 1, "showFitCI": true }
+                            }
+                        ],
+                        "smootherLambda": 0.4
+                    },
+                    "threeD": {
+                        "encoding": {},
+                        "elements": [{ "kind": "scatter3d", "enabled": true }],
+                        "smootherLambda": 0.4
+                    },
+                    "multivariate": {
+                        "columns": [],
+                        "chartType": "correlationMatrix",
+                        "correlationMethod": "pearson"
+                    }
+                },
+                "filters": [],
+                "sampling": { "mode": "full" }
+            },
+            "createdAt": "2026-08-31T00:00:00.000Z"
+        });
+        let folders = HashMap::from([("fit-1".to_string(), "Analyses/Bivariate".to_string())]);
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "2.0.0".to_string(),
+            "2026-08-31T00:00:00.000Z".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![fit.clone()],
+            Vec::new(),
+            vec!["Analyses".to_string(), "Analyses/Bivariate".to_string()],
+            &HashMap::new(),
+            &HashMap::new(),
+            &folders,
+            &HashMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let archive = std::fs::File::open(&path).unwrap();
+        let mut zip = zip::ZipArchive::new(archive).unwrap();
+        let mut manifest_entry = zip.by_name("manifest.json").unwrap();
+        let mut manifest_bytes = Vec::new();
+        manifest_entry.read_to_end(&mut manifest_bytes).unwrap();
+        let manifest_json: Value = serde_json::from_slice(&manifest_bytes).unwrap();
+
+        let persisted_fit = manifest_json
+            .get("fitYByX")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(Value::as_object)
+            .unwrap();
+
+        assert_eq!(persisted_fit.get("name"), fit.get("name"));
+        assert_eq!(persisted_fit.get("response"), fit.get("response"));
+        assert_eq!(persisted_fit.get("factor"), fit.get("factor"));
+        assert_eq!(persisted_fit.get("personality"), fit.get("personality"));
+        assert_eq!(persisted_fit.get("graph"), fit.get("graph"));
+        assert_eq!(persisted_fit.get("createdAt"), fit.get("createdAt"));
+        assert!(!persisted_fit.contains_key("result"));
+        assert!(!persisted_fit.contains_key("usedRows"));
+        assert!(!persisted_fit.contains_key("excludedRows"));
+        assert!(!persisted_fit.contains_key("summaryOfFit"));
+        assert!(!persisted_fit.contains_key("parameterEstimates"));
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.fit_y_by_x, vec![fit]);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn tabulate_missing_manifest_fields_default_cleanly() {
         let path = temp_project_path("tabulate-defaults");
         let file = std::fs::File::create(&path).unwrap();

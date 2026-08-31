@@ -52,6 +52,7 @@ resetStores();
 const loadedBase = fitItem("fit-2", "Fit Y by X 2");
 const loadedCustom = fitItem("fit-custom", "Custom fit", "dataset-2");
 const loadedBivariate = bivariateFitItem("fit-bivar", "Fit Y by X 4", "dataset-4");
+const malformedBivariate = bivariateFitItem("fit-malformed-bivariate", "Malformed bivariate");
 const mixedOneway = fitItem("fit-mixed-oneway", "Mixed oneway");
 const mixedBivariate = bivariateFitItem("fit-mixed-bivariate", "Mixed bivariate");
 const persistedGraph = {
@@ -143,6 +144,11 @@ useFitYByXStore.getState().loadFromProject([
   { ...fitItem("fit-legacy", "Legacy fit"), graph: undefined } as never,
   { ...fitItem("fit-malformed", "Malformed fit"), graph: { mode: "bogus" } } as never,
   {
+    ...malformedBivariate,
+    personality: "oneway",
+    graph: { mode: "bogus" },
+  } as never,
+  {
     ...fitItem("fit-partial", "Partial fit"),
     graph: {
       mode: "2d",
@@ -187,9 +193,28 @@ assert.deepEqual(
   useFitYByXStore.getState().items.find(({ id }) => id === "fit-legacy")?.graph,
   fitItem("fit-legacy", "Legacy fit").graph,
 );
+assert.equal(
+  useFitYByXStore.getState().items.find(({ id }) => id === "fit-legacy")?.personality,
+  "oneway",
+);
 assert.deepEqual(
   useFitYByXStore.getState().items.find(({ id }) => id === "fit-malformed")?.graph,
   fitItem("fit-malformed", "Malformed fit").graph,
+);
+assert.equal(
+  useFitYByXStore.getState().items.find(({ id }) => id === "fit-malformed-bivariate")?.personality,
+  "bivariate",
+);
+assert.deepEqual(
+  useFitYByXStore.getState().items.find(({ id }) => id === "fit-malformed-bivariate")?.graph,
+  malformedBivariate.graph,
+);
+assert.deepEqual(
+  useFitYByXStore.getState().items.find(({ id }) => id === "fit-malformed-bivariate")?.graph.modeStates.twoD.elements,
+  [
+    { kind: "points", enabled: true },
+    { kind: "fitline", enabled: true, options: { fitType: "polynomial", degree: 1, showFitCI: true } },
+  ],
 );
 assert.deepEqual(
   useFitYByXStore.getState().items.find(({ id }) => id === "fit-partial")?.graph,
@@ -234,6 +259,7 @@ assert.deepEqual(
     "fit-custom",
     "fit-legacy",
     "fit-malformed",
+    "fit-malformed-bivariate",
     "fit-partial",
   ],
 );

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import type { ProjectInfo } from "../src/types/project";
 import type { SaveProgress, SaveProjectFolders, SaveProjectRequest } from "../src/services/projectService";
+import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
 import { createProjectStore } from "../src/stores/useProjectStore.ts";
 import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
@@ -326,6 +327,110 @@ function resetGraphBuilderStore() {
 
   onProgressRef?.(makeProgress(0.7));
   assert.equal(store.getState().saveProgress, null);
+}
+
+{
+  resetGraphBuilderStore();
+
+  const bivariateFit = {
+    ...createFitYByXItem({
+      id: "fit-bivariate",
+      name: "Fit Y by X 2",
+      sourceDatasetId: "table-1",
+      response: continuous("height"),
+      factor: continuous("age"),
+      createdAt: new Date(0).toISOString(),
+    }),
+    graph: {
+      mode: "2d" as const,
+      modeStates: {
+        twoD: {
+          encoding: {
+            x: continuous("age"),
+            y: continuous("height"),
+          },
+          multiX: [],
+          multiY: [],
+          elements: [
+            { kind: "points", enabled: true },
+            { kind: "fitline", enabled: true, options: { fitType: "polynomial", degree: 1, showFitCI: true } },
+          ],
+          smootherLambda: 0.4,
+        },
+        threeD: {
+          encoding: {},
+          elements: [{ kind: "scatter3d", enabled: true }],
+          smootherLambda: 0.4,
+        },
+        multivariate: {
+          columns: [],
+          chartType: "correlationMatrix",
+          correlationMethod: "pearson",
+        },
+      },
+      filters: [],
+      sampling: { mode: "full" as const },
+    },
+  };
+  const fitRequest: SaveProjectRequest = {
+    ...request,
+    fitYByX: [bivariateFit],
+    fitYByXFolders: { [bivariateFit.id]: "Analyses/Bivariate" },
+  };
+  const fitBaseline = JSON.stringify(fitRequest.fitYByX);
+
+  let capturedSaveRequest: SaveProjectRequest | null = null;
+
+  const store = createProjectStore({
+    projectService: {
+      initProject: async () => savedProject,
+      createProject: async () => savedProject,
+      openProject: async () => ({
+        project: savedProject,
+        datasets: [],
+        history: [],
+        snapshots: [],
+        graphBuilders: [],
+        fitYByX: [],
+        tabulates: [],
+        folders: [],
+        tableFolders: {},
+        graphFolders: {},
+        fitYByXFolders: {},
+        tabulateFolders: {},
+        datasetNameMigrations: [],
+      }),
+      saveProject: async (saveRequest) => {
+        capturedSaveRequest = saveRequest;
+        return savedProject;
+      },
+      getCurrentProject: async () => savedProject,
+    },
+  });
+
+  await store.getState().saveProject(fitRequest);
+
+  assert.deepEqual(capturedSaveRequest?.fitYByX, [bivariateFit]);
+  assert.deepEqual(capturedSaveRequest?.fitYByXFolders, { [bivariateFit.id]: "Analyses/Bivariate" });
+  assert.equal(JSON.stringify(fitRequest.fitYByX), fitBaseline);
+
+  const savedFit = capturedSaveRequest?.fitYByX[0] as {
+    personality: string;
+    graph: {
+      modeStates: {
+        twoD: {
+          elements: unknown[];
+        };
+      };
+    };
+  } & Record<string, unknown>;
+
+  assert.equal(savedFit.personality, "bivariate");
+  assert.deepEqual(savedFit.graph.modeStates.twoD.elements, [
+    { kind: "points", enabled: true },
+    { kind: "fitline", enabled: true, options: { fitType: "polynomial", degree: 1, showFitCI: true } },
+  ]);
+  assert.equal(Object.hasOwn(savedFit, "result"), false);
 }
 
 {
