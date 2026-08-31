@@ -1279,10 +1279,10 @@ impl DuckDbEngine {
         let table = Self::quote_identifier(&Self::internal_table_name(dataset_id));
         let column = Self::quote_identifier(field);
         let sql = format!(
-            "SELECT DISTINCT COALESCE(CAST({column} AS VARCHAR), '') AS value
+            "SELECT DISTINCT COALESCE(CAST({column} AS VARCHAR), '') AS \"__sp_filter_value\"
              FROM {table}
              WHERE strpos(lower(COALESCE(CAST({column} AS VARCHAR), '')), lower(?)) > 0
-             ORDER BY lower(value), value
+             ORDER BY lower(\"__sp_filter_value\"), \"__sp_filter_value\"
              LIMIT ?"
         );
         let limit = i64::try_from(limit)
@@ -9708,6 +9708,40 @@ mod tests {
                 .unwrap_err(),
             AppError::InvalidParam(_)
         ));
+    }
+
+    #[test]
+    fn query_table_filter_values_returns_labels_from_stacked_table() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "wide-id",
+            "Wide",
+            &["build".into(), "height".into(), "width".into()],
+            &["VARCHAR".into(), "DOUBLE".into(), "DOUBLE".into()],
+        )
+        .unwrap();
+        db.conn()
+            .execute_batch(
+                "INSERT INTO dataset_wide_id VALUES
+                    (1, 'EV1', 10.0, 20.0),
+                    (2, 'EV2', 11.0, 21.0);",
+            )
+            .unwrap();
+
+        db.stack_table(
+            "stacked-id",
+            "Stacked",
+            "wide-id",
+            &["height".into(), "width".into()],
+            &["build".into()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.query_table_filter_values("stacked-id", "Label", "", 10, 0)
+                .unwrap(),
+            vec!["height".to_string(), "width".to_string()],
+        );
     }
 
     fn seed_sales_dataset(db: &DuckDbEngine) {
