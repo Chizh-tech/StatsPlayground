@@ -192,6 +192,46 @@ mod tests {
     }
 
     #[test]
+    fn runs_bivariate_with_decimal_and_uhugeint_rows_and_exact_accounting() -> Result<(), AppError>
+    {
+        let state = AppState::new().expect("test state");
+        seed_dataset(
+            &state,
+            "fit-bivariate-wide-numeric",
+            &["response", "factor"],
+            &["UHUGEINT", "DECIMAL(18,2)"],
+            r#"
+            INSERT INTO "dataset_fit_bivariate_wide_numeric" (_row_id, response, factor) VALUES
+                (1, CAST(3 AS UHUGEINT), CAST(1.00 AS DECIMAL(18,2))),
+                (2, CAST(5 AS UHUGEINT), CAST(2.00 AS DECIMAL(18,2))),
+                (3, CAST(7 AS UHUGEINT), CAST(3.00 AS DECIMAL(18,2))),
+                (4, NULL, CAST(4.00 AS DECIMAL(18,2))),
+                (5, CAST(11 AS UHUGEINT), NULL);
+            "#,
+            5,
+        );
+
+        let result = FitYByXService::new(&state).run(FitYByXRequest {
+            dataset_id: "fit-bivariate-wide-numeric".into(),
+            generation: 0,
+            response_column: "response".into(),
+            factor_column: "factor".into(),
+            personality: FitYByXPersonality::Bivariate,
+            confidence_level: 0.95,
+        })?;
+
+        let FitYByXResult::Bivariate(bivariate) = result else {
+            panic!("expected bivariate result");
+        };
+        assert_eq!(bivariate.used_rows, 3);
+        assert_eq!(bivariate.excluded_rows, 2);
+        assert_eq!(bivariate.summary_of_fit.observation_count, 3);
+        assert_eq!(bivariate.intercept, 1.0);
+        assert_eq!(bivariate.slope, 2.0);
+        Ok(())
+    }
+
+    #[test]
     fn rejects_stale_generation_while_holding_db_lock() {
         let state = AppState::new().expect("test state");
         seed_dataset(

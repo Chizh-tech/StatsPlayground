@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::mem;
 use std::time::Instant;
 
-use duckdb::types::{OrderedMap, TimeUnit, Value};
+use duckdb::types::{Decimal, OrderedMap, TimeUnit, Value};
 use duckdb::{params, params_from_iter, Config, Connection};
 
 use crate::engine::correlation::{correlate, CorrelationFailure, StatisticalMethod};
@@ -718,7 +718,12 @@ impl DuckDbEngine {
                     updated_at: row.get(7)?,
                 })
             },
-        )?;
+        ).map_err(|error| match error {
+            duckdb::Error::QueryReturnedNoRows => {
+                AppError::InvalidParam(format!("unknown dataset: {id}"))
+            }
+            other => AppError::from(other),
+        })?;
         Ok(meta)
     }
 
@@ -948,15 +953,10 @@ impl DuckDbEngine {
             for (column_index, (value, column_type)) in
                 row.iter().zip(canonical_types.iter()).enumerate()
             {
-                let duckdb_value = Self::json_scalar_to_duckdb_value(
-                    value,
-                    row_index + 1,
-                    column_index + 1,
-                )?;
-                let validation_sql = format!(
-                    "SELECT {}",
-                    Self::typed_parameter_expression(column_type)
-                );
+                let duckdb_value =
+                    Self::json_scalar_to_duckdb_value(value, row_index + 1, column_index + 1)?;
+                let validation_sql =
+                    format!("SELECT {}", Self::typed_parameter_expression(column_type));
                 self.conn
                     .query_row(&validation_sql, params![duckdb_value], |_| Ok(()))
                     .map_err(|error| {
@@ -7488,14 +7488,22 @@ fn fit_y_by_x_numeric_value(value: Value) -> Option<f64> {
         Value::SmallInt(inner) => Some(inner as f64),
         Value::Int(inner) => Some(inner as f64),
         Value::BigInt(inner) => Some(inner as f64),
+        Value::HugeInt(inner) => Some(inner as f64),
+        Value::UHugeInt(inner) => Some(inner as f64),
         Value::UTinyInt(inner) => Some(inner as f64),
         Value::USmallInt(inner) => Some(inner as f64),
         Value::UInt(inner) => Some(inner as f64),
         Value::UBigInt(inner) => Some(inner as f64),
         Value::Float(inner) => Some(inner as f64),
         Value::Double(inner) => Some(inner),
+        Value::Decimal(inner) => fit_y_by_x_decimal_value(inner),
         _ => None,
     }
+}
+
+fn fit_y_by_x_decimal_value(value: Decimal) -> Option<f64> {
+    let scale_factor = 10_f64.powi(i32::from(value.scale()));
+    Some((value.value() as f64) / scale_factor)
 }
 
 fn fit_y_by_x_display_value(value: Value) -> Option<String> {
@@ -7881,6 +7889,7 @@ fn dedupe_sqlite_table_name(base: &str, used: &mut std::collections::HashSet<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::fit_y_by_x::{FitYByXPersonality, FitYByXRow};
     use crate::models::graph_data::{
         GraphDataRequest, GraphElementRequest, GraphFieldBinding, GraphSampling, GraphViewport,
     };
@@ -7919,6 +7928,102 @@ mod tests {
             filters: Vec::new(),
             generation: 0,
         }
+    }
+
+    fn seed_fit_y_by_x_dataset(
+        engine: &DuckDbEngine,
+        dataset_id: &str,
+        column_names: &[&str],
+        column_types: &[&str],
+        insert_sql: &str,
+        row_count: i64,
+    ) {
+        engine
+            .create_empty_table(
+                dataset_id,
+                dataset_id,
+                &column_names
+                    .iter()
+                    .map(|name| (*name).to_string())
+                    .collect::<Vec<_>>(),
+                &column_types
+                    .iter()
+                    .map(|column_type| (*column_type).to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .expect("fit y by x fixture metadata");
+        engine
+            .conn()
+            .execute_batch(insert_sql)
+            .expect("fit y by x fixture rows");
+        engine
+            .conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
+                params![row_count, dataset_id],
+            )
+            .expect("fit y by x fixture row count");
+    }
+
+    #[test]
+    fn read_fit_y_by_x_rows_maps_unknown_dataset_to_invalid_param() {
+        let engine = DuckDbEngine::new_in_memory().unwrap();
+
+        let error = engine
+            .read_fit_y_by_x_rows(
+                "missing-dataset",
+                "response",
+                "factor",
+                FitYByXPersonality::Oneway,
+            )
+            .expect_err("unknown dataset must fail");
+
+        assert!(
+            matches!(error, AppError::InvalidParam(message) if message.contains("unknown dataset"))
+        );
+    }
+
+    #[test]
+    fn read_fit_y_by_x_rows_keeps_decimal_and_hugeint_bivariate_rows() {
+        let engine = DuckDbEngine::new_in_memory().unwrap();
+        seed_fit_y_by_x_dataset(
+            &engine,
+            "fit-wide-bivariate",
+            &["response", "factor"],
+            &["DECIMAL(18,2)", "HUGEINT"],
+            r#"
+            INSERT INTO "dataset_fit_wide_bivariate" (_row_id, response, factor) VALUES
+                (1, CAST(12.50 AS DECIMAL(18,2)), CAST(9223372036854775808 AS HUGEINT)),
+                (2, CAST(15.75 AS DECIMAL(18,2)), CAST(9223372036854775810 AS HUGEINT)),
+                (3, NULL, CAST(9223372036854775812 AS HUGEINT)),
+                (4, CAST(18.00 AS DECIMAL(18,2)), NULL);
+            "#,
+            4,
+        );
+
+        let result = engine
+            .read_fit_y_by_x_rows(
+                "fit-wide-bivariate",
+                "response",
+                "factor",
+                FitYByXPersonality::Bivariate,
+            )
+            .expect("fit y by x rows");
+
+        assert_eq!(result.source_rows, 4);
+        assert_eq!(
+            result.rows,
+            vec![
+                FitYByXRow::Bivariate {
+                    x: 9_223_372_036_854_775_808.0,
+                    y: 12.5,
+                },
+                FitYByXRow::Bivariate {
+                    x: 9_223_372_036_854_775_810.0,
+                    y: 15.75,
+                },
+            ]
+        );
     }
 
     #[test]
