@@ -313,6 +313,7 @@ test("renders completed continuous summary values", async ({ mount }) => {
             maximum: 5,
             median: 3,
             primaryMode: 1,
+            modeIsUnique: true,
             range: 4,
             iqr: 3,
             mad: 1,
@@ -324,7 +325,50 @@ test("renders completed continuous summary values", async ({ mount }) => {
   );
 
   await expect(component.getByText("Summary Statistics")).toBeVisible();
+  await expect(component.getByText("Std Error Mean", { exact: true })).toBeVisible();
   await expect(component.getByText("3", { exact: true }).first()).toBeVisible();
+});
+
+test("renders summary tied modes as no unique mode", async ({ mount }) => {
+  const component = await mount(
+    <DistributionWorkspace
+      item={item}
+      sourceAvailable
+      bootstrap={null}
+      runState={null}
+      failure={null}
+      result={{
+        ...previousResult,
+        reportBlocks: [{
+          schemaVersion: "1",
+          blockId: "summary",
+          kind: "summary",
+          titleKey: "distribution.report.summary",
+          status: "available",
+          summaryData: {
+            n: 4,
+            nMissing: 0,
+            mean: 2,
+            stdDev: 1,
+            stdError: 0.5,
+            meanCiLower: 1,
+            meanCiUpper: 3,
+            minimum: 1,
+            maximum: 3,
+            median: 2,
+            primaryMode: 1,
+            modeIsUnique: false,
+            range: 2,
+            iqr: 1,
+            mad: 1,
+          },
+          chartData: null,
+        }],
+      }}
+    />,
+  );
+
+  await expect(component.getByRole("row", { name: "Mode No unique mode", exact: true })).toBeVisible();
 });
 
 test("renders a scrollable By and Y report hierarchy", async ({ mount, page }) => {
@@ -420,6 +464,7 @@ test("normal quantile menu item depends on payload and chart stays hidden by def
             maximum: 3,
             median: 2,
             primaryMode: 1,
+            modeIsUnique: true,
             range: 2,
             iqr: 1,
             mad: 1,
@@ -558,6 +603,7 @@ test("quantile box and stem-and-leaf menu items are payload-gated and render on 
             maximum: 6,
             median: 3,
             primaryMode: 1,
+            modeIsUnique: true,
             range: 5,
             iqr: 3,
             mad: 1,
@@ -580,9 +626,9 @@ test("quantile box and stem-and-leaf menu items are payload-gated and render on 
   );
 
   await withoutPayload.getByRole("button", { name: "Analysis options for sales_amount" }).click();
-  await expect(withoutPayload.getByRole("checkbox", { name: "Quantile Box Plot" })).toHaveCount(0);
+  await expect(withoutPayload.getByRole("checkbox", { name: "Letter-Value Quantile Plot" })).toHaveCount(0);
   await expect(withoutPayload.getByRole("checkbox", { name: "Stem-and-Leaf" })).toHaveCount(0);
-  await expect(withoutPayload.getByRole("heading", { name: "Quantile Box Plot" })).toHaveCount(0);
+  await expect(withoutPayload.getByRole("heading", { name: "Letter-Value Quantile Plot" })).toHaveCount(0);
   await expect(withoutPayload.getByRole("heading", { name: "Stem-and-Leaf" })).toHaveCount(0);
   await withoutPayload.unmount();
 
@@ -646,10 +692,12 @@ test("quantile box and stem-and-leaf menu items are payload-gated and render on 
                 chartData: null,
                 stemAndLeafData: {
                   rows: [
-                    { stem: "1", leaves: ["0", "2", "4"], omittedLeafCount: 1 },
-                    { stem: "2", leaves: ["1", "3", "8"], omittedLeafCount: 2 },
+                    { stem: "1", leaves: ["0", "2", "4"], count: 4, omittedLeafCount: 1 },
+                    { stem: "2", leaves: ["1", "3", "8"], count: 5, omittedLeafCount: 2 },
                   ],
                   scale: 0.1,
+                  leafUnit: 0.01,
+                  interpretationKey: { stem: "1", leaf: "0", value: 0.1 },
                   omittedStemCount: 3,
                   omittedLeafCount: 12,
                   status: "available",
@@ -669,15 +717,15 @@ test("quantile box and stem-and-leaf menu items are payload-gated and render on 
     />,
   );
 
-  await expect(withPayload.getByRole("heading", { name: "Quantile Box Plot" })).toHaveCount(0);
+  await expect(withPayload.getByRole("heading", { name: "Letter-Value Quantile Plot" })).toHaveCount(0);
   await expect(withPayload.getByRole("heading", { name: "Stem-and-Leaf" })).toHaveCount(0);
 
   await withPayload.getByRole("button", { name: "Analysis options for sales_amount" }).click();
-  await expect(withPayload.getByRole("checkbox", { name: "Quantile Box Plot" })).toBeVisible();
+  await expect(withPayload.getByRole("checkbox", { name: "Letter-Value Quantile Plot" })).toBeVisible();
   await expect(withPayload.getByRole("checkbox", { name: "Stem-and-Leaf" })).toBeVisible();
-  await withPayload.getByRole("checkbox", { name: "Quantile Box Plot" }).click();
+  await withPayload.getByRole("checkbox", { name: "Letter-Value Quantile Plot" }).click();
 
-  await expect(withPayload.getByRole("heading", { name: "Quantile Box Plot" })).toBeVisible();
+  await expect(withPayload.getByRole("heading", { name: "Letter-Value Quantile Plot" })).toBeVisible();
   await expect(withPayload.getByText("Public method; differs from JMP 19").first()).toBeVisible();
   await expect(withPayload.locator('[data-chart-kind="quantileBoxData"] canvas')).toHaveCount(1);
 
@@ -689,11 +737,13 @@ test("quantile box and stem-and-leaf menu items are payload-gated and render on 
   const stemTable = withPayload.getByRole("table", { name: "Stem-and-Leaf" });
   await expect(stemTable).toBeVisible();
   await expect(stemTable.locator("tbody tr")).toHaveCount(2);
-  await expect(stemTable.locator("tbody tr").nth(0).locator("td").nth(1)).toHaveText("1");
-  await expect(stemTable.locator("tbody tr").nth(1).locator("td").nth(1)).toHaveText("2");
+  await expect(stemTable.getByRole("columnheader", { name: "Count" })).toBeVisible();
+  await expect(stemTable.locator("tbody tr").nth(0).locator("td").nth(1)).toHaveText("4");
+  await expect(stemTable.locator("tbody tr").nth(1).locator("td").nth(1)).toHaveText("5");
   await expect(stemTable.locator("tbody td").first()).toHaveCSS("border-right-style", "solid");
   await expect(stemTable.locator("tbody td").first()).toHaveCSS("border-bottom-style", "solid");
-  await expect(withPayload.getByText("Scale: 0.1")).toBeVisible();
+  await expect(withPayload.getByText("Leaf unit: 0.01")).toBeVisible();
+  await expect(withPayload.getByText("Key: 1|0 represents 0.1")).toBeVisible();
   await expect(withPayload.getByText("Omitted stems: 3")).toBeVisible();
   await expect(withPayload.getByText("Omitted leaves: 12")).toBeVisible();
 });
@@ -725,10 +775,12 @@ test("shows unavailable reason for stem-and-leaf blocks", async ({ mount }) => {
               chartData: null,
               stemAndLeafData: {
                 rows: [
-                  { stem: "1", leaves: [], omittedLeafCount: 0 },
-                  { stem: "2", leaves: [], omittedLeafCount: 0 },
+                  { stem: "1", leaves: [], count: 0, omittedLeafCount: 0 },
+                  { stem: "2", leaves: [], count: 0, omittedLeafCount: 0 },
                 ],
                 scale: 1,
+                leafUnit: 0.1,
+                interpretationKey: { stem: "1", leaf: "0", value: 1 },
                 omittedStemCount: 0,
                 omittedLeafCount: 0,
                 status: "unavailable",
@@ -831,7 +883,7 @@ test(`renders automatic Process Capability with ${confidencePercent}% interval h
   const observedTail = (count: number, proportion: number) => ({
     count: { state: "available" as const, value: count, reasonCode: null },
     proportion: capabilityValue(proportion),
-    ppm: capabilityValue(proportion * 1_000_000),
+    ppm: capabilityValue(999_999),
     proportionInterval: {
       lower: capabilityValue(0), upper: capabilityValue(0.1), intervalMethod: "wilson.v1",
     },
@@ -891,9 +943,13 @@ test(`renders automatic Process Capability with ${confidencePercent}% interval h
                   d2: 1.128379,
                   withinSigma: 600.4645,
                   overallSigma: 731.7753,
+                  stabilityIndex: {
+                    value: capabilityValue(1.218682),
+                    methodId: "stabilityIndex.overallSigmaOverWithinSigma.v1",
+                  },
                 },
                 indices: {
-                  cp: capabilityValue(0.555), cpk: capabilityValue(-0.264),
+                  cp: capabilityValue(0.55544), cpk: capabilityValue(-0.26444),
                   cpl: capabilityValue(-0.264), cpu: capabilityValue(1.375),
                   cpmWithin: capabilityValue(0.209), pp: capabilityValue(0.456),
                   ppk: capabilityValue(-0.217), ppl: capabilityValue(-0.217),
@@ -939,6 +995,9 @@ test(`renders automatic Process Capability with ${confidencePercent}% interval h
   await expect(component.getByText("Within Sigma Capability")).toBeVisible();
   await expect(component.getByText("Overall Sigma Capability")).toBeVisible();
   await expect(component.getByText("Nonconformance")).toBeVisible();
+  await expect(component.getByRole("row", { name: /Stability Index/ })).toContainText("1.219");
+  await expect(component.getByRole("row", { name: /^cp / })).toContainText("0.555");
+  await expect(component.getByRole("row", { name: /^cp / })).not.toContainText("0.55544");
   await expect(component.getByRole("columnheader", { name: `Lower ${confidencePercent}%` }).first()).toBeVisible();
   await expect(component.getByRole("columnheader", { name: `Upper ${confidencePercent}%` }).first()).toBeVisible();
   await expect(component.getByRole("columnheader", { name: "Lower CI" })).toHaveCount(0);
@@ -1099,6 +1158,7 @@ test("groups Y menu options and closes on Escape with focus restored", async ({ 
                   maximum: 5,
                   median: 3,
                   primaryMode: 1,
+                  modeIsUnique: true,
                   range: 4,
                   iqr: 2,
                   mad: 1,
@@ -1166,6 +1226,10 @@ test("groups Y menu options and closes on Escape with focus restored", async ({ 
                     d2: 1.128379,
                     withinSigma: 0.8,
                     overallSigma: 1,
+                    stabilityIndex: {
+                      value: { state: "available", value: 1.25, reasonCode: null },
+                      methodId: "capability.stability.overallToWithin.v1",
+                    },
                   },
                   indices: {
                     cp: { state: "available", value: 1, reasonCode: null },
@@ -1480,6 +1544,7 @@ test("renders quantiles and summary in .distribution-table-pair with responsive 
                 maximum: 5,
                 median: 3,
                 primaryMode: 1,
+                modeIsUnique: true,
                 range: 4,
                 iqr: 2,
                 mad: 1,
@@ -1591,7 +1656,7 @@ for (const viewport of [
   });
 }
 
-test("renders nonconformance with exactly 3 body rows and 5 columns", async ({ mount }) => {
+test("renders nonconformance with exactly 3 body rows and 4 percentage columns", async ({ mount }) => {
   const capabilityValue = (value: number) => ({ state: "available" as const, value, reasonCode: null });
   const capabilityInterval = (lower: number, upper: number) => ({
     lower: capabilityValue(lower),
@@ -1612,7 +1677,7 @@ test("renders nonconformance with exactly 3 body rows and 5 columns", async ({ m
   });
   const expectedTail = (proportion: number) => ({
     proportion: capabilityValue(proportion),
-    ppm: capabilityValue(proportion * 1_000_000),
+    ppm: capabilityValue(888_888),
   });
 
   const component = await mount(
@@ -1647,6 +1712,10 @@ test("renders nonconformance with exactly 3 body rows and 5 columns", async ({ m
                   d2: 1.128379,
                   withinSigma: 600.4645,
                   overallSigma: 731.7753,
+                  stabilityIndex: {
+                    value: capabilityValue(1.218682),
+                    methodId: "capability.stability.overallToWithin.v1",
+                  },
                 },
                 indices: {
                   cp: capabilityValue(0.555),
@@ -1709,14 +1778,16 @@ test("renders nonconformance with exactly 3 body rows and 5 columns", async ({ m
 
   const table = component.getByRole("table", { name: "Nonconformance" });
   await expect(table).toBeVisible();
-  await expect(table.locator("thead th")).toHaveCount(5);
+  await expect(table.locator("thead th")).toHaveCount(4);
   await expect(table.locator("tbody tr")).toHaveCount(3);
-  await expect(table.getByRole("columnheader", { name: "Region" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Observed Count" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Observed PPM" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Expected Within PPM" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Expected Overall PPM" })).toBeVisible();
-  await expect(table.getByText("Proportion")).toHaveCount(0);
+  await expect(table.getByRole("columnheader", { name: "Portion" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Observed %" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Expected Within %" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Expected Overall %" })).toBeVisible();
+  await expect(table.getByRole("row", { name: /Below LSL/ })).toContainText("5.8824%");
+  await expect(table.getByText("0.01%")).toBeVisible();
+  await expect(table.getByText("Observed Count")).toHaveCount(0);
+  await expect(table.getByText(/PPM/)).toHaveCount(0);
   await expect(table.getByText(/Wilson/i)).toHaveCount(0);
   await expect(table.locator("tbody td").first()).toHaveCSS("border-right-style", "solid");
   await expect(table.locator("tbody td").first()).toHaveCSS("border-bottom-style", "solid");

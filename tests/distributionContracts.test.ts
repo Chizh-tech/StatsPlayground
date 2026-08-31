@@ -61,10 +61,25 @@ type WithinEffectiveDfIsNullableNumber = Assert<
       : false
     : false
 >;
+type StabilityIndexContract = ProcessCapabilityDataV1["processSummary"]["stabilityIndex"];
+type StabilityIndexValueIsTyped = Assert<
+  StabilityIndexContract["value"] extends ProcessCapabilityDataV1["indices"]["cp"] ? true : false
+>;
+type StabilityIndexMethodIsRequired = Assert<
+  StabilityIndexContract["methodId"] extends string
+    ? undefined extends StabilityIndexContract["methodId"]
+      ? false
+      : true
+    : false
+>;
 const confidenceLevelContract: ConfidenceLevelIsRequiredNumber = true;
 const withinEffectiveDfContract: WithinEffectiveDfIsNullableNumber = true;
+const stabilityIndexValueContract: StabilityIndexValueIsTyped = true;
+const stabilityIndexMethodContract: StabilityIndexMethodIsRequired = true;
 assert.equal(confidenceLevelContract, true);
 assert.equal(withinEffectiveDfContract, true);
+assert.equal(stabilityIndexValueContract, true);
+assert.equal(stabilityIndexMethodContract, true);
 
 const continuousFit: DistributionContinuousFitConfigV1 = {
   enabledDistributionIds: ["normal", "gamma"],
@@ -142,8 +157,10 @@ const fitData: DistributionFitDataV1 = {
         value: 1,
         reasonCode: null,
       },
+      fixed: false,
     },
   ],
+  estimatedParameterCount: 2,
   effectiveN: 1,
   logLikelihood: { state: "available", value: -1, reasonCode: null },
   aic: { state: "available", value: 4, reasonCode: null },
@@ -228,6 +245,7 @@ const fitDataWithoutFittedCurve: DistributionFitDataV1 = {
   status: "available",
   reasonCode: null,
   parameters: [],
+  estimatedParameterCount: 2,
   effectiveN: 0,
   logLikelihood: { state: "unavailable", value: null, reasonCode: null },
   aic: { state: "unavailable", value: null, reasonCode: null },

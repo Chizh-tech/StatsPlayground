@@ -129,6 +129,7 @@ export interface DistributionFitMetricV1 {
 export interface DistributionFitParameterV1 {
   parameterId: string;
   value: CapabilityTypedValueV1;
+  fixed: boolean;
 }
 
 export interface DistributionFitConvergenceV1 {
@@ -187,6 +188,7 @@ export interface DistributionFitDataV1 {
   status: DistributionFitStatusV1;
   reasonCode: string | null;
   parameters: DistributionFitParameterV1[];
+  estimatedParameterCount: number;
   effectiveN: number;
   logLikelihood: CapabilityTypedValueV1;
   aic: CapabilityTypedValueV1;
@@ -350,12 +352,21 @@ export interface QuantileBoxDataV1 {
 export interface StemAndLeafRowV1 {
   stem: string;
   leaves: string[];
+  count: number;
   omittedLeafCount: number;
+}
+
+export interface StemAndLeafInterpretationKeyV1 {
+  stem: string;
+  leaf: string;
+  value: number;
 }
 
 export interface StemAndLeafDataV1 {
   rows: StemAndLeafRowV1[];
   scale: number;
+  leafUnit: number;
+  interpretationKey: StemAndLeafInterpretationKeyV1;
   omittedStemCount: number;
   omittedLeafCount: number;
   status: "available" | "unavailable" | "failed";
@@ -440,6 +451,10 @@ export interface ProcessCapabilityDataV1 {
     d2: number;
     withinSigma: number | null;
     overallSigma: number | null;
+    stabilityIndex: {
+      value: CapabilityTypedValueV1;
+      methodId: string;
+    };
   };
   indices: {
     cp: CapabilityTypedValueV1;
@@ -581,6 +596,7 @@ export interface DistributionSummaryDataV1 {
   maximum: number;
   median: number;
   primaryMode: number;
+  modeIsUnique: boolean;
   range: number;
   iqr: number;
   mad: number;

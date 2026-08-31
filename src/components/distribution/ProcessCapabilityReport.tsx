@@ -175,6 +175,10 @@ export function ProcessCapabilityReport({
                 <td>{formatNumber(value)}</td>
               </tr>
             ))}
+            <tr>
+              <th scope="row">{t("distribution.capability.stabilityIndex")}</th>
+              <td>{formatCapabilityValue(data.processSummary.stabilityIndex.value, t)}</td>
+            </tr>
           </tbody>
         </table>}
       </div>
@@ -229,9 +233,9 @@ function IndexTable({
           return (
           <tr key={label}>
             <th scope="row">{label.startsWith("cpm") ? "cpm" : label}</th>
-            <td>{formatTypedValue(value, t)}</td>
-            <td>{formatTypedValue(interval.lower, t)}</td>
-            <td>{formatTypedValue(interval.upper, t)}</td>
+            <td>{formatCapabilityValue(value, t)}</td>
+            <td>{formatCapabilityValue(interval.lower, t)}</td>
+            <td>{formatCapabilityValue(interval.upper, t)}</td>
           </tr>
           );
         })}
@@ -260,21 +264,19 @@ function NonconformanceTable({ data }: { data: ProcessCapabilityDataV1["nonconfo
       <caption>{t("distribution.capability.nonconformance")}</caption>
       <thead>
         <tr>
-          <th scope="col">{t("distribution.capability.region")}</th>
-          <th scope="col">{t("distribution.capability.observedCount")}</th>
-          <th scope="col">{t("distribution.capability.observedPpm")}</th>
-          <th scope="col">{t("distribution.capability.expectedWithinPpm")}</th>
-          <th scope="col">{t("distribution.capability.expectedOverallPpm")}</th>
+          <th scope="col">{t("distribution.capability.portion")}</th>
+          <th scope="col">{t("distribution.capability.observedPercent")}</th>
+          <th scope="col">{t("distribution.capability.expectedWithinPercent")}</th>
+          <th scope="col">{t("distribution.capability.expectedOverallPercent")}</th>
         </tr>
       </thead>
       <tbody>
         {rows.map(([tail, observed, expectedWithin, expectedOverall]) => (
           <tr key={tail}>
             <th scope="row">{t(`distribution.capability.${tail}`)}</th>
-            <td>{formatTypedCount(observed.count, t)}</td>
-            <td>{formatTypedValue(observed.ppm, t)}</td>
-            <td>{formatTypedValue(expectedWithin.ppm, t)}</td>
-            <td>{formatTypedValue(expectedOverall.ppm, t)}</td>
+            <td>{formatPercentage(observed.proportion, t)}</td>
+            <td>{formatPercentage(expectedWithin.proportion, t)}</td>
+            <td>{formatPercentage(expectedOverall.proportion, t)}</td>
           </tr>
         ))}
       </tbody>
@@ -282,19 +284,29 @@ function NonconformanceTable({ data }: { data: ProcessCapabilityDataV1["nonconfo
   );
 }
 
-function formatTypedCount(
-  value: ProcessCapabilityDataV1["nonconformance"]["observed"]["total"]["count"],
-  t: (key: string) => string,
-): string {
-  if (value.state === "available" && value.value !== null) return value.value.toLocaleString();
-  return t(`distribution.capability.states.${value.state}`);
-}
-
-function formatTypedValue(
+function formatCapabilityValue(
   value: CapabilityTypedValueV1,
   t: (key: string) => string,
 ): string {
-  if (value.state === "available" && value.value !== null) return formatNumber(value.value);
+  if (value.state === "available" && value.value !== null) {
+    return value.value.toLocaleString(undefined, {
+      minimumFractionDigits: 3,
+      maximumFractionDigits: 3,
+    });
+  }
+  return t(`distribution.capability.states.${value.state}`);
+}
+
+function formatPercentage(
+  value: CapabilityTypedValueV1,
+  t: (key: string) => string,
+): string {
+  if (value.state === "available" && value.value !== null) {
+    const percentage = (value.value * 100).toLocaleString(undefined, {
+      maximumFractionDigits: 4,
+    });
+    return `${percentage}%`;
+  }
   return t(`distribution.capability.states.${value.state}`);
 }
 

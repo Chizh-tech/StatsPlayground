@@ -12,7 +12,13 @@ export function StemAndLeafReport({ data }: StemAndLeafReportProps) {
   return (
     <div className="distribution-stem-and-leaf" data-testid="distribution-stem-and-leaf">
       <p className="distribution-stem-meta">
-        <span>{t("distribution.report.scale")}: {formatScale(data.scale)}</span>
+        <span>{t("distribution.leafUnit", { defaultValue: "Leaf unit" })}: {formatScale(data.leafUnit)}</span>
+        <span>{t("distribution.stemKey", {
+          defaultValue: "Key: {{stem}}|{{leaf}} represents {{value}}",
+          stem: data.interpretationKey.stem,
+          leaf: data.interpretationKey.leaf,
+          value: formatScale(data.interpretationKey.value),
+        })}</span>
         <span>{t("distribution.report.omittedStems")}: {data.omittedStemCount.toLocaleString()}</span>
         <span>{t("distribution.report.omittedLeaves")}: {data.omittedLeafCount.toLocaleString()}</span>
       </p>
@@ -21,6 +27,7 @@ export function StemAndLeafReport({ data }: StemAndLeafReportProps) {
           <tr>
             <th scope="col">{t("distribution.report.stem")}</th>
             <th scope="col">{t("distribution.report.leaves")}</th>
+            <th scope="col">{t("distribution.capability.count", { defaultValue: "Count" })}</th>
             <th scope="col">{t("distribution.report.omitted")}</th>
           </tr>
         </thead>
@@ -31,6 +38,7 @@ export function StemAndLeafReport({ data }: StemAndLeafReportProps) {
               <td>
                 <pre className="distribution-stem-leaf-text">{row.leaves.join(" ")}</pre>
               </td>
+              <td>{row.count.toLocaleString()}</td>
               <td>{row.omittedLeafCount.toLocaleString()}</td>
             </tr>
           ))}

@@ -36,9 +36,10 @@ const fit: DistributionFitDataV1 = {
   status: "available",
   reasonCode: null,
   parameters: [
-    { parameterId: "location", value: metric(3) },
-    { parameterId: "scale", value: metric(1.5) },
+    { parameterId: "location", value: metric(3), fixed: false },
+    { parameterId: "scale", value: metric(1.5), fixed: false },
   ],
+  estimatedParameterCount: 2,
   effectiveN: 10,
   logLikelihood: metric(-12),
   aic: metric(28),
@@ -69,16 +70,111 @@ const block = (patch: Partial<DistributionReportBlockV1>): DistributionReportBlo
   ...patch,
 });
 
-test("renders available Continuous Fit parameters and statistics with complete grid lines", async ({ mount }) => {
+test("renders available Continuous Fit parameter estimates and JMP measures with complete grid lines", async ({ mount }) => {
   const component = await mount(<ReportBlock block={block({ distributionFitData: fit })} />);
   await expect(component.getByRole("heading", { name: "Continuous Fit - Normal" })).toBeVisible();
-  await expect(component.getByRole("table", { name: "Normal parameters" })).toBeVisible();
-  await expect(component.getByRole("table", { name: "Normal fit statistics" })).toBeVisible();
+  await expect(component.getByRole("table", { name: "Normal Parameter Estimates" })).toBeVisible();
+  const measures = component.getByRole("table", { name: "Normal measures" });
+  await expect(measures).toBeVisible();
   await expect(component.getByText("JMP 19 compatibility pending")).toBeVisible();
   await expect(component.getByText(/Convergence: Converged/)).toBeVisible();
-  await expect(component.getByText("AICc", { exact: true })).toBeVisible();
+  await expect(component.getByRole("columnheader", { name: "Estimate" })).toBeVisible();
+  await expect(component.getByRole("rowheader", { name: "Location" })).toBeVisible();
+  await expect(component.getByRole("rowheader", { name: "Dispersion" })).toBeVisible();
+  await expect(measures.locator("tbody tr")).toHaveCount(3);
+  await expect(measures.getByRole("row", { name: /-2\*LogLikelihood/ })).toContainText("24");
+  await expect(measures.getByRole("rowheader", { name: "AICc" })).toBeVisible();
+  await expect(measures.getByRole("rowheader", { name: "BIC" })).toBeVisible();
+  await expect(measures.getByRole("rowheader", { name: "AIC", exact: true })).toHaveCount(0);
+  await expect(measures.getByRole("rowheader", { name: "LogLikelihood", exact: true })).toHaveCount(0);
   await expect(component.locator(".distribution-fit-table td").first()).toHaveCSS("border-right-style", "solid");
   await expect(component.locator(".distribution-fit-table td").first()).toHaveCSS("border-bottom-style", "solid");
+});
+
+test("uses model-specific parameter terminology and marks fixed locations", async ({ mount }) => {
+  const cases: Array<{
+    data: DistributionFitDataV1;
+    expectedRows: string[];
+    note?: string;
+  }> = [
+    {
+      data: {
+        ...fit,
+        fitId: "fit-lognormal",
+        distributionId: "lognormal",
+        parameterizationId: "lognormal.logLocationLogScale.v1",
+        parameters: [
+          { parameterId: "logLocation", value: metric(2), fixed: false },
+          { parameterId: "logScale", value: metric(0.5), fixed: false },
+        ],
+      },
+      expectedRows: ["Scale", "Shape"],
+      note: "Parameters use the natural logarithm of the response.",
+    },
+    {
+      data: {
+        ...fit,
+        fitId: "fit-exponential",
+        distributionId: "exponential",
+        parameterizationId: "exponential.scaleLocation0.v1",
+        parameters: [
+          { parameterId: "scale", value: metric(3), fixed: false },
+          { parameterId: "location", value: metric(0), fixed: true },
+        ],
+      },
+      expectedRows: ["Scale", "Location Fixed"],
+    },
+    {
+      data: {
+        ...fit,
+        fitId: "fit-gamma",
+        distributionId: "gamma",
+        parameterizationId: "gamma.shapeScale.location0.v1",
+        parameters: [
+          { parameterId: "shape", value: metric(2), fixed: false },
+          { parameterId: "scale", value: metric(3), fixed: false },
+          { parameterId: "location", value: metric(0), fixed: true },
+        ],
+      },
+      expectedRows: ["Shape", "Scale", "Location Fixed"],
+    },
+    {
+      data: {
+        ...fit,
+        fitId: "fit-weibull",
+        distributionId: "weibull",
+        parameterizationId: "weibull.shapeScale.location0.v1",
+        parameters: [
+          { parameterId: "shape", value: metric(2), fixed: false },
+          { parameterId: "scale", value: metric(3), fixed: false },
+          { parameterId: "location", value: metric(0), fixed: true },
+        ],
+      },
+      expectedRows: ["Shape", "Scale", "Location Fixed"],
+    },
+  ];
+
+  for (const candidate of cases) {
+    const component = await mount(<ReportBlock block={block({ distributionFitData: candidate.data })} />);
+    const table = component.getByRole("table", { name: new RegExp(`${candidate.data.distributionId} Parameter Estimates`, "i") });
+    for (const rowName of candidate.expectedRows) {
+      await expect(table.getByRole("row", { name: new RegExp(rowName) })).toBeVisible();
+    }
+    if (candidate.note) await expect(component.getByText(candidate.note)).toBeVisible();
+    await component.unmount();
+  }
+});
+
+test("preserves unavailable log likelihood state in Measures", async ({ mount }) => {
+  const component = await mount(<ReportBlock block={block({
+    distributionFitData: {
+      ...fit,
+      logLikelihood: metric(null, "distribution.fit.informationCriteriaInvalid.v1"),
+    },
+  })} />);
+  const measures = component.getByRole("table", { name: "Normal measures" });
+  await expect(measures.getByRole("row", { name: /-2\*LogLikelihood/ }))
+    .toContainText("distribution.fit.informationCriteriaInvalid.v1");
 });
 
 test("renders failed fit reason without a fake fit table", async ({ mount }) => {

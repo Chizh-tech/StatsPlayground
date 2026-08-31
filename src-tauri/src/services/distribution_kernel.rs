@@ -26,6 +26,7 @@ pub(crate) struct ContinuousSummaryV1 {
     pub maximum: f64,
     pub median: f64,
     pub primary_mode: f64,
+    pub mode_is_unique: bool,
     pub modes: Vec<f64>,
     pub range: f64,
     pub iqr: f64,
@@ -234,6 +235,7 @@ pub(crate) fn continuous_summary(
         .collect::<Vec<_>>();
     modes.sort_by(f64::total_cmp);
     let primary_mode = modes[0];
+    let mode_is_unique = modes.len() == 1;
 
     Ok(ContinuousSummaryV1 {
         n,
@@ -252,6 +254,7 @@ pub(crate) fn continuous_summary(
         maximum,
         median,
         primary_mode,
+        mode_is_unique,
         modes,
         range: maximum - minimum,
         iqr: q3 - q1,
@@ -398,7 +401,27 @@ mod tests {
     }
 
     #[test]
-    fn summary_reports_tied_modes_and_n1_unavailable_variance() {
+    fn summary_marks_a_single_highest_contribution_as_unique_mode() {
+        let summary = continuous_summary(
+            &group(
+                vec![
+                    observation(1, 1.0, 1.0, 1),
+                    observation(2, 2.0, 1.0, 3),
+                    observation(3, 3.0, 1.0, 1),
+                ],
+                0,
+            ),
+            0.95,
+        )
+        .expect("summary");
+
+        assert_eq!(summary.primary_mode, 2.0);
+        assert_eq!(summary.modes, vec![2.0]);
+        assert!(summary.mode_is_unique);
+    }
+
+    #[test]
+    fn summary_marks_tied_highest_contributions_as_no_unique_mode() {
         let tied = group(
             vec![
                 observation(1, 1.0, 1.0, 2),
@@ -412,7 +435,30 @@ mod tests {
         assert_eq!(summary.n_missing, 1);
         assert_eq!(summary.modes, vec![1.0, 3.0]);
         assert_eq!(summary.primary_mode, 1.0);
+        assert!(!summary.mode_is_unique);
+    }
 
+    #[test]
+    fn summary_marks_all_unique_values_as_no_unique_mode() {
+        let summary = continuous_summary(
+            &group(
+                vec![
+                    observation(1, 1.0, 1.0, 1),
+                    observation(2, 2.0, 1.0, 1),
+                    observation(3, 3.0, 1.0, 1),
+                ],
+                0,
+            ),
+            0.95,
+        )
+        .expect("summary");
+
+        assert_eq!(summary.modes, vec![1.0, 2.0, 3.0]);
+        assert!(!summary.mode_is_unique);
+    }
+
+    #[test]
+    fn summary_reports_n1_unavailable_variance() {
         let singleton = continuous_summary(&group(vec![observation(1, 7.0, 1.0, 1)], 0), 0.95)
             .expect("singleton summary");
         assert_eq!(singleton.mean, 7.0);
@@ -1318,6 +1364,44 @@ mod tests {
             .expect("stem 10");
         assert_eq!(row_10.leaves, vec!["2", "2", "5", "8"]);
     }
+
+    #[test]
+    fn stem_and_leaf_preserves_fractional_sign_and_exposes_interpretation_metadata() {
+        let sample = group(
+            vec![
+                observation(1, -0.3, 1.0, 2),
+                observation(2, 0.3, 1.0, 3),
+                observation(3, 10.0, 1.0, 1),
+            ],
+            0,
+        );
+
+        let kernel = stem_and_leaf_public_decimal(&sample, false, 200, 120).expect("stem rows");
+        let negative = kernel.rows.iter().find(|row| row.stem == "-0").unwrap();
+        let positive = kernel.rows.iter().find(|row| row.stem == "0").unwrap();
+        assert_eq!(negative.leaves, vec!["3", "3"]);
+        assert_eq!(negative.count, 2);
+        assert_eq!(positive.leaves, vec!["3", "3", "3"]);
+        assert_eq!(positive.count, 3);
+        assert_eq!(kernel.leaf_unit, kernel.scale / 10.0);
+        assert_eq!(kernel.interpretation_key.stem, "1");
+        assert_eq!(kernel.interpretation_key.leaf, "0");
+        assert_eq!(kernel.interpretation_key.value, kernel.scale);
+    }
+
+    #[test]
+    fn stem_and_leaf_marks_nonrepresentable_stems_unavailable() {
+        let sample = group(vec![observation(1, 1e20, 1.0, 2)], 0);
+
+        let kernel = stem_and_leaf_public_decimal(&sample, false, 200, 120).unwrap();
+
+        assert_eq!(kernel.status, StemAndLeafKernelStatusV1::Unavailable);
+        assert_eq!(
+            kernel.reason_code.as_deref(),
+            Some("stemLeaf.stemOutOfRange.v1")
+        );
+        assert!(kernel.rows.is_empty());
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1438,13 +1522,23 @@ pub(crate) enum StemAndLeafKernelStatusV1 {
 pub(crate) struct StemAndLeafRowDataV1 {
     pub stem: String,
     pub leaves: Vec<String>,
+    pub count: u64,
     pub omitted_leaf_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct StemAndLeafInterpretationKeyDataV1 {
+    pub stem: String,
+    pub leaf: String,
+    pub value: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StemAndLeafKernelV1 {
     pub rows: Vec<StemAndLeafRowDataV1>,
     pub scale: f64,
+    pub leaf_unit: f64,
+    pub interpretation_key: StemAndLeafInterpretationKeyDataV1,
     pub omitted_stem_count: u64,
     pub omitted_leaf_count: u64,
     pub status: StemAndLeafKernelStatusV1,
@@ -2135,6 +2229,12 @@ pub(crate) fn stem_and_leaf_public_decimal(
         return Ok(StemAndLeafKernelV1 {
             rows: Vec::new(),
             scale: 1.0,
+            leaf_unit: 0.1,
+            interpretation_key: StemAndLeafInterpretationKeyDataV1 {
+                stem: "1".to_string(),
+                leaf: "0".to_string(),
+                value: 1.0,
+            },
             omitted_stem_count: 0,
             omitted_leaf_count: 0,
             status: StemAndLeafKernelStatusV1::Unavailable,
@@ -2145,6 +2245,12 @@ pub(crate) fn stem_and_leaf_public_decimal(
         return Ok(StemAndLeafKernelV1 {
             rows: Vec::new(),
             scale: 1.0,
+            leaf_unit: 0.1,
+            interpretation_key: StemAndLeafInterpretationKeyDataV1 {
+                stem: "1".to_string(),
+                leaf: "0".to_string(),
+                value: 1.0,
+            },
             omitted_stem_count: 0,
             omitted_leaf_count: 0,
             status: StemAndLeafKernelStatusV1::Unavailable,
@@ -2165,6 +2271,28 @@ pub(crate) fn stem_and_leaf_public_decimal(
         .max_by(f64::total_cmp)
         .unwrap_or(0.0);
     let scale = stem_leaf_scale_from_span(maximum - minimum);
+    let has_nonrepresentable_stem = sample.observations.iter().any(|observation| {
+        let normalized = observation.y / scale;
+        !normalized.is_finite()
+            || normalized >= i64::MAX as f64
+            || normalized < i64::MIN as f64
+    });
+    if has_nonrepresentable_stem {
+        return Ok(StemAndLeafKernelV1 {
+            rows: Vec::new(),
+            scale,
+            leaf_unit: scale / 10.0,
+            interpretation_key: StemAndLeafInterpretationKeyDataV1 {
+                stem: "1".to_string(),
+                leaf: "0".to_string(),
+                value: scale,
+            },
+            omitted_stem_count: 0,
+            omitted_leaf_count: 0,
+            status: StemAndLeafKernelStatusV1::Unavailable,
+            reason_code: Some("stemLeaf.stemOutOfRange.v1".to_string()),
+        });
+    }
 
     #[derive(Default)]
     struct StemAccumulator {
@@ -2173,7 +2301,7 @@ pub(crate) fn stem_and_leaf_public_decimal(
         total_leaf_count: u64,
     }
 
-    let mut stems = BTreeMap::<i64, StemAccumulator>::new();
+    let mut stems = BTreeMap::<(i64, u8), StemAccumulator>::new();
     let mut sorted = sample.observations.clone();
     sorted.sort_by(|left, right| {
         left.y
@@ -2188,6 +2316,7 @@ pub(crate) fn stem_and_leaf_public_decimal(
             observation.y
         } / scale;
         let stem_value = normalized.trunc() as i64;
+        let signed_zero_order = if stem_value == 0 && normalized < 0.0 { 0 } else { 1 };
         let fractional = (normalized - stem_value as f64).abs();
         let mut leaf_digit = (fractional * 10.0 + 1e-12).floor() as i64;
         if leaf_digit > 9 {
@@ -2195,7 +2324,7 @@ pub(crate) fn stem_and_leaf_public_decimal(
         }
         let leaf = leaf_digit.to_string();
 
-        let entry = stems.entry(stem_value).or_default();
+        let entry = stems.entry((stem_value, signed_zero_order)).or_default();
         let frequency = observation.frequency;
         entry.total_leaf_count =
             entry
@@ -2222,7 +2351,7 @@ pub(crate) fn stem_and_leaf_public_decimal(
     let mut rows = Vec::with_capacity(displayed_stems);
     let mut omitted_leaf_count = 0_u64;
 
-    for (index, (stem_value, accumulator)) in stems.into_iter().enumerate() {
+    for (index, ((stem_value, signed_zero_order), accumulator)) in stems.into_iter().enumerate() {
         if index < max_display_stems {
             omitted_leaf_count = omitted_leaf_count
                 .checked_add(accumulator.omitted_leaf_count)
@@ -2230,8 +2359,13 @@ pub(crate) fn stem_and_leaf_public_decimal(
                     AppError::InvalidParam("distribution.method.frequencyOverflow".to_string())
                 })?;
             rows.push(StemAndLeafRowDataV1 {
-                stem: stem_value.to_string(),
+                stem: if stem_value == 0 && signed_zero_order == 0 {
+                    "-0".to_string()
+                } else {
+                    stem_value.to_string()
+                },
                 leaves: accumulator.leaves,
+                count: accumulator.total_leaf_count,
                 omitted_leaf_count: accumulator.omitted_leaf_count,
             });
         } else {
@@ -2246,6 +2380,12 @@ pub(crate) fn stem_and_leaf_public_decimal(
     Ok(StemAndLeafKernelV1 {
         rows,
         scale,
+        leaf_unit: scale / 10.0,
+        interpretation_key: StemAndLeafInterpretationKeyDataV1 {
+            stem: "1".to_string(),
+            leaf: "0".to_string(),
+            value: scale,
+        },
         omitted_stem_count: (total_stems - displayed_stems) as u64,
         omitted_leaf_count,
         status: StemAndLeafKernelStatusV1::Available,

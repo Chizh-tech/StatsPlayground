@@ -192,6 +192,7 @@ pub trait FitModel {
 #[derive(Debug, Clone)]
 pub struct FitModelRegistrationV1 {
     pub distribution_id: ContinuousDistributionIdV1,
+    pub estimated_parameter_count: usize,
     pub method_id: &'static str,
     pub method_version: &'static str,
     pub parameterization_id: &'static str,
@@ -514,6 +515,7 @@ impl WeibullFitV1 {
 pub const STAGE1_FIT_REGISTRY: [FitModelRegistrationV1; 5] = [
     FitModelRegistrationV1 {
         distribution_id: ContinuousDistributionIdV1::Normal,
+        estimated_parameter_count: 2,
         method_id: NormalFitV1::METHOD_ID,
         method_version: "1.0.0",
         parameterization_id: NormalFitV1::PARAMETERIZATION_ID,
@@ -526,6 +528,7 @@ pub const STAGE1_FIT_REGISTRY: [FitModelRegistrationV1; 5] = [
     },
     FitModelRegistrationV1 {
         distribution_id: ContinuousDistributionIdV1::Lognormal,
+        estimated_parameter_count: 2,
         method_id: LognormalFitV1::METHOD_ID,
         method_version: "1.0.0",
         parameterization_id: LognormalFitV1::PARAMETERIZATION_ID,
@@ -538,6 +541,7 @@ pub const STAGE1_FIT_REGISTRY: [FitModelRegistrationV1; 5] = [
     },
     FitModelRegistrationV1 {
         distribution_id: ContinuousDistributionIdV1::Exponential,
+        estimated_parameter_count: 1,
         method_id: ExponentialFitV1::METHOD_ID,
         method_version: "1.0.0",
         parameterization_id: ExponentialFitV1::PARAMETERIZATION_ID,
@@ -550,6 +554,7 @@ pub const STAGE1_FIT_REGISTRY: [FitModelRegistrationV1; 5] = [
     },
     FitModelRegistrationV1 {
         distribution_id: ContinuousDistributionIdV1::Gamma,
+        estimated_parameter_count: 2,
         method_id: GammaFitV1::METHOD_ID,
         method_version: "1.0.0",
         parameterization_id: GammaFitV1::PARAMETERIZATION_ID,
@@ -562,6 +567,7 @@ pub const STAGE1_FIT_REGISTRY: [FitModelRegistrationV1; 5] = [
     },
     FitModelRegistrationV1 {
         distribution_id: ContinuousDistributionIdV1::Weibull,
+        estimated_parameter_count: 2,
         method_id: WeibullFitV1::METHOD_ID,
         method_version: "1.0.0",
         parameterization_id: WeibullFitV1::PARAMETERIZATION_ID,
@@ -1563,6 +1569,7 @@ fn available_parameter(
             value: Some(value),
             reason_code: None,
         },
+        fixed: false,
     })
 }
 
@@ -1673,7 +1680,7 @@ mod tests {
         FitOptimizationStateV1, FitOptimizer, GammaFitV1, GammaObjectiveV1, LognormalFitV1,
         NormalFitV1, WeibullFitV1, WeibullObjectiveV1, ARGMIN_BRENT_OPTIMIZER_ID,
         ARGMIN_BRENT_OPTIMIZER_VERSION, CONTINUOUS_FIT_ITERATION_LIMIT, CONTINUOUS_FIT_TOLERANCE,
-        LOG_LIKELIHOOD_INVALID_REASON,
+        LOG_LIKELIHOOD_INVALID_REASON, STAGE1_FIT_REGISTRY,
     };
     use crate::engine::distribution_executor::PreparedObservationV1;
     use crate::models::distribution::{
@@ -1735,6 +1742,7 @@ mod tests {
                 value: Some(value),
                 reason_code: None,
             },
+            fixed: false,
         }
     }
 
@@ -1765,6 +1773,12 @@ mod tests {
     struct PublicFixtureParameterV1 {
         parameter_id: String,
         value: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CapabilityFixtureV1 {
+        observations: Vec<f64>,
     }
 
     fn public_fixture_path() -> String {
@@ -2310,6 +2324,55 @@ mod tests {
         assert!((metrics.aic.value.unwrap() - expected_aic).abs() < 1e-12);
         assert!((metrics.aicc.value.unwrap() - expected_aicc).abs() < 1e-12);
         assert!((metrics.bic.value.unwrap() - expected_bic).abs() < 1e-12);
+    }
+
+    #[test]
+    fn stage1_registry_owns_estimated_parameter_counts() {
+        let count_for = |distribution_id| {
+            STAGE1_FIT_REGISTRY
+                .iter()
+                .find(|registration| registration.distribution_id == distribution_id)
+                .unwrap()
+                .estimated_parameter_count
+        };
+
+        assert_eq!(count_for(ContinuousDistributionIdV1::Normal), 2);
+        assert_eq!(count_for(ContinuousDistributionIdV1::Lognormal), 2);
+        assert_eq!(count_for(ContinuousDistributionIdV1::Exponential), 1);
+        assert_eq!(count_for(ContinuousDistributionIdV1::Gamma), 2);
+        assert_eq!(count_for(ContinuousDistributionIdV1::Weibull), 2);
+    }
+
+    #[test]
+    fn exponential_information_criteria_use_one_estimated_parameter_for_n51_fixture() {
+        let path = format!(
+            "{}/../tests/fixtures/distribution/process-capability-moving-range-v1.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let fixture: CapabilityFixtureV1 =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let observations = fixture
+            .observations
+            .into_iter()
+            .map(|value| observation(value, 1.0, 1.0))
+            .collect::<Vec<_>>();
+        let registration = STAGE1_FIT_REGISTRY
+            .iter()
+            .find(|registration| {
+                registration.distribution_id == ContinuousDistributionIdV1::Exponential
+            })
+            .unwrap();
+        let estimate = registration.model().fit(&observations).unwrap();
+        let metrics = fit_information_criteria(
+            estimate.log_likelihood,
+            registration.estimated_parameter_count,
+            effective_n(&observations).unwrap(),
+        )
+        .unwrap();
+
+        assert_close(-2.0 * estimate.log_likelihood, 740.6183972);
+        assert_close(metrics.aicc.value.unwrap(), 742.7000298);
+        assert_close(metrics.bic.value.unwrap(), 744.5502228);
     }
 
     #[test]

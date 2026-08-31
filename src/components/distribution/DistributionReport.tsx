@@ -255,7 +255,7 @@ function YSection({
     diagnosticOptions.push(["normalQuantilePlot", t("distribution.report.normalQuantilePlot")]);
   }
   if (hasQuantileBox) {
-    diagnosticOptions.push(["quantileBoxPlot", t("distribution.report.quantileBoxPlot")]);
+    diagnosticOptions.push(["quantileBoxPlot", t("distribution.letterValueQuantilePlot")]);
   }
   if (hasStemAndLeaf) {
     diagnosticOptions.push(["stemAndLeaf", t("distribution.report.stemAndLeaf")]);
@@ -663,11 +663,14 @@ export function ReportBlock({
   const { t } = useTranslation();
   const unavailableReasonCode = getUnavailableReasonCode(block);
   const compatibilityStatus = getCompatibilityStatus(block);
+  const titleKey = block.kind === "quantileBox"
+    ? "distribution.letterValueQuantilePlot"
+    : block.titleKey;
   const blockTitle = block.distributionFitData
-    ? `${t(block.titleKey)} - ${t(`distribution.fit.distributions.${block.distributionFitData.distributionId}`, {
+    ? `${t(titleKey)} - ${t(`distribution.fit.distributions.${block.distributionFitData.distributionId}`, {
       defaultValue: block.distributionFitData.distributionId,
     })}`
-    : t(block.titleKey);
+    : t(titleKey);
   return (
     <section className="distribution-report-block" data-testid={`distribution-report-block-${block.blockId}`}>
       <h3>{blockTitle}</h3>
@@ -682,7 +685,7 @@ export function ReportBlock({
         </p>
       )}
       {block.summaryData && <SummaryDataTables summaryData={block.summaryData} />}
-      {block.chartData && <DistributionChart chart={block.chartData} title={t(block.titleKey)} />}
+      {block.chartData && <DistributionChart chart={block.chartData} title={t(titleKey)} />}
       {block.stemAndLeafData && <StemAndLeafReport data={block.stemAndLeafData} />}
       {block.distributionFitData && <ContinuousFitReport data={block.distributionFitData} />}
       {block.distributionFitComparisonData && <ContinuousFitComparisonReport data={block.distributionFitComparisonData} />}
@@ -707,7 +710,9 @@ function SummaryDataTables({
       <SummaryTable title={t("distribution.report.location")} rows={[
         ["n", summaryData.n], ["nMissing", summaryData.nMissing],
         ["mean", summaryData.mean], ["median", summaryData.median],
-        ["mode", summaryData.primaryMode], ["minimum", summaryData.minimum],
+        ["mode", summaryData.modeIsUnique
+          ? summaryData.primaryMode
+          : t("distribution.statistics.noUniqueMode")], ["minimum", summaryData.minimum],
         ["maximum", summaryData.maximum],
       ]} />
       <SummaryTable title={t("distribution.report.variation")} rows={[
@@ -719,7 +724,7 @@ function SummaryDataTables({
   );
 }
 
-function SummaryTable({ title, rows }: { title: string; rows: Array<[string, number | null]> }) {
+function SummaryTable({ title, rows }: { title: string; rows: Array<[string, number | string | null]> }) {
   const { t } = useTranslation();
   return (
     <table className="distribution-summary-table">
@@ -728,7 +733,7 @@ function SummaryTable({ title, rows }: { title: string; rows: Array<[string, num
         {rows.map(([label, value]) => (
           <tr key={label}>
             <th scope="row">{t(`distribution.statistics.${label}`)}</th>
-            <td>{typeof value === "number" ? formatNumber(value) : "—"}</td>
+            <td>{typeof value === "number" ? formatNumber(value) : value ?? "—"}</td>
           </tr>
         ))}
       </tbody>

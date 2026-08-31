@@ -7,6 +7,7 @@ use crate::engine::distribution_executor::{prepare_continuous_groups, PreparedGr
 use crate::models::distribution::{
     AnalysisSnapshotV1, BlackBoxCaseV1, BoxPlotCoordinatesV1, CapabilityDescriptorV1,
     CapabilityTypedCountV1, CapabilityTypedValueV1, DistributionCancelTokenV1,
+    ContinuousDistributionIdV1,
     DistributionChartDataV1, DistributionChartProvenanceV1, DistributionCoordinateV1,
     DistributionFitComparisonDataV1, DistributionFitComparisonRowV1,
     DistributionFitConvergenceStatusV1, DistributionFitConvergenceV1, DistributionFitDataV1,
@@ -23,7 +24,8 @@ use crate::models::distribution::{
     ProcessCapabilityIntervalsV1, ProcessCapabilityNonconformanceV1,
     ProcessCapabilityObservedNonconformanceV1, ProcessCapabilityObservedTailV1,
     ProcessCapabilityProportionIntervalV1, ProcessCapabilitySpecificationLinesV1,
-    ProcessCapabilitySpecificationV1, ProcessCapabilitySummaryV1, ResourceBudgetV1,
+    ProcessCapabilitySpecificationV1, ProcessCapabilityStabilityIndexV1,
+    ProcessCapabilitySummaryV1, ResourceBudgetV1,
 };
 use crate::services::data_service::DataService;
 use crate::services::distribution_kernel::{
@@ -39,10 +41,10 @@ use crate::services::distribution_fit::{
 };
 use crate::services::normal_capability::{
     capability_chart_data, capability_indices, capability_intervals, nonconformance_metrics,
-    normal_process_summary, resolve_specification_limits, CapabilityDensitySeriesV1,
-    CapabilityIntervalV1, NormalCapabilityChartDataV1, NormalCapabilityIntervalsV1,
-    NormalNonconformanceV1, NumericStateV1, SpecificationOverrideV1, SpecificationSourceV1,
-    TypedCountV1, TypedValueV1,
+    normal_process_summary, resolve_specification_limits, stability_index,
+    CapabilityDensitySeriesV1, CapabilityIntervalV1, NormalCapabilityChartDataV1,
+    NormalCapabilityIntervalsV1, NormalNonconformanceV1, NumericStateV1, SpecificationOverrideV1,
+    SpecificationSourceV1, TypedCountV1, TypedValueV1,
 };
 use crate::state::AppState;
 
@@ -248,6 +250,7 @@ impl<'a> DistributionService<'a> {
                             maximum: summary.maximum,
                             median: summary.median,
                             primary_mode: summary.primary_mode,
+                            mode_is_unique: summary.mode_is_unique,
                             range: summary.range,
                             iqr: summary.iqr,
                             mad: summary.mad,
@@ -516,10 +519,18 @@ impl<'a> DistributionService<'a> {
                                 .map(|row| crate::models::distribution::StemAndLeafRowV1 {
                                     stem: row.stem.clone(),
                                     leaves: row.leaves.clone(),
+                                    count: row.count,
                                     omitted_leaf_count: row.omitted_leaf_count,
                                 })
                                 .collect(),
                             scale: stem_and_leaf.scale,
+                            leaf_unit: stem_and_leaf.leaf_unit,
+                            interpretation_key:
+                                crate::models::distribution::StemAndLeafInterpretationKeyV1 {
+                                    stem: stem_and_leaf.interpretation_key.stem.clone(),
+                                    leaf: stem_and_leaf.interpretation_key.leaf.clone(),
+                                    value: stem_and_leaf.interpretation_key.value,
+                                },
                             omitted_stem_count: stem_and_leaf.omitted_stem_count,
                             omitted_leaf_count: stem_and_leaf.omitted_leaf_count,
                             status: match stem_and_leaf.status {
@@ -534,8 +545,9 @@ impl<'a> DistributionService<'a> {
                                 }
                             },
                             reason_code: stem_and_leaf.reason_code,
-                            provenance: chart_provenance_with_status(
+                            provenance: chart_provenance_with_status_and_version(
                                 "stemLeaf.public.decimal.v1",
+                                "1.1.0",
                                 Jmp19CompatibilityStatusV1::IntentionalDifference,
                                 accepted,
                             ),
@@ -694,6 +706,7 @@ impl<'a> DistributionService<'a> {
                                 let values =
                                     ordered.iter().map(|value| value.y).collect::<Vec<_>>();
                                 let process_summary = normal_process_summary(&values);
+                                let stability = stability_index(&process_summary);
                                 let indices = capability_indices(&process_summary, limits);
                                 let intervals = capability_intervals(
                                     &process_summary,
@@ -744,6 +757,10 @@ impl<'a> DistributionService<'a> {
                                             d2: process_summary.d2,
                                             within_sigma: process_summary.within_sigma,
                                             overall_sigma: process_summary.overall_sigma,
+                                            stability_index: ProcessCapabilityStabilityIndexV1 {
+                                                value: map_capability_value(stability.value),
+                                                method_id: stability.method_id,
+                                            },
                                         },
                                         indices: map_capability_indices(indices),
                                         intervals: map_capability_intervals(intervals),
@@ -1093,7 +1110,7 @@ fn build_fit_payload(
     };
     let metrics = match isolated_fit_metrics(
         estimate.log_likelihood,
-        estimate.parameters.len(),
+        registration.estimated_parameter_count,
         effective_n,
     ) {
         Ok(metrics) => metrics,
@@ -1124,6 +1141,23 @@ fn build_fit_payload(
         }
     };
 
+    let mut parameters = estimate.parameters;
+    if registration.distribution_id == ContinuousDistributionIdV1::Exponential {
+        if let Some(location) = parameters.iter_mut().find(|parameter| parameter.parameter_id == "location") {
+            location.fixed = true;
+        }
+    }
+    if matches!(
+        registration.distribution_id,
+        ContinuousDistributionIdV1::Gamma | ContinuousDistributionIdV1::Weibull
+    ) {
+        parameters.push(crate::models::distribution::DistributionFitParameterV1 {
+            parameter_id: "location".to_string(),
+            value: available_fit_metric(0.0)?,
+            fixed: true,
+        });
+    }
+
     Ok(DistributionFitDataV1 {
         schema_version: "1".to_string(),
         fit_id,
@@ -1131,7 +1165,8 @@ fn build_fit_payload(
         parameterization_id: registration.parameterization_id.to_string(),
         status: DistributionFitStatusV1::Available,
         reason_code: None,
-        parameters: estimate.parameters,
+        parameters,
+        estimated_parameter_count: registration.estimated_parameter_count,
         effective_n,
         log_likelihood: available_fit_metric(estimate.log_likelihood)?,
         aic: metrics.aic,
@@ -1170,6 +1205,7 @@ fn failed_fit_payload(
         status,
         reason_code: Some(failure.reason_code.clone()),
         parameters: Vec::new(),
+        estimated_parameter_count: registration.estimated_parameter_count,
         effective_n,
         log_likelihood: metric.clone(),
         aic: metric.clone(),
@@ -1590,9 +1626,23 @@ fn chart_provenance_with_status(
     compatibility_status: Jmp19CompatibilityStatusV1,
     accepted: &DistributionRunAcceptedV1,
 ) -> DistributionChartProvenanceV1 {
+    chart_provenance_with_status_and_version(
+        method_id,
+        "1.0.0",
+        compatibility_status,
+        accepted,
+    )
+}
+
+fn chart_provenance_with_status_and_version(
+    method_id: &str,
+    method_version: &str,
+    compatibility_status: Jmp19CompatibilityStatusV1,
+    accepted: &DistributionRunAcceptedV1,
+) -> DistributionChartProvenanceV1 {
     DistributionChartProvenanceV1 {
         method_id: method_id.to_string(),
-        method_version: "1.0.0".to_string(),
+        method_version: method_version.to_string(),
         compatibility_status,
         snapshot_id: accepted.snapshot_id.clone(),
     }
@@ -1930,6 +1980,23 @@ mod tests {
         use crate::models::distribution::{
             ContinuousDistributionIdV1, DistributionFitStatusV1,
         };
+        use serde::Deserialize;
+        use std::fs;
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CapabilityFixtureV1 {
+            observations: Vec<f64>,
+        }
+
+        fn assert_close(actual: f64, expected: f64) {
+            let absolute = (actual - expected).abs();
+            let relative = absolute / expected.abs().max(1.0);
+            assert!(
+                absolute <= 1e-10 || relative <= 1e-9,
+                "expected {expected}, got {actual}"
+            );
+        }
 
         fn execute_fit_request(
             state: &AppState,
@@ -2006,6 +2073,49 @@ mod tests {
                         .as_ref()
                         .is_some_and(|curve| curve.points.len() == 256)
             }));
+            let gamma = payloads
+                .iter()
+                .find(|payload| payload.distribution_id == ContinuousDistributionIdV1::Gamma)
+                .unwrap();
+            assert_eq!(gamma.estimated_parameter_count, 2);
+            assert!(gamma.parameters.iter().any(|parameter| {
+                parameter.parameter_id == "location"
+                    && parameter.fixed
+                    && parameter.value.value == Some(0.0)
+            }));
+        }
+
+        #[test]
+        fn exponential_n51_payload_uses_one_estimated_parameter_for_information_criteria() {
+            let path = format!(
+                "{}/../tests/fixtures/distribution/process-capability-moving-range-v1.json",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let fixture: CapabilityFixtureV1 =
+                serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+            let rows = fixture
+                .observations
+                .into_iter()
+                .map(|value| (value, 1, 1.0))
+                .collect::<Vec<_>>();
+            let state = AppState::new().expect("test state");
+            let result = execute_fit_request(&state, &rows, |request, _, _| {
+                request.continuous_fit.enabled_distribution_ids =
+                    vec![ContinuousDistributionIdV1::Exponential];
+            })
+            .expect("exponential fit");
+            let fit = fit_payloads(&result)[0];
+
+            assert_eq!(fit.status, DistributionFitStatusV1::Available);
+            assert_eq!(fit.estimated_parameter_count, 1);
+            assert!(fit.parameters.iter().any(|parameter| {
+                parameter.parameter_id == "location"
+                    && parameter.fixed
+                    && parameter.value.value == Some(0.0)
+            }));
+            assert_close(-2.0 * fit.log_likelihood.value.unwrap(), 740.6183972);
+            assert_close(fit.aicc.value.unwrap(), 742.7000298);
+            assert_close(fit.bic.value.unwrap(), 744.5502228);
         }
 
         #[test]
@@ -2852,12 +2962,18 @@ mod tests {
             stem_payload.provenance.method_id,
             "stemLeaf.public.decimal.v1"
         );
+        assert_eq!(stem_payload.provenance.method_version, "1.1.0");
         assert_eq!(
             stem_payload.provenance.compatibility_status,
             Jmp19CompatibilityStatusV1::IntentionalDifference
         );
         assert!(stem_payload.rows.len() <= 200);
         assert!(stem_payload.rows.iter().all(|row| row.leaves.len() <= 120));
+        assert!(stem_payload.rows.iter().all(|row| row.count >= row.leaves.len() as u64));
+        assert_eq!(stem_payload.leaf_unit, stem_payload.scale / 10.0);
+        assert_eq!(stem_payload.interpretation_key.stem, "1");
+        assert_eq!(stem_payload.interpretation_key.leaf, "0");
+        assert_eq!(stem_payload.interpretation_key.value, stem_payload.scale);
 
         request.enabled_capability_ids.clear();
         let disabled_result = DistributionService::new(&state)

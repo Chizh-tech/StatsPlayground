@@ -46,6 +46,7 @@
 - Normal Quantile Plot、Quantile Box Plot、Stem-and-leaf 已实现并通过自动门禁，但兼容状态不同。
 - Normal、Lognormal、Exponential、Gamma、Weibull、Fit All、信息准则和 fitted PDF overlay 已完成 Continuous Fit Stage 1 自动验收，产品 UI 验收仍为 `pending`。
 - Normal Process Capability 已实现并通过自动门禁，产品 UI 验收仍为 `pending`。
+- JMP 术语与方法对齐 Stage 1 已实现并通过自动门禁：Summary、Capability 显示、Continuous Fit Measures 与 Stem 可解释性已收口；参数 SE/CI 与 JMP-target 算法仍按 Stage 2/3 边界执行。
 - Test Mean、Test Std Dev、Prediction Interval、Equivalence 和 Tolerance Interval 当前仍为 `deferred`。
 - Continuous Fit Stage 2 的 GOF、Cauchy、Student's t 和模型诊断已批准或规划，但尚未实现。
 
@@ -140,7 +141,7 @@ P0 字段：
 
 - Mean
 - Sample Std Dev
-- Std Error
+- Std Error Mean
 - Mean Confidence Interval
 - N
 - N Missing
@@ -178,7 +179,7 @@ $$
 
 - 不能把 MLE scale 与 sample Std Dev 混用。
 - `D <= 0` 时 Std Dev、SE 和 Mean CI 使用 typed unavailable。
-- Mode ties 全部保存在 payload，报告可显示 primary mode 并标记并列。
+- Mode ties 全部保存在 payload；仅唯一众数显示数值，并列或全异样本显示 `No unique mode`。
 - Customize Summary Statistics 只控制展示，不改变已计算结果；新增高成本统计量时才进入 calculation config。
 
 ## 6. Histogram Options 优化设计
@@ -350,14 +351,16 @@ JMP 对 negative values、rounding、split stems、decimal scale 和极端范围
 - Weight 返回 unavailable。
 - 默认最多 200 stems、每 stem 最多 120 leaves。
 - payload 必须返回 `omittedStemCount` 和 `omittedLeafCount`。
+- payload 返回每行完整频数 `count`、`leafUnit` 与结构化 interpretation key；显示预算省略的 leaves 仍计入 `count`。
+- `stemLeaf.public.decimal.v1` 的 sign-safe 表达修复使用 method version `1.1.0`；$(-scale,0)$ 的值使用 `-0` stem，超出整数 stem 表示范围时返回 typed unavailable。
 - 完整展开受 `maxTotalRows` 与 `maxTotalBytes` 保护。
 - 不投入高优先级工作追求 JMP 像素或文本格式复刻。
 
-## 9. Quantile Box Plot
+## 9. Letter-Value Quantile Plot
 
 ### 9.1 统计意义
 
-Quantile Box Plot 用嵌套分位区间显示中心与尾部，比单一 Tukey box 展示更多分布层次。当前实现采用公开的 letter-value Type-6 方法，不把它描述为 JMP 专有层级算法。
+Letter-Value Quantile Plot 用嵌套分位区间显示中心与尾部，比单一 Tukey box 展示更多分布层次。当前实现采用公开的 letter-value Type-6 方法，不把它描述为 JMP 专有层级算法。
 
 每层 payload 包含：
 
@@ -510,14 +513,16 @@ Tolerance interval 的语义是：以置信度 $\gamma$ 覆盖总体至少比例
 
 已实现报告：
 
-- MLE 参数表
-- LogLikelihood
-- AIC
+- Parameter Estimates：Estimate；固定 location 显示 Fixed
+- Normal Location/Dispersion；Lognormal Scale/Shape（natural-log parameterization）；Gamma/Weibull Shape/Scale
+- Measures：`-2*LogLikelihood`
 - AICc
 - BIC
 - fitted PDF overlay
 - typed convergence、domain failure 和 unavailable
 - Fit comparison
+
+AIC 继续保留在 typed payload 与 Fit All fallback 排序中，但不在单模型默认 Measures 表显示。Stage 1 不生成参数 Standard Error 或 Confidence Interval；这些统计量属于 Stage 2。
 
 ### 12.2 Fit Normal 参数化
 
@@ -562,6 +567,8 @@ $$
 ### 12.4 Fit statistics
 
 令 $k$ 为自由参数数，$n_{eff}$ 为有效样本量：
+
+Stage 1 中 Normal、Lognormal、Gamma、Weibull 使用 $k=2$；Exponential 的 location 固定为 0，因此使用 $k=1$，不能按参数显示行数推断 $k$。
 
 $$
 AIC=2k-2\ell,
@@ -635,6 +642,8 @@ Normal Process Capability 与 Fit Normal 使用相同的 Normal 分布原语，�
 - 至少存在有效 LSL 或 USL 才显示 capability。
 - 双侧规格必须满足 `LSL < USL`。
 - Capability 的 Within Sigma 使用 average moving range；Overall Sigma 使用整体 sample variation。
+- Stability Index 定义为 Overall Sigma / Within Sigma，并携带独立 method provenance。
+- Capability indices 与区间默认固定显示 3 位小数；Nonconformance 默认以 Observed/Expected Within/Expected Overall 百分比呈现，比例是显示权威源。
 - Fit Normal 的 MLE scale 不得静默替代 capability 已冻结的 Within/Overall Sigma。
 - 两个 block 可以共享 Normal CDF/PDF primitives，但必须保持不同 method IDs 和 provenance。
 

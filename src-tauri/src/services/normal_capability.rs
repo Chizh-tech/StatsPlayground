@@ -63,6 +63,13 @@ pub struct TypedValueV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct StabilityIndexV1 {
+    pub value: TypedValueV1,
+    pub method_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct NormalCapabilityIndicesV1 {
     pub cp: TypedValueV1,
     pub cpk: TypedValueV1,
@@ -316,6 +323,23 @@ pub fn normal_process_summary(observations_in_row_order: &[f64]) -> NormalProces
     }
 }
 
+pub fn stability_index(summary: &NormalProcessSummaryV1) -> StabilityIndexV1 {
+    let value = match (summary.overall_sigma, summary.within_sigma) {
+        (Some(overall), Some(within)) if overall.is_finite() && within.is_finite() => {
+            if within <= 0.0 {
+                unavailable("capability.stabilityWithinSigmaZero.v1")
+            } else {
+                available(overall / within)
+            }
+        }
+        _ => unavailable("capability.stabilitySigmaUnavailable.v1"),
+    };
+    StabilityIndexV1 {
+        value,
+        method_id: "capability.stability.overallToWithin.v1".to_string(),
+    }
+}
+
 fn validate_limits(limits: &SpecificationLimitsV1) -> Result<(), ()> {
     if [limits.lsl, limits.target, limits.usl]
         .into_iter()
@@ -495,6 +519,92 @@ mod tests {
             "/../tests/fixtures/distribution/process-capability-moving-range-v1.json"
         )))
         .expect("moving range fixture should deserialize")
+    }
+
+    #[test]
+    fn stability_index_is_overall_sigma_over_within_sigma_with_method_provenance() {
+        let summary = NormalProcessSummaryV1 {
+            n: 10,
+            mean: 5.0,
+            moving_range_average: Some(1.0),
+            d2: 1.0,
+            within_sigma: Some(2.0),
+            overall_sigma: Some(3.0),
+        };
+
+        let stability = stability_index(&summary);
+
+        assert_eq!(stability.value.state, NumericStateV1::Available);
+        assert_eq!(stability.value.value, Some(1.5));
+        assert_eq!(
+            stability.method_id,
+            "capability.stability.overallToWithin.v1"
+        );
+    }
+
+    #[test]
+    fn stability_index_is_unavailable_when_within_sigma_is_zero() {
+        let summary = NormalProcessSummaryV1 {
+            n: 3,
+            mean: 5.0,
+            moving_range_average: Some(0.0),
+            d2: 1.0,
+            within_sigma: Some(0.0),
+            overall_sigma: Some(0.0),
+        };
+
+        let stability = stability_index(&summary);
+
+        assert_eq!(stability.value.state, NumericStateV1::Unavailable);
+        assert_eq!(stability.value.value, None);
+        assert_eq!(
+            stability.value.reason_code.as_deref(),
+            Some("capability.stabilityWithinSigmaZero.v1")
+        );
+
+        let negative = stability_index(&NormalProcessSummaryV1 {
+            within_sigma: Some(-1.0),
+            overall_sigma: Some(1.0),
+            ..summary
+        });
+        assert_eq!(negative.value.state, NumericStateV1::Unavailable);
+        assert_eq!(negative.value.value, None);
+    }
+
+    #[test]
+    fn stability_index_is_unavailable_when_sigma_is_missing() {
+        let summary = NormalProcessSummaryV1 {
+            n: 1,
+            mean: 5.0,
+            moving_range_average: None,
+            d2: 1.0,
+            within_sigma: None,
+            overall_sigma: None,
+        };
+
+        let stability = stability_index(&summary);
+
+        assert_eq!(stability.value.state, NumericStateV1::Unavailable);
+        assert_eq!(stability.value.value, None);
+        assert_eq!(
+            stability.value.reason_code.as_deref(),
+            Some("capability.stabilitySigmaUnavailable.v1")
+        );
+    }
+
+    #[test]
+    fn moving_range_fixture_stability_index_matches_n51_expected_value() {
+        let fixture = load_moving_range_fixture();
+        let summary = normal_process_summary(&fixture.observations);
+
+        let stability = stability_index(&summary);
+
+        assert_eq!(summary.n, 51);
+        let value = stability.value.value.expect("available stability index");
+        assert!(
+            (value - 1.218682).abs() < 0.0000005,
+            "expected approximately 1.218682, got {value}"
+        );
     }
 
     #[test]

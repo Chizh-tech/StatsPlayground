@@ -226,6 +226,8 @@ pub struct DistributionFitCapabilityV1 {
 pub struct DistributionFitParameterV1 {
     pub parameter_id: String,
     pub value: CapabilityTypedValueV1,
+    #[serde(default)]
+    pub fixed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -306,6 +308,8 @@ pub struct DistributionFitDataV1 {
     pub status: DistributionFitStatusV1,
     pub reason_code: Option<String>,
     pub parameters: Vec<DistributionFitParameterV1>,
+    #[serde(default)]
+    pub estimated_parameter_count: usize,
     pub effective_n: f64,
     pub log_likelihood: CapabilityTypedValueV1,
     pub aic: CapabilityTypedValueV1,
@@ -726,7 +730,16 @@ pub struct QuantileBoxDataV1 {
 pub struct StemAndLeafRowV1 {
     pub stem: String,
     pub leaves: Vec<String>,
+    pub count: u64,
     pub omitted_leaf_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StemAndLeafInterpretationKeyV1 {
+    pub stem: String,
+    pub leaf: String,
+    pub value: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -734,6 +747,8 @@ pub struct StemAndLeafRowV1 {
 pub struct StemAndLeafDataV1 {
     pub rows: Vec<StemAndLeafRowV1>,
     pub scale: f64,
+    pub leaf_unit: f64,
+    pub interpretation_key: StemAndLeafInterpretationKeyV1,
     pub omitted_stem_count: u64,
     pub omitted_leaf_count: u64,
     pub status: DiagnosticDataStatusV1,
@@ -834,6 +849,14 @@ pub struct ProcessCapabilitySummaryV1 {
     pub d2: f64,
     pub within_sigma: Option<f64>,
     pub overall_sigma: Option<f64>,
+    pub stability_index: ProcessCapabilityStabilityIndexV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessCapabilityStabilityIndexV1 {
+    pub value: CapabilityTypedValueV1,
+    pub method_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1028,6 +1051,7 @@ pub struct DistributionSummaryDataV1 {
     pub maximum: f64,
     pub median: f64,
     pub primary_mode: f64,
+    pub mode_is_unique: bool,
     pub range: f64,
     pub iqr: f64,
     pub mad: f64,

@@ -3,8 +3,10 @@ import type { TFunction } from "i18next";
 
 import type {
   CapabilityTypedValueV1,
+  ContinuousDistributionIdV1,
   DistributionFitComparisonDataV1,
   DistributionFitDataV1,
+  DistributionFitParameterV1,
 } from "@/types/distribution";
 
 function formatValue(value: CapabilityTypedValueV1): string {
@@ -34,6 +36,37 @@ function formatReason(t: TFunction, code: string): string {
     : code;
 }
 
+function negativeTwoLogLikelihood(value: CapabilityTypedValueV1): CapabilityTypedValueV1 {
+  if (value.state !== "available" || value.value === null || !Number.isFinite(value.value)) {
+    return value;
+  }
+  return { ...value, value: -2 * value.value };
+}
+
+interface DisplayParameter {
+  parameterId: string;
+  labelId: string;
+  value: CapabilityTypedValueV1;
+  fixed: boolean;
+}
+
+function displayParameters(
+  distributionId: ContinuousDistributionIdV1,
+  parameters: DistributionFitParameterV1[],
+): DisplayParameter[] {
+  const rows = parameters.map((parameter) => {
+    let labelId = parameter.parameterId;
+    if (distributionId === "normal" && parameter.parameterId === "scale") labelId = "dispersion";
+    if (distributionId === "lognormal" && parameter.parameterId === "logLocation") labelId = "scale";
+    if (distributionId === "lognormal" && parameter.parameterId === "logScale") labelId = "shape";
+    return {
+      ...parameter,
+      labelId,
+    };
+  });
+  return rows;
+}
+
 export function ContinuousFitReport({ data }: { data: DistributionFitDataV1 }) {
   const { t } = useTranslation();
   const distribution = t(`distribution.fit.distributions.${data.distributionId}`, {
@@ -56,9 +89,9 @@ export function ContinuousFitReport({ data }: { data: DistributionFitDataV1 }) {
     );
   }
 
-  const metrics = [
-    ["logLikelihood", data.logLikelihood],
-    ["aic", data.aic],
+  const parameters = displayParameters(data.distributionId, data.parameters);
+  const measures = [
+    ["negativeTwoLogLikelihood", negativeTwoLogLikelihood(data.logLikelihood)],
     ["aicc", data.aicc],
     ["bic", data.bic],
   ] as const;
@@ -69,23 +102,25 @@ export function ContinuousFitReport({ data }: { data: DistributionFitDataV1 }) {
         {t(`distribution.compatibility.${data.provenance.compatibilityStatus}`)}
       </p>
       <div className="distribution-fit-tables">
-        <table className="distribution-fit-table" aria-label={`${distribution} parameters`}>
+        <table className="distribution-fit-table" aria-label={`${distribution} ${t("distribution.fit.parameters", { defaultValue: "Parameter Estimates" })}`}>
           <caption>{t("distribution.fit.parameters", { defaultValue: "Parameter Estimates" })}</caption>
-          <thead><tr><th>{t("distribution.fit.parameter", { defaultValue: "Parameter" })}</th><th>{t("distribution.report.value")}</th></tr></thead>
+          <thead><tr><th scope="col">{t("distribution.fit.parameter", { defaultValue: "Parameter" })}</th><th scope="col">{t("distribution.fit.estimate", { defaultValue: "Estimate" })}</th></tr></thead>
           <tbody>
-            {data.parameters.map((parameter) => (
+            {parameters.map((parameter) => (
               <tr key={parameter.parameterId}>
-                <th scope="row">{t(`distribution.fit.parametersById.${parameter.parameterId}`, { defaultValue: parameter.parameterId })}</th>
-                <td>{formatValue(parameter.value)}</td>
+                <th scope="row">{t(`distribution.fit.parametersById.${parameter.labelId}`, { defaultValue: parameter.labelId })}</th>
+                <td>{parameter.fixed
+                  ? t("distribution.fit.fixed", { defaultValue: "Fixed" })
+                  : formatValue(parameter.value)}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        <table className="distribution-fit-table" aria-label={`${distribution} fit statistics`}>
-          <caption>{t("distribution.fit.statistics", { defaultValue: "Fit Statistics" })}</caption>
-          <thead><tr><th>{t("distribution.fit.metric", { defaultValue: "Metric" })}</th><th>{t("distribution.report.value")}</th></tr></thead>
+        <table className="distribution-fit-table" aria-label={`${distribution} ${t("distribution.fit.measuresAria", { defaultValue: "measures" })}`}>
+          <caption>{t("distribution.fit.measures", { defaultValue: "Measures" })}</caption>
+          <thead><tr><th scope="col">{t("distribution.fit.measure", { defaultValue: "Measure" })}</th><th scope="col">{t("distribution.report.value")}</th></tr></thead>
           <tbody>
-            {metrics.map(([metricId, value]) => (
+            {measures.map(([metricId, value]) => (
               <tr key={metricId}>
                 <th scope="row">{t(`distribution.fit.metrics.${metricId}`, { defaultValue: metricId })}</th>
                 <td>{formatValue(value)}</td>
@@ -94,6 +129,13 @@ export function ContinuousFitReport({ data }: { data: DistributionFitDataV1 }) {
           </tbody>
         </table>
       </div>
+      {data.distributionId === "lognormal" && (
+        <p className="distribution-fit-parameter-note">
+          {t("distribution.fit.lognormalNaturalLogNote", {
+            defaultValue: "Parameters use the natural logarithm of the response.",
+          })}
+        </p>
+      )}
       <p className="distribution-fit-convergence">
         {t("distribution.fit.convergence", { defaultValue: "Convergence" })}: {t(`distribution.fit.states.${data.convergence.status}`, { defaultValue: data.convergence.status })}
         {data.convergence.reasonCode ? ` (${formatReason(t, data.convergence.reasonCode)})` : ""}
