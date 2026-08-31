@@ -877,11 +877,13 @@ pub struct ProcessCapabilityIntervalProvenanceV1 {
     pub parameterization: String,
     pub inverse_cdf_algorithm_id: String,
     pub method_version: String,
+    pub within_effective_degrees_of_freedom: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessCapabilityIntervalsV1 {
+    pub confidence_level: f64,
     pub cp: ProcessCapabilityIntervalV1,
     pub cpk: ProcessCapabilityIntervalV1,
     pub cpl: ProcessCapabilityIntervalV1,

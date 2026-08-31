@@ -16,8 +16,10 @@ assert.match(
 );
 assert.match(
   source,
-  /<DistributionOverviewChart[\s\S]*valueAxisName=\{result\.yName\}[\s\S]*densityAxisName=\{t\("distribution\.report\.probabilityDensity"\)\}/,
+  /<DistributionOverviewChart[^>]*valueAxisName=\{result\.yName\}[^>]*specificationLines=\{overviewSpecificationLines\}/,
 );
+assert.doesNotMatch(source, /<DistributionOverviewChart[^>]*densityAxisName=/);
+assert.doesNotMatch(source, /<DistributionOverviewChart[^>]*fitCurves=/);
 assert.doesNotMatch(source, /histogramScale=\{visible\.histogramScale\}/);
 assert.match(
   workspaceSource,

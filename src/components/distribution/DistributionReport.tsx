@@ -12,7 +12,11 @@ import type {
 } from "@/types/distribution";
 import { DISTRIBUTION_FIT_CAPABILITY_REGISTRY } from "./distributionConfig";
 
-import { DistributionChart, DistributionOverviewChart } from "./DistributionChart";
+import {
+  DistributionChart,
+  DistributionFitDensityChart,
+  DistributionOverviewChart,
+} from "./DistributionChart";
 import { ContinuousFitComparisonReport, ContinuousFitReport } from "./ContinuousFitReport";
 import { ProcessCapabilityReport } from "./ProcessCapabilityReport";
 import { StemAndLeafReport } from "./StemAndLeafReport";
@@ -224,17 +228,14 @@ function YSection({
   const boxPlotBlock = result.blocks.find((block) => block.chartData?.kind === "boxPlotData");
   const summaryBlock = result.blocks.find((block) => block.kind === "summary" && !!block.summaryData);
   const capabilityBlock = result.blocks.find((block) => block.kind === "processCapability");
-  const fitCurves = result.blocks
-    .flatMap((block) => block.distributionFitData ? [block.distributionFitData] : [])
-    .filter((fit) => fit.status === "available" && !!fit.fittedCurve)
-    .map((fit) => ({
-      fitId: fit.fitId,
-      distributionId: fit.distributionId,
-      points: fit.fittedCurve?.points ?? [],
-    }))
-    .filter(() => visible.fitOverlays !== false);
   const histogram = histogramBlock?.chartData?.kind === "histogramData" ? histogramBlock.chartData : null;
   const boxPlot = boxPlotBlock?.chartData?.kind === "boxPlotData" ? boxPlotBlock.chartData : null;
+  const fitCurves = result.blocks.flatMap((block) => {
+    const fit = block.distributionFitData;
+    return fit?.status === "available" && fit.fittedCurve && fit.fittedCurve.points.length > 0
+      ? [{ distributionId: fit.distributionId, points: fit.fittedCurve.points }]
+      : [];
+  });
   const hasNormalQuantile = result.blocks.some((block) => block.chartData?.kind === "normalQuantileData");
   const hasQuantileBox = result.blocks.some((block) => block.chartData?.kind === "quantileBoxData");
   const hasStemAndLeaf = result.blocks.some((block) => !!block.stemAndLeafData);
@@ -570,9 +571,7 @@ function YSection({
                 boxPlot={boxPlot}
                 title={t("distribution.report.overview")}
                 valueAxisName={result.yName}
-                densityAxisName={t("distribution.report.probabilityDensity")}
                 specificationLines={overviewSpecificationLines}
-                fitCurves={fitCurves}
               />
             </section>
           )}
@@ -583,13 +582,22 @@ function YSection({
                 boxPlot={null}
                 title={t("distribution.report.overview")}
                 valueAxisName={result.yName}
-                densityAxisName={t("distribution.report.probabilityDensity")}
                 specificationLines={overviewSpecificationLines}
-                fitCurves={fitCurves}
               />
             </section>
           )}
           {showBoxOnly && boxPlotBlock && <ReportBlock block={boxPlotBlock} />}
+          {histogram && fitCurves.length > 0 && visible.fitOverlays !== false && (
+            <section className="distribution-report-block">
+              <DistributionFitDensityChart
+                histogram={histogram}
+                curves={fitCurves}
+                title={t("distribution.report.fitDensity")}
+                valueAxisName={result.yName}
+                densityAxisName={t("distribution.report.probabilityDensity")}
+              />
+            </section>
+          )}
           {(visible.quantiles || visible.summary) && (hasQuantiles || hasSummary) && (
             <section className={tablePairClassName}>
               {visible.quantiles && hasQuantiles && (

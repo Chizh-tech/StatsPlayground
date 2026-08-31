@@ -1405,6 +1405,7 @@ fn map_capability_interval(value: CapabilityIntervalV1) -> ProcessCapabilityInte
 
 fn map_capability_intervals(value: NormalCapabilityIntervalsV1) -> ProcessCapabilityIntervalsV1 {
     ProcessCapabilityIntervalsV1 {
+        confidence_level: value.confidence_level,
         cp: map_capability_interval(value.cp),
         cpk: map_capability_interval(value.cpk),
         cpl: map_capability_interval(value.cpl),
@@ -1421,6 +1422,9 @@ fn map_capability_intervals(value: NormalCapabilityIntervalsV1) -> ProcessCapabi
             parameterization: value.provenance.parameterization,
             inverse_cdf_algorithm_id: value.provenance.inverse_cdf_algorithm_id,
             method_version: value.provenance.method_version,
+            within_effective_degrees_of_freedom: value
+                .provenance
+                .within_effective_degrees_of_freedom,
         },
     }
 }
@@ -2747,6 +2751,12 @@ mod tests {
         assert_eq!(capability_data.specification.usl, Some(6.0));
         assert_eq!(capability_data.process_summary.n, 5);
         assert_eq!(capability_data.indices.cp.state, "available");
+        assert_eq!(capability_data.intervals.confidence_level, 0.95);
+        assert!(capability_data
+            .intervals
+            .provenance
+            .within_effective_degrees_of_freedom
+            .is_some());
         assert!(result
             .report_blocks
             .iter()

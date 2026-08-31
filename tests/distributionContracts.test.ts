@@ -10,6 +10,7 @@ import type {
   DistributionFitComparisonDataV1,
   DistributionFitDataV1,
   DistributionWorkspaceBootstrapV1,
+  ProcessCapabilityDataV1,
 } from "../src/types/distribution.ts";
 import {
   DISTRIBUTION_FIT_CAPABILITY_REGISTRY,
@@ -43,6 +44,27 @@ const chartData: DistributionChartDataV1 = {
   bins: [{ lower: 0, upper: 1, count: 3, probability: 1, density: 1 }],
 };
 assert.equal("observations" in chartData, false);
+
+type CapabilityIntervalsContract = ProcessCapabilityDataV1["intervals"];
+type Assert<T extends true> = T;
+type ConfidenceLevelIsRequiredNumber = Assert<
+  CapabilityIntervalsContract["confidenceLevel"] extends number
+    ? undefined extends CapabilityIntervalsContract["confidenceLevel"]
+      ? false
+      : true
+    : false
+>;
+type WithinEffectiveDfIsNullableNumber = Assert<
+  CapabilityIntervalsContract["provenance"]["withinEffectiveDegreesOfFreedom"] extends number | null
+    ? null extends CapabilityIntervalsContract["provenance"]["withinEffectiveDegreesOfFreedom"]
+      ? true
+      : false
+    : false
+>;
+const confidenceLevelContract: ConfidenceLevelIsRequiredNumber = true;
+const withinEffectiveDfContract: WithinEffectiveDfIsNullableNumber = true;
+assert.equal(confidenceLevelContract, true);
+assert.equal(withinEffectiveDfContract, true);
 
 const continuousFit: DistributionContinuousFitConfigV1 = {
   enabledDistributionIds: ["normal", "gamma"],

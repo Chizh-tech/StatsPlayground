@@ -94,11 +94,13 @@ pub struct CapabilityIntervalProvenanceV1 {
     pub parameterization: String,
     pub inverse_cdf_algorithm_id: String,
     pub method_version: String,
+    pub within_effective_degrees_of_freedom: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NormalCapabilityIntervalsV1 {
+    pub confidence_level: f64,
     pub cp: CapabilityIntervalV1,
     pub cpk: CapabilityIntervalV1,
     pub cpl: CapabilityIntervalV1,
@@ -373,6 +375,276 @@ fn compensated_sum(values: impl IntoIterator<Item = f64>) -> f64 {
 mod tests {
     use super::*;
     use crate::error::AppError;
+    use sha2::{Digest, Sha256};
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MovingRangeCapabilityFixtureV1 {
+        schema_version: String,
+        case_id: String,
+        observations: Vec<f64>,
+        specification: SpecificationLimitsV1,
+        expected_summary: MovingRangeExpectedSummaryV1,
+        public_method_expected: MovingRangeExpectedIntervalsV1,
+        jmp19_observed_rounded: MovingRangeExpectedIntervalsV1,
+        compatibility_status: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MovingRangeExpectedSummaryV1 {
+        n: u64,
+        mean: f64,
+        moving_range_average: f64,
+        within_sigma: f64,
+        overall_sigma: f64,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MovingRangeExpectedIntervalsV1 {
+        within_effective_degrees_of_freedom: Option<f64>,
+        cpl_lower: f64,
+        cpl_upper: f64,
+        cpu_lower: f64,
+        cpu_upper: f64,
+    }
+
+    #[test]
+    fn moving_range_fixture_loads_in_source_row_order() {
+        let fixture: MovingRangeCapabilityFixtureV1 = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/fixtures/distribution/process-capability-moving-range-v1.json"
+        )))
+        .expect("moving range fixture should deserialize");
+
+        assert_eq!(fixture.schema_version, "1");
+        assert_eq!(fixture.case_id, "missingRegion.salesAmount.n51");
+        assert_eq!(fixture.observations.len(), 51);
+        assert_eq!(fixture.observations.first().copied(), Some(318.29));
+        let canonical_observations =
+            serde_json::to_vec(&fixture.observations).expect("observations should serialize");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_observations)),
+            "a187a58ebfc96ab515dbf2077611641e033b95d20c3b6d45868a4e8cb168666a"
+        );
+
+        let summary = normal_process_summary(&fixture.observations);
+        assert_eq!(summary.n, fixture.expected_summary.n);
+        assert_close(summary.mean, fixture.expected_summary.mean);
+        assert_close(
+            summary.moving_range_average.expect("moving range average"),
+            fixture.expected_summary.moving_range_average,
+        );
+        assert_close(
+            summary.within_sigma.expect("within sigma"),
+            fixture.expected_summary.within_sigma,
+        );
+        assert_close(
+            summary.overall_sigma.expect("overall sigma"),
+            fixture.expected_summary.overall_sigma,
+        );
+
+        let indices = capability_indices(&summary, &fixture.specification);
+        assert_close(
+            indices.cpl.value.expect("Cpl point estimate"),
+            -0.264393149632642,
+        );
+        assert_close(
+            indices.cpu.value.expect("Cpu point estimate"),
+            1.37464479402943,
+        );
+        assert_eq!(fixture.compatibility_status, "compatibilityPending");
+        assert!(fixture
+            .public_method_expected
+            .within_effective_degrees_of_freedom
+            .is_some());
+        assert!(fixture
+            .jmp19_observed_rounded
+            .within_effective_degrees_of_freedom
+            .is_none());
+        assert_ne!(
+            fixture.public_method_expected.cpl_lower,
+            fixture.jmp19_observed_rounded.cpl_lower
+        );
+        assert_ne!(
+            fixture.public_method_expected.cpl_upper,
+            fixture.jmp19_observed_rounded.cpl_upper
+        );
+        assert_ne!(
+            fixture.public_method_expected.cpu_lower,
+            fixture.jmp19_observed_rounded.cpu_lower
+        );
+        assert_ne!(
+            fixture.public_method_expected.cpu_upper,
+            fixture.jmp19_observed_rounded.cpu_upper
+        );
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        let tolerance = 1e-10_f64.max(expected.abs() * 1e-9);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    fn load_moving_range_fixture() -> MovingRangeCapabilityFixtureV1 {
+        serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/fixtures/distribution/process-capability-moving-range-v1.json"
+        )))
+        .expect("moving range fixture should deserialize")
+    }
+
+    #[test]
+    fn moving_range_effective_df_drives_within_cp_interval() {
+        let summary = NormalProcessSummaryV1 {
+            n: 51,
+            mean: 5.0,
+            moving_range_average: Some(2.0 / std::f64::consts::PI.sqrt()),
+            d2: 2.0 / std::f64::consts::PI.sqrt(),
+            within_sigma: Some(1.0),
+            overall_sigma: Some(1.0),
+        };
+        let limits = SpecificationLimitsV1 {
+            lsl: Some(0.0),
+            target: Some(5.0),
+            usl: Some(10.0),
+            source: SpecificationSourceV1::AnalysisOverride,
+        };
+        let indices = capability_indices(&summary, &limits);
+        let intervals = capability_intervals(&summary, &indices, 0.95);
+
+        assert_eq!(intervals.confidence_level, 0.95);
+        assert_close(
+            intervals
+                .provenance
+                .within_effective_degrees_of_freedom
+                .expect("Within effective degrees of freedom"),
+            30.43832706934947,
+        );
+
+        let moving_range_count = (summary.n - 1) as f64;
+        let d2 = 2.0 / std::f64::consts::PI.sqrt();
+        let variance = 2.0 * (1.0 - 2.0 / std::f64::consts::PI);
+        let adjacent_covariance = 1.0 / 3.0 + (2.0 * 3.0_f64.sqrt() - 4.0) / std::f64::consts::PI;
+        let relative_variance = (moving_range_count * variance
+            + 2.0 * (moving_range_count - 1.0) * adjacent_covariance)
+            / (moving_range_count * moving_range_count * d2 * d2);
+        let effective_df = 1.0 / (2.0 * relative_variance);
+        assert_close(effective_df, 30.43832706934947);
+
+        let chi = ChiSquared::new(effective_df).expect("positive effective DF");
+        let cp = indices.cp.value.expect("Cp point estimate");
+        assert_close(
+            intervals.cp.lower.value.expect("Cp lower"),
+            cp * (chi.inverse_cdf(0.025) / effective_df).sqrt(),
+        );
+        assert_close(
+            intervals.cp.upper.value.expect("Cp upper"),
+            cp * (chi.inverse_cdf(0.975) / effective_df).sqrt(),
+        );
+        assert_eq!(
+            intervals.cp.interval_method.as_deref(),
+            Some("movingRangeEffectiveDfChiSquare.v1")
+        );
+    }
+
+    #[test]
+    fn capability_intervals_serialize_camel_case_fields() {
+        let fixture = load_moving_range_fixture();
+        let summary = normal_process_summary(&fixture.observations);
+        let indices = capability_indices(&summary, &fixture.specification);
+        let serialized = serde_json::to_value(capability_intervals(&summary, &indices, 0.95))
+            .expect("capability intervals should serialize");
+
+        assert_eq!(serialized["confidenceLevel"], 0.95);
+        assert!(serialized.get("confidence_level").is_none());
+        assert!(serialized["provenance"]
+            .get("withinEffectiveDegreesOfFreedom")
+            .is_some());
+        assert!(serialized["provenance"]
+            .get("within_effective_degrees_of_freedom")
+            .is_none());
+        assert!(serialized["cpl"]["lower"].is_object());
+        assert!(serialized["cpl"]["upper"].is_object());
+    }
+
+    #[test]
+    fn moving_range_fixture_uses_public_n51_intervals_and_preserves_overall() {
+        let fixture = load_moving_range_fixture();
+        let summary = normal_process_summary(&fixture.observations);
+        let indices = capability_indices(&summary, &fixture.specification);
+        let intervals = capability_intervals(&summary, &indices, 0.95);
+        let expected = fixture.public_method_expected;
+
+        assert_close(
+            intervals.cpl.lower.value.expect("Cpl lower"),
+            expected.cpl_lower,
+        );
+        assert_close(
+            intervals.cpl.upper.value.expect("Cpl upper"),
+            expected.cpl_upper,
+        );
+        assert_close(
+            intervals.cpu.lower.value.expect("Cpu lower"),
+            expected.cpu_lower,
+        );
+        assert_close(
+            intervals.cpu.upper.value.expect("Cpu upper"),
+            expected.cpu_upper,
+        );
+        assert_eq!(
+            intervals.cpl.interval_method.as_deref(),
+            Some("movingRangeEffectiveDfWald.v1")
+        );
+        assert_eq!(
+            intervals.cpu.interval_method.as_deref(),
+            Some("movingRangeEffectiveDfWald.v1")
+        );
+        assert_eq!(
+            intervals.cpk.interval_method.as_deref(),
+            Some("movingRangeEffectiveDfWald.v1")
+        );
+
+        let overall_df = (summary.n - 1) as f64;
+        let chi = ChiSquared::new(overall_df).expect("positive overall DF");
+        let pp = indices.pp.value.expect("Pp point estimate");
+        assert_close(
+            intervals.pp.lower.value.expect("Pp lower"),
+            pp * (chi.inverse_cdf(0.025) / overall_df).sqrt(),
+        );
+        assert_close(
+            intervals.pp.upper.value.expect("Pp upper"),
+            pp * (chi.inverse_cdf(0.975) / overall_df).sqrt(),
+        );
+
+        let normal = Normal::new(0.0, 1.0).expect("standard normal");
+        let z = normal.inverse_cdf(0.975);
+        for (point, interval) in [
+            (&indices.ppl, &intervals.ppl),
+            (&indices.ppu, &intervals.ppu),
+        ] {
+            let value = point.value.expect("overall side point estimate");
+            let standard_error =
+                (1.0 / (9.0 * summary.n as f64) + value * value / (2.0 * overall_df)).sqrt();
+            assert_close(
+                interval.lower.value.expect("overall side lower"),
+                value - z * standard_error,
+            );
+            assert_close(
+                interval.upper.value.expect("overall side upper"),
+                value + z * standard_error,
+            );
+            assert_eq!(interval.interval_method.as_deref(), Some("wald.v1"));
+        }
+        assert_eq!(
+            intervals.pp.interval_method.as_deref(),
+            Some("chiSquare.v1")
+        );
+        assert_eq!(intervals.ppk.interval_method.as_deref(), Some("wald.v1"));
+    }
 
     #[test]
     fn resolves_column_specs_and_target_only_is_absent() {
@@ -521,7 +793,7 @@ mod tests {
     }
 
     #[test]
-    fn intervals_are_unavailable_when_sample_is_too_small() {
+    fn moving_range_effective_df_intervals_are_unavailable_when_sample_is_too_small() {
         let summary = NormalProcessSummaryV1 {
             n: 2,
             mean: 5.0,
@@ -538,11 +810,36 @@ mod tests {
         };
         let indices = capability_indices(&summary, &limits);
         let intervals = capability_intervals(&summary, &indices, 0.95);
+        assert_eq!(intervals.confidence_level, 0.95);
+        assert_eq!(
+            intervals.provenance.within_effective_degrees_of_freedom,
+            None
+        );
         assert_eq!(intervals.cp.lower.state, NumericStateV1::Unavailable);
         assert_eq!(
             intervals.cp.lower.reason_code.as_deref(),
             Some("capability.intervalSampleTooSmall.v1")
         );
+        assert_eq!(
+            intervals.cp.interval_method.as_deref(),
+            Some("movingRangeEffectiveDfChiSquare.v1")
+        );
+        for interval in [&intervals.cpl, &intervals.cpu, &intervals.cpk] {
+            assert_eq!(interval.lower.state, NumericStateV1::Unavailable);
+            assert_eq!(
+                interval.lower.reason_code.as_deref(),
+                Some("capability.intervalSampleTooSmall.v1")
+            );
+            assert_eq!(
+                interval.interval_method.as_deref(),
+                Some("movingRangeEffectiveDfWald.v1")
+            );
+        }
+        assert_eq!(
+            intervals.pp.interval_method.as_deref(),
+            Some("chiSquare.v1")
+        );
+        assert_eq!(intervals.ppl.interval_method.as_deref(), Some("wald.v1"));
     }
 
     #[test]
@@ -565,13 +862,16 @@ mod tests {
         let intervals = capability_intervals(&summary, &indices, 0.95);
         assert_eq!(
             intervals.cp.interval_method.as_deref(),
-            Some("chiSquareApproximation.v1")
+            Some("movingRangeEffectiveDfChiSquare.v1")
         );
         assert_eq!(
             intervals.pp.interval_method.as_deref(),
             Some("chiSquare.v1")
         );
-        assert_eq!(intervals.cpu.interval_method.as_deref(), Some("wald.v1"));
+        assert_eq!(
+            intervals.cpu.interval_method.as_deref(),
+            Some("movingRangeEffectiveDfWald.v1")
+        );
         assert_eq!(intervals.cpk.limiting_side.as_deref(), Some("both"));
         assert_eq!(
             intervals.cpm_within.lower.state,
@@ -791,33 +1091,38 @@ pub fn capability_intervals(
     let provenance = CapabilityIntervalProvenanceV1 {
         distribution_crate: "statrs".to_string(),
         distribution_crate_version: "0.18.0".to_string(),
-        parameterization: "chiSquared(df=n-1), standardNormal(0,1)".to_string(),
+        parameterization:
+            "withinMovingRangeEffectiveDf, overallChiSquared(df=n-1), standardNormal(0,1)"
+                .to_string(),
         inverse_cdf_algorithm_id: "statrs.inverseCdf.v1".to_string(),
-        method_version: "1.0.0".to_string(),
+        method_version: "1.1.0".to_string(),
+        within_effective_degrees_of_freedom: (summary.n >= 3)
+            .then(|| moving_range_effective_degrees_of_freedom(summary.n)),
     };
     let alpha = 1.0 - confidence_level;
-    let degrees_of_freedom = summary.n.saturating_sub(1) as f64;
+    let overall_degrees_of_freedom = summary.n.saturating_sub(1) as f64;
     if summary.n < 3 {
         return NormalCapabilityIntervalsV1 {
+            confidence_level,
             cp: unavailable_interval_from_point(
                 &indices.cp,
                 "capability.intervalSampleTooSmall.v1",
-                Some("chiSquareApproximation.v1"),
+                Some("movingRangeEffectiveDfChiSquare.v1"),
             ),
             cpk: unavailable_interval_from_point(
                 &indices.cpk,
                 "capability.intervalSampleTooSmall.v1",
-                Some("wald.v1"),
+                Some("movingRangeEffectiveDfWald.v1"),
             ),
             cpl: unavailable_interval_from_point(
                 &indices.cpl,
                 "capability.intervalSampleTooSmall.v1",
-                Some("wald.v1"),
+                Some("movingRangeEffectiveDfWald.v1"),
             ),
             cpu: unavailable_interval_from_point(
                 &indices.cpu,
                 "capability.intervalSampleTooSmall.v1",
-                Some("wald.v1"),
+                Some("movingRangeEffectiveDfWald.v1"),
             ),
             cpm_within: unavailable_interval_from_point(
                 &indices.cpm_within,
@@ -853,21 +1158,58 @@ pub fn capability_intervals(
         };
     }
 
+    let within_degrees_of_freedom = moving_range_effective_degrees_of_freedom(summary.n);
     let cp = chi_square_interval(
         &indices.cp,
-        degrees_of_freedom,
+        within_degrees_of_freedom,
         alpha,
-        "chiSquareApproximation.v1",
+        "movingRangeEffectiveDfChiSquare.v1",
     );
-    let pp = chi_square_interval(&indices.pp, degrees_of_freedom, alpha, "chiSquare.v1");
-    let cpl = wald_interval(&indices.cpl, summary.n, alpha);
-    let cpu = wald_interval(&indices.cpu, summary.n, alpha);
-    let ppl = wald_interval(&indices.ppl, summary.n, alpha);
-    let ppu = wald_interval(&indices.ppu, summary.n, alpha);
+    let pp = chi_square_interval(
+        &indices.pp,
+        overall_degrees_of_freedom,
+        alpha,
+        "chiSquare.v1",
+    );
+    let cpl = wald_interval(
+        &indices.cpl,
+        summary.n,
+        within_degrees_of_freedom,
+        alpha,
+        "movingRangeEffectiveDfWald.v1",
+    );
+    let cpu = wald_interval(
+        &indices.cpu,
+        summary.n,
+        within_degrees_of_freedom,
+        alpha,
+        "movingRangeEffectiveDfWald.v1",
+    );
+    let ppl = wald_interval(
+        &indices.ppl,
+        summary.n,
+        overall_degrees_of_freedom,
+        alpha,
+        "wald.v1",
+    );
+    let ppu = wald_interval(
+        &indices.ppu,
+        summary.n,
+        overall_degrees_of_freedom,
+        alpha,
+        "wald.v1",
+    );
 
     NormalCapabilityIntervalsV1 {
+        confidence_level,
         cp,
-        cpk: combine_performance_interval(&indices.cpl, &indices.cpu, &cpl, &cpu),
+        cpk: combine_performance_interval(
+            &indices.cpl,
+            &indices.cpu,
+            &cpl,
+            &cpu,
+            "movingRangeEffectiveDfWald.v1",
+        ),
         cpl,
         cpu,
         cpm_within: unavailable_interval_from_point(
@@ -876,7 +1218,7 @@ pub fn capability_intervals(
             None,
         ),
         pp,
-        ppk: combine_performance_interval(&indices.ppl, &indices.ppu, &ppl, &ppu),
+        ppk: combine_performance_interval(&indices.ppl, &indices.ppu, &ppl, &ppu, "wald.v1"),
         ppl,
         ppu,
         cpm_overall: unavailable_interval_from_point(
@@ -886,6 +1228,17 @@ pub fn capability_intervals(
         ),
         provenance,
     }
+}
+
+fn moving_range_effective_degrees_of_freedom(n: u64) -> f64 {
+    let moving_range_count = n.saturating_sub(1) as f64;
+    let d2 = 2.0 / std::f64::consts::PI.sqrt();
+    let variance = 2.0 * (1.0 - 2.0 / std::f64::consts::PI);
+    let adjacent_covariance = 1.0 / 3.0 + (2.0 * 3.0_f64.sqrt() - 4.0) / std::f64::consts::PI;
+    let relative_variance = (moving_range_count * variance
+        + 2.0 * (moving_range_count - 1.0) * adjacent_covariance)
+        / (moving_range_count * moving_range_count * d2 * d2);
+    1.0 / (2.0 * relative_variance)
 }
 
 pub fn nonconformance_metrics(
@@ -1323,12 +1676,18 @@ fn chi_square_interval(
     }
 }
 
-fn wald_interval(point: &TypedValueV1, n: u64, alpha: f64) -> CapabilityIntervalV1 {
+fn wald_interval(
+    point: &TypedValueV1,
+    n: u64,
+    degrees_of_freedom: f64,
+    alpha: f64,
+    method: &str,
+) -> CapabilityIntervalV1 {
     if point.state == NumericStateV1::NotApplicable {
         return CapabilityIntervalV1 {
             lower: not_applicable(),
             upper: not_applicable(),
-            interval_method: Some("wald.v1".to_string()),
+            interval_method: Some(method.to_string()),
             limiting_side: None,
             warnings: Vec::new(),
         };
@@ -1337,7 +1696,7 @@ fn wald_interval(point: &TypedValueV1, n: u64, alpha: f64) -> CapabilityInterval
         return CapabilityIntervalV1 {
             lower: unbounded(),
             upper: unbounded(),
-            interval_method: Some("wald.v1".to_string()),
+            interval_method: Some(method.to_string()),
             limiting_side: None,
             warnings: Vec::new(),
         };
@@ -1346,7 +1705,7 @@ fn wald_interval(point: &TypedValueV1, n: u64, alpha: f64) -> CapabilityInterval
         return unavailable_interval_from_point(
             point,
             "capability.intervalUnavailable.v1",
-            Some("wald.v1"),
+            Some(method),
         );
     };
     let standard_normal = match Normal::new(0.0, 1.0) {
@@ -1355,26 +1714,26 @@ fn wald_interval(point: &TypedValueV1, n: u64, alpha: f64) -> CapabilityInterval
             return unavailable_interval_from_point(
                 point,
                 "capability.intervalUnavailable.v1",
-                Some("wald.v1"),
+                Some(method),
             );
         }
     };
     let z = standard_normal.inverse_cdf(1.0 - alpha / 2.0);
     let sample = n as f64;
-    let standard_error = (1.0 / (9.0 * sample) + value * value / (2.0 * (sample - 1.0))).sqrt();
+    let standard_error = (1.0 / (9.0 * sample) + value * value / (2.0 * degrees_of_freedom)).sqrt();
     let lower = value - z * standard_error;
     let upper = value + z * standard_error;
     if !(lower.is_finite() && upper.is_finite()) {
         return unavailable_interval_from_point(
             point,
             "capability.intervalUnavailable.v1",
-            Some("wald.v1"),
+            Some(method),
         );
     }
     CapabilityIntervalV1 {
         lower: available(lower),
         upper: available(upper),
-        interval_method: Some("wald.v1".to_string()),
+        interval_method: Some(method.to_string()),
         limiting_side: None,
         warnings: Vec::new(),
     }
@@ -1385,6 +1744,7 @@ fn combine_performance_interval(
     upper_point: &TypedValueV1,
     lower_interval: &CapabilityIntervalV1,
     upper_interval: &CapabilityIntervalV1,
+    method: &str,
 ) -> CapabilityIntervalV1 {
     if lower_point.state == NumericStateV1::NotApplicable
         || upper_point.state == NumericStateV1::NotApplicable
@@ -1392,7 +1752,7 @@ fn combine_performance_interval(
         return CapabilityIntervalV1 {
             lower: not_applicable(),
             upper: not_applicable(),
-            interval_method: Some("wald.v1".to_string()),
+            interval_method: Some(method.to_string()),
             limiting_side: None,
             warnings: Vec::new(),
         };
@@ -1403,7 +1763,7 @@ fn combine_performance_interval(
         return CapabilityIntervalV1 {
             lower: unbounded(),
             upper: unbounded(),
-            interval_method: Some("wald.v1".to_string()),
+            interval_method: Some(method.to_string()),
             limiting_side: Some("both".to_string()),
             warnings: Vec::new(),
         };
@@ -1413,14 +1773,14 @@ fn combine_performance_interval(
         return unavailable_interval_from_point(
             lower_point,
             "capability.intervalUnavailable.v1",
-            Some("wald.v1"),
+            Some(method),
         );
     };
     let Some(upper_value) = upper_point.value else {
         return unavailable_interval_from_point(
             upper_point,
             "capability.intervalUnavailable.v1",
-            Some("wald.v1"),
+            Some(method),
         );
     };
 
@@ -1437,7 +1797,7 @@ fn combine_performance_interval(
                 return CapabilityIntervalV1 {
                     lower: available(intersection_lower),
                     upper: available(intersection_upper),
-                    interval_method: Some("wald.v1".to_string()),
+                    interval_method: Some(method.to_string()),
                     limiting_side: Some("both".to_string()),
                     warnings: Vec::new(),
                 };
@@ -1445,7 +1805,7 @@ fn combine_performance_interval(
             return CapabilityIntervalV1 {
                 lower: available(l1.min(l2)),
                 upper: available(u1.max(u2)),
-                interval_method: Some("wald.v1".to_string()),
+                interval_method: Some(method.to_string()),
                 limiting_side: Some("both".to_string()),
                 warnings: vec!["capability.equalSidesApproximation.v1".to_string()],
             };
@@ -1453,7 +1813,7 @@ fn combine_performance_interval(
         return unavailable_interval_from_point(
             lower_point,
             "capability.intervalUnavailable.v1",
-            Some("wald.v1"),
+            Some(method),
         );
     }
 

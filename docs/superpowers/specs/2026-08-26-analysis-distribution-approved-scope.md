@@ -1,7 +1,7 @@
 # Analyze Distribution 批准范围与验收台账
 
 **日期：** 2026-08-26
-**状态：** Platform Workflow、Continuous Descriptive 与 Normal Capability V1 已实现并通过自动门禁；正式 UI 验收待执行
+**状态：** Platform Workflow、Continuous Descriptive、Normal Capability V1 与 Optimization Handbook Phase A 已实现并通过自动门禁；正式 UI 验收待执行
 **范围批准人：** 产品负责人
 **关联跟踪：** GitHub Issue #49（仅作为需求跟踪入口；其图片和第三方素材不属于实现资料）
 **总体设计：** [2026-08-25-analysis-distribution-design.md](2026-08-25-analysis-distribution-design.md)
@@ -11,6 +11,7 @@
 - [Platform Workflow V1](2026-08-26-distribution-platform-workflow-v1.md) / [实施计划](../plans/2026-08-26-distribution-platform-workflow-v1.md)
 - [Continuous Descriptive Methods V1](2026-08-26-distribution-continuous-descriptive-methods-v1.md) / [实施计划](../plans/2026-08-26-distribution-continuous-descriptive-v1.md)
 - [Normal Process Capability V1](2026-08-26-distribution-normal-capability-method-v1.md) / [实施计划](../plans/2026-08-26-distribution-normal-capability-v1.md)
+- [Optimization Handbook Phase A](2026-08-31-distribution-phase-a-layout-capability-design.md) / [实施计划](../plans/2026-08-31-distribution-phase-a-layout-capability.md) / [验收记录](../artifacts/2026-08-31-distribution-phase-a-layout-capability-acceptance.md)
 
 ## 1. 文档权威与维护规则
 
@@ -151,6 +152,18 @@
 	- Quantile Box pending class 覆盖 `n1To20`、`ties`、`outlier`、`freq`、`weight`。
 	- Stem and Leaf pending class 覆盖 `positive`、`negative`、`zero`、`decimal`、`repeated`、`extremeScale`、`freq`、`weight`。
 - 当前仍缺 JMP 桌面黑盒 numeric breadth：上述 pending 仅为 machine marker 覆盖，不代表 bins/layers/stems 的数值兼容已冻结。
+
+### 4.6 Optimization Handbook Phase A
+
+| ID | 功能 | developmentStatus | automationStatus | uiAcceptance | 兼容状态与验收重点 |
+| --- | --- | --- | --- | --- | --- |
+| OPT-A-01 | Overview 横向 Count Histogram 与右侧 Tukey Box | implemented | passing | pending | 后端 bins 直接映射为 `[count, lower, upper]`；共享 value Y extent |
+| OPT-A-02 | 独立 Fit Density 图 | implemented | passing | pending | 后端 density/PDF coordinates；失败或空 curve 不渲染；颜色跨顺序/子集稳定 |
+| OPT-A-03 | 五类 report 统一外边界与响应式双栏 | implemented | passing | pending | `1440x900`、`1024x700`、`768x900` CT；外缘 `<=2px`、paired top `<=3px`、无横向 overflow |
+| OPT-A-04 | Moving Range effective-DF Within interval | implemented | passing | pending | 公开近似已实现；JMP 19 exact interval 仍为 `compatibilityPending` |
+| OPT-A-05 | 参数化 confidence headings 与 camelCase interval contract | implemented | passing | pending | `Lower/Upper 95%`、`90%`；旧 `Lower/Upper CI` 缺席；Rust serde 已锁定 |
+
+Phase A 自动门禁和 Tauri process/render smoke 不构成产品 UI 验收。51-row missing-region 真实场景、规格线与 scrollbar、wide/narrow report 对齐仍需产品负责人在桌面应用中签字；在此之前所有 `uiAcceptance` 保持 `pending`。Phase B-E 未进入本次实现。
 
 ## 5. 暂缓功能清单
 

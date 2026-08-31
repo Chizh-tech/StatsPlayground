@@ -208,6 +208,10 @@ function IndexTable({
   intervals: ProcessCapabilityDataV1["intervals"];
 }) {
   const { t } = useTranslation();
+  const confidencePercent = new Intl.NumberFormat(undefined, {
+    style: "percent",
+    maximumFractionDigits: 2,
+  }).format(intervals.confidenceLevel);
   return (
     <table>
       <caption>{title}</caption>
@@ -215,8 +219,8 @@ function IndexTable({
         <tr>
           <th scope="col">{t("distribution.capability.index")}</th>
           <th scope="col">{t("distribution.capability.estimate")}</th>
-          <th scope="col">{t("distribution.capability.lowerCi")}</th>
-          <th scope="col">{t("distribution.capability.upperCi")}</th>
+          <th scope="col">{t("distribution.capability.lowerConfidence", { confidencePercent })}</th>
+          <th scope="col">{t("distribution.capability.upperConfidence", { confidencePercent })}</th>
         </tr>
       </thead>
       <tbody>
@@ -240,7 +244,8 @@ function intervalFor(
   label: string,
   intervals: ProcessCapabilityDataV1["intervals"],
 ): ProcessCapabilityIntervalV1 {
-  return intervals[label as keyof Omit<typeof intervals, "provenance">] as ProcessCapabilityIntervalV1;
+  type IntervalKey = Exclude<keyof typeof intervals, "confidenceLevel" | "provenance">;
+  return intervals[label as IntervalKey];
 }
 
 function NonconformanceTable({ data }: { data: ProcessCapabilityDataV1["nonconformance"] }) {

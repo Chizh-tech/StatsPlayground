@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/experimental-ct-react";
 
 import {
   DistributionChart,
+  DistributionFitDensityChart,
   DistributionOverviewChart,
   ProcessCapabilityChart,
 } from "../../src/components/distribution";
@@ -147,6 +148,7 @@ test("renders a nonblank combined Overview", async ({ mount }) => {
     <DistributionOverviewChart histogram={histogram} boxPlot={boxPlot} title="Overview" />,
   );
   await expect(component).toHaveAttribute("data-chart-kind", "overview");
+  await expect(component).toHaveAttribute("data-axis-layout", "horizontal-count");
   const canvas = component.locator("canvas");
   await expect(canvas).toBeVisible();
   await expect.poll(async () => canvas.evaluate((element) => {
@@ -161,7 +163,7 @@ test("renders a nonblank combined Overview", async ({ mount }) => {
   })).toBeGreaterThan(100);
 });
 
-test("renders a nonblank combined Overview with density scale", async ({ mount }) => {
+test("renders a nonblank horizontal Count Overview with an empty bin", async ({ mount }) => {
   const histogram = charts[0].chart;
   const boxPlot = charts[1].chart;
   if (histogram.kind !== "histogramData" || boxPlot.kind !== "boxPlotData") {
@@ -169,18 +171,20 @@ test("renders a nonblank combined Overview with density scale", async ({ mount }
   }
   const component = await mount(
     <DistributionOverviewChart
-      histogram={histogram}
+      histogram={{
+        ...histogram,
+        bins: [
+          ...histogram.bins,
+          { lower: 2, upper: 3, count: 0, probability: 0, density: 0 },
+        ],
+      }}
       boxPlot={boxPlot}
-      title="Overview Density"
+      title="Overview Count"
       valueAxisName="sales_amount"
-      densityAxisName="Probability Density"
-      fitCurves={[
-        { fitId: "fit-normal", distributionId: "normal", points: [{ x: 0, y: 0.1 }, { x: 2, y: 0.5 }] },
-        { fitId: "fit-gamma", distributionId: "gamma", points: [{ x: 0, y: 0 }, { x: 2, y: 0.4 }] },
-      ]}
     />,
   );
   await expect(component).toHaveAttribute("data-chart-kind", "overview");
+  await expect(component).toHaveAttribute("data-axis-layout", "horizontal-count");
   const canvas = component.locator("canvas");
   await expect(canvas).toBeVisible();
   await expect.poll(async () => canvas.evaluate((element) => {
@@ -191,6 +195,32 @@ test("renders a nonblank combined Overview with density scale", async ({ mount }
     for (let index = 3; index < pixels.length; index += 4) {
       if (pixels[index] > 0) visible += 1;
     }
+    return visible;
+  })).toBeGreaterThan(100);
+});
+
+test("renders a nonblank Fit Density canvas with two backend curves", async ({ mount }) => {
+  const histogram = charts[0].chart;
+  if (histogram.kind !== "histogramData") throw new Error("invalid Fit Density fixture");
+  const component = await mount(<DistributionFitDensityChart
+    histogram={histogram}
+    curves={[
+      { distributionId: "gamma", points: [{ x: 0, y: 0.12 }, { x: 2, y: 0.2 }] },
+      { distributionId: "normal", points: [{ x: 0, y: 0.18 }, { x: 2, y: 0.15 }] },
+    ]}
+    title="Fit Density"
+    valueAxisName="sales_amount"
+    densityAxisName="Probability Density"
+  />);
+  await expect(component).toHaveAttribute("data-chart-kind", "fit-density");
+  const canvas = component.locator("canvas");
+  await expect(canvas).toBeVisible();
+  await expect.poll(async () => canvas.evaluate((element) => {
+    const context = (element as HTMLCanvasElement).getContext("2d");
+    if (!context) return 0;
+    const pixels = context.getImageData(0, 0, element.width, element.height).data;
+    let visible = 0;
+    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] > 0) visible += 1;
     return visible;
   })).toBeGreaterThan(100);
 });

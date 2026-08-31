@@ -176,10 +176,16 @@
 }
 
 .distribution-y-content {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 0 0 12px 42px;
 }
 
 .distribution-report-block {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 12px 0;
   border-bottom: 1px solid var(--border-color);
 }
@@ -191,7 +197,9 @@
 }
 
 .distribution-quantile-table {
-  width: min(360px, 100%);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   border: 1px solid var(--border-color, #c4c9d3);
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
@@ -453,6 +461,9 @@
 }
 
 .distribution-table-pair {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: start;
@@ -465,6 +476,8 @@
 
 .distribution-summary-table {
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   border: 1px solid var(--border-color, #c4c9d3);
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
@@ -495,11 +508,13 @@
 .distribution-fit-tables {
   display: grid;
   grid-template-columns: repeat(2, minmax(220px, 1fr));
-  gap: 16px;
+  gap: 18px;
 }
 
 .distribution-fit-table {
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   border-width: 1px;
   border-style: solid;
   border-color: var(--border-main, #c4c9d3);
@@ -535,7 +550,7 @@
   font-size: 12px;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 900px) {
   .distribution-fit-tables {
     grid-template-columns: 1fr;
   }
@@ -595,6 +610,8 @@
 
 .distribution-chart {
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   height: 260px;
   min-height: 260px;
 }
@@ -610,12 +627,21 @@
 .distribution-capability-indices {
   display: grid;
   grid-template-columns: repeat(2, minmax(220px, 1fr));
-  gap: 16px;
+  gap: 18px;
   margin-top: 10px;
+}
+
+.distribution-capability-report,
+.distribution-fit-report {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .distribution-capability-report table {
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   border: 1px solid var(--border-color, #c4c9d3);
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
@@ -643,7 +669,7 @@
   color: var(--text-secondary);
 }
 
-@media (max-width: 700px) {
+@media (max-width: 900px) {
   .distribution-capability-summary,
   .distribution-capability-indices {
     grid-template-columns: 1fr;

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import {
   buildDistributionChartOption,
+  buildDistributionFitDensityOption,
   buildDistributionOverviewOption,
   buildProcessCapabilityChartOption,
   formatDistributionAxisLabel,
@@ -161,43 +162,50 @@ assert.deepEqual(quantileBoxOption.series[0].data, [
 assert.equal(quantileBoxOption.series[1].type, "line");
 
 const overviewOption = buildDistributionOverviewOption(histogram, box, "Overview") as {
-  xAxis: Array<{ type: string; min?: number; max?: number }>;
-  yAxis: Array<{ type: string; min?: number; max?: number }>;
+  xAxis: Array<{ type: string; min?: number; max?: number; name?: string }>;
+  yAxis: Array<{ type: string; min?: number; max?: number; name?: string }>;
   series: Array<{ data: unknown[] }>;
 };
 assert.equal(overviewOption.xAxis[0].type, "value");
-assert.equal(overviewOption.xAxis[0].min, 0.125);
-assert.equal(overviewOption.xAxis[0].max, 9);
-assert.equal(overviewOption.xAxis[1].min, overviewOption.xAxis[0].min);
-assert.equal(overviewOption.xAxis[1].max, overviewOption.xAxis[0].max);
+assert.equal(overviewOption.xAxis[0].min, 0);
+assert.equal(overviewOption.xAxis[0].max, 7.5);
+assert.equal(overviewOption.xAxis[0].name, "Count");
+assert.equal(overviewOption.xAxis[1].type, "category");
 assert.equal(overviewOption.yAxis[0].type, "value");
-assert.equal(overviewOption.yAxis[0].min, 0);
-assert.equal(overviewOption.yAxis[0].max, 4);
-assert.equal(overviewOption.yAxis[1].type, "category");
-assert.deepEqual(overviewOption.series[0].data, [[0.125, 4]]);
+assert.equal(overviewOption.yAxis[0].min, 0.125);
+assert.equal(overviewOption.yAxis[0].max, 9);
+assert.equal(overviewOption.yAxis[0].name, "Value");
+assert.equal(overviewOption.yAxis[1].min, overviewOption.yAxis[0].min);
+assert.equal(overviewOption.yAxis[1].max, overviewOption.yAxis[0].max);
+assert.deepEqual(overviewOption.series[0].data, [[7.5, 0.125, 0.375]]);
 assert.deepEqual(overviewOption.series[1].data, [[1, 2, 3, 4, 5]]);
 
-const densityOnlyOverview = buildDistributionOverviewOption(
+const histogramOnlyOverview = buildDistributionOverviewOption(
   histogram,
   null,
   "Overview",
   { lsl: 0, target: 0.25, usl: 0.5, source: "columnProperty" },
   "sales_amount",
-  "Probability Density",
 ) as {
-  xAxis: Array<{ max?: number; name?: string }>;
-  yAxis: Array<{ max?: number; name?: string }>;
-  series: Array<{ data: unknown[]; markLine?: { data?: Array<{ xAxis?: number }> } }>;
+  xAxis: Array<{ min?: number; max?: number; name?: string }>;
+  yAxis: Array<{ min?: number; max?: number; name?: string }>;
+  series: Array<{
+    data: unknown[];
+    markLine?: { label?: { show?: boolean }; data?: Array<{ yAxis?: number }> };
+  }>;
 };
-assert.equal(densityOnlyOverview.xAxis[0].max, 0.5);
-assert.equal(densityOnlyOverview.xAxis[0].name, "sales_amount");
-assert.equal(densityOnlyOverview.yAxis[0].max, 4);
-assert.equal(densityOnlyOverview.yAxis[0].name, "Probability Density");
-assert.deepEqual(densityOnlyOverview.series[0].data, [[0.125, 4]]);
+assert.equal(histogramOnlyOverview.xAxis[0].min, 0);
+assert.equal(histogramOnlyOverview.xAxis[0].max, 7.5);
+assert.equal(histogramOnlyOverview.xAxis[0].name, "Count");
+assert.equal(histogramOnlyOverview.yAxis[0].min, 0);
+assert.equal(histogramOnlyOverview.yAxis[0].max, 0.5);
+assert.equal(histogramOnlyOverview.yAxis[0].name, "sales_amount");
+assert.deepEqual(histogramOnlyOverview.series[0].data, [[7.5, 0.125, 0.375]]);
 assert.deepEqual(
-  densityOnlyOverview.series.find((series) => series.markLine)?.markLine?.data?.map((line) => line.xAxis),
+  histogramOnlyOverview.series.find((series) => series.markLine)?.markLine?.data?.map((line) => line.yAxis),
   [0, 0.25, 0.5],
 );
+assert.equal(histogramOnlyOverview.series.find((series) => series.markLine)?.markLine?.label?.show, true);
 
 const namedOverview = buildDistributionOverviewOption(
   histogram,
@@ -205,42 +213,104 @@ const namedOverview = buildDistributionOverviewOption(
   "Overview",
   undefined,
   "sales_amount",
-  "Probability Density",
 ) as {
   xAxis: Array<{ max?: number; name?: string }>;
   yAxis: Array<{ max?: number; name?: string }>;
   series: Array<{ data: unknown[] }>;
 };
-assert.equal(namedOverview.xAxis[1].name, "sales_amount");
-assert.equal(namedOverview.yAxis[0].name, "Probability Density");
-assert.deepEqual(namedOverview.series[0].data, [[0.125, 4]]);
+assert.equal(namedOverview.xAxis[0].name, "Count");
+assert.equal(namedOverview.yAxis[0].name, "sales_amount");
+assert.deepEqual(namedOverview.series[0].data, [[7.5, 0.125, 0.375]]);
 
-const overviewWithFitCurves = buildDistributionOverviewOption(
-  histogram,
-  box,
-  "Overview",
-  undefined,
+const fitDensityOption = buildDistributionFitDensityOption(
+  {
+    ...histogram,
+    bins: [
+      { lower: 0, upper: 1, count: 3, probability: 0.3, density: 0.15 },
+      { lower: 1, upper: 2, count: 7, probability: 0.7, density: 0.35 },
+    ],
+  },
+  [
+    {
+      distributionId: "gamma",
+      points: [{ x: 0.25, y: 0.11 }, { x: 1.75, y: 0.22 }],
+    },
+    {
+      distributionId: "normal",
+      points: [{ x: -0.5, y: 0.05 }, { x: 2.5, y: 0.18 }],
+    },
+  ],
+  "Fit Density",
   "sales_amount",
   "Probability Density",
-  [
-    { fitId: "fit-normal", distributionId: "normal", points: [{ x: -1, y: 2 }, { x: 10, y: 0.1 }] },
-    { fitId: "fit-gamma", distributionId: "gamma", points: [{ x: 0, y: 5 }, { x: 9, y: 0.2 }] },
-  ],
 ) as {
   legend: { data: string[] };
-  xAxis: Array<{ min?: number; max?: number }>;
-  yAxis: Array<{ max?: number }>;
-  series: Array<{ name?: string; type: string; data?: unknown[]; clip?: boolean; showSymbol?: boolean }>;
+  xAxis: { min?: number; max?: number; name?: string };
+  yAxis: { min?: number; max?: number; name?: string };
+  series: Array<{
+    name: string;
+    type: string;
+    data: number[][];
+    lineStyle?: { color?: string };
+  }>;
 };
-assert.deepEqual(overviewWithFitCurves.legend.data, ["Gamma", "Normal"]);
-assert.equal(overviewWithFitCurves.xAxis[0].min, -1);
-assert.equal(overviewWithFitCurves.xAxis[0].max, 10);
-assert.equal(overviewWithFitCurves.yAxis[0].max, 5);
-const fitSeries = overviewWithFitCurves.series.filter((series) => series.name === "Gamma" || series.name === "Normal");
-assert.deepEqual(fitSeries.map((series) => series.name), ["Gamma", "Normal"]);
-assert.deepEqual(fitSeries[0].data, [[0, 5], [9, 0.2]]);
-assert.deepEqual(fitSeries[1].data, [[-1, 2], [10, 0.1]]);
-assert.ok(fitSeries.every((series) => series.type === "line" && series.clip && series.showSymbol === false));
+assert.deepEqual(fitDensityOption.legend.data, ["normal", "gamma"]);
+assert.equal(fitDensityOption.xAxis.min, -0.5);
+assert.equal(fitDensityOption.xAxis.max, 2.5);
+assert.equal(fitDensityOption.xAxis.name, "sales_amount");
+assert.equal(fitDensityOption.yAxis.min, 0);
+assert.equal(fitDensityOption.yAxis.max, 0.35);
+assert.equal(fitDensityOption.yAxis.name, "Probability Density");
+assert.deepEqual(fitDensityOption.series[0].data, [[0, 1, 0.15], [1, 2, 0.35]]);
+assert.equal(fitDensityOption.series[1].name, "normal");
+assert.deepEqual(fitDensityOption.series[1].data, [[-0.5, 0.05], [2.5, 0.18]]);
+assert.equal(fitDensityOption.series[2].name, "gamma");
+assert.deepEqual(fitDensityOption.series[2].data, [[0.25, 0.11], [1.75, 0.22]]);
+assert.notEqual(fitDensityOption.series[1].lineStyle?.color, fitDensityOption.series[2].lineStyle?.color);
+assert.ok(Number.isFinite(fitDensityOption.xAxis.min));
+assert.ok(Number.isFinite(fitDensityOption.xAxis.max));
+assert.ok(Number.isFinite(fitDensityOption.yAxis.max));
+
+const normalOnlyFitDensity = buildDistributionFitDensityOption(
+  histogram,
+  [{ distributionId: "normal", points: [{ x: 0, y: 0.18 }, { x: 2, y: 0.15 }] }],
+  "Fit Density",
+) as { series: Array<{ name: string; type: string; data: number[][]; lineStyle?: { color?: string } }> };
+const reorderedFitDensity = buildDistributionFitDensityOption(
+  histogram,
+  [
+    { distributionId: "normal", points: [{ x: 0, y: 0.18 }, { x: 2, y: 0.15 }] },
+    { distributionId: "gamma", points: [{ x: 0, y: 0.12 }, { x: 2, y: 0.2 }] },
+  ],
+  "Fit Density",
+) as { series: Array<{ name: string; type: string; data: number[][]; lineStyle?: { color?: string } }> };
+assert.equal(
+  normalOnlyFitDensity.series.find((series) => series.name === "normal")?.lineStyle?.color,
+  reorderedFitDensity.series.find((series) => series.name === "normal")?.lineStyle?.color,
+);
+assert.equal(fitDensityOption.series[0].type, "custom");
+assert.equal(fitDensityOption.series[1].type, "line");
+assert.deepEqual(fitDensityOption.series[1].data, [[-0.5, 0.05], [2.5, 0.18]]);
+
+const zeroCountOverview = buildDistributionOverviewOption({
+  ...histogram,
+  bins: [{ lower: 0, upper: 1, count: 0, probability: 0, density: 0 }],
+}, null, "Overview") as {
+  series: Array<{
+    data: number[][];
+    renderItem?: (
+      params: { dataIndex: number },
+      api: { value: (index: number) => number; coord: (value: [number, number]) => [number, number] },
+    ) => { shape: { width: number } };
+  }>;
+};
+assert.deepEqual(zeroCountOverview.series[0].data, [[0, 0, 1]]);
+const zeroTuple = zeroCountOverview.series[0].data[0];
+const zeroShape = zeroCountOverview.series[0].renderItem?.(
+  { dataIndex: 0 },
+  { value: (index) => zeroTuple[index], coord: ([x, y]) => [x * 10, y * 10] },
+);
+assert.equal(zeroShape?.shape.width, 0);
 
 const pollutedOverviewOption = buildDistributionOverviewOption({
   kind: "histogramData",
@@ -281,17 +351,23 @@ const pollutedOverviewOption = buildDistributionOverviewOption({
   grid: Array<{ right?: number }>;
   xAxis: Array<{ min?: number; max?: number; axisLabel?: { show?: boolean } }>;
   yAxis: Array<{ min?: number; max?: number; axisLabel?: { show?: boolean } }>;
-  series: Array<{ type: string; data?: unknown[]; xAxisIndex?: number; yAxisIndex?: number; markLine?: { data?: Array<{ xAxis: number }> } }>;
+  series: Array<{
+    type: string;
+    data?: unknown[];
+    xAxisIndex?: number;
+    yAxisIndex?: number;
+    markLine?: { label?: { show?: boolean }; data?: Array<{ yAxis: number }> };
+  }>;
 };
 
-assert.ok((pollutedOverviewOption.xAxis[0].max ?? 0) >= 8554.68);
-assert.ok((pollutedOverviewOption.xAxis[1].max ?? 0) >= 8554.68);
-assert.notEqual(pollutedOverviewOption.xAxis[0].max, 17_445_714);
-assert.notEqual(pollutedOverviewOption.xAxis[1].max, 17_445_714);
-assert.equal(pollutedOverviewOption.yAxis[0].max, 0.008965711773901062);
+assert.equal(pollutedOverviewOption.xAxis[0].min, 0);
+assert.equal(pollutedOverviewOption.xAxis[0].max, 17_445_714);
+assert.ok((pollutedOverviewOption.yAxis[0].max ?? 0) >= 8554.68);
+assert.equal(pollutedOverviewOption.yAxis[1].min, pollutedOverviewOption.yAxis[0].min);
+assert.equal(pollutedOverviewOption.yAxis[1].max, pollutedOverviewOption.yAxis[0].max);
 assert.deepEqual(pollutedOverviewOption.series[0].data, [
-  [120, 0.008965711773901062],
-  [220, 0.0007387773043563848],
+  [17_445_714, 120, 220],
+  [2_012_345, 220, 360],
 ]);
 assert.ok((pollutedOverviewOption.grid[0].right ?? 0) >= 32);
 
@@ -299,9 +375,29 @@ const specCarrierSeries = pollutedOverviewOption.series.filter((series) =>
   series.type === "line" && series.markLine && Array.isArray(series.markLine.data)
 );
 assert.equal(specCarrierSeries.length, 2);
-for (const series of specCarrierSeries) {
-  assert.deepEqual(series.markLine?.data?.map((line) => line.xAxis), [0, 3000, 6000]);
-}
+assert.deepEqual(specCarrierSeries[0].markLine?.data?.map((line) => line.yAxis), [0, 3000, 6000]);
+assert.equal(specCarrierSeries[0].markLine?.label?.show, true);
+assert.deepEqual(specCarrierSeries[1].markLine?.data?.map((line) => line.yAxis), [0, 3000, 6000]);
+assert.equal(specCarrierSeries[1].markLine?.label?.show, false);
+assert.deepEqual(
+  pollutedOverviewOption.series.slice(1, 3).map((series) => [series.type, series.xAxisIndex, series.yAxisIndex]),
+  [["boxplot", 1, 1], ["scatter", 1, 1]],
+);
+
+const overviewHistogramSeries = pollutedOverviewOption.series[0] as typeof pollutedOverviewOption.series[number] & {
+  renderItem: (
+    params: { dataIndex: number },
+    api: { value: (index: number) => number; coord: (value: [number, number]) => [number, number] },
+  ) => { type: string; shape: { width: number; height: number } };
+};
+const overviewHistogramTuple = overviewHistogramSeries.data?.[0] as number[];
+const overviewHistogramShape = overviewHistogramSeries.renderItem(
+  { dataIndex: 0 },
+  { value: (index) => overviewHistogramTuple[index], coord: ([x, y]) => [x / 100_000, y] },
+);
+assert.equal(overviewHistogramShape.type, "rect");
+assert.ok(overviewHistogramShape.shape.width > 0);
+assert.ok(overviewHistogramShape.shape.height > 0);
 
 const noSpecOverview = buildDistributionOverviewOption(
   {

@@ -818,7 +818,8 @@ test("restores and writes report display preferences without rerunning", async (
   expect(updatedPreferences).toMatchObject({ ecdf: true, summary: false });
 });
 
-test("renders automatic Process Capability from column specifications", async ({ mount }) => {
+for (const [confidenceLevel, confidencePercent] of [[0.95, 95], [0.9, 90]] as const) {
+test(`renders automatic Process Capability with ${confidencePercent}% interval headers`, async ({ mount }) => {
   const capabilityValue = (value: number) => ({ state: "available" as const, value, reasonCode: null });
   const capabilityInterval = (lower: number, upper: number) => ({
     lower: capabilityValue(lower),
@@ -899,6 +900,7 @@ test("renders automatic Process Capability from column specifications", async ({
                   ppu: capabilityValue(1.128), cpmOverall: capabilityValue(0.202),
                 },
                 intervals: {
+                  confidenceLevel,
                   cp: capabilityInterval(0.4, 0.7), cpk: capabilityInterval(-0.4, -0.1),
                   cpl: capabilityInterval(-0.4, -0.1), cpu: capabilityInterval(1.0, 1.7),
                   cpmWithin: capabilityInterval(0.1, 0.3), pp: capabilityInterval(0.3, 0.6),
@@ -908,6 +910,7 @@ test("renders automatic Process Capability from column specifications", async ({
                     distributionCrate: "statrs", distributionCrateVersion: "0.18.0",
                     parameterization: "standardNormal(0,1)",
                     inverseCdfAlgorithmId: "statrs.inverseCdf.v1", methodVersion: "1.0.0",
+                    withinEffectiveDegreesOfFreedom: 30.43832706934947,
                   },
                 },
                 nonconformance: {
@@ -936,13 +939,17 @@ test("renders automatic Process Capability from column specifications", async ({
   await expect(component.getByText("Within Sigma Capability")).toBeVisible();
   await expect(component.getByText("Overall Sigma Capability")).toBeVisible();
   await expect(component.getByText("Nonconformance")).toBeVisible();
-  await expect(component.getByRole("columnheader", { name: "Lower CI" }).first()).toBeVisible();
+  await expect(component.getByRole("columnheader", { name: `Lower ${confidencePercent}%` }).first()).toBeVisible();
+  await expect(component.getByRole("columnheader", { name: `Upper ${confidencePercent}%` }).first()).toBeVisible();
+  await expect(component.getByRole("columnheader", { name: "Lower CI" })).toHaveCount(0);
+  await expect(component.getByRole("columnheader", { name: "Upper CI" })).toHaveCount(0);
   await component.getByRole("button", { name: "Process Capability options" }).click();
   await expect(component.getByRole("region", { name: "Process Capability options" })).toBeVisible();
   await component.getByRole("checkbox", { name: "Nonconformance" }).click();
   await expect(component.getByText("Nonconformance")).toHaveCount(0);
   await expect(component.getByText("1,000")).toBeVisible();
 });
+}
 
 test("groups Y menu options and closes on Escape with focus restored", async ({ mount, page }) => {
   await page.setViewportSize({ width: 1024, height: 700 });
@@ -1173,6 +1180,7 @@ test("groups Y menu options and closes on Escape with focus restored", async ({ 
                     cpmOverall: { state: "available", value: 1, reasonCode: null },
                   },
                   intervals: {
+                    confidenceLevel: 0.95,
                     cp: { lower: { state: "available", value: 0.9, reasonCode: null }, upper: { state: "available", value: 1.1, reasonCode: null }, intervalMethod: "wald", limitingSide: null, warnings: [] },
                     cpk: { lower: { state: "available", value: 0.9, reasonCode: null }, upper: { state: "available", value: 1.1, reasonCode: null }, intervalMethod: "wald", limitingSide: null, warnings: [] },
                     cpl: { lower: { state: "available", value: 0.9, reasonCode: null }, upper: { state: "available", value: 1.1, reasonCode: null }, intervalMethod: "wald", limitingSide: null, warnings: [] },
@@ -1189,6 +1197,7 @@ test("groups Y menu options and closes on Escape with focus restored", async ({ 
                       parameterization: "standardNormal(0,1)",
                       inverseCdfAlgorithmId: "statrs.inverseCdf.v1",
                       methodVersion: "1.0.0",
+                      withinEffectiveDegreesOfFreedom: 2.5,
                     },
                   },
                   nonconformance: {
@@ -1521,6 +1530,67 @@ test("renders quantiles and summary in .distribution-table-pair with responsive 
   expect(Math.abs(quantilesVerticalBox.x - summaryVerticalBox.x)).toBeLessThan(3);
 });
 
+for (const viewport of [
+  { width: 1440, height: 900 },
+  { width: 1024, height: 700 },
+  { width: 768, height: 900 },
+]) {
+  test(`keeps aligned report bounds without overflow at ${viewport.width}x${viewport.height}`, async ({ mount, page }) => {
+    await page.setViewportSize(viewport);
+    const component = await mount(
+      <div className="distribution-y-content" style={{ width: "100%" }}>
+        <section className="distribution-report-block" data-testid="bounds-overview">
+          <div className="distribution-chart" />
+        </section>
+        <section className="distribution-report-block" data-testid="bounds-fit-density">
+          <div className="distribution-chart" />
+        </section>
+        <section className="distribution-report-block distribution-table-pair" data-testid="bounds-tables">
+          <table className="distribution-quantile-table"><tbody><tr><td>0.5</td><td>Median</td><td>3</td></tr></tbody></table>
+          <table className="distribution-summary-table"><tbody><tr><th>Mean</th><td>3</td></tr></tbody></table>
+        </section>
+        <section className="distribution-report-block" data-testid="bounds-capability">
+          <div className="distribution-capability-report">
+            <div className="distribution-capability-summary">
+              <table><tbody><tr><th>LSL</th><td>0</td></tr></tbody></table>
+              <table><tbody><tr><th>Mean</th><td>3</td></tr></tbody></table>
+            </div>
+          </div>
+        </section>
+        <section className="distribution-report-block" data-testid="bounds-fit-comparison">
+          <table className="distribution-fit-table distribution-fit-comparison"><tbody><tr><th>Normal</th><td>12</td></tr></tbody></table>
+        </section>
+      </div>,
+    );
+
+    const reference = await component.getByTestId("bounds-overview").boundingBox();
+    expect(reference).not.toBeNull();
+    if (!reference) return;
+    const referenceRight = reference.x + reference.width;
+    for (const testId of ["bounds-fit-density", "bounds-tables", "bounds-capability", "bounds-fit-comparison"]) {
+      const surface = await component.getByTestId(testId).boundingBox();
+      expect(surface).not.toBeNull();
+      if (!surface) continue;
+      expect(Math.abs(surface.x - reference.x)).toBeLessThanOrEqual(2);
+      expect(Math.abs(surface.x + surface.width - referenceRight)).toBeLessThanOrEqual(2);
+    }
+
+    const hasOverflow = await component.evaluate((root) => root.scrollWidth > root.clientWidth + 1);
+    expect(hasOverflow).toBe(false);
+    const pairedTables = component.getByTestId("bounds-tables").locator("table");
+    const pairedCapability = component.getByTestId("bounds-capability").locator("table");
+    const tableBoxes = await Promise.all([pairedTables.nth(0).boundingBox(), pairedTables.nth(1).boundingBox()]);
+    const capabilityBoxes = await Promise.all([pairedCapability.nth(0).boundingBox(), pairedCapability.nth(1).boundingBox()]);
+    if (viewport.width > 900) {
+      expect(Math.abs((tableBoxes[0]?.y ?? 0) - (tableBoxes[1]?.y ?? 0))).toBeLessThanOrEqual(3);
+      expect(Math.abs((capabilityBoxes[0]?.y ?? 0) - (capabilityBoxes[1]?.y ?? 0))).toBeLessThanOrEqual(3);
+    } else {
+      expect(tableBoxes[1]?.y).toBeGreaterThan((tableBoxes[0]?.y ?? 0) + (tableBoxes[0]?.height ?? 0));
+      expect(capabilityBoxes[1]?.y).toBeGreaterThan((capabilityBoxes[0]?.y ?? 0) + (capabilityBoxes[0]?.height ?? 0));
+    }
+  });
+}
+
 test("renders nonconformance with exactly 3 body rows and 5 columns", async ({ mount }) => {
   const capabilityValue = (value: number) => ({ state: "available" as const, value, reasonCode: null });
   const capabilityInterval = (lower: number, upper: number) => ({
@@ -1591,6 +1661,7 @@ test("renders nonconformance with exactly 3 body rows and 5 columns", async ({ m
                   cpmOverall: capabilityValue(0.202),
                 },
                 intervals: {
+                  confidenceLevel: 0.95,
                   cp: capabilityInterval(0.4, 0.7),
                   cpk: capabilityInterval(-0.4, -0.1),
                   cpl: capabilityInterval(-0.4, -0.1),
@@ -1607,6 +1678,7 @@ test("renders nonconformance with exactly 3 body rows and 5 columns", async ({ m
                     parameterization: "standardNormal(0,1)",
                     inverseCdfAlgorithmId: "statrs.inverseCdf.v1",
                     methodVersion: "1.0.0",
+                    withinEffectiveDegreesOfFreedom: 30.43832706934947,
                   },
                 },
                 nonconformance: {

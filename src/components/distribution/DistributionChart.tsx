@@ -3,10 +3,11 @@ import * as echarts from "echarts";
 
 import {
   buildDistributionChartOption,
+  buildDistributionFitDensityOption,
   buildDistributionOverviewOption,
   buildProcessCapabilityChartOption,
+  type DistributionFitCurveInputV1,
 } from "@/graphCore/distributionAdapter";
-import type { DistributionFitCurveInputV1 } from "@/graphCore/distributionAdapter";
 import type {
   DistributionChartDataV1,
   ProcessCapabilityChartDataV1,
@@ -54,9 +55,7 @@ interface DistributionOverviewChartProps {
   boxPlot: Extract<DistributionChartDataV1, { kind: "boxPlotData" }> | null;
   title: string;
   valueAxisName?: string;
-  densityAxisName?: string;
   specificationLines?: { lsl: number | null; target: number | null; usl: number | null; source: string };
-  fitCurves?: DistributionFitCurveInputV1[];
 }
 
 export function DistributionOverviewChart({
@@ -64,9 +63,7 @@ export function DistributionOverviewChart({
   boxPlot,
   title,
   valueAxisName = "Value",
-  densityAxisName = "Probability Density",
   specificationLines,
-  fitCurves = [],
 }: DistributionOverviewChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -75,7 +72,7 @@ export function DistributionOverviewChart({
     if (!container) return;
     const instance = echarts.init(container, undefined, { renderer: "canvas" });
     const update = () => instance.setOption(
-      buildDistributionOverviewOption(histogram, boxPlot, title, specificationLines, valueAxisName, densityAxisName, fitCurves),
+      buildDistributionOverviewOption(histogram, boxPlot, title, specificationLines, valueAxisName),
       { notMerge: true },
     );
     update();
@@ -88,7 +85,7 @@ export function DistributionOverviewChart({
       themeObserver.disconnect();
       instance.dispose();
     };
-  }, [histogram, boxPlot, title, valueAxisName, densityAxisName, specificationLines, fitCurves]);
+  }, [histogram, boxPlot, title, valueAxisName, specificationLines]);
 
   return (
     <div
@@ -97,6 +94,53 @@ export function DistributionOverviewChart({
       role="img"
       aria-label={title}
       data-chart-kind="overview"
+      data-axis-layout="horizontal-count"
+    />
+  );
+}
+
+export function DistributionFitDensityChart({
+  histogram,
+  curves,
+  title,
+  valueAxisName = "Value",
+  densityAxisName = "Probability Density",
+}: {
+  histogram: Extract<DistributionChartDataV1, { kind: "histogramData" }>;
+  curves: DistributionFitCurveInputV1[];
+  title: string;
+  valueAxisName?: string;
+  densityAxisName?: string;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const instance = echarts.init(container, undefined, { renderer: "canvas" });
+    const update = () => instance.setOption(
+      buildDistributionFitDensityOption(histogram, curves, title, valueAxisName, densityAxisName),
+      { notMerge: true },
+    );
+    update();
+    const observer = new ResizeObserver(() => instance.resize());
+    observer.observe(container);
+    const themeObserver = new MutationObserver(update);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme"] });
+    return () => {
+      observer.disconnect();
+      themeObserver.disconnect();
+      instance.dispose();
+    };
+  }, [histogram, curves, title, valueAxisName, densityAxisName]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="distribution-chart distribution-fit-density-chart"
+      role="img"
+      aria-label={title}
+      data-chart-kind="fit-density"
     />
   );
 }

@@ -1,12 +1,23 @@
 import type {
+  ContinuousDistributionIdV1,
   DistributionChartDataV1,
+  DistributionCoordinateV1,
   ProcessCapabilityChartDataV1,
 } from "@/types/distribution";
-import type {
-  ContinuousDistributionIdV1,
-  DistributionCoordinateV1,
-} from "@/types/distribution";
 import { getGraphTheme } from "./theme";
+
+const FIT_DENSITY_DISTRIBUTION_ORDER: ContinuousDistributionIdV1[] = [
+  "normal",
+  "lognormal",
+  "exponential",
+  "gamma",
+  "weibull",
+];
+
+export interface DistributionFitCurveInputV1 {
+  distributionId: ContinuousDistributionIdV1;
+  points: DistributionCoordinateV1[];
+}
 
 export function formatDistributionAxisLabel(value: number): string {
   if (!Number.isFinite(value)) return "";
@@ -35,12 +46,6 @@ export interface DistributionGraphInputV1 {
     interactive: true;
     exportable: true;
   };
-}
-
-export interface DistributionFitCurveInputV1 {
-  fitId: string;
-  distributionId: ContinuousDistributionIdV1;
-  points: DistributionCoordinateV1[];
 }
 
 export function toGraphBuilderInput(
@@ -280,58 +285,33 @@ export function buildDistributionOverviewOption(
   title: string,
   specificationLines?: { lsl: number | null; target: number | null; usl: number | null; source: string },
   valueAxisName = "Value",
-  densityAxisName = "Probability Density",
-  fitCurves: DistributionFitCurveInputV1[] = [],
 ): Record<string, unknown> {
   const theme = getGraphTheme();
   const coordinates = boxPlot?.coordinates;
-  const orderedFitCurves = [...fitCurves].sort((left, right) =>
-    left.distributionId.localeCompare(right.distributionId));
-  const finiteFitPoints = orderedFitCurves.flatMap((curve) =>
-    curve.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)));
   const specValues = [specificationLines?.lsl, specificationLines?.target, specificationLines?.usl]
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const valueExtent = [
     ...histogram.bins.flatMap((bin) => [bin.lower, bin.upper]),
     ...(coordinates ? [coordinates.lowerWhisker, coordinates.upperWhisker, ...coordinates.outliers] : []),
     ...specValues,
-    ...finiteFitPoints.map((point) => point.x),
   ];
   const valueMin = Math.min(...valueExtent);
   const valueMax = Math.max(...valueExtent);
-  const densityMax = Math.max(
-    0,
-    ...histogram.bins.map((bin) => bin.density),
-    ...finiteFitPoints.map((point) => point.y),
-  );
-  const fitLabels: Record<ContinuousDistributionIdV1, string> = {
-    normal: "Normal",
-    lognormal: "Lognormal",
-    exponential: "Exponential",
-    gamma: "Gamma",
-    weibull: "Weibull",
-  };
-  const fitColors: Record<ContinuousDistributionIdV1, string> = {
-    normal: theme.categorical[0] ?? theme.accent,
-    lognormal: theme.categorical[1] ?? theme.accent,
-    exponential: theme.categorical[2] ?? theme.accent,
-    gamma: theme.categorical[3] ?? theme.accent,
-    weibull: theme.categorical[4] ?? theme.accent,
-  };
+  const countMax = Math.max(0, ...histogram.bins.map((bin) => bin.count));
 
   const specMarkLineData: Array<[string, number | null | undefined]> = [
     ["LSL", specificationLines?.lsl],
     ["Target", specificationLines?.target],
     ["USL", specificationLines?.usl],
   ];
-  const verticalSpecMarkLineData = buildSpecificationMarkLineData(specMarkLineData, "xAxis", theme);
+  const horizontalSpecMarkLineData = buildSpecificationMarkLineData(specMarkLineData, "yAxis", theme);
   const barStyles = histogram.bins.map(() => ({
     fill: theme.accent,
     opacity: 0.68,
     stroke: theme.accent,
     lineWidth: 1,
   }));
-  const specCarrierSeries = verticalSpecMarkLineData.length > 0
+  const specCarrierSeries = horizontalSpecMarkLineData.length > 0
     ? [
         {
           type: "line",
@@ -342,8 +322,8 @@ export function buildDistributionOverviewOption(
           markLine: {
             silent: true,
             symbol: "none",
-            label: { color: theme.fgSecondary, formatter: "{b}", position: "insideEndTop" },
-            data: verticalSpecMarkLineData,
+            label: { show: true, color: theme.fgSecondary, formatter: "{b}", position: "insideEndTop" },
+            data: horizontalSpecMarkLineData,
           },
         },
         ...(boxPlot ? [{
@@ -356,7 +336,7 @@ export function buildDistributionOverviewOption(
             silent: true,
             symbol: "none",
             label: { show: false },
-            data: verticalSpecMarkLineData,
+            data: horizontalSpecMarkLineData,
           },
         }] : []),
       ]
@@ -382,68 +362,51 @@ export function buildDistributionOverviewOption(
           clip: true,
           xAxisIndex: 1,
           yAxisIndex: 1,
-          data: coordinates.outliers.map((value) => [value, 0]),
+          data: coordinates.outliers.map((value) => [0, value]),
           symbolSize: 6,
           itemStyle: { color: theme.accent },
         },
       ]
     : [];
-  const fitSeries = orderedFitCurves.map((curve) => ({
-    name: fitLabels[curve.distributionId],
-    type: "line",
-    clip: true,
-    showSymbol: false,
-    xAxisIndex: 0,
-    yAxisIndex: 0,
-    data: curve.points.map((point) => [point.x, point.y]),
-    lineStyle: { color: fitColors[curve.distributionId], width: 2 },
-    itemStyle: { color: fitColors[curve.distributionId] },
-  }));
 
   return {
     animation: false,
     backgroundColor: "transparent",
     title: { text: title, left: 8, top: 4, textStyle: { color: theme.fgPrimary, fontSize: 12 } },
-    legend: {
-      show: orderedFitCurves.length > 0,
-      data: orderedFitCurves.map((curve) => fitLabels[curve.distributionId]),
-      right: 40,
-      top: 6,
-      textStyle: { color: theme.fgSecondary, fontSize: 10 },
-    },
     tooltip: { trigger: "axis" },
     grid: boxPlot
       ? [
-          { left: 72, right: 40, top: 42, bottom: 94 },
-          { left: 72, right: 40, height: 34, bottom: 38 },
+          { left: 72, right: 150, top: 42, bottom: 54 },
+          { width: 56, right: 40, top: 42, bottom: 54 },
         ]
       : [{ left: 72, right: 40, top: 42, bottom: 54 }],
     xAxis: [
       {
-        ...axis(theme, "value", undefined, [valueMin, valueMax]),
+        ...axis(theme, "value", undefined, [0, countMax]),
         gridIndex: 0,
-        name: boxPlot ? undefined : valueAxisName,
+        name: "Count",
         nameLocation: "middle",
         nameGap: 30,
-        axisLabel: boxPlot ? { show: false } : axis(theme, "value").axisLabel,
       },
       ...(boxPlot ? [{
-        ...axis(theme, "value", undefined, [valueMin, valueMax]),
+        ...axis(theme, "category", [""]),
         gridIndex: 1,
-        name: valueAxisName,
-        nameLocation: "middle",
-        nameGap: 30,
+        axisLabel: { show: false },
       }] : []),
     ],
     yAxis: [
       {
-        ...axis(theme, "value", undefined, [0, densityMax]),
+        ...axis(theme, "value", undefined, [valueMin, valueMax]),
         gridIndex: 0,
-        name: densityAxisName,
+        name: valueAxisName,
         nameLocation: "middle",
         nameGap: 48,
       },
-      ...(boxPlot ? [{ ...axis(theme, "category", [""]), gridIndex: 1, axisLabel: { show: false } }] : []),
+      ...(boxPlot ? [{
+        ...axis(theme, "value", undefined, [valueMin, valueMax]),
+        gridIndex: 1,
+        axisLabel: { show: false },
+      }] : []),
     ],
     series: [
       {
@@ -451,14 +414,97 @@ export function buildDistributionOverviewOption(
         clip: true,
         xAxisIndex: 0,
         yAxisIndex: 0,
-        data: histogram.bins.map((bin) => [bin.lower, bin.density]),
-        renderItem: (params: { dataIndex: number }, api: {
+        data: histogram.bins.map((bin) => [bin.count, bin.lower, bin.upper]),
+        renderItem: (_params: { dataIndex: number }, api: {
+          value: (index: number) => number;
+          coord: (value: [number, number]) => [number, number];
+        }) => {
+          const count = api.value(0);
+          const lower = api.value(1);
+          const upper = api.value(2);
+          const lowerLeft = api.coord([0, lower]);
+          const upperRight = api.coord([count, upper]);
+          return {
+            type: "rect",
+            shape: {
+              x: lowerLeft[0],
+              y: Math.min(lowerLeft[1], upperRight[1]) + 0.5,
+              width: Math.max(0, upperRight[0] - lowerLeft[0]),
+              height: Math.max(0, Math.abs(lowerLeft[1] - upperRight[1]) - 1),
+            },
+            style: barStyles[_params.dataIndex],
+          };
+        },
+      },
+      ...boxSeries,
+      ...specCarrierSeries,
+    ],
+  };
+}
+
+export function buildDistributionFitDensityOption(
+  histogram: Extract<DistributionChartDataV1, { kind: "histogramData" }>,
+  curves: DistributionFitCurveInputV1[],
+  title: string,
+  valueAxisName = "Value",
+  densityAxisName = "Probability Density",
+): Record<string, unknown> {
+  const theme = getGraphTheme();
+  const orderedCurves = FIT_DENSITY_DISTRIBUTION_ORDER.flatMap((distributionId) => {
+    const curve = curves.find((candidate) => candidate.distributionId === distributionId);
+    return curve ? [curve] : [];
+  });
+  const xValues = [
+    ...histogram.bins.flatMap((bin) => [bin.lower, bin.upper]),
+    ...orderedCurves.flatMap((curve) => curve.points.map((point) => point.x)),
+  ].filter(Number.isFinite);
+  const densityValues = [
+    0,
+    ...histogram.bins.map((bin) => bin.density),
+    ...orderedCurves.flatMap((curve) => curve.points.map((point) => point.y)),
+  ].filter(Number.isFinite);
+  const xExtent: [number, number] = xValues.length > 0
+    ? [Math.min(...xValues), Math.max(...xValues)]
+    : [0, 1];
+  const densityExtent: [number, number] = [0, Math.max(...densityValues)];
+
+  return {
+    animation: false,
+    backgroundColor: "transparent",
+    title: { text: title, left: 8, top: 4, textStyle: { color: theme.fgPrimary, fontSize: 12 } },
+    legend: {
+      data: orderedCurves.map((curve) => curve.distributionId),
+      top: 8,
+      right: 40,
+      textStyle: { color: theme.fgSecondary },
+    },
+    grid: { left: 72, right: 40, top: 58, bottom: 54 },
+    tooltip: { trigger: "axis" },
+    xAxis: {
+      ...axis(theme, "value", undefined, xExtent),
+      name: valueAxisName,
+      nameLocation: "middle",
+      nameGap: 30,
+    },
+    yAxis: {
+      ...axis(theme, "value", undefined, densityExtent),
+      name: densityAxisName,
+      nameLocation: "middle",
+      nameGap: 48,
+    },
+    series: [
+      {
+        name: "Histogram density",
+        type: "custom",
+        clip: true,
+        data: histogram.bins.map((bin) => [bin.lower, bin.upper, bin.density]),
+        renderItem: (_params: unknown, api: {
           value: (index: number) => number;
           coord: (value: [number, number]) => [number, number];
         }) => {
           const lower = api.value(0);
-          const density = api.value(1);
-          const upper = histogram.bins[params.dataIndex].upper;
+          const upper = api.value(1);
+          const density = api.value(2);
           const upperLeft = api.coord([lower, density]);
           const lowerRight = api.coord([upper, 0]);
           return {
@@ -469,13 +515,23 @@ export function buildDistributionOverviewOption(
               width: Math.max(1, lowerRight[0] - upperLeft[0] - 1),
               height: lowerRight[1] - upperLeft[1],
             },
-            style: barStyles[params.dataIndex],
+            style: { fill: theme.accent, opacity: 0.35, stroke: theme.accent, lineWidth: 1 },
           };
         },
       },
-      ...fitSeries,
-      ...boxSeries,
-      ...specCarrierSeries,
+      ...orderedCurves.map((curve) => {
+        const colorIndex = FIT_DENSITY_DISTRIBUTION_ORDER.indexOf(curve.distributionId);
+        const color = theme.categorical[colorIndex % theme.categorical.length];
+        return {
+          name: curve.distributionId,
+          type: "line",
+          clip: true,
+          showSymbol: false,
+          data: curve.points.map((point) => [point.x, point.y]),
+          lineStyle: { color, width: 2 },
+          itemStyle: { color },
+        };
+      }),
     ],
   };
 }

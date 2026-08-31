@@ -454,6 +454,7 @@ export interface ProcessCapabilityDataV1 {
     cpmOverall: CapabilityTypedValueV1;
   };
   intervals: {
+    confidenceLevel: number;
     cp: ProcessCapabilityIntervalV1;
     cpk: ProcessCapabilityIntervalV1;
     cpl: ProcessCapabilityIntervalV1;
@@ -523,6 +524,7 @@ export interface ProcessCapabilityIntervalProvenanceV1 {
   parameterization: string;
   inverseCdfAlgorithmId: string;
   methodVersion: string;
+  withinEffectiveDegreesOfFreedom: number | null;
 }
 
 export interface CapabilityTypedCountV1 {
