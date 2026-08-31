@@ -12,6 +12,7 @@ use argmin::solver::brent::{BrentOpt, BrentRoot};
 use statrs::distribution::{Continuous, Exp, Gamma, LogNormal, Normal, Weibull};
 use statrs::function::gamma::digamma;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 const AVAILABLE_STATE: &str = "available";
@@ -23,6 +24,11 @@ const OBSERVATION_FREQUENCY_INVALID_REASON: &str =
     "distribution.fit.observationFrequencyInvalid.v1";
 const EFFECTIVE_N_INVALID_REASON: &str = "distribution.fit.effectiveNInvalid.v1";
 const LOG_LIKELIHOOD_INVALID_REASON: &str = "distribution.fit.logLikelihoodInvalid.v1";
+const PARAMETER_INFERENCE_UNAVAILABLE_REASON: &str =
+    "distribution.fit.parameterInferenceUnavailable.v1";
+const PARAMETER_INFORMATION_SINGULAR_REASON: &str =
+    "distribution.fit.parameterInformationSingular.v1";
+const PARAMETER_Z_975: f64 = 1.959_963_984_540_054;
 const POSITIVE_TRANSFORM_INVALID_REASON: &str = "distribution.fit.positiveTransformInvalid.v1";
 const CURVE_WIDTH_INVALID_REASON: &str = "distribution.fit.curveWidthInvalid.v1";
 const CURVE_STEP_INVALID_REASON: &str = "distribution.fit.curveStepInvalid.v1";
@@ -187,6 +193,194 @@ pub trait FitModel {
     fn validate_domain(&self, observations: &[FitObservationV1]) -> Result<(), FitFailureV1>;
     fn fit(&self, observations: &[FitObservationV1]) -> Result<FitEstimateV1, FitFailureV1>;
     fn pdf(&self, estimate: &FitEstimateV1, x: f64) -> Result<f64, FitFailureV1>;
+}
+
+pub fn attach_parameter_inference(
+    estimate: &mut FitEstimateV1,
+    observations: &[FitObservationV1],
+) {
+    let values = estimate
+        .parameters
+        .iter()
+        .filter_map(|parameter| parameter.value.value)
+        .collect::<Vec<_>>();
+    let total_weight = observations
+        .iter()
+        .map(FitObservationV1::contribution)
+        .sum::<f64>();
+    let standard_errors = match estimate.distribution_id {
+        ContinuousDistributionIdV1::Normal | ContinuousDistributionIdV1::Lognormal
+            if values.len() == 2 && total_weight.is_finite() && total_weight > 0.0 =>
+        {
+            Some(vec![
+                values[1] / total_weight.sqrt(),
+                values[1] / (2.0 * total_weight).sqrt(),
+            ])
+        }
+        ContinuousDistributionIdV1::Exponential
+            if !values.is_empty() && total_weight.is_finite() && total_weight > 0.0 =>
+        {
+            Some(vec![values[0] / total_weight.sqrt()])
+        }
+        ContinuousDistributionIdV1::Gamma if values.len() == 2 => {
+            gamma_standard_errors(values[0], values[1], total_weight)
+        }
+        ContinuousDistributionIdV1::Weibull if values.len() == 2 => {
+            weibull_standard_errors(observations, values[0], values[1])
+        }
+        _ => None,
+    };
+
+    for (index, parameter) in estimate.parameters.iter_mut().enumerate() {
+        let Some(standard_error) = standard_errors
+            .as_ref()
+            .and_then(|errors| errors.get(index))
+            .copied()
+            .filter(|value| value.is_finite() && *value >= 0.0)
+        else {
+            set_parameter_inference_unavailable(parameter, PARAMETER_INFORMATION_SINGULAR_REASON);
+            continue;
+        };
+        let Some(point) = parameter.value.value else {
+            set_parameter_inference_unavailable(parameter, PARAMETER_INFERENCE_UNAVAILABLE_REASON);
+            continue;
+        };
+        let lower = point - PARAMETER_Z_975 * standard_error;
+        let upper = point + PARAMETER_Z_975 * standard_error;
+        if !lower.is_finite() || !upper.is_finite() {
+            set_parameter_inference_unavailable(
+                parameter,
+                "distribution.fit.parameterIntervalNonFinite.v1",
+            );
+            continue;
+        }
+        parameter.standard_error = available_typed_value(standard_error);
+        parameter.lower_confidence = available_typed_value(lower);
+        parameter.upper_confidence = available_typed_value(upper);
+    }
+}
+
+fn available_typed_value(value: f64) -> CapabilityTypedValueV1 {
+    CapabilityTypedValueV1 {
+        state: AVAILABLE_STATE.to_string(),
+        value: Some(value),
+        reason_code: None,
+    }
+}
+
+fn set_parameter_inference_unavailable(
+    parameter: &mut DistributionFitParameterV1,
+    reason: &str,
+) {
+    let unavailable = unavailable_metric(reason);
+    parameter.standard_error = unavailable.clone();
+    parameter.lower_confidence = unavailable.clone();
+    parameter.upper_confidence = unavailable;
+}
+
+fn trigamma(mut value: f64) -> Option<f64> {
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+    let mut result = 0.0;
+    while value < 8.0 {
+        result += 1.0 / (value * value);
+        value += 1.0;
+    }
+    let inverse = value.recip();
+    let inverse2 = inverse * inverse;
+    result += inverse + inverse2 / 2.0 + inverse2 * inverse / 6.0
+        - inverse2 * inverse2 * inverse / 30.0
+        + inverse2.powi(3) * inverse / 42.0;
+    result.is_finite().then_some(result)
+}
+
+fn gamma_standard_errors(shape: f64, scale: f64, total_weight: f64) -> Option<Vec<f64>> {
+    if !shape.is_finite() || shape <= 0.0 || !scale.is_finite() || scale <= 0.0
+        || !total_weight.is_finite() || total_weight <= 0.0
+    {
+        return None;
+    }
+    let information_00 = total_weight * trigamma(shape)?;
+    let information_01 = total_weight / scale;
+    let information_11 = total_weight * shape / (scale * scale);
+    let determinant = information_00 * information_11 - information_01 * information_01;
+    if !determinant.is_finite() || determinant <= 0.0 {
+        return None;
+    }
+    let variance_shape = information_11 / determinant;
+    let variance_scale = information_00 / determinant;
+    if variance_shape < 0.0 || variance_scale < 0.0 {
+        return None;
+    }
+    Some(vec![variance_shape.sqrt(), variance_scale.sqrt()])
+}
+
+fn weibull_standard_errors(
+    observations: &[FitObservationV1],
+    shape: f64,
+    scale: f64,
+) -> Option<Vec<f64>> {
+    if shape <= 0.0 || scale <= 0.0 || !shape.is_finite() || !scale.is_finite() {
+        return None;
+    }
+    let canonical_center = |value: f64| (value * 1e8).round() / 1e8;
+    let center = [canonical_center(shape.ln()), canonical_center(scale.ln())];
+    let steps = center.map(|value| f64::EPSILON.cbrt() * value.abs().max(1.0));
+    let mut grouped = BTreeMap::<u64, (f64, f64)>::new();
+    for observation in observations {
+        let entry = grouped
+            .entry(observation.value.to_bits())
+            .or_insert((observation.value, 0.0));
+        entry.1 += observation.contribution();
+    }
+    let grouped = grouped.into_values().collect::<Vec<_>>();
+    let objective = |parameters: [f64; 2]| -> Option<f64> {
+        let candidate_shape = parameters[0].exp();
+        let candidate_scale = parameters[1].exp();
+        let distribution = Weibull::new(candidate_shape, candidate_scale).ok()?;
+        let log_likelihood = grouped
+            .iter()
+            .map(|(value, contribution)| contribution * distribution.ln_pdf(*value))
+            .sum::<f64>();
+        log_likelihood.is_finite().then_some(-log_likelihood)
+    };
+    let center_value = objective(center)?;
+    let mut hessian = [[0.0; 2]; 2];
+    for index in 0..2 {
+        let mut plus = center;
+        let mut minus = center;
+        plus[index] += steps[index];
+        minus[index] -= steps[index];
+        hessian[index][index] =
+            (objective(plus)? - 2.0 * center_value + objective(minus)?)
+                / steps[index].powi(2);
+    }
+    let mut plus_plus = center;
+    let mut plus_minus = center;
+    let mut minus_plus = center;
+    let mut minus_minus = center;
+    plus_plus[0] += steps[0]; plus_plus[1] += steps[1];
+    plus_minus[0] += steps[0]; plus_minus[1] -= steps[1];
+    minus_plus[0] -= steps[0]; minus_plus[1] += steps[1];
+    minus_minus[0] -= steps[0]; minus_minus[1] -= steps[1];
+    let cross = (objective(plus_plus)? - objective(plus_minus)?
+        - objective(minus_plus)? + objective(minus_minus)?)
+        / (4.0 * steps[0] * steps[1]);
+    hessian[0][1] = cross;
+    hessian[1][0] = cross;
+    let determinant = hessian[0][0] * hessian[1][1] - cross * cross;
+    if !determinant.is_finite() || determinant <= 0.0
+        || hessian[0][0] <= 0.0 || hessian[1][1] <= 0.0
+    {
+        return None;
+    }
+    let transformed_variance_shape = hessian[1][1] / determinant;
+    let transformed_variance_scale = hessian[0][0] / determinant;
+    Some(vec![
+        shape * transformed_variance_shape.sqrt(),
+        scale * transformed_variance_scale.sqrt(),
+    ])
 }
 
 #[derive(Debug, Clone)]
@@ -394,25 +588,19 @@ impl FitModel for ExponentialFitV1 {
         FitEstimateV1::new(
             ContinuousDistributionIdV1::Exponential,
             Self::PARAMETERIZATION_ID,
-            vec![
-                available_parameter("scale", scale)?,
-                available_parameter("location", 0.0)?,
-            ],
+            vec![available_parameter("scale", scale)?],
             log_likelihood,
             closed_form_convergence(),
         )
     }
 
     fn pdf(&self, estimate: &FitEstimateV1, x: f64) -> Result<f64, FitFailureV1> {
-        let [scale, location] = expect_parameter_values(
+        let [scale] = expect_parameter_values(
             estimate,
             &ContinuousDistributionIdV1::Exponential,
             Self::PARAMETERIZATION_ID,
-            &["scale", "location"],
+            &["scale"],
         )?;
-        if location != 0.0 {
-            return Err(input_failure(ESTIMATE_PARAMETERS_INVALID_REASON));
-        }
         let x = validate_pdf_x(x)?;
         if x < 0.0 {
             return Ok(0.0);
@@ -1562,6 +1750,7 @@ fn available_parameter(
         return Err(objective_failure(LOG_LIKELIHOOD_INVALID_REASON));
     }
 
+    let inference_unavailable = unavailable_metric("distribution.fit.parameterInferenceUnavailable.v1");
     Ok(DistributionFitParameterV1 {
         parameter_id: parameter_id.to_string(),
         value: CapabilityTypedValueV1 {
@@ -1569,7 +1758,9 @@ fn available_parameter(
             value: Some(value),
             reason_code: None,
         },
-        fixed: false,
+        standard_error: inference_unavailable.clone(),
+        lower_confidence: inference_unavailable.clone(),
+        upper_confidence: inference_unavailable,
     })
 }
 
@@ -1672,7 +1863,8 @@ fn value_from_metric(metric: &CapabilityTypedValueV1) -> Result<f64, AppError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_pdf_curve, effective_n, fit_information_criteria, objective_failure,
+        attach_parameter_inference, build_pdf_curve, closed_form_convergence, effective_n,
+        fit_information_criteria, objective_failure,
         optimized_convergence, positive_transform, refine_score_root, run_optimizer,
         total_frequency, weibull_profile_parameters, ArgminBrentOptimizerV1, ExponentialFitV1,
         FitEstimateV1, FitFailureClassificationV1, FitFailureV1, FitModel, FitObjective,
@@ -1680,7 +1872,7 @@ mod tests {
         FitOptimizationStateV1, FitOptimizer, GammaFitV1, GammaObjectiveV1, LognormalFitV1,
         NormalFitV1, WeibullFitV1, WeibullObjectiveV1, ARGMIN_BRENT_OPTIMIZER_ID,
         ARGMIN_BRENT_OPTIMIZER_VERSION, CONTINUOUS_FIT_ITERATION_LIMIT, CONTINUOUS_FIT_TOLERANCE,
-        LOG_LIKELIHOOD_INVALID_REASON, STAGE1_FIT_REGISTRY,
+        trigamma, LOG_LIKELIHOOD_INVALID_REASON, STAGE1_FIT_REGISTRY,
     };
     use crate::engine::distribution_executor::PreparedObservationV1;
     use crate::models::distribution::{
@@ -1725,6 +1917,15 @@ mod tests {
         );
     }
 
+    fn assert_numerical_inference_close(actual: f64, expected: f64) {
+        let absolute = (actual - expected).abs();
+        let relative = absolute / expected.abs().max(1.0);
+        assert!(
+            absolute <= 1e-8 || relative <= 2e-6,
+            "expected {expected}, got {actual}, abs={absolute}, rel={relative}"
+        );
+    }
+
     fn assert_recovered_close(actual: f64, expected: f64) {
         let abs = (actual - expected).abs();
         let rel = abs / expected.abs();
@@ -1735,6 +1936,11 @@ mod tests {
     }
 
     fn available_parameter(parameter_id: &str, value: f64) -> DistributionFitParameterV1 {
+        let unavailable = CapabilityTypedValueV1 {
+            state: "unavailable".to_string(),
+            value: None,
+            reason_code: Some("distribution.fit.parameterInferenceUnavailable.v1".to_string()),
+        };
         DistributionFitParameterV1 {
             parameter_id: parameter_id.to_string(),
             value: CapabilityTypedValueV1 {
@@ -1742,7 +1948,9 @@ mod tests {
                 value: Some(value),
                 reason_code: None,
             },
-            fixed: false,
+            standard_error: unavailable.clone(),
+            lower_confidence: unavailable.clone(),
+            upper_confidence: unavailable,
         }
     }
 
@@ -1772,7 +1980,10 @@ mod tests {
     #[serde(rename_all = "camelCase")]
     struct PublicFixtureParameterV1 {
         parameter_id: String,
-        value: f64,
+        estimate: f64,
+        standard_error: Option<f64>,
+        lower_confidence: Option<f64>,
+        upper_confidence: Option<f64>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -2195,11 +2406,14 @@ mod tests {
 
             let mut replication_groups: BTreeMap<String, Vec<(String, FitEstimateV1)>> =
                 BTreeMap::new();
+            let mut inferred_distributions = BTreeMap::<String, usize>::new();
+            let mut pinned_inference_distributions = BTreeMap::<String, usize>::new();
 
             for case in &fixture.cases {
                 let observations = observations_from_case(case);
                 let model = fit_model_for(&case.distribution_id);
-                let estimate = model.fit(&observations).unwrap();
+                let mut estimate = model.fit(&observations).unwrap();
+                attach_parameter_inference(&mut estimate, &observations);
 
                 let expected_method_id = match case.distribution_id {
                     ContinuousDistributionIdV1::Normal => NormalFitV1::METHOD_ID,
@@ -2225,10 +2439,46 @@ mod tests {
                     assert_eq!(actual.parameter_id, expected.parameter_id);
                     assert_eq!(actual.value.state, "available");
                     assert_eq!(actual.value.reason_code, None);
-                    assert_close(actual.value.value.unwrap(), expected.value);
+                    assert_close(actual.value.value.unwrap(), expected.estimate);
                 }
 
                 assert_close(estimate.log_likelihood, case.expected_log_likelihood);
+                *inferred_distributions
+                    .entry(format!("{:?}", case.distribution_id))
+                    .or_default() += 1;
+                for parameter in &estimate.parameters {
+                    let point = parameter.value.value.unwrap();
+                    let standard_error = parameter.standard_error.value.unwrap();
+                    assert!(standard_error.is_finite() && standard_error >= 0.0);
+                    assert_close(
+                        parameter.lower_confidence.value.unwrap(),
+                        point - 1.959_963_984_540_054 * standard_error,
+                    );
+                    assert_close(
+                        parameter.upper_confidence.value.unwrap(),
+                        point + 1.959_963_984_540_054 * standard_error,
+                    );
+                    if let Some(expected) = case
+                        .expected_parameters
+                        .iter()
+                        .find(|expected| expected.parameter_id == parameter.parameter_id)
+                    {
+                        if let Some(expected_standard_error) = expected.standard_error {
+                            *pinned_inference_distributions
+                                .entry(format!("{:?}", case.distribution_id))
+                                .or_default() += 1;
+                            assert_close(standard_error, expected_standard_error);
+                            assert_close(
+                                parameter.lower_confidence.value.unwrap(),
+                                expected.lower_confidence.unwrap(),
+                            );
+                            assert_close(
+                                parameter.upper_confidence.value.unwrap(),
+                                expected.upper_confidence.unwrap(),
+                            );
+                        }
+                    }
+                }
 
                 let x_min = case.values.iter().copied().fold(f64::INFINITY, f64::min);
                 let x_max = case
@@ -2249,6 +2499,9 @@ mod tests {
                         .push((case.case_id.clone(), estimate.clone()));
                 }
             }
+
+            assert_eq!(inferred_distributions.len(), 5);
+            assert_eq!(pinned_inference_distributions.len(), 5);
 
             for estimates in replication_groups.values() {
                 assert_eq!(estimates.len(), 2);
@@ -2324,6 +2577,148 @@ mod tests {
         assert!((metrics.aic.value.unwrap() - expected_aic).abs() < 1e-12);
         assert!((metrics.aicc.value.unwrap() - expected_aicc).abs() < 1e-12);
         assert!((metrics.bic.value.unwrap() - expected_bic).abs() < 1e-12);
+    }
+
+    #[test]
+    fn parameter_inference_uses_closed_form_mle_information() {
+        let observations = vec![
+            observation(1.0, 1.0, 1.0),
+            observation(3.0, 1.0, 1.0),
+            observation(5.0, 1.0, 1.0),
+        ];
+        let mut normal = NormalFitV1.fit(&observations).unwrap();
+        attach_parameter_inference(&mut normal, &observations);
+        let scale = normal.parameters[1].value.value.unwrap();
+        assert_close(
+            normal.parameters[0].standard_error.value.unwrap(),
+            scale / 3.0_f64.sqrt(),
+        );
+        assert_close(
+            normal.parameters[1].standard_error.value.unwrap(),
+            scale / 6.0_f64.sqrt(),
+        );
+
+        let mut exponential = ExponentialFitV1.fit(&observations).unwrap();
+        attach_parameter_inference(&mut exponential, &observations);
+        let estimate = exponential.parameters[0].value.value.unwrap();
+        let standard_error = exponential.parameters[0].standard_error.value.unwrap();
+        assert_close(standard_error, estimate / 3.0_f64.sqrt());
+        assert_close(
+            exponential.parameters[0].lower_confidence.value.unwrap(),
+            estimate - 1.959_963_984_540_054 * standard_error,
+        );
+        assert_close(
+            exponential.parameters[0].upper_confidence.value.unwrap(),
+            estimate + 1.959_963_984_540_054 * standard_error,
+        );
+        let serialized = serde_json::to_value(&exponential.parameters[0]).unwrap();
+        assert!(serialized.get("estimate").is_some());
+        assert!(serialized.get("standardError").is_some());
+        assert!(serialized.get("lowerConfidence").is_some());
+        assert!(serialized.get("upperConfidence").is_some());
+        assert!(serialized.get("value").is_none());
+        assert!(serialized.get("fixed").is_none());
+    }
+
+    #[test]
+    fn gamma_and_weibull_parameter_inference_is_finite_and_deterministic() {
+        assert_close(trigamma(1.0).unwrap(), std::f64::consts::PI.powi(2) / 6.0);
+        assert_close(trigamma(0.5).unwrap(), std::f64::consts::PI.powi(2) / 2.0);
+        let observations = vec![
+            observation(0.5, 1.0, 1.0),
+            observation(1.0, 1.0, 1.0),
+            observation(2.0, 1.0, 1.0),
+            observation(4.0, 1.0, 1.0),
+            observation(8.0, 1.0, 1.0),
+        ];
+        for model in [
+            Box::new(GammaFitV1) as Box<dyn FitModel>,
+            Box::new(WeibullFitV1) as Box<dyn FitModel>,
+        ] {
+            let mut first = model.fit(&observations).unwrap();
+            let mut second = first.clone();
+            attach_parameter_inference(&mut first, &observations);
+            attach_parameter_inference(&mut second, &observations);
+            for (left, right) in first.parameters.iter().zip(second.parameters.iter()) {
+                assert!(left.standard_error.value.is_some_and(f64::is_finite));
+                assert!(left.lower_confidence.value.is_some_and(f64::is_finite));
+                assert!(left.upper_confidence.value.is_some_and(f64::is_finite));
+                assert_eq!(left.standard_error, right.standard_error);
+                assert_eq!(left.lower_confidence, right.lower_confidence);
+                assert_eq!(left.upper_confidence, right.upper_confidence);
+            }
+        }
+    }
+
+    #[test]
+    fn weibull_parameter_inference_matches_frequency_expansion() {
+        let compact = vec![
+            observation(0.5, 2.0, 1.0),
+            observation(2.0, 1.0, 1.0),
+            observation(8.0, 2.0, 1.0),
+        ];
+        let expanded = vec![
+            observation(0.5, 1.0, 1.0),
+            observation(0.5, 1.0, 1.0),
+            observation(2.0, 1.0, 1.0),
+            observation(8.0, 1.0, 1.0),
+            observation(8.0, 1.0, 1.0),
+        ];
+        let mut compact_fit = WeibullFitV1.fit(&compact).unwrap();
+        let mut expanded_fit = WeibullFitV1.fit(&expanded).unwrap();
+        attach_parameter_inference(&mut compact_fit, &compact);
+        attach_parameter_inference(&mut expanded_fit, &expanded);
+
+        for (left, right) in compact_fit.parameters.iter().zip(expanded_fit.parameters.iter()) {
+            assert_close(left.value.value.unwrap(), right.value.value.unwrap());
+            assert_numerical_inference_close(
+                left.standard_error.value.unwrap(),
+                right.standard_error.value.unwrap(),
+            );
+            assert_numerical_inference_close(
+                left.lower_confidence.value.unwrap(),
+                right.lower_confidence.value.unwrap(),
+            );
+            assert_numerical_inference_close(
+                left.upper_confidence.value.unwrap(),
+                right.upper_confidence.value.unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn singular_parameter_information_preserves_estimates_as_typed_unavailable_inference() {
+        let observations = vec![observation(1.0, 1.0, 1.0)];
+        let mut estimate = FitEstimateV1::new(
+            ContinuousDistributionIdV1::Gamma,
+            GammaFitV1::PARAMETERIZATION_ID,
+            vec![
+                available_parameter("shape", f64::MAX),
+                available_parameter("scale", f64::MIN_POSITIVE),
+            ],
+            -1.0,
+            closed_form_convergence(),
+        )
+        .unwrap();
+
+        attach_parameter_inference(&mut estimate, &observations);
+
+        for parameter in &estimate.parameters {
+            assert_eq!(parameter.value.state, "available");
+            assert!(parameter.value.value.is_some_and(f64::is_finite));
+            for inference in [
+                &parameter.standard_error,
+                &parameter.lower_confidence,
+                &parameter.upper_confidence,
+            ] {
+                assert_eq!(inference.state, "unavailable");
+                assert_eq!(inference.value, None);
+                assert_eq!(
+                    inference.reason_code.as_deref(),
+                    Some("distribution.fit.parameterInformationSingular.v1")
+                );
+            }
+        }
     }
 
     #[test]

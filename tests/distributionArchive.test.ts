@@ -59,8 +59,6 @@ const distribution: DistributionDocV1 = {
         summary: true,
         horizontalTables: false,
         normalQuantilePlot: true,
-        quantileBoxPlot: false,
-        stemAndLeaf: false,
         ecdf: true,
         processCapability: true,
         histogramScale: "density",
@@ -164,11 +162,28 @@ assert.deepEqual(reopened.distributionFolders, {
 const { useDistributionStore } = await import("../src/stores/useDistributionStore.ts");
 const { useFolderStore } = await import("../src/stores/useFolderStore.ts");
 useDistributionStore.getState().loadFromProject(
-  reopened.distributions,
+  reopened.distributions.map((item) => ({
+    ...item,
+    currentConfig: {
+      ...item.currentConfig,
+      reportPreferences: {
+        ...item.currentConfig.reportPreferences,
+        "sales-amount-id": {
+          ...item.currentConfig.reportPreferences?.["sales-amount-id"],
+          quantileBoxPlot: true,
+          stemAndLeaf: true,
+        },
+      },
+    },
+  })) as DistributionDocV1[],
   reopened.derivedFormulas,
   reopened.distributionIssues,
 );
 assert.deepEqual(useDistributionStore.getState().items, [distribution]);
+const migratedPreferences = useDistributionStore.getState().items[0]?.currentConfig
+  .reportPreferences?.["sales-amount-id"] as Record<string, unknown>;
+assert.equal("quantileBoxPlot" in migratedPreferences, false);
+assert.equal("stemAndLeaf" in migratedPreferences, false);
 assert.deepEqual(useDistributionStore.getState().derivedFormulas, [formula]);
 assert.deepEqual(
   useDistributionStore.getState().items[0]?.currentConfig.continuousFit,

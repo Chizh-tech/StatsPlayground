@@ -320,8 +320,6 @@ assertDocumentedNormalMutationGuards();
 const compareCase = (caseItem: VisualCase): CompareResult => {
   const forcedPendingMethods = [
     "histogram.jmpAuto",
-    "quantileBox.jmp19",
-    "stemLeaf.jmp19",
     "normalScore.pending",
   ];
 
@@ -382,9 +380,7 @@ for (const result of results) {
   assert.ok(caseItem, `missing case for result ${result.caseId}`);
   assert.equal(result.status, caseItem.compatibilityStatus);
 
-  if (caseItem.methodId.startsWith("histogram.jmpAuto") ||
-      caseItem.methodId.startsWith("quantileBox.jmp19") ||
-      caseItem.methodId.startsWith("stemLeaf.jmp19")) {
+  if (caseItem.methodId.startsWith("histogram.jmpAuto")) {
     assert.equal(result.compatible, false);
   }
 }
@@ -414,19 +410,6 @@ const requiredPendingIds = [
   "histogram.jmpauto.pending.narrowdecimal.count",
   "histogram.jmpauto.pending.outlier.probability",
   "normalscore.pending.ties.n5",
-  "quantilebox.jmp19.pending.freq",
-  "quantilebox.jmp19.pending.n1to20",
-  "quantilebox.jmp19.pending.outlier",
-  "quantilebox.jmp19.pending.ties",
-  "quantilebox.jmp19.pending.weight",
-  "stemleaf.jmp19.pending.decimal",
-  "stemleaf.jmp19.pending.extremescale",
-  "stemleaf.jmp19.pending.freq",
-  "stemleaf.jmp19.pending.negative",
-  "stemleaf.jmp19.pending.positive",
-  "stemleaf.jmp19.pending.repeated",
-  "stemleaf.jmp19.pending.weight",
-  "stemleaf.jmp19.pending.zero",
 ];
 
 requiredPendingIds.forEach((id) => {
@@ -444,22 +427,6 @@ const histogramScales = new Set(
 );
 assert.deepEqual(new Set(["constant", "narrowDecimal", "mixedSign", "outlier", "boundary"]), histogramClasses);
 assert.deepEqual(new Set(["count", "probability", "density"]), histogramScales);
-
-const quantileCases = cases.filter(
-  (item) => item.methodId.startsWith("quantileBox.jmp19") && item.compatibilityStatus === "compatibilityPending",
-);
-const quantileClasses = new Set(
-  quantileCases.map((item) => (item.input as Record<string, unknown>).datasetClass),
-);
-assert.deepEqual(new Set(["n1To20", "ties", "outlier", "freq", "weight"]), quantileClasses);
-
-const stemCases = cases.filter(
-  (item) => item.methodId.startsWith("stemLeaf.jmp19") && item.compatibilityStatus === "compatibilityPending",
-);
-const stemClasses = new Set(
-  stemCases.map((item) => (item.input as Record<string, unknown>).datasetClass),
-);
-assert.deepEqual(new Set(["positive", "negative", "zero", "decimal", "repeated", "extremeScale", "freq", "weight"]), stemClasses);
 
 const tiePending = cases.find((item) => item.caseId === "normalscore.pending.ties.n5");
 assert.ok(tiePending, "missing normal ties pending case");

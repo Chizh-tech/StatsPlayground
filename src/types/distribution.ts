@@ -128,8 +128,10 @@ export interface DistributionFitMetricV1 {
 
 export interface DistributionFitParameterV1 {
   parameterId: string;
-  value: CapabilityTypedValueV1;
-  fixed: boolean;
+  estimate: CapabilityTypedValueV1;
+  standardError: CapabilityTypedValueV1;
+  lowerConfidence: CapabilityTypedValueV1;
+  upperConfidence: CapabilityTypedValueV1;
 }
 
 export interface DistributionFitConvergenceV1 {
@@ -282,7 +284,6 @@ export type DistributionChartKindV1 =
   | "histogramData"
   | "boxPlotData"
   | "normalQuantileData"
-  | "quantileBoxData"
   | "qqData"
   | "ppData"
   | "cdfData"
@@ -333,47 +334,6 @@ export interface NormalQuantileDataV1 {
   confidenceBandProvenance: DiagnosticProvenanceV1;
 }
 
-export interface QuantileBoxLayerV1 {
-  probabilityLower: number;
-  probabilityUpper: number;
-  lower: number;
-  upper: number;
-  depth: number;
-}
-
-export interface QuantileBoxDataV1 {
-  layers: QuantileBoxLayerV1[];
-  median: number;
-  status: "available" | "unavailable" | "failed";
-  reasonCode: string | null;
-  provenance: DiagnosticProvenanceV1;
-}
-
-export interface StemAndLeafRowV1 {
-  stem: string;
-  leaves: string[];
-  count: number;
-  omittedLeafCount: number;
-}
-
-export interface StemAndLeafInterpretationKeyV1 {
-  stem: string;
-  leaf: string;
-  value: number;
-}
-
-export interface StemAndLeafDataV1 {
-  rows: StemAndLeafRowV1[];
-  scale: number;
-  leafUnit: number;
-  interpretationKey: StemAndLeafInterpretationKeyV1;
-  omittedStemCount: number;
-  omittedLeafCount: number;
-  status: "available" | "unavailable" | "failed";
-  reasonCode: string | null;
-  provenance: DiagnosticProvenanceV1;
-}
-
 interface DistributionChartDataBaseV1 {
   schemaVersion: DistributionSchemaVersionV1;
   provenance: DistributionChartProvenanceV1;
@@ -406,13 +366,9 @@ export type DistributionChartDataV1 =
       payload: NormalQuantileDataV1;
     })
   | (DistributionChartDataBaseV1 & {
-      kind: "quantileBoxData";
-      payload: QuantileBoxDataV1;
-    })
-  | (DistributionChartDataBaseV1 & {
       kind: Exclude<
         DistributionChartKindV1,
-        "histogramData" | "boxPlotData" | "normalQuantileData" | "quantileBoxData"
+        "histogramData" | "boxPlotData" | "normalQuantileData"
       >;
       points: DistributionCoordinateV1[];
     });
@@ -425,7 +381,6 @@ export interface DistributionReportBlockV1 {
   status: string;
   summaryData?: DistributionSummaryDataV1;
   capabilityData?: ProcessCapabilityDataV1;
-  stemAndLeafData?: StemAndLeafDataV1;
   distributionFitData?: DistributionFitDataV1;
   distributionFitComparisonData?: DistributionFitComparisonDataV1;
   chartData: DistributionChartDataV1 | null;
@@ -760,8 +715,6 @@ export interface DistributionYReportPreferencesV2 {
   summary: boolean;
   horizontalTables: boolean;
   normalQuantilePlot: boolean;
-  quantileBoxPlot: boolean;
-  stemAndLeaf: boolean;
   ecdf: boolean;
   processCapability: boolean;
   histogramScale: "count" | "probability" | "density";

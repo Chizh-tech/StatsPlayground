@@ -556,42 +556,6 @@
   }
 }
 
-.distribution-stem-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin: 0 0 8px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.distribution-stem-table {
-  width: min(720px, 100%);
-  border: 1px solid var(--border-color, #c4c9d3);
-  border-collapse: collapse;
-  font-variant-numeric: tabular-nums;
-}
-
-.distribution-stem-table th,
-.distribution-stem-table td {
-  padding: 4px 8px;
-  border: 1px solid var(--border-color, #c4c9d3);
-  text-align: right;
-}
-
-.distribution-stem-table th {
-  text-align: left;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.distribution-stem-leaf-text {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-}
-
 @media (max-width: 900px) {
   .distribution-table-pair {
     grid-template-columns: 1fr;

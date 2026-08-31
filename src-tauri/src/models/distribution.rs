@@ -225,9 +225,11 @@ pub struct DistributionFitCapabilityV1 {
 #[serde(rename_all = "camelCase")]
 pub struct DistributionFitParameterV1 {
     pub parameter_id: String,
+    #[serde(rename = "estimate")]
     pub value: CapabilityTypedValueV1,
-    #[serde(default)]
-    pub fixed: bool,
+    pub standard_error: CapabilityTypedValueV1,
+    pub lower_confidence: CapabilityTypedValueV1,
+    pub upper_confidence: CapabilityTypedValueV1,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -406,8 +408,6 @@ pub struct DistributionYReportPreferencesV1 {
     pub summary: bool,
     pub horizontal_tables: bool,
     pub normal_quantile_plot: bool,
-    pub quantile_box_plot: bool,
-    pub stem_and_leaf: bool,
     pub ecdf: bool,
     pub process_capability: bool,
     #[serde(default = "default_true")]
@@ -611,7 +611,6 @@ pub enum DistributionChartKindV1 {
     HistogramData,
     BoxPlotData,
     NormalQuantileData,
-    QuantileBoxData,
     QqData,
     PpData,
     CdfData,
@@ -706,57 +705,6 @@ pub struct NormalQuantileDataV1 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct QuantileBoxLayerV1 {
-    pub probability_lower: f64,
-    pub probability_upper: f64,
-    pub lower: f64,
-    pub upper: f64,
-    pub depth: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct QuantileBoxDataV1 {
-    pub layers: Vec<QuantileBoxLayerV1>,
-    pub median: f64,
-    pub status: DiagnosticDataStatusV1,
-    pub reason_code: Option<String>,
-    pub provenance: DiagnosticProvenanceV1,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct StemAndLeafRowV1 {
-    pub stem: String,
-    pub leaves: Vec<String>,
-    pub count: u64,
-    pub omitted_leaf_count: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct StemAndLeafInterpretationKeyV1 {
-    pub stem: String,
-    pub leaf: String,
-    pub value: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct StemAndLeafDataV1 {
-    pub rows: Vec<StemAndLeafRowV1>,
-    pub scale: f64,
-    pub leaf_unit: f64,
-    pub interpretation_key: StemAndLeafInterpretationKeyV1,
-    pub omitted_stem_count: u64,
-    pub omitted_leaf_count: u64,
-    pub status: DiagnosticDataStatusV1,
-    pub reason_code: Option<String>,
-    pub provenance: DiagnosticProvenanceV1,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -777,11 +725,6 @@ pub enum DistributionChartDataV1 {
         schema_version: DistributionSchemaVersionV1,
         provenance: DistributionChartProvenanceV1,
         payload: NormalQuantileDataV1,
-    },
-    QuantileBoxData {
-        schema_version: DistributionSchemaVersionV1,
-        provenance: DistributionChartProvenanceV1,
-        payload: QuantileBoxDataV1,
     },
     QqData {
         schema_version: DistributionSchemaVersionV1,
@@ -822,8 +765,6 @@ pub struct DistributionReportBlockV1 {
     pub summary_data: Option<DistributionSummaryDataV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_data: Option<ProcessCapabilityDataV1>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stem_and_leaf_data: Option<StemAndLeafDataV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distribution_fit_data: Option<DistributionFitDataV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1478,8 +1419,6 @@ mod tests {
                     summary: false,
                     horizontal_tables: true,
                     normal_quantile_plot: false,
-                    quantile_box_plot: false,
-                    stem_and_leaf: false,
                     ecdf: true,
                     process_capability: true,
                     capability_histogram: true,
@@ -1516,7 +1455,6 @@ mod tests {
             DistributionChartKindV1::HistogramData,
             DistributionChartKindV1::BoxPlotData,
             DistributionChartKindV1::NormalQuantileData,
-            DistributionChartKindV1::QuantileBoxData,
             DistributionChartKindV1::QqData,
             DistributionChartKindV1::PpData,
             DistributionChartKindV1::CdfData,
@@ -1530,7 +1468,6 @@ mod tests {
                 "histogramData",
                 "boxPlotData",
                 "normalQuantileData",
-                "quantileBoxData",
                 "qqData",
                 "ppData",
                 "cdfData",

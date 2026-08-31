@@ -94,26 +94,6 @@ const charts: Array<{ title: string; chart: DistributionChartDataV1; minVisibleP
       },
     },
   },
-  {
-    title: "Quantile Box",
-    minVisiblePixels: 600,
-    chart: {
-      schemaVersion: "1",
-      kind: "quantileBoxData",
-      provenance,
-      payload: {
-        layers: [
-          { probabilityLower: 0.25, probabilityUpper: 0.75, lower: 1.0, upper: 5.0, depth: 1 },
-          { probabilityLower: 0.125, probabilityUpper: 0.875, lower: 0.5, upper: 5.5, depth: 2 },
-          { probabilityLower: 0.0625, probabilityUpper: 0.9375, lower: 0.25, upper: 5.75, depth: 3 },
-        ],
-        median: 3.0,
-        status: "available",
-        reasonCode: null,
-        provenance,
-      },
-    },
-  },
 ];
 
 for (const { title, chart, minVisiblePixels = 100 } of charts) {

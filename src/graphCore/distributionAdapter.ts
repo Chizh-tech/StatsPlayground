@@ -198,67 +198,6 @@ export function buildDistributionChartOption(
     };
   }
 
-  if (chart.kind === "quantileBoxData") {
-    const payload = chart.payload;
-    return {
-      ...base,
-      xAxis: axis(theme, "value", undefined, [0, 1]),
-      yAxis: axis(theme, "value"),
-      series: [
-        {
-          name: "Quantile layers",
-          type: "custom",
-          clip: true,
-          data: payload.layers.map((layer) => [
-            layer.probabilityLower,
-            layer.probabilityUpper,
-            layer.lower,
-            layer.upper,
-            layer.depth,
-          ]),
-          renderItem: (_params: unknown, api: {
-            value: (index: number) => number;
-            coord: (value: [number, number]) => [number, number];
-          }) => {
-            const probabilityLower = api.value(0);
-            const probabilityUpper = api.value(1);
-            const lower = api.value(2);
-            const upper = api.value(3);
-            const depth = api.value(4);
-            const leftTop = api.coord([probabilityLower, upper]);
-            const rightBottom = api.coord([probabilityUpper, lower]);
-            return {
-              type: "rect",
-              shape: {
-                x: leftTop[0],
-                y: leftTop[1],
-                width: Math.max(1, rightBottom[0] - leftTop[0]),
-                height: Math.max(1, rightBottom[1] - leftTop[1]),
-              },
-              style: {
-                fill: theme.accent,
-                opacity: Math.max(0.15, 0.45 - Math.min(depth, 6) * 0.05),
-                stroke: theme.accent,
-                lineWidth: 1,
-              },
-            };
-          },
-        },
-        {
-          name: "Median",
-          type: "line",
-          clip: true,
-          showSymbol: false,
-          data: [
-            [0.48, payload.median],
-            [0.52, payload.median],
-          ],
-          lineStyle: { color: theme.fgPrimary, width: 1.5 },
-        },
-      ],
-    };
-  }
-
   if ("points" in chart) {
     return {
       ...base,

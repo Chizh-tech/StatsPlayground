@@ -40,7 +40,7 @@ $$
 - Continuous Fit Measures默认显示`-2*LogLikelihood`、`AICc`、`BIC`；AIC保留payload但不作为默认表行。
 - 模型术语改为JMP结构：Normal使用Location/Dispersion；Lognormal说明natural-log scale；Gamma/Weibull使用Shape/Scale；固定参数显示`Fixed`。
 
-Stage 1不新增参数SE/CI，也不改变Normal/Gamma/Weibull的估计方法。
+Stage 1当时未新增参数SE/CI；后续批准的 Fit Inference 设计已交付五模型固定95%参数推断，且不改变point estimate方法。
 
 ### Stage 2：Continuous Fit JMP目标合同
 
@@ -153,7 +153,7 @@ AICc与BIC沿现有typed values显示。AIC继续保留contract供诊断和排�
 
 Stage 1只对齐可见术语，不伪造Std Error或Confidence Limits。
 
-## 6. Quantile Box与Stem-and-Leaf
+## 6. Quantile Box与Stem-and-Leaf（历史状态）
 
 ### 6.1 当前状态
 
@@ -167,6 +167,8 @@ Stage 1只对齐可见术语，不伪造Std Error或Confidence Limits。
 - Quantile Box可见名称增加`Letter-Value`说明，避免暗示JMP等价。
 - Stem报告补Count列、leaf-unit/解释key，并优先修复$(-scale,0)$符号表达缺陷。
 - 不改变现有method ID的数学结果，除非是明确的数据表达bug；bugfix必须有版本/provenance说明。
+
+后续产品决策已覆盖本节：Letter-Value Quantile Plot 与 Stem-and-Leaf 已彻底移除，以上内容仅记录 Stage 1 历史状态，不再代表当前 runtime 或未来路线。
 
 ### 6.3 Stage 3准入
 

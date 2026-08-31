@@ -112,55 +112,6 @@ assert.deepEqual(normalQuantileOption.series[2].data, [
   [0.6744897501960817, 3],
 ]);
 
-const quantileBox = {
-  kind: "quantileBoxData" as const,
-  schemaVersion: "1" as const,
-  provenance: {
-    methodId: "quantileBox.public.letterValue.type6.v1",
-    methodVersion: "1.0.0",
-    compatibilityStatus: "intentionalDifference" as const,
-    snapshotId: "snapshot-1",
-  },
-  payload: {
-    layers: [
-      {
-        probabilityLower: 0.25,
-        probabilityUpper: 0.75,
-        lower: 1,
-        upper: 5,
-        depth: 1,
-      },
-      {
-        probabilityLower: 0.125,
-        probabilityUpper: 0.875,
-        lower: 0.5,
-        upper: 5.5,
-        depth: 2,
-      },
-    ],
-    median: 3,
-    status: "available" as const,
-    reasonCode: null,
-    provenance: {
-      methodId: "quantileBox.public.letterValue.type6.v1",
-      methodVersion: "1.0.0",
-      compatibilityStatus: "intentionalDifference" as const,
-      snapshotId: "snapshot-1",
-    },
-  },
-};
-const quantileBoxOption = buildDistributionChartOption(quantileBox, "Quantile Box") as {
-  xAxis: { min?: number; max?: number };
-  series: Array<{ type: string; data: unknown[] }>;
-};
-assert.equal(quantileBoxOption.xAxis.max, 1);
-assert.equal(quantileBoxOption.series[0].type, "custom");
-assert.deepEqual(quantileBoxOption.series[0].data, [
-  [0.25, 0.75, 1, 5, 1],
-  [0.125, 0.875, 0.5, 5.5, 2],
-]);
-assert.equal(quantileBoxOption.series[1].type, "line");
-
 const overviewOption = buildDistributionOverviewOption(histogram, box, "Overview") as {
   xAxis: Array<{ type: string; min?: number; max?: number; name?: string }>;
   yAxis: Array<{ type: string; min?: number; max?: number; name?: string }>;

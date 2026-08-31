@@ -9,9 +9,9 @@ import type {
   DistributionFitParameterV1,
 } from "@/types/distribution";
 
-function formatValue(value: CapabilityTypedValueV1): string {
+function formatValue(value: CapabilityTypedValueV1, t?: TFunction): string {
   if (value.state !== "available" || value.value === null || !Number.isFinite(value.value)) {
-    return value.reasonCode ?? "—";
+    return value.reasonCode && t ? formatReason(t, value.reasonCode) : value.reasonCode ?? "—";
   }
   return new Intl.NumberFormat(undefined, { maximumSignificantDigits: 8 }).format(value.value);
 }
@@ -24,6 +24,7 @@ function reasonCategory(code: string): string | null {
   if (code.includes("optimizer") || code.includes("iterationLimit") || code.includes("toleranceInvalid")) return "optimizationFailed";
   if (code.includes("curve") || code.includes("pdf")) return "curveInvalid";
   if (code.includes("Likelihood") || code.includes("Criteria") || code.includes("aicc")) return "metricInvalid";
+  if (code.includes("parameterInference") || code.includes("parameterInformation") || code.includes("parameterInterval")) return "parameterInferenceUnavailable";
   if (code.includes("estimate")) return "estimateInvalid";
   if (code.includes("observation") || code.includes("effectiveN") || code.includes("positiveTransform")) return "inputInvalid";
   return null;
@@ -46,8 +47,10 @@ function negativeTwoLogLikelihood(value: CapabilityTypedValueV1): CapabilityType
 interface DisplayParameter {
   parameterId: string;
   labelId: string;
-  value: CapabilityTypedValueV1;
-  fixed: boolean;
+  estimate: CapabilityTypedValueV1;
+  standardError: CapabilityTypedValueV1;
+  lowerConfidence: CapabilityTypedValueV1;
+  upperConfidence: CapabilityTypedValueV1;
 }
 
 function displayParameters(
@@ -104,14 +107,21 @@ export function ContinuousFitReport({ data }: { data: DistributionFitDataV1 }) {
       <div className="distribution-fit-tables">
         <table className="distribution-fit-table" aria-label={`${distribution} ${t("distribution.fit.parameters", { defaultValue: "Parameter Estimates" })}`}>
           <caption>{t("distribution.fit.parameters", { defaultValue: "Parameter Estimates" })}</caption>
-          <thead><tr><th scope="col">{t("distribution.fit.parameter", { defaultValue: "Parameter" })}</th><th scope="col">{t("distribution.fit.estimate", { defaultValue: "Estimate" })}</th></tr></thead>
+          <thead><tr>
+            <th scope="col">{t("distribution.fit.parameter", { defaultValue: "Parameter" })}</th>
+            <th scope="col">{t("distribution.fit.estimate", { defaultValue: "Estimate" })}</th>
+            <th scope="col">{t("distribution.fitStandardError", { defaultValue: "Std Error" })}</th>
+            <th scope="col">{t("distribution.fitLower95", { defaultValue: "Lower 95%" })}</th>
+            <th scope="col">{t("distribution.fitUpper95", { defaultValue: "Upper 95%" })}</th>
+          </tr></thead>
           <tbody>
             {parameters.map((parameter) => (
               <tr key={parameter.parameterId}>
                 <th scope="row">{t(`distribution.fit.parametersById.${parameter.labelId}`, { defaultValue: parameter.labelId })}</th>
-                <td>{parameter.fixed
-                  ? t("distribution.fit.fixed", { defaultValue: "Fixed" })
-                  : formatValue(parameter.value)}</td>
+                <td>{formatValue(parameter.estimate, t)}</td>
+                <td>{formatValue(parameter.standardError, t)}</td>
+                <td>{formatValue(parameter.lowerConfidence, t)}</td>
+                <td>{formatValue(parameter.upperConfidence, t)}</td>
               </tr>
             ))}
           </tbody>

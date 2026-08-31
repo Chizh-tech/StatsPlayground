@@ -12,6 +12,14 @@ const metric = (value: number | null, reasonCode: string | null = null) => ({
   reasonCode,
 });
 
+const parameter = (parameterId: string, estimate: number, standardError = 0.1) => ({
+  parameterId,
+  estimate: metric(estimate),
+  standardError: metric(standardError),
+  lowerConfidence: metric(estimate - 1.959963984540054 * standardError),
+  upperConfidence: metric(estimate + 1.959963984540054 * standardError),
+});
+
 const provenance = {
   methodId: "fit.normal.mle.v1",
   methodVersion: "1",
@@ -36,8 +44,8 @@ const fit: DistributionFitDataV1 = {
   status: "available",
   reasonCode: null,
   parameters: [
-    { parameterId: "location", value: metric(3), fixed: false },
-    { parameterId: "scale", value: metric(1.5), fixed: false },
+    parameter("location", 3),
+    parameter("scale", 1.5),
   ],
   estimatedParameterCount: 2,
   effectiveN: 10,
@@ -79,6 +87,9 @@ test("renders available Continuous Fit parameter estimates and JMP measures with
   await expect(component.getByText("JMP 19 compatibility pending")).toBeVisible();
   await expect(component.getByText(/Convergence: Converged/)).toBeVisible();
   await expect(component.getByRole("columnheader", { name: "Estimate" })).toBeVisible();
+  await expect(component.getByRole("columnheader", { name: "Std Error" })).toBeVisible();
+  await expect(component.getByRole("columnheader", { name: "Lower 95%" })).toBeVisible();
+  await expect(component.getByRole("columnheader", { name: "Upper 95%" })).toBeVisible();
   await expect(component.getByRole("rowheader", { name: "Location" })).toBeVisible();
   await expect(component.getByRole("rowheader", { name: "Dispersion" })).toBeVisible();
   await expect(measures.locator("tbody tr")).toHaveCount(3);
@@ -91,7 +102,7 @@ test("renders available Continuous Fit parameter estimates and JMP measures with
   await expect(component.locator(".distribution-fit-table td").first()).toHaveCSS("border-bottom-style", "solid");
 });
 
-test("uses model-specific parameter terminology and marks fixed locations", async ({ mount }) => {
+test("uses model-specific parameter terminology without fixed location rows", async ({ mount }) => {
   const cases: Array<{
     data: DistributionFitDataV1;
     expectedRows: string[];
@@ -104,8 +115,8 @@ test("uses model-specific parameter terminology and marks fixed locations", asyn
         distributionId: "lognormal",
         parameterizationId: "lognormal.logLocationLogScale.v1",
         parameters: [
-          { parameterId: "logLocation", value: metric(2), fixed: false },
-          { parameterId: "logScale", value: metric(0.5), fixed: false },
+          parameter("logLocation", 2),
+          parameter("logScale", 0.5),
         ],
       },
       expectedRows: ["Scale", "Shape"],
@@ -118,11 +129,10 @@ test("uses model-specific parameter terminology and marks fixed locations", asyn
         distributionId: "exponential",
         parameterizationId: "exponential.scaleLocation0.v1",
         parameters: [
-          { parameterId: "scale", value: metric(3), fixed: false },
-          { parameterId: "location", value: metric(0), fixed: true },
+          parameter("scale", 3),
         ],
       },
-      expectedRows: ["Scale", "Location Fixed"],
+      expectedRows: ["Scale"],
     },
     {
       data: {
@@ -131,12 +141,11 @@ test("uses model-specific parameter terminology and marks fixed locations", asyn
         distributionId: "gamma",
         parameterizationId: "gamma.shapeScale.location0.v1",
         parameters: [
-          { parameterId: "shape", value: metric(2), fixed: false },
-          { parameterId: "scale", value: metric(3), fixed: false },
-          { parameterId: "location", value: metric(0), fixed: true },
+          parameter("shape", 2),
+          parameter("scale", 3),
         ],
       },
-      expectedRows: ["Shape", "Scale", "Location Fixed"],
+      expectedRows: ["Shape", "Scale"],
     },
     {
       data: {
@@ -145,12 +154,11 @@ test("uses model-specific parameter terminology and marks fixed locations", asyn
         distributionId: "weibull",
         parameterizationId: "weibull.shapeScale.location0.v1",
         parameters: [
-          { parameterId: "shape", value: metric(2), fixed: false },
-          { parameterId: "scale", value: metric(3), fixed: false },
-          { parameterId: "location", value: metric(0), fixed: true },
+          parameter("shape", 2),
+          parameter("scale", 3),
         ],
       },
-      expectedRows: ["Shape", "Scale", "Location Fixed"],
+      expectedRows: ["Shape", "Scale"],
     },
   ];
 
@@ -159,6 +167,9 @@ test("uses model-specific parameter terminology and marks fixed locations", asyn
     const table = component.getByRole("table", { name: new RegExp(`${candidate.data.distributionId} Parameter Estimates`, "i") });
     for (const rowName of candidate.expectedRows) {
       await expect(table.getByRole("row", { name: new RegExp(rowName) })).toBeVisible();
+    }
+    if (["exponential", "gamma", "weibull"].includes(candidate.data.distributionId)) {
+      await expect(table.getByRole("rowheader", { name: "Location" })).toHaveCount(0);
     }
     if (candidate.note) await expect(component.getByText(candidate.note)).toBeVisible();
     await component.unmount();
@@ -175,6 +186,26 @@ test("preserves unavailable log likelihood state in Measures", async ({ mount })
   const measures = component.getByRole("table", { name: "Normal measures" });
   await expect(measures.getByRole("row", { name: /-2\*LogLikelihood/ }))
     .toContainText("distribution.fit.informationCriteriaInvalid.v1");
+});
+
+test("keeps the estimate visible when parameter inference is unavailable", async ({ mount }) => {
+  const reasonCode = "distribution.fit.parameterInformationSingular.v1";
+  const component = await mount(<ReportBlock block={block({
+    distributionFitData: {
+      ...fit,
+      parameters: [{
+        parameterId: "location",
+        estimate: metric(3),
+        standardError: metric(null, reasonCode),
+        lowerConfidence: metric(null, reasonCode),
+        upperConfidence: metric(null, reasonCode),
+      }],
+      estimatedParameterCount: 1,
+    },
+  })} />);
+  const row = component.getByRole("row", { name: /Location/ });
+  await expect(row).toContainText("3");
+  await expect(row).toContainText("Parameter inference is unavailable");
 });
 
 test("renders failed fit reason without a fake fit table", async ({ mount }) => {

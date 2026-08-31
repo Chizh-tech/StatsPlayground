@@ -19,7 +19,6 @@ import {
 } from "./DistributionChart";
 import { ContinuousFitComparisonReport, ContinuousFitReport } from "./ContinuousFitReport";
 import { ProcessCapabilityReport } from "./ProcessCapabilityReport";
-import { StemAndLeafReport } from "./StemAndLeafReport";
 
 interface DistributionReportProps {
   groups: DistributionGroupResultV1[];
@@ -50,8 +49,6 @@ export const DEFAULT_DISTRIBUTION_REPORT_PREFERENCES: DistributionYReportPrefere
   summary: true,
   horizontalTables: true,
   normalQuantilePlot: false,
-  quantileBoxPlot: false,
-  stemAndLeaf: false,
   ecdf: false,
   processCapability: true,
   histogramScale: "density",
@@ -70,14 +67,32 @@ type DisplayToggleKey =
   | "summary"
   | "ecdf"
   | "processCapability"
-  | "normalQuantilePlot"
-  | "quantileBoxPlot"
-  | "stemAndLeaf";
+  | "normalQuantilePlot";
 
 function normalizeReportPreferences(
   preferences?: DistributionYReportPreferencesV1,
 ): DistributionYReportPreferencesV1 {
-  return { ...DEFAULT_DISTRIBUTION_REPORT_PREFERENCES, ...preferences };
+  const defaults = DEFAULT_DISTRIBUTION_REPORT_PREFERENCES;
+  return {
+    overview: preferences?.overview ?? defaults.overview,
+    histogram: preferences?.histogram ?? defaults.histogram,
+    outlierBoxPlot: preferences?.outlierBoxPlot ?? defaults.outlierBoxPlot,
+    specificationLines: preferences?.specificationLines ?? defaults.specificationLines,
+    quantiles: preferences?.quantiles ?? defaults.quantiles,
+    summary: preferences?.summary ?? defaults.summary,
+    horizontalTables: preferences?.horizontalTables ?? defaults.horizontalTables,
+    normalQuantilePlot: preferences?.normalQuantilePlot ?? defaults.normalQuantilePlot,
+    ecdf: preferences?.ecdf ?? defaults.ecdf,
+    processCapability: preferences?.processCapability ?? defaults.processCapability,
+    histogramScale: preferences?.histogramScale ?? defaults.histogramScale,
+    capabilityHistogram: preferences?.capabilityHistogram ?? defaults.capabilityHistogram,
+    capabilityProcessSummary: preferences?.capabilityProcessSummary ?? defaults.capabilityProcessSummary,
+    capabilityWithin: preferences?.capabilityWithin ?? defaults.capabilityWithin,
+    capabilityOverall: preferences?.capabilityOverall ?? defaults.capabilityOverall,
+    capabilityNonconformance: preferences?.capabilityNonconformance ?? defaults.capabilityNonconformance,
+    fitOverlays: preferences?.fitOverlays ?? defaults.fitOverlays,
+    fitDetails: preferences?.fitDetails ?? defaults.fitDetails,
+  };
 }
 
 export function DistributionReport({
@@ -237,8 +252,6 @@ function YSection({
       : [];
   });
   const hasNormalQuantile = result.blocks.some((block) => block.chartData?.kind === "normalQuantileData");
-  const hasQuantileBox = result.blocks.some((block) => block.chartData?.kind === "quantileBoxData");
-  const hasStemAndLeaf = result.blocks.some((block) => !!block.stemAndLeafData);
   const hasOverview = !!(histogram || boxPlot);
   const hasQuantiles = true;
   const hasSummary = result.blocks.some((block) => block.kind === "summary");
@@ -253,12 +266,6 @@ function YSection({
   const diagnosticOptions: Array<[DisplayToggleKey, string]> = [];
   if (hasNormalQuantile) {
     diagnosticOptions.push(["normalQuantilePlot", t("distribution.report.normalQuantilePlot")]);
-  }
-  if (hasQuantileBox) {
-    diagnosticOptions.push(["quantileBoxPlot", t("distribution.letterValueQuantilePlot")]);
-  }
-  if (hasStemAndLeaf) {
-    diagnosticOptions.push(["stemAndLeaf", t("distribution.report.stemAndLeaf")]);
   }
   if (result.blocks.some((block) => block.kind === "ecdf")) {
     diagnosticOptions.push(["ecdf", t("distribution.report.ecdf")]);
@@ -663,9 +670,7 @@ export function ReportBlock({
   const { t } = useTranslation();
   const unavailableReasonCode = getUnavailableReasonCode(block);
   const compatibilityStatus = getCompatibilityStatus(block);
-  const titleKey = block.kind === "quantileBox"
-    ? "distribution.letterValueQuantilePlot"
-    : block.titleKey;
+  const titleKey = block.titleKey;
   const blockTitle = block.distributionFitData
     ? `${t(titleKey)} - ${t(`distribution.fit.distributions.${block.distributionFitData.distributionId}`, {
       defaultValue: block.distributionFitData.distributionId,
@@ -686,7 +691,6 @@ export function ReportBlock({
       )}
       {block.summaryData && <SummaryDataTables summaryData={block.summaryData} />}
       {block.chartData && <DistributionChart chart={block.chartData} title={t(titleKey)} />}
-      {block.stemAndLeafData && <StemAndLeafReport data={block.stemAndLeafData} />}
       {block.distributionFitData && <ContinuousFitReport data={block.distributionFitData} />}
       {block.distributionFitComparisonData && <ContinuousFitComparisonReport data={block.distributionFitComparisonData} />}
       {block.capabilityData && <ProcessCapabilityReport
@@ -749,9 +753,7 @@ function isBlockVisible(
     | "summary"
     | "ecdf"
     | "processCapability"
-    | "normalQuantilePlot"
-    | "quantileBoxPlot"
-    | "stemAndLeaf",
+    | "normalQuantilePlot",
     boolean
   >,
 ): boolean {
@@ -760,16 +762,13 @@ function isBlockVisible(
   if (kind === "ecdf") return visible.ecdf;
   if (kind === "processCapability") return visible.processCapability;
   if (kind === "normalQuantile") return visible.normalQuantilePlot;
-  if (kind === "quantileBox") return visible.quantileBoxPlot;
-  if (kind === "stemAndLeaf") return visible.stemAndLeaf;
   return true;
 }
 
 function getCompatibilityStatus(
   block: DistributionReportBlockV1,
 ): "intentionalDifference" | "compatibilityPending" | null {
-  const status = block.stemAndLeafData?.provenance.compatibilityStatus ??
-    block.chartData?.provenance.compatibilityStatus;
+  const status = block.chartData?.provenance.compatibilityStatus;
   return status === "intentionalDifference" || status === "compatibilityPending"
     ? status
     : null;
@@ -779,13 +778,7 @@ function getUnavailableReasonCode(block: DistributionReportBlockV1): string | nu
   if (block.status !== "unavailable") {
     return null;
   }
-  if (block.stemAndLeafData?.status === "unavailable") {
-    return block.stemAndLeafData.reasonCode;
-  }
   if (block.chartData?.kind === "normalQuantileData") {
-    return block.chartData.payload.reasonCode;
-  }
-  if (block.chartData?.kind === "quantileBoxData") {
     return block.chartData.payload.reasonCode;
   }
   return null;

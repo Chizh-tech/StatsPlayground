@@ -76,8 +76,6 @@ const config: DistributionAnalysisConfigV1 = {
       summary: true,
       horizontalTables: true,
       normalQuantilePlot: false,
-      quantileBoxPlot: false,
-      stemAndLeaf: false,
       ecdf: false,
       processCapability: true,
       histogramScale: "count",

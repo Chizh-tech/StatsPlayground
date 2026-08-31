@@ -76,6 +76,24 @@ function maxDistributionSuffix(items: readonly DistributionDocV1[]): number {
   }, 0);
 }
 
+function withoutRemovedDiagnosticPreferences(
+  config: DistributionAnalysisConfigV1,
+): DistributionAnalysisConfigV1 {
+  const reportPreferences = Object.fromEntries(
+    Object.entries(config.reportPreferences ?? {}).map(([columnId, preferences]) => {
+      const sanitized = structuredClone(preferences) as DistributionYReportPreferencesV1
+        & Record<string, unknown>;
+      delete sanitized.quantileBoxPlot;
+      delete sanitized.stemAndLeaf;
+      return [columnId, sanitized];
+    }),
+  );
+  return {
+    ...structuredClone(config),
+    reportPreferences,
+  };
+}
+
 function isLoadedDistributionDoc(
   item: DistributionDocV1 | undefined,
 ): item is LoadedDistributionDocV1 {
@@ -112,7 +130,9 @@ export const useDistributionStore = create<DistributionStore>((set, get) => ({
   failureByAnalysisId: {},
   loadFromProject: (items, derivedFormulas, issues) =>
     set({
-      items,
+      items: items.map((item) => isLoadedDistributionDoc(item)
+        ? { ...item, currentConfig: withoutRemovedDiagnosticPreferences(item.currentConfig) }
+        : item),
       derivedFormulas,
       issues,
       selectedAnalysisId: null,
@@ -209,7 +229,7 @@ export const useDistributionStore = create<DistributionStore>((set, get) => ({
             sourceDatasetId: config.sourceDatasetId,
             status: "ready",
             loadStatus: "ready",
-            currentConfig: structuredClone(config),
+            currentConfig: withoutRemovedDiagnosticPreferences(config),
             configRevision,
           };
         }),

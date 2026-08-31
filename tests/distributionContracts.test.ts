@@ -22,7 +22,6 @@ const chartKinds = [
   "histogramData",
   "boxPlotData",
   "normalQuantileData",
-  "quantileBoxData",
   "qqData",
   "ppData",
   "cdfData",
@@ -30,7 +29,7 @@ const chartKinds = [
   "diagnosticCoordinateData",
 ] as const satisfies readonly DistributionChartKindV1[];
 
-assert.equal(new Set(chartKinds).size, 9);
+assert.equal(new Set(chartKinds).size, 8);
 
 const chartData: DistributionChartDataV1 = {
   kind: "histogramData",
@@ -152,15 +151,17 @@ const fitData: DistributionFitDataV1 = {
   parameters: [
     {
       parameterId: "location",
-      value: {
+      estimate: {
         state: "available",
         value: 1,
         reasonCode: null,
       },
-      fixed: false,
+      standardError: { state: "available", value: 0.1, reasonCode: null },
+      lowerConfidence: { state: "available", value: 0.8040036, reasonCode: null },
+      upperConfidence: { state: "available", value: 1.1959964, reasonCode: null },
     },
   ],
-  estimatedParameterCount: 2,
+  estimatedParameterCount: 1,
   effectiveN: 1,
   logLikelihood: { state: "available", value: -1, reasonCode: null },
   aic: { state: "available", value: 4, reasonCode: null },

@@ -60,7 +60,7 @@
 ### 2.2 本期范围裁剪
 
 - `DESC-06`、`DESC-07` 扩展摘要统计暂缓。
-- Stem-and-leaf 暂缓。
+- Letter-Value Quantile Plot 与 Stem-and-leaf 已按 2026-08-31 产品决策彻底移除，不进入 runtime、registry 或 UI。
 - Equivalence tests 暂缓。
 - Tolerance intervals 暂缓。
 - 高级拟合、zero-inflated distributions 和 mixtures 全部暂缓。
@@ -134,8 +134,8 @@
 | VIS-01 | Display 与 Histogram 分组菜单 | implemented | passing | pending | 只显示真实 backend 能力；显示偏好不增加 revision |
 | VIS-02 | Histogram methods、scale 与 JMP Auto 兼容矩阵 | implemented | passing | pending | 公开 methods 为 `intentionalDifference`；`jmpAuto` 为 FD fallback 且 `compatibilityPending` |
 | VIS-03 | Normal Quantile Plot | implemented | passing | pending | $r_i/(N+1)$ normal scores 为 `documentedCompatible`；line/band 为 `compatibilityPending` |
-| VIS-04 | Letter-Value Quantile Plot | implemented | passing | pending | 公开 letter-value Type-6 方法，明确 `intentionalDifference`；JMP-target 方法留待 Stage 3 |
-| DESC-08 | Stem-and-leaf | implemented | passing | pending | decimal v1.1.0：Count、leaf unit/key、sign-safe `-0`、typed extreme unavailable；仍为 `intentionalDifference` |
+| VIS-04 | Letter-Value Quantile Plot | removed | passing | notApplicable | backend compute、IPC、adapter、menu、preferences 与 UI 已删除；旧偏好读取时丢弃 |
+| DESC-08 | Stem-and-leaf | removed | passing | notApplicable | backend compute、IPC、component、menu、preferences 与 UI 已删除；旧偏好读取时丢弃 |
 | DESC-10 | Normal Q-Q、通用 Q-Q、P-P | implemented | passing | pending | 本阶段仅实现 Normal Quantile Plot；其他 Q-Q/P-P 仍 deferred |
 | VIS-05 | Overview/Capability axis 与规格线修复 | implemented | passing | pending | extent 隔离；LSL/Target/USL 可见且线型两两不同 |
 | VIS-06 | Quantiles/Summary 横向表格与紧凑 Nonconformance | implemented | passing | pending | 响应式双栏、单线表格、三行五列 Nonconformance |
@@ -147,12 +147,11 @@
 - Case 只允许机器字段：`caseId`、`methodId`、`inputHash`、`input`、`expected`、`jmpVersion`、`compatibilityStatus`、`schemaVersion`。
 - 明确禁止字段与内容：截图、帮助正文、绝对路径、可见列名、自由文本。
 - `normalScore.documented.*` deterministic cases 可标 `documentedCompatible`。
-- `histogram.jmpAuto.*`、`quantileBox.jmp19.*`、`stemLeaf.jmp19.*` 在黑盒证据到位前只能是 machine-only `compatibilityPending`，且 comparator 必须判定 `compatible=false`。
+- `histogram.jmpAuto.*` 在黑盒证据到位前只能是 machine-only `compatibilityPending`，且 comparator 必须判定 `compatible=false`。
 - Task 1 已建立 pending marker coverage：
 	- Histogram pending class 覆盖 `constant`、`narrowDecimal`、`mixedSign`、`outlier`、`boundary`，并覆盖 `count`、`probability`、`density` markers。
-	- Quantile Box pending class 覆盖 `n1To20`、`ties`、`outlier`、`freq`、`weight`。
-	- Stem and Leaf pending class 覆盖 `positive`、`negative`、`zero`、`decimal`、`repeated`、`extremeScale`、`freq`、`weight`。
-- 当前仍缺 JMP 桌面黑盒 numeric breadth：上述 pending 仅为 machine marker 覆盖，不代表 bins/layers/stems 的数值兼容已冻结。
+- Letter-Value Quantile Plot 与 Stem-and-leaf 的 pending cases 已从 fixture/comparator 移除，不再是 active compatibility target。
+- 当前仍缺 Histogram JMP 桌面黑盒 numeric breadth；pending 仅为 machine marker 覆盖，不代表 bins 数值兼容已冻结。
 
 ### 4.6 Optimization Handbook Phase A
 
@@ -180,7 +179,7 @@ Phase A 自动门禁和 Tauri process/render smoke 不构成产品 UI 验收。5
 | TEST-04 | Equivalence tests | deferred | 本期明确暂缓 |
 | TEST-05 | Prediction intervals | deferred | 本期不交付 |
 | TEST-06 | Tolerance intervals | deferred | 本期明确暂缓 |
-| FIT-01 | Normal、Lognormal、Weibull、Exponential、Gamma 通用拟合 UI | implemented | Stage 1 自动门禁通过；Parameter Estimates 使用模型术语与 Fixed；Measures 显示 -2*LogLikelihood/AICc/BIC；参数 SE/CI 留待 Stage 2；人工 UI 验收 pending |
+| FIT-01 | Normal、Lognormal、Weibull、Exponential、Gamma 通用拟合 UI | implemented | 五模型自由参数输出 Estimate、Std Error、Lower 95%、Upper 95%；固定 Location 不输出；Measures 保持 -2*LogLikelihood/AICc/BIC；人工 UI 验收 pending |
 | FIT-02 | Poisson、Negative Binomial、Binomial | deferred | 离散分布阶段另行批准 |
 | FIT-03 | Anderson-Darling、Shapiro-Wilk、Pearson chi-square | approved | Continuous Fit Stage 2；Shapiro-Wilk 仅用于 Normal 辅助诊断 |
 | FIT-04 | Fit All、AIC/AICc/BIC 稳定排序 | implemented | Exponential 固定 location 使用自由参数数 k=1，其他 Stage 1 模型 k=2；Fit All、partial failure 与稳定排序通过；Stage 2 再扩展候选与 GOF |

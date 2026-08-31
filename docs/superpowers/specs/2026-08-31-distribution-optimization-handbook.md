@@ -17,6 +17,7 @@
 - [Distribution Continuous Fit Design](2026-08-28-distribution-continuous-fit-jmp19-design.md)
 - [Visual Diagnostics 验收记录](../artifacts/2026-08-27-distribution-visual-diagnostics-acceptance.md)
 - [Continuous Fit Stage 1 验收记录](../artifacts/2026-08-30-distribution-continuous-fit-stage-1-acceptance.md)
+- [Fit Inference 与诊断移除验收记录](../artifacts/2026-08-31-distribution-fit-inference-and-diagnostics-removal-acceptance.md)
 
 ## 1. 手册定位
 
@@ -43,14 +44,14 @@
 因此，本手册采用以下当前事实：
 
 - Quantiles、Core Summary、Histogram、Tukey Box、ECDF 已实现并通过自动门禁，产品 UI 验收仍为 `pending`。
-- Normal Quantile Plot、Quantile Box Plot、Stem-and-leaf 已实现并通过自动门禁，但兼容状态不同。
+- Normal Quantile Plot 已实现并通过自动门禁；Letter-Value Quantile Plot 与 Stem-and-leaf 已按后续产品决策从 runtime、contracts 和 UI 彻底移除。
 - Normal、Lognormal、Exponential、Gamma、Weibull、Fit All、信息准则和 fitted PDF overlay 已完成 Continuous Fit Stage 1 自动验收，产品 UI 验收仍为 `pending`。
 - Normal Process Capability 已实现并通过自动门禁，产品 UI 验收仍为 `pending`。
-- JMP 术语与方法对齐 Stage 1 已实现并通过自动门禁：Summary、Capability 显示、Continuous Fit Measures 与 Stem 可解释性已收口；参数 SE/CI 与 JMP-target 算法仍按 Stage 2/3 边界执行。
+- JMP 术语与方法对齐 Stage 1 已实现；后续 Fit Inference 阶段已为五模型自由参数增加固定 95% SE/CI，兼容状态保持 `compatibilityPending`。
 - Test Mean、Test Std Dev、Prediction Interval、Equivalence 和 Tolerance Interval 当前仍为 `deferred`。
 - Continuous Fit Stage 2 的 GOF、Cauchy、Student's t 和模型诊断已批准或规划，但尚未实现。
 
-当前批准范围台账本身仍有两类待修正冲突：前文“Stem-and-leaf 暂缓”与后文 `DESC-08 implemented` 冲突；暂缓表中 `FIT-01`、`FIT-04` 的 `scopeStatus` 列误填为 `implemented`。后续 session 必须先根据已批准的设计、提交记录和验收记录修正台账。修正前，不回退已进入 registry 且自动门禁通过的能力，也不据此批准新的能力。
+批准范围台账中的 Stem、Letter-Value 与 Continuous Fit 状态冲突已按后续产品决策修正；removed 能力不得重新进入 registry 或 UI。
 
 ## 3. 优先级与状态模型
 
@@ -81,7 +82,7 @@
 1. **Overview**：Histogram 与 Tukey Outlier Box Plot 共用 value axis。
 2. **Quantiles + Summary Statistics**：宽屏横向、窄屏纵向。
 3. **Process Capability**：仅在存在有效 LSL 或 USL 时默认出现。
-4. **Diagnostics**：Normal Quantile、Quantile Box、Stem-and-leaf、ECDF 默认关闭，由用户按需开启。
+4. **Diagnostics**：Normal Quantile 与 ECDF 默认关闭，由用户按需开启；Letter-Value Quantile Plot 与 Stem-and-leaf 不再提供。
 5. **Continuous Fit**：仅显示 capability registry 中真实可执行的模型。
 
 显示开关、报告折叠、横向布局、Histogram scale、fit overlay 和 details visibility 都是 presentation preference：
@@ -315,72 +316,13 @@ $$
 - 确定性 rank grid 必须保留两端、中心和规格限邻域。
 - Rust 返回 points、reference line 和 confidence band；Graph Builder 只映射坐标。
 
-## 8. Stem-and-leaf
+## 8. Stem-and-leaf（Removed）
 
-### 8.1 统计意义
+该能力已按 2026-08-31 产品决策彻底移除。当前 runtime 不计算或返回 Stem-and-leaf payload，UI、偏好、i18n、组件和活动 compatibility fixture 均不再包含该能力。旧项目中的 `stemAndLeaf` 偏好键在加载时丢弃。
 
-Stem-and-leaf 将观测值拆成高位 stem 与末位 leaf，在保留原始数字结构的同时显示分布形态、重复值、间隙和极端值。
+## 9. Letter-Value Quantile Plot（Removed）
 
-例如在 leaf unit 为 1 时：
-
-```text
-12 | 3 5 8
-```
-
-表示 123、125、128。报告必须显示解释 key，不能让用户猜测 decimal scale。
-
-### 8.2 计算边界
-
-一般流程：
-
-1. 根据数据范围和目标行数选择 decimal scale。
-2. 按冻结的舍入规则转换到 leaf unit。
-3. 将转换值拆成 stem 和 leaf。
-4. 按数值顺序排序。
-5. 必要时 split stems，例如 0–4 与 5–9 分行。
-6. 保留重复 leaves，并计算每行 count。
-
-JMP 对 negative values、rounding、split stems、decimal scale 和极端范围的精确规则不能从截图确定。
-
-### 8.3 产品决策
-
-优先级为 **P2 保留能力，默认关闭**。
-
-- 当前公开 decimal 方法保持 `intentionalDifference`。
-- Freq 等价于逻辑重复。
-- Weight 返回 unavailable。
-- 默认最多 200 stems、每 stem 最多 120 leaves。
-- payload 必须返回 `omittedStemCount` 和 `omittedLeafCount`。
-- payload 返回每行完整频数 `count`、`leafUnit` 与结构化 interpretation key；显示预算省略的 leaves 仍计入 `count`。
-- `stemLeaf.public.decimal.v1` 的 sign-safe 表达修复使用 method version `1.1.0`；$(-scale,0)$ 的值使用 `-0` stem，超出整数 stem 表示范围时返回 typed unavailable。
-- 完整展开受 `maxTotalRows` 与 `maxTotalBytes` 保护。
-- 不投入高优先级工作追求 JMP 像素或文本格式复刻。
-
-## 9. Letter-Value Quantile Plot
-
-### 9.1 统计意义
-
-Letter-Value Quantile Plot 用嵌套分位区间显示中心与尾部，比单一 Tukey box 展示更多分布层次。当前实现采用公开的 letter-value Type-6 方法，不把它描述为 JMP 专有层级算法。
-
-每层 payload 包含：
-
-- `probabilityLower`
-- `probabilityUpper`
-- `lower`
-- `upper`
-- `depth`
-
-所有边界复用 weighted Type-6 quantile；Freq 和 Weight 语义与 Quantiles 一致。单点与常数样本允许各层退化到同一值，不制造非有限宽度。
-
-### 9.2 产品决策
-
-优先级为 **P2 保留能力，默认关闭**。
-
-- 当前实现与自动门禁保留。
-- compatibility status 使用验收记录中的 `intentionalDifference`。
-- 不再以未验证的 JMP 层级规则作为当前实现声明。
-- Phase A 只验证现有 payload、退化状态、显示开关和项目恢复，不扩展算法。
-- 若未来恢复 JMP 数值兼容目标，必须另建版本化 method ID 和脱敏黑盒矩阵，不能静默改变现有 letter-value 结果。
+该能力已按 2026-08-31 产品决策彻底移除。当前 runtime 不计算或返回 Quantile Box payload，IPC chart union、graph adapter、UI、偏好、i18n 和活动 compatibility fixture 均不再包含该能力。旧项目中的 `quantileBoxPlot` 偏好键在加载时丢弃。
 
 ## 10. ECDF/CDF Plot
 
@@ -513,7 +455,7 @@ Tolerance interval 的语义是：以置信度 $\gamma$ 覆盖总体至少比例
 
 已实现报告：
 
-- Parameter Estimates：Estimate；固定 location 显示 Fixed
+- Parameter Estimates：Estimate、Std Error、Lower 95%、Upper 95%；固定 location 不输出
 - Normal Location/Dispersion；Lognormal Scale/Shape（natural-log parameterization）；Gamma/Weibull Shape/Scale
 - Measures：`-2*LogLikelihood`
 - AICc
@@ -522,7 +464,7 @@ Tolerance interval 的语义是：以置信度 $\gamma$ 覆盖总体至少比例
 - typed convergence、domain failure 和 unavailable
 - Fit comparison
 
-AIC 继续保留在 typed payload 与 Fit All fallback 排序中，但不在单模型默认 Measures 表显示。Stage 1 不生成参数 Standard Error 或 Confidence Interval；这些统计量属于 Stage 2。
+AIC 继续保留在 typed payload 与 Fit All fallback 排序中，但不在单模型默认 Measures 表显示。五模型自由参数使用固定 95% Wald limits；推断失败只使 SE/limits typed unavailable，不影响 Estimate、fit 或 PDF。
 
 ### 12.2 Fit Normal 参数化
 
@@ -687,7 +629,6 @@ $$
 | Tukey Box | 支持 | 支持 | quartiles 使用 weighted Type 6 |
 | ECDF | 支持 | 支持 | Weight scale invariant |
 | Normal Quantile | 支持 | 暂不支持 | typed unavailable |
-| Stem-and-leaf | 支持 | 暂不支持 | typed unavailable |
 | Continuous Fit | 支持 | 部分支持 | Weight 下参数/PDF 可用；信息准则与 Fit All 排名在语义冻结前 unavailable |
 
 ### 14.3 退化样本
@@ -727,7 +668,6 @@ Statistics Kernel、Continuous Fit 和 Capability 必须消费同一 prepared sa
 - 消费 executor 已验证的 observation contribution。
 - 对 prepared sample 排序并计算 quantiles、summary、bins、box、ECDF。
 - normal scores、reference line 和 confidence band。
-- stem-and-leaf rows。
 - MLE、optimizer、PDF/CDF/inverse CDF。
 - GOF、tests、intervals 和 capability。
 - 所有 chart-data coordinates。
@@ -811,8 +751,6 @@ Histogram
 
 Diagnostic Plots
   Normal Quantile Plot
-  Quantile Box Plot
-  Stem-and-Leaf
   Empirical CDF
 
 Continuous Fit
@@ -856,9 +794,8 @@ Process Capability
 
 目标：先把已实现能力从“自动 passing、UI pending”推进到产品可验收。
 
-- 先修正批准范围台账中的 Stem-and-leaf 与 Continuous Fit 状态冲突，不改变代码行为。
+- 保持 Letter-Value Quantile Plot 与 Stem-and-leaf 为 removed，不恢复隐藏计算或菜单入口。
 - 正式 Tauri UI 验收平台 Run/Edit/Save/Open 流程、Overview、Tukey Box、Quantiles、Summary、Horizontal Tables、ECDF 和 Normal Quantile。
-- 验证现有 Quantile Box Plot 与 Stem-and-leaf 的显示、退化状态、兼容标签和项目恢复；它们不是 P0 新开发范围，但已有实现不能跳过验收。
 - 验收 Count/Probability/Density scale 和 Fixed Count/Width。
 - 验收 Normal/Lognormal/Exponential/Gamma/Weibull、Fit All 和 PDF overlay。
 - 修复 weighted Continuous Fit：参数/PDF 保留，信息准则与 Fit All 排名返回 typed unavailable；增加 Weight 整体缩放测试。
@@ -1011,4 +948,4 @@ Process Capability
 
 可直接用于下一 session 的任务描述：
 
-> 依据 `docs/superpowers/specs/2026-08-31-distribution-optimization-handbook.md`，先执行 Phase A。先修正批准范围台账中的状态冲突，再核对当前 registry、自动测试和正式 Tauri UI，输出逐项验收结果与缺陷清单；修复 P0 缺陷以及已实现 P2 能力的回归问题，但不新增 P1/P2 功能。每个修复先建立可证伪检查，完成后运行 focused tests、frontend build 和相关 Rust tests，并同步批准范围与验收台账。
+> 依据 `docs/superpowers/specs/2026-08-31-distribution-optimization-handbook.md`，核对当前 registry、自动测试和正式 Tauri UI，输出逐项验收结果与缺陷清单；保持 Letter-Value Quantile Plot 与 Stem-and-leaf 为 removed，修复 P0 回归但不新增 P1/P2 功能。每个修复先建立可证伪检查，完成后运行 focused tests、frontend build 和相关 Rust tests，并同步批准范围与验收台账。

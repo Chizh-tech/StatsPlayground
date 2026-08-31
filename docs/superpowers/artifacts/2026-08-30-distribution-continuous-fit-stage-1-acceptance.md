@@ -5,6 +5,8 @@
 **产品 UI 验收：** pending
 **数值兼容目标：** JMP 19（当前全流程状态为 `compatibilityPending`）
 
+> **后续覆盖：** 本记录保留 Stage 1 当时的验收事实。当前参数合同、固定 Location 显示与诊断能力状态以 [Fit Inference 与诊断移除验收记录](2026-08-31-distribution-fit-inference-and-diagnostics-removal-acceptance.md) 为准。
+
 ## 已交付范围
 
 | 能力 | developmentStatus | automationStatus | uiAcceptance | 兼容状态 |

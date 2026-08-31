@@ -19,9 +19,11 @@ Stage 2 的 Continuous Fit 参数 Standard Error/Confidence Interval、JMP-targe
 | Summary | implemented | passing | pending | `Std Error Mean`；唯一众数显示数值，ties/all-unique 显示 `No unique mode`；四语言 |
 | Capability | implemented | passing | pending | Stability = Overall/Within；indices/intervals 固定 3 位小数；Nonconformance 四列百分比直接读取 proportion |
 | Exponential 信息准则 | implemented | passing | pending | registry 拥有自由参数数，payload 返回 `estimatedParameterCount`；Exponential $k=1$，其他 Stage 1 模型 $k=2$；kernel 与 service payload 双层 fixture |
-| Continuous Fit 报告 | implemented | passing | pending | 每个参数携带 backend-owned `fixed`；Parameter Estimates 使用 Estimate/Fixed 与模型术语；Measures 仅显示 `-2*LogLikelihood`、AICc、BIC |
-| Letter-Value Quantile Plot | implemented | passing | pending | 仅调整可见术语；公开 Type-6 方法和 `intentionalDifference` 不变 |
-| Stem-and-Leaf | implemented | passing | pending | Count、leaf unit、typed key、`-0` sign-safe rows、极端 stem typed unavailable；method ID 保持，version `1.1.0` |
+| Continuous Fit 报告 | superseded | passing | pending | 后续 Fit Inference 设计移除 `fixed` 输出，改为自由参数 Estimate/Std Error/Lower 95%/Upper 95% |
+| Letter-Value Quantile Plot | removed | passing | notApplicable | 后续产品决策已彻底移除 runtime、contract 与 UI |
+| Stem-and-Leaf | removed | passing | notApplicable | 后续产品决策已彻底移除 runtime、contract 与 UI |
+
+本表记录 Stage 1 当时的验收结果；状态冲突时，以 [Fit Inference 与诊断移除验收记录](2026-08-31-distribution-fit-inference-and-diagnostics-removal-acceptance.md) 为准。
 
 ## 51 行回归值
 

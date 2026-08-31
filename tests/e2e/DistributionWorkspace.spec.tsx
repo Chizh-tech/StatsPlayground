@@ -572,7 +572,7 @@ test("normal quantile menu item depends on payload and chart stays hidden by def
   await expect(withNormalQuantile.getByRole("heading", { name: "Normal Quantile Plot" })).toBeVisible();
 });
 
-test("quantile box and stem-and-leaf menu items are payload-gated and render on demand", async ({ mount }) => {
+test("removed diagnostics stay absent from the menu", async ({ mount }) => {
   const baseResult = {
     ...previousResult,
     groups: [{
@@ -631,177 +631,6 @@ test("quantile box and stem-and-leaf menu items are payload-gated and render on 
   await expect(withoutPayload.getByRole("heading", { name: "Letter-Value Quantile Plot" })).toHaveCount(0);
   await expect(withoutPayload.getByRole("heading", { name: "Stem-and-Leaf" })).toHaveCount(0);
   await withoutPayload.unmount();
-
-  const withPayload = await mount(
-    <DistributionWorkspace
-      item={item}
-      sourceAvailable
-      bootstrap={null}
-      runState={null}
-      failure={null}
-      result={{
-        ...baseResult,
-        groups: [{
-          groupKey: [],
-          yResults: [{
-            ...baseResult.groups![0].yResults[0],
-            blocks: [
-              ...baseResult.groups![0].yResults[0].blocks,
-              {
-                schemaVersion: "1",
-                blockId: "quantile-box-available",
-                kind: "quantileBox",
-                titleKey: "distribution.report.quantileBoxPlot",
-                status: "available",
-                summaryData: null,
-                capabilityData: null,
-                chartData: {
-                  kind: "quantileBoxData",
-                  schemaVersion: "1",
-                  provenance: {
-                    methodId: "quantileBox.public.letterValue.type6.v1",
-                    methodVersion: "1.0.0",
-                    compatibilityStatus: "intentionalDifference",
-                    snapshotId: "snapshot-1",
-                  },
-                  payload: {
-                    layers: [
-                      { probabilityLower: 0.25, probabilityUpper: 0.75, lower: 2, upper: 5, depth: 1 },
-                      { probabilityLower: 0.125, probabilityUpper: 0.875, lower: 1.5, upper: 5.5, depth: 2 },
-                    ],
-                    median: 3,
-                    status: "available",
-                    reasonCode: null,
-                    provenance: {
-                      methodId: "quantileBox.public.letterValue.type6.v1",
-                      methodVersion: "1.0.0",
-                      compatibilityStatus: "intentionalDifference",
-                      snapshotId: "snapshot-1",
-                    },
-                  },
-                },
-              },
-              {
-                schemaVersion: "1",
-                blockId: "stem-and-leaf-available",
-                kind: "stemAndLeaf",
-                titleKey: "distribution.report.stemAndLeaf",
-                status: "available",
-                summaryData: null,
-                capabilityData: null,
-                chartData: null,
-                stemAndLeafData: {
-                  rows: [
-                    { stem: "1", leaves: ["0", "2", "4"], count: 4, omittedLeafCount: 1 },
-                    { stem: "2", leaves: ["1", "3", "8"], count: 5, omittedLeafCount: 2 },
-                  ],
-                  scale: 0.1,
-                  leafUnit: 0.01,
-                  interpretationKey: { stem: "1", leaf: "0", value: 0.1 },
-                  omittedStemCount: 3,
-                  omittedLeafCount: 12,
-                  status: "available",
-                  reasonCode: null,
-                  provenance: {
-                    methodId: "stemLeaf.public.splitScale.v1",
-                    methodVersion: "1.0.0",
-                    compatibilityStatus: "intentionalDifference",
-                    snapshotId: "snapshot-1",
-                  },
-                },
-              },
-            ],
-          }],
-        }],
-      }}
-    />,
-  );
-
-  await expect(withPayload.getByRole("heading", { name: "Letter-Value Quantile Plot" })).toHaveCount(0);
-  await expect(withPayload.getByRole("heading", { name: "Stem-and-Leaf" })).toHaveCount(0);
-
-  await withPayload.getByRole("button", { name: "Analysis options for sales_amount" }).click();
-  await expect(withPayload.getByRole("checkbox", { name: "Letter-Value Quantile Plot" })).toBeVisible();
-  await expect(withPayload.getByRole("checkbox", { name: "Stem-and-Leaf" })).toBeVisible();
-  await withPayload.getByRole("checkbox", { name: "Letter-Value Quantile Plot" }).click();
-
-  await expect(withPayload.getByRole("heading", { name: "Letter-Value Quantile Plot" })).toBeVisible();
-  await expect(withPayload.getByText("Public method; differs from JMP 19").first()).toBeVisible();
-  await expect(withPayload.locator('[data-chart-kind="quantileBoxData"] canvas')).toHaveCount(1);
-
-  await withPayload.getByRole("button", { name: "Analysis options for sales_amount" }).click();
-  await withPayload.getByRole("checkbox", { name: "Stem-and-Leaf" }).click();
-
-  await expect(withPayload.getByRole("heading", { name: "Stem-and-Leaf" })).toBeVisible();
-  await expect(withPayload.getByText("Public method; differs from JMP 19").nth(1)).toBeVisible();
-  const stemTable = withPayload.getByRole("table", { name: "Stem-and-Leaf" });
-  await expect(stemTable).toBeVisible();
-  await expect(stemTable.locator("tbody tr")).toHaveCount(2);
-  await expect(stemTable.getByRole("columnheader", { name: "Count" })).toBeVisible();
-  await expect(stemTable.locator("tbody tr").nth(0).locator("td").nth(1)).toHaveText("4");
-  await expect(stemTable.locator("tbody tr").nth(1).locator("td").nth(1)).toHaveText("5");
-  await expect(stemTable.locator("tbody td").first()).toHaveCSS("border-right-style", "solid");
-  await expect(stemTable.locator("tbody td").first()).toHaveCSS("border-bottom-style", "solid");
-  await expect(withPayload.getByText("Leaf unit: 0.01")).toBeVisible();
-  await expect(withPayload.getByText("Key: 1|0 represents 0.1")).toBeVisible();
-  await expect(withPayload.getByText("Omitted stems: 3")).toBeVisible();
-  await expect(withPayload.getByText("Omitted leaves: 12")).toBeVisible();
-});
-
-test("shows unavailable reason for stem-and-leaf blocks", async ({ mount }) => {
-  const component = await mount(
-    <DistributionWorkspace
-      item={item}
-      sourceAvailable
-      bootstrap={null}
-      runState={null}
-      failure={null}
-      result={{
-        ...previousResult,
-        groups: [{
-          groupKey: [],
-          yResults: [{
-            yColumn: { columnId: "sales-id", modelingType: "continuous" as const },
-            yName: "sales_amount",
-            quantiles: [],
-            blocks: [{
-              schemaVersion: "1",
-              blockId: "stem-and-leaf-unavailable",
-              kind: "stemAndLeaf",
-              titleKey: "distribution.report.stemAndLeaf",
-              status: "unavailable",
-              summaryData: null,
-              capabilityData: null,
-              chartData: null,
-              stemAndLeafData: {
-                rows: [
-                  { stem: "1", leaves: [], count: 0, omittedLeafCount: 0 },
-                  { stem: "2", leaves: [], count: 0, omittedLeafCount: 0 },
-                ],
-                scale: 1,
-                leafUnit: 0.1,
-                interpretationKey: { stem: "1", leaf: "0", value: 1 },
-                omittedStemCount: 0,
-                omittedLeafCount: 0,
-                status: "unavailable",
-                reasonCode: "stemLeaf.jmp19.pending.extremescale",
-                provenance: {
-                  methodId: "stemLeaf.jmp19.scaleSplit",
-                  methodVersion: "1.0.0",
-                  compatibilityStatus: "compatibilityPending",
-                  snapshotId: "snapshot-1",
-                },
-              },
-            }],
-          }],
-        }],
-      }}
-    />,
-  );
-
-  await component.getByRole("button", { name: "Analysis options for sales_amount" }).click();
-  await component.getByRole("checkbox", { name: "Stem-and-Leaf" }).click();
-  await expect(component.getByText("Unavailable: stemLeaf.jmp19.pending.extremescale")).toBeVisible();
 });
 
 test("restores and writes report display preferences without rerunning", async ({ mount }) => {
@@ -907,8 +736,6 @@ test(`renders automatic Process Capability with ${confidencePercent}% interval h
               summary: true,
               horizontalTables: true,
               normalQuantilePlot: false,
-              quantileBoxPlot: false,
-              stemAndLeaf: false,
               ecdf: false,
               processCapability: true,
               histogramScale: "count",
@@ -1043,8 +870,6 @@ test("groups Y menu options and closes on Escape with focus restored", async ({ 
               summary: true,
               horizontalTables: true,
               normalQuantilePlot: false,
-              quantileBoxPlot: false,
-              stemAndLeaf: false,
               ecdf: false,
               processCapability: true,
               histogramScale: "count",
@@ -1387,8 +1212,6 @@ test("renders overview according to independent histogram and outlier box toggle
               summary: false,
               horizontalTables: true,
               normalQuantilePlot: false,
-              quantileBoxPlot: false,
-              stemAndLeaf: false,
               ecdf: false,
               processCapability: false,
               histogramScale: "count",
@@ -1500,8 +1323,6 @@ test("renders quantiles and summary in .distribution-table-pair with responsive 
               summary: true,
               horizontalTables: true,
               normalQuantilePlot: false,
-              quantileBoxPlot: false,
-              stemAndLeaf: false,
               ecdf: false,
               processCapability: false,
               histogramScale: "count",

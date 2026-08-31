@@ -7,7 +7,6 @@ use crate::engine::distribution_executor::{prepare_continuous_groups, PreparedGr
 use crate::models::distribution::{
     AnalysisSnapshotV1, BlackBoxCaseV1, BoxPlotCoordinatesV1, CapabilityDescriptorV1,
     CapabilityTypedCountV1, CapabilityTypedValueV1, DistributionCancelTokenV1,
-    ContinuousDistributionIdV1,
     DistributionChartDataV1, DistributionChartProvenanceV1, DistributionCoordinateV1,
     DistributionFitComparisonDataV1, DistributionFitComparisonRowV1,
     DistributionFitConvergenceStatusV1, DistributionFitConvergenceV1, DistributionFitDataV1,
@@ -30,12 +29,10 @@ use crate::models::distribution::{
 use crate::services::data_service::DataService;
 use crate::services::distribution_kernel::{
     continuous_summary, histogram, normal_quantile_plot, normal_quantile_plot_with_priorities,
-    quantile_box_public_letter_value,
-    stem_and_leaf_public_decimal, tukey_box, weighted_ecdf, weighted_type6,
-    NormalQuantileKernelStatusV1, QuantileBoxKernelStatusV1, StemAndLeafKernelStatusV1,
+    tukey_box, weighted_ecdf, weighted_type6, NormalQuantileKernelStatusV1,
 };
 use crate::services::distribution_fit::{
-    build_pdf_curve, effective_n, fit_information_criteria, objective_failure,
+    attach_parameter_inference, build_pdf_curve, effective_n, fit_information_criteria, objective_failure,
     FitFailureClassificationV1, FitFailureV1, FitMetricSetV1, FitModelRegistrationV1,
     FitObservationV1, STAGE1_FIT_REGISTRY,
 };
@@ -256,7 +253,6 @@ impl<'a> DistributionService<'a> {
                             mad: summary.mad,
                         }),
                         capability_data: None,
-                        stem_and_leaf_data: None,
                         distribution_fit_data: None,
                         distribution_fit_comparison_data: None,
                         chart_data: None,
@@ -300,7 +296,6 @@ impl<'a> DistributionService<'a> {
                     status: "available".to_string(),
                     summary_data: None,
                     capability_data: None,
-                    stem_and_leaf_data: None,
                     distribution_fit_data: None,
                     distribution_fit_comparison_data: None,
                     chart_data: Some(DistributionChartDataV1::HistogramData {
@@ -364,7 +359,6 @@ impl<'a> DistributionService<'a> {
                         .to_string(),
                         summary_data: None,
                         capability_data: None,
-                        stem_and_leaf_data: None,
                         distribution_fit_data: None,
                         distribution_fit_comparison_data: None,
                         chart_data: Some(DistributionChartDataV1::NormalQuantileData {
@@ -435,128 +429,6 @@ impl<'a> DistributionService<'a> {
                         }),
                     });
 
-                    let quantile_box = quantile_box_public_letter_value(group)?;
-                    blocks.push(DistributionReportBlockV1 {
-                        schema_version: "1".to_string(),
-                        block_id: format!("{prefix}-quantile-box"),
-                        kind: "quantileBox".to_string(),
-                        title_key: "distribution.report.quantileBoxPlot".to_string(),
-                        status: match quantile_box.status {
-                            QuantileBoxKernelStatusV1::Available => "available",
-                            QuantileBoxKernelStatusV1::Unavailable => "unavailable",
-                            QuantileBoxKernelStatusV1::Failed => "failed",
-                        }
-                        .to_string(),
-                        summary_data: None,
-                        capability_data: None,
-                        stem_and_leaf_data: None,
-                        distribution_fit_data: None,
-                        distribution_fit_comparison_data: None,
-                        chart_data: Some(DistributionChartDataV1::QuantileBoxData {
-                            schema_version: "1".to_string(),
-                            provenance: chart_provenance_with_status(
-                                "quantileBox.public.letterValue.type6.v1",
-                                Jmp19CompatibilityStatusV1::IntentionalDifference,
-                                accepted,
-                            ),
-                            payload: crate::models::distribution::QuantileBoxDataV1 {
-                                layers: quantile_box
-                                    .layers
-                                    .iter()
-                                    .map(|layer| crate::models::distribution::QuantileBoxLayerV1 {
-                                        probability_lower: layer.probability_lower,
-                                        probability_upper: layer.probability_upper,
-                                        lower: layer.lower,
-                                        upper: layer.upper,
-                                        depth: layer.depth,
-                                    })
-                                    .collect(),
-                                median: quantile_box.median,
-                                status: match quantile_box.status {
-                                    QuantileBoxKernelStatusV1::Available => {
-                                        crate::models::distribution::DiagnosticDataStatusV1::Available
-                                    }
-                                    QuantileBoxKernelStatusV1::Unavailable => {
-                                        crate::models::distribution::DiagnosticDataStatusV1::Unavailable
-                                    }
-                                    QuantileBoxKernelStatusV1::Failed => {
-                                        crate::models::distribution::DiagnosticDataStatusV1::Failed
-                                    }
-                                },
-                                reason_code: quantile_box.reason_code,
-                                provenance: chart_provenance_with_status(
-                                    "quantileBox.public.letterValue.type6.v1",
-                                    Jmp19CompatibilityStatusV1::IntentionalDifference,
-                                    accepted,
-                                ),
-                            },
-                        }),
-                    });
-
-                    let stem_and_leaf = stem_and_leaf_public_decimal(
-                        group,
-                        request.weight_column_id.is_some(),
-                        200,
-                        120,
-                    )?;
-                    blocks.push(DistributionReportBlockV1 {
-                        schema_version: "1".to_string(),
-                        block_id: format!("{prefix}-stem-and-leaf"),
-                        kind: "stemAndLeaf".to_string(),
-                        title_key: "distribution.report.stemAndLeaf".to_string(),
-                        status: match stem_and_leaf.status {
-                            StemAndLeafKernelStatusV1::Available => "available",
-                            StemAndLeafKernelStatusV1::Unavailable => "unavailable",
-                            StemAndLeafKernelStatusV1::Failed => "failed",
-                        }
-                        .to_string(),
-                        summary_data: None,
-                        capability_data: None,
-                        stem_and_leaf_data: Some(crate::models::distribution::StemAndLeafDataV1 {
-                            rows: stem_and_leaf
-                                .rows
-                                .iter()
-                                .map(|row| crate::models::distribution::StemAndLeafRowV1 {
-                                    stem: row.stem.clone(),
-                                    leaves: row.leaves.clone(),
-                                    count: row.count,
-                                    omitted_leaf_count: row.omitted_leaf_count,
-                                })
-                                .collect(),
-                            scale: stem_and_leaf.scale,
-                            leaf_unit: stem_and_leaf.leaf_unit,
-                            interpretation_key:
-                                crate::models::distribution::StemAndLeafInterpretationKeyV1 {
-                                    stem: stem_and_leaf.interpretation_key.stem.clone(),
-                                    leaf: stem_and_leaf.interpretation_key.leaf.clone(),
-                                    value: stem_and_leaf.interpretation_key.value,
-                                },
-                            omitted_stem_count: stem_and_leaf.omitted_stem_count,
-                            omitted_leaf_count: stem_and_leaf.omitted_leaf_count,
-                            status: match stem_and_leaf.status {
-                                StemAndLeafKernelStatusV1::Available => {
-                                    crate::models::distribution::DiagnosticDataStatusV1::Available
-                                }
-                                StemAndLeafKernelStatusV1::Unavailable => {
-                                    crate::models::distribution::DiagnosticDataStatusV1::Unavailable
-                                }
-                                StemAndLeafKernelStatusV1::Failed => {
-                                    crate::models::distribution::DiagnosticDataStatusV1::Failed
-                                }
-                            },
-                            reason_code: stem_and_leaf.reason_code,
-                            provenance: chart_provenance_with_status_and_version(
-                                "stemLeaf.public.decimal.v1",
-                                "1.1.0",
-                                Jmp19CompatibilityStatusV1::IntentionalDifference,
-                                accepted,
-                            ),
-                        }),
-                        distribution_fit_data: None,
-                        distribution_fit_comparison_data: None,
-                        chart_data: None,
-                    });
-
                     let candidate_registrations = fit_candidates(request);
                     if !candidate_registrations.is_empty() {
                         let fit_observations = group
@@ -603,7 +475,6 @@ impl<'a> DistributionService<'a> {
                                 status: fit_status(payload.status.clone()).to_string(),
                                 summary_data: None,
                                 capability_data: None,
-                                stem_and_leaf_data: None,
                                 distribution_fit_data: Some(payload.clone()),
                                 distribution_fit_comparison_data: None,
                                 chart_data: None,
@@ -623,7 +494,6 @@ impl<'a> DistributionService<'a> {
                                 status: "available".to_string(),
                                 summary_data: None,
                                 capability_data: None,
-                                stem_and_leaf_data: None,
                                 distribution_fit_data: None,
                                 distribution_fit_comparison_data: Some(
                                     DistributionFitComparisonDataV1 {
@@ -647,7 +517,6 @@ impl<'a> DistributionService<'a> {
                         status: "available".to_string(),
                         summary_data: None,
                         capability_data: None,
-                        stem_and_leaf_data: None,
                         distribution_fit_data: None,
                         distribution_fit_comparison_data: None,
                         chart_data: Some(DistributionChartDataV1::BoxPlotData {
@@ -676,7 +545,6 @@ impl<'a> DistributionService<'a> {
                         status: "available".to_string(),
                         summary_data: None,
                         capability_data: None,
-                        stem_and_leaf_data: None,
                         distribution_fit_data: None,
                         distribution_fit_comparison_data: None,
                         chart_data: Some(DistributionChartDataV1::CdfData {
@@ -774,7 +642,6 @@ impl<'a> DistributionService<'a> {
                                             .into_iter()
                                             .collect(),
                                     }),
-                                    stem_and_leaf_data: None,
                                     distribution_fit_data: None,
                                     distribution_fit_comparison_data: None,
                                     chart_data: None,
@@ -1096,7 +963,7 @@ fn build_fit_payload(
         "{prefix}-fit-{}",
         distribution_id(registration.distribution_id.clone())
     );
-    let estimate = match model.fit(observations) {
+    let mut estimate = match model.fit(observations) {
         Ok(estimate) => estimate,
         Err(failure) => {
             return Ok(failed_fit_payload(
@@ -1141,22 +1008,10 @@ fn build_fit_payload(
         }
     };
 
-    let mut parameters = estimate.parameters;
-    if registration.distribution_id == ContinuousDistributionIdV1::Exponential {
-        if let Some(location) = parameters.iter_mut().find(|parameter| parameter.parameter_id == "location") {
-            location.fixed = true;
-        }
-    }
-    if matches!(
-        registration.distribution_id,
-        ContinuousDistributionIdV1::Gamma | ContinuousDistributionIdV1::Weibull
-    ) {
-        parameters.push(crate::models::distribution::DistributionFitParameterV1 {
-            parameter_id: "location".to_string(),
-            value: available_fit_metric(0.0)?,
-            fixed: true,
-        });
-    }
+    attach_parameter_inference(&mut estimate, observations);
+
+    let parameters = estimate.parameters;
+    debug_assert_eq!(parameters.len(), registration.estimated_parameter_count);
 
     Ok(DistributionFitDataV1 {
         schema_version: "1".to_string(),
@@ -2054,15 +1909,15 @@ mod tests {
             .expect("selected fits");
 
             let blocks = &result.groups[0].y_results[0].blocks;
-            let stem_index = blocks
+            let normal_quantile_index = blocks
                 .iter()
-                .position(|block| block.kind == "stemAndLeaf")
-                .expect("stem block");
-            assert_eq!(blocks[stem_index + 1].kind, "continuousFit");
-            assert_eq!(blocks[stem_index + 1].block_id, format!("{}-0-fit-gamma", result.groups[0].y_results[0].y_column.column_id));
-            assert_eq!(blocks[stem_index + 2].kind, "continuousFit");
-            assert_eq!(blocks[stem_index + 2].block_id, format!("{}-0-fit-normal", result.groups[0].y_results[0].y_column.column_id));
-            assert_eq!(blocks[stem_index + 3].kind, "boxPlot");
+                .position(|block| block.kind == "normalQuantile")
+                .expect("normal quantile block");
+            assert_eq!(blocks[normal_quantile_index + 1].kind, "continuousFit");
+            assert_eq!(blocks[normal_quantile_index + 1].block_id, format!("{}-0-fit-gamma", result.groups[0].y_results[0].y_column.column_id));
+            assert_eq!(blocks[normal_quantile_index + 2].kind, "continuousFit");
+            assert_eq!(blocks[normal_quantile_index + 2].block_id, format!("{}-0-fit-normal", result.groups[0].y_results[0].y_column.column_id));
+            assert_eq!(blocks[normal_quantile_index + 3].kind, "boxPlot");
 
             let payloads = fit_payloads(&result);
             assert_eq!(payloads.len(), 2);
@@ -2078,10 +1933,11 @@ mod tests {
                 .find(|payload| payload.distribution_id == ContinuousDistributionIdV1::Gamma)
                 .unwrap();
             assert_eq!(gamma.estimated_parameter_count, 2);
-            assert!(gamma.parameters.iter().any(|parameter| {
-                parameter.parameter_id == "location"
-                    && parameter.fixed
-                    && parameter.value.value == Some(0.0)
+            assert!(!gamma.parameters.iter().any(|parameter| parameter.parameter_id == "location"));
+            assert!(gamma.parameters.iter().all(|parameter| {
+                parameter.standard_error.value.is_some_and(f64::is_finite)
+                    && parameter.lower_confidence.value.is_some_and(f64::is_finite)
+                    && parameter.upper_confidence.value.is_some_and(f64::is_finite)
             }));
         }
 
@@ -2108,11 +1964,11 @@ mod tests {
 
             assert_eq!(fit.status, DistributionFitStatusV1::Available);
             assert_eq!(fit.estimated_parameter_count, 1);
-            assert!(fit.parameters.iter().any(|parameter| {
-                parameter.parameter_id == "location"
-                    && parameter.fixed
-                    && parameter.value.value == Some(0.0)
-            }));
+            assert_eq!(fit.parameters.len(), 1);
+            assert!(!fit.parameters.iter().any(|parameter| parameter.parameter_id == "location"));
+            assert!(fit.parameters[0].standard_error.value.is_some_and(f64::is_finite));
+            assert!(fit.parameters[0].lower_confidence.value.is_some_and(f64::is_finite));
+            assert!(fit.parameters[0].upper_confidence.value.is_some_and(f64::is_finite));
             assert_close(-2.0 * fit.log_likelihood.value.unwrap(), 740.6183972);
             assert_close(fit.aicc.value.unwrap(), 742.7000298);
             assert_close(fit.bic.value.unwrap(), 744.5502228);
@@ -2159,6 +2015,34 @@ mod tests {
             assert!(rows[1..].windows(2).all(|pair| {
                 pair[0]["distributionId"].as_str() <= pair[1]["distributionId"].as_str()
             }));
+        }
+
+        #[test]
+        fn fit_all_positive_payloads_expose_only_inferred_free_parameters() {
+            let state = AppState::new().expect("test state");
+            let result = execute_fit_request(
+                &state,
+                &[(0.5, 1, 1.0), (1.0, 1, 1.0), (2.0, 1, 1.0), (4.0, 1, 1.0), (8.0, 1, 1.0)],
+                |request, _, _| request.continuous_fit.fit_all = true,
+            )
+            .expect("fit all positive data");
+            let payloads = fit_payloads(&result);
+
+            assert_eq!(payloads.len(), 5);
+            for payload in payloads {
+                assert_eq!(payload.status, DistributionFitStatusV1::Available);
+                assert_eq!(payload.parameters.len(), payload.estimated_parameter_count);
+                assert!(!payload.parameters.iter().any(|parameter| {
+                    parameter.parameter_id == "location"
+                        && payload.distribution_id != ContinuousDistributionIdV1::Normal
+                }));
+                assert!(payload.parameters.iter().all(|parameter| {
+                    parameter.value.value.is_some_and(f64::is_finite)
+                        && parameter.standard_error.value.is_some_and(f64::is_finite)
+                        && parameter.lower_confidence.value.is_some_and(f64::is_finite)
+                        && parameter.upper_confidence.value.is_some_and(f64::is_finite)
+                }));
+            }
         }
 
         #[test]
@@ -2795,14 +2679,15 @@ mod tests {
                 "summary",
                 "histogram",
                 "normalQuantile",
-                "quantileBox",
-                "stemAndLeaf",
                 "boxPlot",
                 "ecdf",
                 "processCapability",
             ]
         );
-        assert_eq!(result.report_blocks.len(), 8);
+        assert_eq!(result.report_blocks.len(), 6);
+        let serialized = serde_json::to_string(&result).expect("serialize result");
+        assert!(!serialized.contains("quantileBoxData"));
+        assert!(!serialized.contains("stemAndLeafData"));
         let capability = result
             .report_blocks
             .iter()
@@ -2916,65 +2801,6 @@ mod tests {
                 )
             })
         }));
-        let quantile_box_block = result
-            .report_blocks
-            .iter()
-            .find(|block| block.kind == "quantileBox")
-            .expect("quantile box block");
-        let quantile_box_payload = match quantile_box_block
-            .chart_data
-            .as_ref()
-            .expect("quantile box chart")
-        {
-            crate::models::distribution::DistributionChartDataV1::QuantileBoxData {
-                payload,
-                provenance,
-                ..
-            } => {
-                assert_eq!(
-                    provenance.method_id,
-                    "quantileBox.public.letterValue.type6.v1"
-                );
-                assert_eq!(
-                    provenance.compatibility_status,
-                    Jmp19CompatibilityStatusV1::IntentionalDifference
-                );
-                payload
-            }
-            _ => panic!("quantile box block must contain quantileBoxData"),
-        };
-        assert!(!quantile_box_payload.layers.is_empty());
-        assert_eq!(
-            quantile_box_payload.provenance.compatibility_status,
-            Jmp19CompatibilityStatusV1::IntentionalDifference
-        );
-
-        let stem_block = result
-            .report_blocks
-            .iter()
-            .find(|block| block.kind == "stemAndLeaf")
-            .expect("stem and leaf block");
-        let stem_payload = stem_block
-            .stem_and_leaf_data
-            .as_ref()
-            .expect("stem and leaf payload");
-        assert_eq!(
-            stem_payload.provenance.method_id,
-            "stemLeaf.public.decimal.v1"
-        );
-        assert_eq!(stem_payload.provenance.method_version, "1.1.0");
-        assert_eq!(
-            stem_payload.provenance.compatibility_status,
-            Jmp19CompatibilityStatusV1::IntentionalDifference
-        );
-        assert!(stem_payload.rows.len() <= 200);
-        assert!(stem_payload.rows.iter().all(|row| row.leaves.len() <= 120));
-        assert!(stem_payload.rows.iter().all(|row| row.count >= row.leaves.len() as u64));
-        assert_eq!(stem_payload.leaf_unit, stem_payload.scale / 10.0);
-        assert_eq!(stem_payload.interpretation_key.stem, "1");
-        assert_eq!(stem_payload.interpretation_key.leaf, "0");
-        assert_eq!(stem_payload.interpretation_key.value, stem_payload.scale);
-
         request.enabled_capability_ids.clear();
         let disabled_result = DistributionService::new(&state)
             .execute_distribution_run(&request, &accepted)
@@ -3106,27 +2932,10 @@ mod tests {
         assert!(weight_payload.points.is_empty());
         assert!(weight_payload.reference_line.is_empty());
         assert!(weight_payload.confidence_band.is_empty());
-        let stem_block = weight_result
+        assert!(!weight_result
             .report_blocks
             .iter()
-            .find(|block| block.kind == "stemAndLeaf")
-            .expect("stem block in weighted run");
-        let stem_payload = stem_block
-            .stem_and_leaf_data
-            .as_ref()
-            .expect("stem payload in weighted run");
-        assert_eq!(
-            stem_payload.status,
-            crate::models::distribution::DiagnosticDataStatusV1::Unavailable
-        );
-        assert_eq!(
-            stem_payload.reason_code.as_deref(),
-            Some("stemLeaf.weightUnsupported.v1")
-        );
-        assert_eq!(
-            stem_payload.provenance.compatibility_status,
-            Jmp19CompatibilityStatusV1::IntentionalDifference
-        );
+            .any(|block| block.kind == "stemAndLeaf"));
     }
 
     #[test]
@@ -3215,18 +3024,6 @@ mod tests {
                 )
             })
         }));
-        assert!(!result.report_blocks.iter().any(|block| {
-            block.chart_data.as_ref().is_some_and(|chart| {
-                matches!(
-                    chart,
-                    crate::models::distribution::DistributionChartDataV1::QuantileBoxData { .. }
-                )
-            })
-        }));
-        assert!(!result
-            .report_blocks
-            .iter()
-            .any(|block| block.stem_and_leaf_data.is_some()));
     }
 
     #[test]
