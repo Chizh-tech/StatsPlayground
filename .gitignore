@@ -7,6 +7,7 @@ test-results/
 
 # ----- Rust / Cargo -----
 src-tauri/target/
+src-tauri/target-*/
 
 # ----- Tauri -----
 # DuckDB database files (user data, not version-controlled)
@@ -14,9 +15,7 @@ src-tauri/target/
 *.duckdb.wal
 
 # ----- IDE -----
-.vscode/*
-!.vscode/extensions.json
-!.vscode/settings.json
+.vscode/
 .idea/
 
 # ----- OS -----
