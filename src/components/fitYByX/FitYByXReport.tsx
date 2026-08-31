@@ -101,7 +101,7 @@ function formatCount(value: number | null | undefined, undefinedValue = DEFAULT_
 function createLabeledValueSection(
   key: string,
   title: string,
-  rows: Array<{ key: string; label: string; value: string }>,
+  rows: Array<{ key: string; label: string; value: string; numericColumns?: number[] | null }>,
   t: Translate,
 ): FitYByXReportSectionModel {
   return {
@@ -112,11 +112,21 @@ function createLabeledValueSection(
       t("fitYByX.report.column.metric"),
       t("fitYByX.report.column.value"),
     ],
-    rows: rows.map((row) => ({
-      key: row.key,
-      values: [row.label, row.value],
-      numericColumns: [1],
-    })),
+    rows: rows.map((row) => {
+      const labeledRow: FitYByXReportRowModel = {
+        key: row.key,
+        values: [row.label, row.value],
+      };
+
+      if (row.numericColumns === null) {
+        return labeledRow;
+      }
+
+      return {
+        ...labeledRow,
+        numericColumns: row.numericColumns ?? [1],
+      };
+    }),
   };
 }
 
@@ -200,6 +210,7 @@ function createSummaryOfFitSection(
       {
         key: "fittedEquation",
         label: t("fitYByX.report.summaryOfFit.fittedEquation"),
+        numericColumns: null,
         value: formatSignedEquation(
           item.response.name,
           item.factor.name,

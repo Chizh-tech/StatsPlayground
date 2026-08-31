@@ -300,6 +300,8 @@ function testBivariateViewModelSectionsAndFormatting(): void {
     ["summaryOfFit", "lackOfFit", "analysisOfVariance", "parameterEstimates"],
   );
   assert.equal(model.sections.every((section) => section.open), true);
+  assert.equal(model.sections[0]?.rows[0]?.numericColumns, undefined);
+  assert.deepEqual(model.sections[0]?.rows[1]?.numericColumns, [1]);
   assert.deepEqual(model.sections[0]?.rows[0]?.values, [
     "fitYByX.report.summaryOfFit.fittedEquation",
     "fitYByX.report.summaryOfFit.equationTemplate|factor=temperature,intercept=1.23457,response=diameter,slope=0.0000123457",
