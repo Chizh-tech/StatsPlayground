@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::AppError;
+use crate::models::distribution::DistributionLoadStatusV1;
 
 #[cfg(test)]
 type BeforeDestinationMutationHook = Box<dyn Fn(&str, &str) -> Result<(), AppError>>;
@@ -153,6 +154,154 @@ pub struct ProjectManifest {
     pub tabulates: Vec<serde_json::Value>,
     #[serde(default)]
     pub tabulate_folders: HashMap<String, String>,
+    #[serde(default)]
+    pub distributions: Vec<DistributionEntryRefV1>,
+    #[serde(default)]
+    pub derived_formulas: Vec<DerivedFormulaEntryRefV1>,
+    #[serde(default)]
+    pub distribution_issues: Vec<Value>,
+    #[serde(default)]
+    pub distribution_folders: HashMap<String, String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionEntryRefV1 {
+    pub analysis_id: String,
+    pub name: String,
+    pub file: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedFormulaEntryRefV1 {
+    pub formula_id: String,
+    pub analysis_id: String,
+    pub file: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionDocV1 {
+    pub schema_version: String,
+    pub analysis_id: String,
+    pub name: String,
+    pub source_dataset_id: String,
+    pub status: String,
+    #[serde(default = "default_config_revision")]
+    pub config_revision: u64,
+    pub current_config: Value,
+    #[serde(default)]
+    pub load_status: DistributionLoadStatusV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_envelope: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_text: Option<String>,
+}
+
+fn default_config_revision() -> u64 {
+    1
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedFormulaDocV1 {
+    pub formula_id: String,
+    pub schema_version: String,
+    pub analysis_id: String,
+    pub source_dataset_id: String,
+    pub source_column_ids: Vec<String>,
+    pub output_column_name: String,
+    pub ast: Value,
+    pub fingerprint: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionArchiveEnvelopeV1 {
+    pub schema_version: String,
+    pub body: DistributionDocV1,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DistributionArchiveRecordV1 {
+    Parsed(DistributionArchiveEnvelopeV1),
+    UnknownVersion {
+        analysis_id: String,
+        schema_version: String,
+        raw_envelope: Value,
+    },
+    Corrupt {
+        analysis_id: String,
+        raw_text: String,
+    },
+}
+
+impl DistributionArchiveRecordV1 {
+    pub fn analysis_id(&self) -> &str {
+        match self {
+            Self::Parsed(envelope) => &envelope.body.analysis_id,
+            Self::UnknownVersion { analysis_id, .. } | Self::Corrupt { analysis_id, .. } => analysis_id,
+        }
+    }
+}
+
+pub fn distribution_records_from_values(
+    values: Vec<Value>,
+) -> Result<Vec<DistributionArchiveRecordV1>, AppError> {
+    values
+        .into_iter()
+        .map(|value| {
+            let doc: DistributionDocV1 = serde_json::from_value(value)
+                .map_err(|error| AppError::InvalidParam(format!("invalid distribution document: {error}")))?;
+            Ok(match doc.load_status {
+                DistributionLoadStatusV1::UnknownVersion => {
+                    DistributionArchiveRecordV1::UnknownVersion {
+                        analysis_id: doc.analysis_id,
+                        schema_version: doc.schema_version,
+                        raw_envelope: doc.raw_envelope.unwrap_or_else(|| serde_json::json!({})),
+                    }
+                }
+                DistributionLoadStatusV1::Corrupt => DistributionArchiveRecordV1::Corrupt {
+                    analysis_id: doc.analysis_id,
+                    raw_text: doc.raw_text.unwrap_or_default(),
+                },
+                DistributionLoadStatusV1::Ready | DistributionLoadStatusV1::MissingSource => {
+                    DistributionArchiveRecordV1::Parsed(DistributionArchiveEnvelopeV1 {
+                        schema_version: "1".to_string(),
+                        body: DistributionDocV1 {
+                            raw_envelope: None,
+                            raw_text: None,
+                            ..doc
+                        },
+                    })
+                }
+            })
+        })
+        .collect()
+}
+
+pub fn derived_formula_envelopes_from_values(
+    values: Vec<Value>,
+) -> Result<Vec<DerivedFormulaArchiveEnvelopeV1>, AppError> {
+    values
+        .into_iter()
+        .map(|value| {
+            let body: DerivedFormulaDocV1 = serde_json::from_value(value)
+                .map_err(|error| AppError::InvalidParam(format!("invalid derived formula document: {error}")))?;
+            Ok(DerivedFormulaArchiveEnvelopeV1 {
+                schema_version: "1".to_string(),
+                body,
+            })
+        })
+        .collect()
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedFormulaArchiveEnvelopeV1 {
+    pub schema_version: String,
+    pub body: DerivedFormulaDocV1,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -256,6 +405,8 @@ pub struct ProjectBundle {
     pub graphs: Vec<GraphDoc>,
     pub fit_y_by_x: Vec<Value>,
     pub tabulates: Vec<Value>,
+    pub distributions: Vec<DistributionArchiveRecordV1>,
+    pub derived_formulas: Vec<DerivedFormulaArchiveEnvelopeV1>,
     pub history: Vec<Value>,
     pub snapshots: Vec<Value>,
 }
@@ -528,6 +679,53 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         .unwrap_or_default();
     let fit_y_by_x = manifest.fit_y_by_x.clone();
     let tabulates = manifest.tabulates.clone();
+    let mut distributions = Vec::with_capacity(manifest.distributions.len());
+    for entry in &manifest.distributions {
+        let bytes = read_entry_bytes(&mut zip, &entry.file).ok_or_else(|| {
+            AppError::FileIO(format!("Missing distribution entry: {}", entry.file))
+        })?;
+        let raw_text = String::from_utf8_lossy(&bytes).to_string();
+        let raw_envelope: Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(_) => {
+                distributions.push(DistributionArchiveRecordV1::Corrupt {
+                    analysis_id: entry.analysis_id.clone(),
+                    raw_text,
+                });
+                continue;
+            }
+        };
+        let schema_version = raw_envelope
+            .get("schemaVersion")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if schema_version != "1" {
+            distributions.push(DistributionArchiveRecordV1::UnknownVersion {
+                analysis_id: entry.analysis_id.clone(),
+                schema_version,
+                raw_envelope,
+            });
+            continue;
+        }
+        match serde_json::from_value::<DistributionArchiveEnvelopeV1>(raw_envelope) {
+            Ok(envelope) => distributions.push(DistributionArchiveRecordV1::Parsed(envelope)),
+            Err(_) => distributions.push(DistributionArchiveRecordV1::Corrupt {
+                analysis_id: entry.analysis_id.clone(),
+                raw_text,
+            }),
+        }
+    }
+    let mut derived_formulas = Vec::with_capacity(manifest.derived_formulas.len());
+    for entry in &manifest.derived_formulas {
+        let bytes = read_entry_bytes(&mut zip, &entry.file).ok_or_else(|| {
+            AppError::FileIO(format!("Missing derived formula entry: {}", entry.file))
+        })?;
+        let envelope = serde_json::from_slice(&bytes).map_err(|error| {
+            AppError::FileIO(format!("Invalid derived formula file {}: {error}", entry.file))
+        })?;
+        derived_formulas.push(envelope);
+    }
 
     Ok(ProjectBundle {
         manifest,
@@ -535,6 +733,8 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         graphs,
         fit_y_by_x,
         tabulates,
+        distributions,
+        derived_formulas,
         history,
         snapshots,
     })
@@ -613,6 +813,10 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         fit_y_by_x_folders,
         tabulates: Vec::new(),
         tabulate_folders: HashMap::new(),
+        distributions: Vec::new(),
+        derived_formulas: Vec::new(),
+        distribution_issues: Vec::new(),
+        distribution_folders: HashMap::new(),
     };
 
     Ok(ProjectBundle {
@@ -621,6 +825,8 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         graphs,
         fit_y_by_x,
         tabulates: Vec::new(),
+        distributions: Vec::new(),
+        derived_formulas: Vec::new(),
         history: legacy.history.unwrap_or_default(),
         snapshots: legacy.snapshots.unwrap_or_default(),
     })
@@ -676,11 +882,15 @@ pub fn build_bundle(
     graphs: Vec<GraphDoc>,
     fit_y_by_x: Vec<Value>,
     tabulates: Vec<Value>,
+    distributions: Vec<DistributionArchiveRecordV1>,
+    derived_formulas: Vec<DerivedFormulaArchiveEnvelopeV1>,
+    distribution_issues: Vec<Value>,
     folders: Vec<String>,
     table_folders: &HashMap<String, String>,
     graph_folders: &HashMap<String, String>,
     fit_y_by_x_folders: &HashMap<String, String>,
     tabulate_folders: &HashMap<String, String>,
+    distribution_folders: &HashMap<String, String>,
     history: Vec<Value>,
     snapshots: Vec<Value>,
 ) -> ProjectBundle {
@@ -707,6 +917,30 @@ pub fn build_bundle(
         });
     }
 
+    let distribution_refs = distributions
+        .iter()
+        .map(|record| {
+            let analysis_id = record.analysis_id().to_string();
+            let name = match record {
+                DistributionArchiveRecordV1::Parsed(envelope) => envelope.body.name.clone(),
+                _ => String::new(),
+            };
+            DistributionEntryRefV1 {
+                analysis_id: analysis_id.clone(),
+                name,
+                file: format!("distributions/{analysis_id}.spdist"),
+            }
+        })
+        .collect::<Vec<_>>();
+    let derived_formula_refs = derived_formulas
+        .iter()
+        .map(|envelope| DerivedFormulaEntryRefV1 {
+            formula_id: envelope.body.formula_id.clone(),
+            analysis_id: envelope.body.analysis_id.clone(),
+            file: format!("derived-formulas/{}.spformula", envelope.body.formula_id),
+        })
+        .collect::<Vec<_>>();
+
     // Collapse `folders` to a sorted, deduplicated, normalized list. Includes
     // any implicit ancestor folders for completeness so an extractor sees the
     // full tree even if the user only created `a/b/c` directly.
@@ -726,11 +960,17 @@ pub fn build_bundle(
             fit_y_by_x_folders: fit_y_by_x_folders.clone(),
             tabulates: tabulates.clone(),
             tabulate_folders: tabulate_folders.clone(),
+            distributions: distribution_refs,
+            derived_formulas: derived_formula_refs,
+            distribution_issues,
+            distribution_folders: distribution_folders.clone(),
         },
         tables,
         graphs,
         fit_y_by_x: sanitized_fit_y_by_x,
         tabulates,
+        distributions,
+        derived_formulas,
         history,
         snapshots,
     }
@@ -800,6 +1040,16 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
             bundle.tables.iter().map(|t| (t.id.as_str(), t)).collect();
         let graph_by_id: HashMap<&str, &GraphDoc> =
             bundle.graphs.iter().map(|g| (g.id.as_str(), g)).collect();
+        let distribution_by_id: HashMap<&str, &DistributionArchiveRecordV1> = bundle
+            .distributions
+            .iter()
+            .map(|record| (record.analysis_id(), record))
+            .collect();
+        let formula_by_id: HashMap<&str, &DerivedFormulaArchiveEnvelopeV1> = bundle
+            .derived_formulas
+            .iter()
+            .map(|envelope| (envelope.body.formula_id.as_str(), envelope))
+            .collect();
 
         for entry in &bundle.manifest.tables {
             if let Some(doc) = table_by_id.get(entry.id.as_str()) {
@@ -809,6 +1059,22 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
         for entry in &bundle.manifest.graphs {
             if let Some(doc) = graph_by_id.get(entry.id.as_str()) {
                 write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
+            }
+        }
+        for entry in &bundle.manifest.distributions {
+            if let Some(record) = distribution_by_id.get(entry.analysis_id.as_str()) {
+                let bytes = match record {
+                    DistributionArchiveRecordV1::Parsed(envelope) => serde_json::to_vec(envelope),
+                    DistributionArchiveRecordV1::UnknownVersion { raw_envelope, .. } => serde_json::to_vec(raw_envelope),
+                    DistributionArchiveRecordV1::Corrupt { raw_text, .. } => Ok(raw_text.as_bytes().to_vec()),
+                }
+                .map_err(|error| AppError::FileIO(error.to_string()))?;
+                write_zip_entry(&mut zip, &entry.file, &bytes, opts)?;
+            }
+        }
+        for entry in &bundle.manifest.derived_formulas {
+            if let Some(envelope) = formula_by_id.get(entry.formula_id.as_str()) {
+                write_zip_json_entry(&mut zip, &entry.file, envelope, opts)?;
             }
         }
         if !bundle.history.is_empty() {

@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
+import type { DerivedFormulaDocV1, DistributionDocV1, DistributionIssueV1 } from "@/types/distribution";
 
 /** Optional folder payload accepted by the save_project command.
  *  Folder maps are manifest metadata now; they are not used to route archive
@@ -16,6 +17,8 @@ export interface SaveProjectFolders {
   fitYByXFolders: Record<string, string>;
   /** tabulateId → folder path. Root tabulates are simply absent. */
   tabulateFolders: Record<string, string>;
+  /** analysisId → folder path. Root distributions are simply absent. */
+  distributionFolders: Record<string, string>;
 }
 
 export interface SaveProjectRequest {
@@ -25,11 +28,15 @@ export interface SaveProjectRequest {
   graphBuilders: unknown[];
   fitYByX: unknown[];
   tabulates: unknown[];
+  distributions: DistributionDocV1[];
+  derivedFormulas: DerivedFormulaDocV1[];
+  distributionIssues: DistributionIssueV1[];
   folders: string[];
   tableFolders: Record<string, string>;
   graphFolders: Record<string, string>;
   fitYByXFolders: Record<string, string>;
   tabulateFolders: Record<string, string>;
+  distributionFolders: Record<string, string>;
 }
 
 export type SavePhase = "preparing" | "table" | "metadata" | "compressing" | "finalizing";
@@ -58,14 +65,12 @@ export const projectService = {
     request: SaveProjectRequest,
     onProgress?: (progress: SaveProgress) => void,
   ) => {
-    const progressChannel = new Channel<SaveProgress>();
-    if (onProgress) {
-      progressChannel.onmessage = onProgress;
+    if (!onProgress) {
+      return invoke<ProjectInfo>("save_project", { request });
     }
-    return invoke<ProjectInfo>("save_project", {
-      request,
-      onProgress: progressChannel,
-    });
+    const progressChannel = new Channel<SaveProgress>();
+    progressChannel.onmessage = onProgress;
+    return invoke<ProjectInfo>("save_project", { request, onProgress: progressChannel });
   },
 
   getCurrentProject: () => invoke<ProjectInfo | null>("get_current_project"),

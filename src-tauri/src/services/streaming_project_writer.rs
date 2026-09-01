@@ -343,6 +343,12 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 rows: Vec::new(),
             })
             .collect::<Vec<_>>();
+        let distributions = spprj_archive::distribution_records_from_values(
+            snapshot.request.distributions.clone(),
+        )?;
+        let derived_formulas = spprj_archive::derived_formula_envelopes_from_values(
+            snapshot.request.derived_formulas.clone(),
+        )?;
 
         let bundle = spprj_archive::build_bundle(
             snapshot.destination_name.clone(),
@@ -352,11 +358,15 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             graph_docs,
             snapshot.request.fit_y_by_x.clone(),
             snapshot.request.tabulates.clone(),
+            distributions,
+            derived_formulas,
+            snapshot.request.distribution_issues.clone(),
             snapshot.request.folders.clone(),
             &snapshot.request.table_folders,
             &snapshot.request.graph_folders,
             &snapshot.request.fit_y_by_x_folders,
             &snapshot.request.tabulate_folders,
+            &snapshot.request.distribution_folders,
             snapshot.request.history.clone(),
             snapshot.request.snapshots.clone(),
         );
@@ -381,6 +391,8 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 snapshot,
                 &bundle.manifest,
                 &bundle.graphs,
+                &bundle.distributions,
+                &bundle.derived_formulas,
                 &temp_path,
                 temp_file,
                 total_rows,
@@ -430,6 +442,8 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         snapshot: &SaveSnapshot,
         manifest: &ProjectManifest,
         graph_docs: &[GraphDoc],
+        distribution_docs: &[spprj_archive::DistributionArchiveRecordV1],
+        derived_formulas: &[spprj_archive::DerivedFormulaArchiveEnvelopeV1],
         temp_path: &Path,
         temp_file: std::fs::File,
         total_rows: usize,
@@ -458,6 +472,14 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             .iter()
             .map(|doc| (doc.id.as_str(), doc))
             .collect();
+        let distribution_by_id = distribution_docs
+            .iter()
+            .map(|record| (record.analysis_id(), record))
+            .collect::<HashMap<_, _>>();
+        let formula_by_id = derived_formulas
+            .iter()
+            .map(|envelope| (envelope.body.formula_id.as_str(), envelope))
+            .collect::<HashMap<_, _>>();
         let mut rows_written = 0usize;
 
         for (table_index, dataset) in snapshot.datasets.iter().enumerate() {
@@ -653,6 +675,33 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 let bytes = serde_json::to_vec(graph_doc)
                     .map_err(|e| AppError::FileIO(format!("failed to serialize graph doc: {e}")))?;
                 zip.write_all(&bytes)?;
+            }
+        }
+        for entry in &manifest.distributions {
+            if let Some(record) = distribution_by_id.get(entry.analysis_id.as_str()) {
+                zip.start_file(&entry.file, file_opts)
+                    .map_err(|error| AppError::FileIO(error.to_string()))?;
+                match record {
+                    spprj_archive::DistributionArchiveRecordV1::Parsed(envelope) => {
+                        serde_json::to_writer(&mut zip, envelope)
+                    }
+                    spprj_archive::DistributionArchiveRecordV1::UnknownVersion { raw_envelope, .. } => {
+                        serde_json::to_writer(&mut zip, raw_envelope)
+                    }
+                    spprj_archive::DistributionArchiveRecordV1::Corrupt { raw_text, .. } => {
+                        zip.write_all(raw_text.as_bytes())?;
+                        continue;
+                    }
+                }
+                .map_err(|error| AppError::FileIO(error.to_string()))?;
+            }
+        }
+        for entry in &manifest.derived_formulas {
+            if let Some(envelope) = formula_by_id.get(entry.formula_id.as_str()) {
+                zip.start_file(&entry.file, file_opts)
+                    .map_err(|error| AppError::FileIO(error.to_string()))?;
+                serde_json::to_writer(&mut zip, envelope)
+                    .map_err(|error| AppError::FileIO(error.to_string()))?;
             }
         }
 

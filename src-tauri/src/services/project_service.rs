@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::models::project::{DatasetNameMigration, ProjectInfo};
+use crate::models::distribution::{DistributionIssueV1, DistributionLoadStatusV1};
 use crate::models::save::{
     SaveProgressCallback, SaveProjectRequest, SaveSnapshot, SaveWriteResult,
 };
@@ -8,7 +9,8 @@ use crate::services::archive_cell::{
     archive_cell_to_json, archive_export_expression, is_archive_scalar_type,
 };
 use crate::services::spprj_archive::{
-    self, GraphDoc, ProjectBundle, TableColumn, TableColumnFormat, TableDoc,
+    self, DerivedFormulaDocV1, DistributionDocV1, GraphDoc, ProjectBundle, TableColumn,
+    TableColumnFormat, TableDoc,
 };
 use crate::services::streaming_project_writer::StreamingProjectWriter;
 use crate::state::AppState;
@@ -36,6 +38,12 @@ pub struct OpenProjectResult {
     pub fit_y_by_x: Vec<serde_json::Value>,
     #[serde(default)]
     pub tabulates: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub distributions: Vec<DistributionDocV1>,
+    #[serde(default)]
+    pub derived_formulas: Vec<DerivedFormulaDocV1>,
+    #[serde(default)]
+    pub distribution_issues: Vec<DistributionIssueV1>,
     /// All folder paths that exist in the project (including empty ones).
     #[serde(default)]
     pub folders: Vec<String>,
@@ -52,9 +60,17 @@ pub struct OpenProjectResult {
     /// `tabulateId -> folder path`.
     #[serde(default)]
     pub tabulate_folders: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub distribution_folders: std::collections::HashMap<String, String>,
 }
 
 const SPPRJ_VERSION: &str = "3.0.0";
+
+fn push_distribution_issue(issues: &mut Vec<DistributionIssueV1>, issue: DistributionIssueV1) {
+    if !issues.contains(&issue) {
+        issues.push(issue);
+    }
+}
 
 #[cfg(any(test, feature = "perf-harness"))]
 pub(crate) fn seed_save_project(
@@ -132,6 +148,10 @@ impl<'a> ProjectService<'a> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &empty_folders,
             &empty_folders,
             &empty_folders,
             &empty_folders,
@@ -194,6 +214,110 @@ impl<'a> ProjectService<'a> {
         };
         let fit_y_by_x_folders = bundle.manifest.fit_y_by_x_folders.clone();
         let tabulate_folders = bundle.manifest.tabulate_folders.clone();
+        let distribution_folders = bundle.manifest.distribution_folders.clone();
+        let mut distribution_issues = bundle
+            .manifest
+            .distribution_issues
+            .iter()
+            .filter_map(|issue| serde_json::from_value(issue.clone()).ok())
+            .collect::<Vec<DistributionIssueV1>>();
+        let dataset_ids = {
+            let db = staged_state
+                .db
+                .lock()
+                .map_err(|error| AppError::Database(error.to_string()))?;
+            db.list_datasets()?
+                .into_iter()
+                .map(|dataset| dataset.id)
+                .collect::<std::collections::HashSet<_>>()
+        };
+        let distribution_entries = bundle
+            .manifest
+            .distributions
+            .iter()
+            .map(|entry| (entry.analysis_id.as_str(), entry))
+            .collect::<std::collections::HashMap<_, _>>();
+        let distributions = bundle
+            .distributions
+            .iter()
+            .map(|record| match record {
+                spprj_archive::DistributionArchiveRecordV1::Parsed(envelope) => {
+                    let mut doc = envelope.body.clone();
+                    doc.load_status = DistributionLoadStatusV1::Ready;
+                    if !dataset_ids.contains(&doc.source_dataset_id) {
+                        doc.load_status = DistributionLoadStatusV1::MissingSource;
+                        doc.status = "unavailable".to_string();
+                        push_distribution_issue(&mut distribution_issues, DistributionIssueV1 {
+                            analysis_id: doc.analysis_id.clone(),
+                            kind: DistributionLoadStatusV1::MissingSource,
+                            message_key: "distribution.issue.missingSource".to_string(),
+                            schema_version: doc.schema_version.clone(),
+                            source_dataset_id: Some(doc.source_dataset_id.clone()),
+                        });
+                    }
+                    doc
+                }
+                spprj_archive::DistributionArchiveRecordV1::UnknownVersion {
+                    analysis_id,
+                    schema_version,
+                    raw_envelope,
+                } => {
+                    let entry = distribution_entries.get(analysis_id.as_str());
+                    let body = raw_envelope.get("body").unwrap_or(raw_envelope);
+                    let source_dataset_id = body
+                        .get("sourceDatasetId")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    push_distribution_issue(&mut distribution_issues, DistributionIssueV1 {
+                        analysis_id: analysis_id.clone(),
+                        kind: DistributionLoadStatusV1::UnknownVersion,
+                        message_key: "distribution.issue.unknownVersion".to_string(),
+                        schema_version: schema_version.clone(),
+                        source_dataset_id: (!source_dataset_id.is_empty()).then(|| source_dataset_id.clone()),
+                    });
+                    DistributionDocV1 {
+                        schema_version: schema_version.clone(),
+                        analysis_id: analysis_id.clone(),
+                        name: entry.map(|value| value.name.clone()).unwrap_or_default(),
+                        source_dataset_id,
+                        status: "unavailable".to_string(),
+                        config_revision: 1,
+                        current_config: body.get("currentConfig").cloned().unwrap_or_else(|| serde_json::json!({})),
+                        load_status: DistributionLoadStatusV1::UnknownVersion,
+                        raw_envelope: Some(raw_envelope.clone()),
+                        raw_text: None,
+                    }
+                }
+                spprj_archive::DistributionArchiveRecordV1::Corrupt { analysis_id, raw_text } => {
+                    let entry = distribution_entries.get(analysis_id.as_str());
+                    push_distribution_issue(&mut distribution_issues, DistributionIssueV1 {
+                        analysis_id: analysis_id.clone(),
+                        kind: DistributionLoadStatusV1::Corrupt,
+                        message_key: "distribution.issue.corrupt".to_string(),
+                        schema_version: "unknown".to_string(),
+                        source_dataset_id: None,
+                    });
+                    DistributionDocV1 {
+                        schema_version: "unknown".to_string(),
+                        analysis_id: analysis_id.clone(),
+                        name: entry.map(|value| value.name.clone()).unwrap_or_default(),
+                        source_dataset_id: String::new(),
+                        status: "unavailable".to_string(),
+                        config_revision: 1,
+                        current_config: serde_json::json!({}),
+                        load_status: DistributionLoadStatusV1::Corrupt,
+                        raw_envelope: None,
+                        raw_text: Some(raw_text.clone()),
+                    }
+                }
+            })
+            .collect();
+        let derived_formulas = bundle
+            .derived_formulas
+            .iter()
+            .map(|envelope| envelope.body.clone())
+            .collect();
         let folders = bundle.manifest.folders.clone();
 
         // Re-pack graph docs into the opaque JSON shape the frontend
@@ -254,12 +378,16 @@ impl<'a> ProjectService<'a> {
             graph_builders,
             fit_y_by_x: bundle.fit_y_by_x,
             tabulates: bundle.tabulates,
+            distributions,
+            derived_formulas,
+            distribution_issues,
             folders,
             table_folders,
             graph_folders,
             fit_y_by_x_folders,
             dataset_name_migrations,
             tabulate_folders,
+            distribution_folders,
         })
     }
 

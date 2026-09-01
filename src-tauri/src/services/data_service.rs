@@ -649,6 +649,18 @@ impl<'a> DataService<'a> {
         db.get_user_columns(dataset_id)
     }
 
+    pub fn get_distribution_columns(
+        &self,
+        dataset_id: &str,
+    ) -> Result<Vec<crate::models::distribution::DistributionColumnDescriptorV1>, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        db.get_distribution_columns(dataset_id)
+    }
+
     pub fn sort_table(
         &self,
         source_id: &str,

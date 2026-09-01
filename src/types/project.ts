@@ -1,3 +1,9 @@
+import type {
+  DerivedFormulaDocV1,
+  DistributionDocV1,
+  DistributionIssueV1,
+} from "./distribution";
+
 /** 项目元数据 */
 export interface ProjectInfo {
   name: string;
@@ -29,6 +35,10 @@ export interface OpenProjectResult {
   datasetNameMigrations: DatasetNameMigration[];
   /** tabulateId → folder path。 */
   tabulateFolders: Record<string, string>;
+  distributions: DistributionDocV1[];
+  distributionFolders: Record<string, string>;
+  derivedFormulas: DerivedFormulaDocV1[];
+  distributionIssues: DistributionIssueV1[];
 }
 
 /** 导入 .sptb 的返回值。

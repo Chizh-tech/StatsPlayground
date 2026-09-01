@@ -52,6 +52,7 @@
     "analyze": "Analyze",
     "tabulate": "Tabulate",
     "fitYByX": "Fit Y by X",
+    "distribution": "Distribution",
     "ops": "Operations",
     "opSummary": "Summary",
     "opSubset": "Subset",

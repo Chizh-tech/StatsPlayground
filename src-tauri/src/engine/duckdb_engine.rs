@@ -7073,6 +7073,29 @@ impl DuckDbEngine {
         Ok(cols)
     }
 
+    pub fn get_distribution_columns(
+        &self,
+        dataset_id: &str,
+    ) -> Result<Vec<crate::models::distribution::DistributionColumnDescriptorV1>, AppError> {
+        self.get_dataset_meta(dataset_id)?;
+        let mut statement = self.conn.prepare(
+            "SELECT column_id, col_name, col_type, role, col_index
+             FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
+        )?;
+        statement
+            .query_map(params![dataset_id], |row| {
+                Ok(crate::models::distribution::DistributionColumnDescriptorV1 {
+                    column_id: row.get(0)?,
+                    name: row.get(1)?,
+                    sql_type: row.get(2)?,
+                    role: row.get(3)?,
+                    index: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::from)
+    }
+
     pub fn read_fit_y_by_x_rows(
         &self,
         dataset_id: &str,
