@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import {
   canonicalizeFitModelTerms,
+  fitModelTermIdentityKey,
   FitModelValidationError,
   validateFitModelDefinition,
 } from "@/components/fitModel/fitModelConfig";
@@ -53,13 +54,6 @@ function cloneResponse(value: FieldRef): FieldRef {
 
 function cloneTerms(terms: readonly FitModelTerm[]): FitModelTerm[] {
   return terms.map((term) => ({ kind: term.kind, columnNames: [...term.columnNames] }));
-}
-
-function termKey(term: FitModelTerm): string {
-  if (term.kind === "main") {
-    return `main:${term.columnNames[0] ?? ""}`;
-  }
-  return `interaction:${(term.columnNames[0] ?? "")}*${(term.columnNames[1] ?? "")}`;
 }
 
 function sanitizeItem(item: FitModelItem): FitModelItem {
@@ -191,7 +185,7 @@ function normalizeLoadedFitModel(value: unknown): {
   const seen = new Set<string>();
   const warnings: string[] = [];
   for (const term of canonicalTerms) {
-    const key = termKey(term);
+    const key = fitModelTermIdentityKey(term);
     if (seen.has(key)) {
       warnings.push(`Dropped duplicate Fit Model term ${key} while loading ${id}.`);
       continue;

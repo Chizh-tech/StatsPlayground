@@ -157,4 +157,26 @@ assert.deepEqual(useFitModelStore.getState().items, []);
 assert.equal(useFitModelStore.getState().counter, 1);
 assert.deepEqual(useFitModelStore.getState().migrationWarnings, []);
 
+const tupleSafePersisted = {
+  id: "fit-tuple-safe",
+  name: "Fit Model 102",
+  sourceDatasetId: "dataset-loaded",
+  response: { name: "Yield", type: "continuous" },
+  terms: [
+    { kind: "main", columnNames: ["A"] },
+    { kind: "main", columnNames: ["B*C"] },
+    { kind: "main", columnNames: ["A*B"] },
+    { kind: "main", columnNames: ["C"] },
+    { kind: "interaction", columnNames: ["A", "B*C"] },
+    { kind: "interaction", columnNames: ["A*B", "C"] },
+  ],
+  centeringMethod: "none",
+  createdAt: "2026-09-01T00:00:00.000Z",
+};
+useFitModelStore.getState().loadFromProject([tupleSafePersisted]);
+assert.equal(useFitModelStore.getState().items[0]?.terms.length, 6);
+assert.deepEqual(useFitModelStore.getState().migrationWarnings, []);
+
+useFitModelStore.getState().reset();
+
 console.log("fitModel store contract passed");

@@ -82,7 +82,7 @@ function termKey(term: FitModelTerm): string {
   return `interaction:${(term.columnNames[0] ?? "")}*${(term.columnNames[1] ?? "")}`;
 }
 
-function duplicateKey(term: FitModelTerm): string {
+export function fitModelTermIdentityKey(term: FitModelTerm): string {
   if (term.kind === "main") {
     return `main\u0000${term.columnNames[0] ?? ""}`;
   }
@@ -133,7 +133,7 @@ export function validateFitModelDefinition(input: {
         return { ok: false, reason: "nonContinuousPredictor", columnName };
       }
 
-      const key = duplicateKey(term);
+      const key = fitModelTermIdentityKey(term);
       if (seen.has(key)) {
         return { ok: false, reason: "duplicateTerm", termKey: termKey(term) };
       }
@@ -163,7 +163,7 @@ export function validateFitModelDefinition(input: {
       return { ok: false, reason: "nonContinuousPredictor", columnName: second };
     }
 
-    const key = duplicateKey(term);
+    const key = fitModelTermIdentityKey(term);
     if (seen.has(key)) {
       return { ok: false, reason: "duplicateTerm", termKey: termKey(term) };
     }
