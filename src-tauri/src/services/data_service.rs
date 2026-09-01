@@ -3,6 +3,9 @@ use crate::models::table::{
     CreateTableFromRowsRequest, DatasetMeta, SqlQueryResult, TableQueryResult,
     TableWindowRequest, TableWindowResult,
 };
+use crate::services::spprj_archive::{
+    normalize_unsafe_portable_basename, validate_portable_basename,
+};
 use crate::state::AppState;
 
 fn allocate_case_insensitive_dataset_name<I, S>(requested: &str, existing: I) -> String
@@ -58,6 +61,17 @@ pub struct DataService<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::table::CreateTableFromRowsRequest;
+    use crate::state::AppState;
+
+    fn tiny_rows_request(name: &str) -> CreateTableFromRowsRequest {
+        CreateTableFromRowsRequest {
+            name: name.to_string(),
+            column_names: vec!["value".to_string()],
+            column_types: vec!["VARCHAR".to_string()],
+            rows: vec![vec![serde_json::Value::String("ok".to_string())]],
+        }
+    }
 
     #[test]
     fn allocator_keeps_unique_name_without_suffix() {
@@ -76,6 +90,94 @@ mod tests {
         let resolved = allocate_case_insensitive_dataset_name("Summary", ["summary", "summary-3", "summary-7"]);
         assert_eq!(resolved, "Summary-2");
     }
+
+    #[test]
+    fn create_boundary_rejects_windows_reserved_names_with_typed_error() {
+        let state = AppState::new().expect("state");
+        let service = DataService::new(&state);
+
+        let err = service
+            .create_table("NUL.txt", &["value".to_string()], &["VARCHAR".to_string()])
+            .expect_err("reserved names must be rejected at create boundary");
+
+        assert!(matches!(err, AppError::InvalidParam(message) if message.contains("reserved Windows device name")));
+    }
+
+    #[test]
+    fn create_boundary_rejects_control_chars_with_typed_error() {
+        let state = AppState::new().expect("state");
+        let service = DataService::new(&state);
+        let request = tiny_rows_request("bad\u{0001}name");
+
+        let err = service
+            .create_table_from_rows(&request)
+            .expect_err("control characters must be rejected at create boundary");
+
+        assert!(matches!(err, AppError::InvalidParam(message) if message.contains("control character")));
+    }
+
+    #[test]
+    fn create_boundary_returns_collision_resolved_final_metadata_name() {
+        let state = AppState::new().expect("state");
+        let service = DataService::new(&state);
+
+        let first = service
+            .create_table("Sales", &["value".to_string()], &["VARCHAR".to_string()])
+            .expect("first create");
+        let second = service
+            .create_table("sales", &["value".to_string()], &["VARCHAR".to_string()])
+            .expect("second create");
+
+        assert_eq!(first.name, "Sales");
+        assert_eq!(second.name, "sales-2");
+    }
+
+    #[test]
+    fn invalid_name_rejection_does_not_mutate_dataset_list() {
+        let state = AppState::new().expect("state");
+        let service = DataService::new(&state);
+
+        service
+            .create_table("Good", &["value".to_string()], &["VARCHAR".to_string()])
+            .expect("seed create");
+        let before = service.list_datasets().expect("list before");
+
+        let err = service
+            .create_table("bad\u{0001}name", &["value".to_string()], &["VARCHAR".to_string()])
+            .expect_err("invalid create must fail");
+        assert!(matches!(err, AppError::InvalidParam(_)));
+
+        let after = service.list_datasets().expect("list after");
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after[0].name, before[0].name);
+    }
+
+    #[test]
+    fn create_table_from_sql_query_rejects_reserved_name_before_mutation() {
+        let state = AppState::new().expect("state");
+        let service = DataService::new(&state);
+
+        service
+            .create_table("Seed", &["value".to_string()], &["VARCHAR".to_string()])
+            .expect("seed create");
+        let before = service.list_datasets().expect("list before");
+
+        let err = service
+            .create_table_from_sql_query("SELECT 1 AS value", "CON.txt")
+            .expect_err("reserved names must be rejected before SQL create");
+        assert!(matches!(err, AppError::InvalidParam(message) if message.contains("reserved Windows device name")));
+
+        let after = service.list_datasets().expect("list after");
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after[0].name, before[0].name);
+    }
+
+    #[test]
+    fn import_name_normalization_is_deterministic_for_unsafe_stems() {
+        assert_eq!(normalize_unsafe_portable_basename("NUL.txt", "untitled"), "_NUL.txt");
+        assert_eq!(normalize_unsafe_portable_basename(" bad\u{0001}/name. ", "untitled"), "bad__name");
+        assert_eq!(normalize_unsafe_portable_basename("", "untitled"), "untitled");
+    }
 }
 
 impl<'a> DataService<'a> {
@@ -90,25 +192,31 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        let requested_name = std::path::Path::new(file_path)
+        let source_stem = std::path::Path::new(file_path)
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("untitled")
-            .to_string();
+            .unwrap_or("untitled");
+        let requested_name = normalize_unsafe_portable_basename(source_stem, "untitled");
         let resolved_name = Self::resolve_create_dataset_name(&db, &requested_name)?;
         db.import_csv(&id, &resolved_name, file_path)
+    }
+
+    fn validate_create_dataset_name_boundary(name: &str) -> Result<(), AppError> {
+        validate_portable_basename(name, "Dataset name").map_err(AppError::InvalidParam)
     }
 
     fn resolve_create_dataset_name(
         db: &crate::engine::duckdb_engine::DuckDbEngine,
         requested_name: &str,
     ) -> Result<String, AppError> {
+        Self::validate_create_dataset_name_boundary(requested_name)?;
         let existing_names = db
             .list_datasets()?
             .into_iter()
             .map(|dataset| dataset.name)
             .collect::<Vec<_>>();
         let resolved = allocate_case_insensitive_dataset_name(requested_name, existing_names);
+        Self::validate_create_dataset_name_boundary(&resolved)?;
         db.validate_dataset_name(&resolved, None)?;
         Ok(resolved)
     }

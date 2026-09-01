@@ -1353,6 +1353,70 @@ const WINDOWS_RESERVED_NAMES: &[&str] = &[
     "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
+fn is_windows_reserved_stem(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default();
+    WINDOWS_RESERVED_NAMES.contains(&stem.to_ascii_uppercase().as_str())
+}
+
+pub(crate) fn validate_portable_basename(name: &str, subject: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err(format!("{subject} cannot be empty"));
+    }
+    if name.starts_with(|c: char| c.is_whitespace() || c == '.')
+        || name.ends_with(|c: char| c.is_whitespace() || c == '.')
+    {
+        return Err(format!(
+            "{subject} has leading or trailing whitespace/dot: {}",
+            name
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(format!("{subject} contains control character: {}", name));
+    }
+    if name.chars().any(|ch| FORBIDDEN_NAME_CHARS.contains(&ch)) {
+        return Err(format!(
+            "{subject} contains invalid filesystem characters: {}",
+            name
+        ));
+    }
+    if is_windows_reserved_stem(name) {
+        return Err(format!(
+            "{subject} is a reserved Windows device name: {}",
+            name
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn normalize_unsafe_portable_basename(name: &str, fallback: &str) -> String {
+    let sanitize = |source: &str| -> String {
+        source
+            .chars()
+            .map(|ch| {
+                if ch.is_control() || FORBIDDEN_NAME_CHARS.contains(&ch) {
+                    '_'
+                } else {
+                    ch
+                }
+            })
+            .collect::<String>()
+            .trim_matches(|ch: char| ch.is_whitespace() || ch == '.')
+            .to_string()
+    };
+
+    let mut candidate = sanitize(name);
+    if candidate.is_empty() {
+        candidate = sanitize(fallback);
+    }
+    if candidate.is_empty() {
+        candidate = "untitled".to_string();
+    }
+    if is_windows_reserved_stem(&candidate) {
+        candidate = format!("_{candidate}");
+    }
+    candidate
+}
+
 fn is_format_v4(version: &str) -> bool {
     version
         .split('.')
@@ -1362,39 +1426,7 @@ fn is_format_v4(version: &str) -> bool {
 }
 
 fn validate_display_basename(name: &str) -> Result<(), AppError> {
-    if name.is_empty() {
-        return Err(AppError::FileIO("Document name cannot be empty".to_string()));
-    }
-    if name.starts_with(|c: char| c.is_whitespace() || c == '.')
-        || name.ends_with(|c: char| c.is_whitespace() || c == '.')
-    {
-        return Err(AppError::FileIO(format!(
-            "Document name has leading or trailing whitespace/dot: {}",
-            name
-        )));
-    }
-    if name.chars().any(char::is_control) {
-        return Err(AppError::FileIO(format!(
-            "Document name contains control character: {}",
-            name
-        )));
-    }
-    if name.chars().any(|ch| FORBIDDEN_NAME_CHARS.contains(&ch)) {
-        return Err(AppError::FileIO(format!(
-            "Document name contains invalid filesystem characters: {}",
-            name
-        )));
-    }
-
-    let stem = name.split('.').next().unwrap_or_default();
-    let upper = stem.to_ascii_uppercase();
-    if WINDOWS_RESERVED_NAMES.contains(&upper.as_str()) {
-        return Err(AppError::FileIO(format!(
-            "Document name is a reserved Windows device name: {}",
-            name
-        )));
-    }
-    Ok(())
+    validate_portable_basename(name, "Document name").map_err(AppError::FileIO)
 }
 
 fn allocate_archive_name(

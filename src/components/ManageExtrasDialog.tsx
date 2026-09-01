@@ -241,17 +241,27 @@ export function ManageExtrasDialog({
     try {
       const colNames = [t("extras.columnNameHeader"), ...flatFields.map((f) => f.header)];
       const colTypes = ["VARCHAR", ...flatFields.map((f) => (f.type === "number" ? "DOUBLE" : "VARCHAR"))];
-      const rows: string[][] = selectedColIndices.map((ci) => [
-        cols[ci],
-        ...flatFields.map((f) => getCellValue(ci, f)),
-      ]);
-      await dataService.createTable(name, colNames, colTypes);
-      const meta = (await dataService.listDatasets()).find((d) => d.name === name);
-      if (!meta) throw new Error(t("extras.createdMissing"));
-      // Bulk insert via paste — startRow=0 / startCol=0 / no header row.
-      await dataService.pasteAtPosition(meta.id, 0, 0, rows, null, colTypes);
+      const rows = selectedColIndices.map((ci) => {
+        const payload: Array<string | number | null> = [cols[ci]];
+        for (const field of flatFields) {
+          const raw = getCellValue(ci, field);
+          if (field.type === "number") {
+            const numeric = raw === "" ? null : Number(raw);
+            payload.push(Number.isFinite(numeric) ? numeric : null);
+          } else {
+            payload.push(raw);
+          }
+        }
+        return payload;
+      });
+      const created = await dataService.createTableFromRows({
+        name,
+        columnNames: colNames,
+        columnTypes: colTypes,
+        rows,
+      });
       await refreshDatasets();
-      setStatusMsg({ text: t("extras.exportSuccess", { name, rows: rows.length }), tone: "info" });
+      setStatusMsg({ text: t("extras.exportSuccess", { name: created.name, rows: rows.length }), tone: "info" });
     } catch (e) {
       setStatusMsg({ text: t("extras.exportFailed", { err: String(e) }), tone: "error" });
     }

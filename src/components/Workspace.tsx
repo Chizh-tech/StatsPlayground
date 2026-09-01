@@ -462,10 +462,10 @@ export function Workspace() {
     setActiveFitYByXId(null);
     setActiveTabulateId(null);
     setActiveDataset(meta.id);
-    recordAction(t("history.newTable", { name }));
+    recordAction(t("history.newTable", { name: meta.name }));
     // Enter rename mode
     setRenamingId(meta.id);
-    setRenameValue(name);
+    setRenameValue(meta.name);
   };
   handleCreateTableRef.current = handleCreateTable;
 
