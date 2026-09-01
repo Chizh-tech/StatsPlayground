@@ -10,6 +10,9 @@ on:
       - ".github/workflows/distribution-phase0.yml"
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     strategy:
