@@ -106,7 +106,12 @@ pub fn fit_linear_model(
         .sum::<f64>();
     let sse_raw = residuals.iter().map(|value| square(*value)).sum::<f64>();
     let rounding_tolerance = ROUNDING_CLAMP_FACTOR * sst.abs().max(1.0);
-    let sse = clamp_roundoff_negative(sse_raw, rounding_tolerance, "SSE")?;
+    let response_energy = input.response_values.iter().map(|value| square(*value)).sum::<f64>();
+    let sse = normalize_sse_roundoff_to_zero(
+        clamp_roundoff_negative(sse_raw, rounding_tolerance, "SSE")?,
+        n,
+        response_energy,
+    );
     let ssm_raw = sst - sse;
     let ssm = clamp_roundoff_negative(ssm_raw, rounding_tolerance, "SSM")?;
 
@@ -125,9 +130,8 @@ pub fn fit_linear_model(
         f64::INFINITY
     };
 
-    let constant_response = sst <= rounding_tolerance;
-    let perfect_fit = sse <= rounding_tolerance
-        || (sst > 0.0 && sse <= PERFECT_FIT_RELATIVE_TOLERANCE * sst);
+    let constant_response = sst == 0.0;
+    let perfect_fit = sse == 0.0 || (sst > 0.0 && sse <= PERFECT_FIT_RELATIVE_TOLERANCE * sst);
     let saturated_model = df_error == 0;
     let ill_conditioned = condition_number.is_finite() && condition_number > CONDITION_WARNING_THRESHOLD;
 
@@ -185,6 +189,7 @@ pub fn fit_linear_model(
         &input,
         &coefficients,
         mse,
+        rank_tolerance,
         df_error as u64,
         confidence_level,
         allow_parameter_inference,
@@ -276,13 +281,6 @@ fn solve_coefficients(
     response: &DVector<f64>,
     rank_tolerance: f64,
 ) -> Result<DVector<f64>, FitModelEngineError> {
-    let xtx = design.transpose() * design;
-    let xty = design.transpose() * response;
-
-    if let Some(solution) = xtx.clone().qr().solve(&xty) {
-        return Ok(solution);
-    }
-
     let svd = design.clone().svd(true, true);
     svd.solve(response, rank_tolerance)
         .map_err(|_| FitModelEngineError::SolveFailure)
@@ -292,6 +290,7 @@ fn parameter_estimates(
     input: &FitModelData,
     coefficients: &DVector<f64>,
     mse: Option<f64>,
+    rank_tolerance: f64,
     df_error: u64,
     confidence_level: f64,
     allow_inference: bool,
@@ -308,7 +307,7 @@ fn parameter_estimates(
     }
 
     let covariance = if allow_inference {
-        covariance_matrix(&input.design_matrix, mse)?
+        covariance_matrix(&input.design_matrix, mse, rank_tolerance)?
     } else {
         None
     };
@@ -384,24 +383,40 @@ fn parameter_estimates(
 fn covariance_matrix(
     design: &DMatrix<f64>,
     mse: Option<f64>,
+    rank_tolerance: f64,
 ) -> Result<Option<DMatrix<f64>>, FitModelEngineError> {
     let mse_value = match mse {
         Some(value) if value.is_finite() && value >= 0.0 => value,
         _ => return Ok(None),
     };
 
-    let xtx = design.transpose() * design;
-    let inverse = if let Some(cholesky) = xtx.clone().cholesky() {
-        cholesky.inverse()
-    } else if let Some(lu_inverse) = xtx.lu().try_inverse() {
-        lu_inverse
-    } else {
+    let svd = design.clone().svd(false, true);
+    let Some(v_t) = svd.v_t else {
         return Err(FitModelEngineError::NumericalFailure(
-            "failed to invert X'X for covariance".to_string(),
+            "SVD did not provide V^T for covariance".to_string(),
         ));
     };
 
-    let covariance = inverse * mse_value;
+    if svd.singular_values.len() != design.ncols() {
+        return Err(FitModelEngineError::NumericalFailure(
+            "SVD singular value count does not match design columns".to_string(),
+        ));
+    }
+
+    let mut inverse_diag = DMatrix::zeros(design.ncols(), design.ncols());
+    for (index, sigma) in svd.singular_values.iter().copied().enumerate() {
+        if sigma <= rank_tolerance {
+            return Err(FitModelEngineError::NumericalFailure(
+                "singular value fell below rank tolerance in covariance".to_string(),
+            ));
+        }
+        inverse_diag[(index, index)] = 1.0 / square(sigma);
+    }
+
+    let v = v_t.transpose();
+    let xtx_inverse = &v * inverse_diag * v_t;
+
+    let covariance = xtx_inverse * mse_value;
     if covariance.iter().any(|value| !value.is_finite()) {
         return Err(FitModelEngineError::NumericalFailure(
             "covariance matrix contains non-finite value".to_string(),
@@ -436,7 +451,7 @@ fn warnings(
     if constant_response {
         values.push(FitModelWarningCode::ConstantResponse);
     }
-    if perfect_fit && !constant_response {
+    if perfect_fit {
         values.push(FitModelWarningCode::PerfectFit);
     }
     if ill_conditioned {
@@ -615,11 +630,25 @@ fn normalize_signed_zero(value: f64) -> f64 {
     }
 }
 
+fn normalize_sse_roundoff_to_zero(value: f64, n: usize, response_energy: f64) -> f64 {
+    let scale = if response_energy.is_finite() {
+        response_energy.abs().max(f64::MIN_POSITIVE)
+    } else {
+        f64::MIN_POSITIVE
+    };
+    let epsilon_tolerance = (n.max(1) as f64) * f64::EPSILON * scale;
+    if value >= 0.0 && value <= epsilon_tolerance {
+        0.0
+    } else {
+        normalize_signed_zero(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use nalgebra::DMatrix;
+    use nalgebra::{DMatrix, DVector};
     use statrs::distribution::{ContinuousCDF, StudentsT};
 
     use crate::engine::fit_model::ols::{fit_linear_model, FitModelData};
@@ -1263,7 +1292,7 @@ mod tests {
             "Y",
             vec![term(FitModelTermKind::Main, &["X"])],
             FitModelCenteringMethod::None,
-            BTreeMap::from([(String::from("X"), vec![1.0, 2.0, 3.0, 4.0, 5.0])]),
+            BTreeMap::from([(String::from("X"), vec![-2.0, -1.0, 0.0, 1.0, 2.0])]),
             vec![10.0, 10.0, 10.0, 10.0, 10.0],
             vec![1, 2, 3, 4, 5],
             0,
@@ -1274,11 +1303,53 @@ mod tests {
             panic!("expected fitted result");
         };
 
-        assert_eq!(fitted.warnings, vec![FitModelWarningCode::ConstantResponse]);
+        assert_eq!(
+            fitted.warnings,
+            vec![
+                FitModelWarningCode::ConstantResponse,
+                FitModelWarningCode::PerfectFit,
+            ]
+        );
         assert!(fitted.summary_of_fit.r_squared.is_none());
         assert!(fitted.summary_of_fit.adjusted_r_squared.is_none());
         assert!(fitted.anova[0].f_ratio.is_none());
         assert!(fitted.anova[0].p_value.is_none());
+    }
+
+    #[test]
+    fn tiny_scale_noisy_data_is_not_classified_as_perfect_fit() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let y = vec![
+            3.1e-9, 4.8e-9, 7.2e-9, 8.9e-9, 11.3e-9, 12.7e-9, 15.1e-9, 16.8e-9, 19.2e-9,
+            20.9e-9,
+        ];
+        let input = build_input(
+            "Y",
+            vec![term(FitModelTermKind::Main, &["X"])],
+            FitModelCenteringMethod::None,
+            BTreeMap::from([(String::from("X"), x)]),
+            y,
+            (1..=10).collect(),
+            0,
+        );
+
+        let result = fit_linear_model(input, 0.95).expect("fit should succeed");
+        let FitModelResult::Fitted(fitted) = result else {
+            panic!("expected fitted result");
+        };
+
+        assert!(
+            !fitted
+                .warnings
+                .iter()
+                .any(|warning| warning == &FitModelWarningCode::PerfectFit)
+        );
+        assert!(fitted.anova[0].f_ratio.is_some());
+        for parameter in &fitted.parameter_estimates {
+            assert!(parameter.standard_error.is_some());
+            assert!(parameter.t_ratio.is_some());
+            assert!(parameter.p_value.is_some());
+        }
     }
 
     #[test]
@@ -1342,6 +1413,87 @@ mod tests {
             .any(|warning| warning == &FitModelWarningCode::IllConditioned));
     }
 
+    #[test]
+    fn ill_conditioned_noisy_full_rank_matches_direct_svd_and_inference_policy() {
+        let n = 20_usize;
+        let x1 = (0..n).map(|index| 1.0 + index as f64).collect::<Vec<_>>();
+        let x2 = x1
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let delta = 1.0e-11 * value * value;
+                let wobble = if index % 2 == 0 { 1.0e-12 } else { -1.0e-12 };
+                value + delta + wobble
+            })
+            .collect::<Vec<_>>();
+        let y = x1
+            .iter()
+            .zip(x2.iter())
+            .enumerate()
+            .map(|(index, (a, b))| {
+                let noise = ((index % 5) as f64 - 2.0) * 2.0e-4;
+                5.0 + 3.0 * a - 2.0 * b + noise
+            })
+            .collect::<Vec<_>>();
+
+        let input = build_input(
+            "Y",
+            vec![
+                term(FitModelTermKind::Main, &["X1"]),
+                term(FitModelTermKind::Main, &["X2"]),
+            ],
+            FitModelCenteringMethod::None,
+            BTreeMap::from([(String::from("X1"), x1), (String::from("X2"), x2)]),
+            y.clone(),
+            (1..=(n as u64)).collect(),
+            0,
+        );
+
+        let response = DVector::from_vec(y);
+        let svd_for_rank = input.design_matrix.clone().svd(false, false);
+        let sigma_max = svd_for_rank
+            .singular_values
+            .iter()
+            .copied()
+            .fold(0.0_f64, f64::max);
+        let rank_tolerance =
+            (input.design_matrix.nrows().max(input.design_matrix.ncols()) as f64)
+                * f64::EPSILON
+                * sigma_max;
+        let expected = input
+            .design_matrix
+            .clone()
+            .svd(true, true)
+            .solve(&response, rank_tolerance)
+            .expect("direct SVD solve should succeed");
+
+        let result = fit_linear_model(input, 0.95).expect("fit should succeed");
+        let FitModelResult::Fitted(fitted) = result else {
+            panic!("expected fitted result");
+        };
+
+        assert!(fitted
+            .warnings
+            .iter()
+            .any(|warning| warning == &FitModelWarningCode::IllConditioned));
+        assert!(fitted.summary_of_fit.error_degrees_of_freedom > 0);
+
+        for (index, parameter) in fitted.parameter_estimates.iter().enumerate() {
+            assert_close(parameter.estimate, expected[index]);
+            for value in [
+                parameter.standard_error,
+                parameter.t_ratio,
+                parameter.p_value,
+                parameter.lower_confidence_limit,
+                parameter.upper_confidence_limit,
+            ] {
+                if let Some(numeric) = value {
+                    assert!(numeric.is_finite());
+                }
+            }
+        }
+    }
+
     fn make_sampling_input() -> FitModelData {
         let n = GRAPH_SCATTER_RENDER_BUDGET + 1;
         let x = (0..n).map(|index| index as f64).collect::<Vec<_>>();
@@ -1395,7 +1547,14 @@ mod tests {
 
     #[test]
     fn warns_in_required_order_when_multiple_conditions_apply() {
-        let matrix = DMatrix::from_row_slice(4, 4, &[1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 4.0, 8.0, 1.0, 3.0, 9.0, 27.0, 1.0, 4.0, 16.0, 64.0]);
+        let matrix = DMatrix::from_row_slice(
+            4,
+            4,
+            &[
+                1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0,
+                0.0, 1.0,
+            ],
+        );
         let terms = resolve_terms(&[
             term(FitModelTermKind::Main, &["X1"]),
             term(FitModelTermKind::Main, &["X2"]),
@@ -1429,6 +1588,7 @@ mod tests {
             vec![
                 FitModelWarningCode::SaturatedModel,
                 FitModelWarningCode::ConstantResponse,
+                FitModelWarningCode::PerfectFit,
             ]
         );
     }
