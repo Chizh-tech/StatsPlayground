@@ -28,4 +28,15 @@ assert.match(
   "Workspace new table rename prefill must use the backend-returned final dataset name.",
 );
 
+assert.match(
+  workspaceSource,
+  /handleCreateFitYByXItem[\s\S]*?resolveProjectBasename\([\s\S]*?"fitYByX"[\s\S]*?if \(resolved\.error\) \{[\s\S]*?alert\(resolved\.error\);[\s\S]*?return;/,
+  "Fit Y by X creation must reject invalid project filenames before adding the item.",
+);
+assert.match(
+  workspaceSource,
+  /const requestedName = item\.name\.trim\(\);[\s\S]*?requestedName \|\| nextFitYByXName\(\)/,
+  "Fit Y by X creation must not consume a default-name counter for non-empty submissions.",
+);
+
 console.log("task4 create paths contract passed");

@@ -59,6 +59,7 @@ pub struct OpenProjectResult {
 }
 
 const SPPRJ_VERSION: &str = "4.0.0";
+const SPPRJ_MAJOR_VERSION: u32 = 4;
 
 #[cfg(any(test, feature = "perf-harness"))]
 pub(crate) fn seed_save_project(
@@ -163,6 +164,12 @@ impl<'a> ProjectService<'a> {
         progress_cb: Option<&dyn Fn(usize, usize, &str, usize, usize)>,
     ) -> Result<OpenProjectResult, AppError> {
         let mut bundle = spprj_archive::read_project_file(file_path)?;
+        if is_future_project_format(&bundle.manifest.version) {
+            return Err(AppError::InvalidParam(format!(
+                "Unsupported project format version: {}",
+                bundle.manifest.version
+            )));
+        }
         let requires_migration = requires_archive_migration(&bundle.manifest.version);
         let document_name_migrations = if requires_migration {
             normalize_visible_document_names(&mut bundle)
@@ -987,8 +994,17 @@ fn requires_archive_migration(version: &str) -> bool {
         .split('.')
         .next()
         .and_then(|major| major.parse::<u32>().ok())
-        .map(|major| major < 4)
+        .map(|major| major < SPPRJ_MAJOR_VERSION)
         .unwrap_or(true)
+}
+
+fn is_future_project_format(version: &str) -> bool {
+    version
+        .split('.')
+        .next()
+        .and_then(|major| major.parse::<u32>().ok())
+        .map(|major| major > SPPRJ_MAJOR_VERSION)
+        .unwrap_or(false)
 }
 
 fn sanitize_portable_basename(name: &str) -> String {
@@ -2506,7 +2522,6 @@ mod tests {
         let service = ProjectService::new(&state);
         let result = service.open_project(file_path.to_str().unwrap(), None);
         let _ = std::fs::remove_file(file_path);
-
         assert!(result.is_err());
         let db = state.db.lock().unwrap();
         assert!(db.get_dataset_meta("original-id").is_ok());
@@ -2516,5 +2531,56 @@ mod tests {
             state.project.read().unwrap().as_ref().unwrap().name,
             "Original Project"
         );
+    }
+
+    #[test]
+    fn future_project_format_is_rejected_before_live_state_replacement() {
+        let state = AppState::new().unwrap();
+        *state.project.write().unwrap() = Some(ProjectInfo {
+            name: "Existing Project".into(),
+            file_path: "existing.spprj".into(),
+            created_at: "before".into(),
+        });
+
+        let file_path =
+            std::env::temp_dir().join(format!("sp_future_format_{}.spprj", uuid::Uuid::new_v4()));
+        let manifest = ProjectManifest {
+            name: "Future Project".into(),
+            version: "5.0.0".into(),
+            created_at: "after".into(),
+            tables: vec![],
+            graphs: vec![],
+            folders: vec![],
+            table_folders: Some(HashMap::new()),
+            graph_folders: Some(HashMap::new()),
+            fit_y_by_x: vec![],
+            fit_y_by_x_folders: HashMap::new(),
+            tabulates: vec![],
+            tabulate_folders: HashMap::new(),
+            fit_y_by_x_files: vec![],
+            tabulate_files: vec![],
+            snapshot_files: vec![],
+        };
+
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&file_path).unwrap());
+        write_zip_entry(
+            &mut zip,
+            "manifest.json",
+            &serde_json::to_vec_pretty(&manifest).unwrap(),
+        );
+        zip.finish().unwrap();
+
+        let error =
+            match ProjectService::new(&state).open_project(file_path.to_str().unwrap(), None) {
+                Ok(_) => panic!("future project versions must be rejected"),
+                Err(error) => error,
+            };
+        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("5.0.0")));
+        assert_eq!(
+            state.project.read().unwrap().as_ref().unwrap().name,
+            "Existing Project"
+        );
+
+        let _ = std::fs::remove_file(file_path);
     }
 }

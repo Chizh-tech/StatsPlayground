@@ -572,13 +572,17 @@ export function Workspace() {
   };
 
   const handleCreateFitYByXItem = (item: FitYByXItem) => {
-    const reservedName = nextFitYByXName();
-    const name = allocateProjectBasename(
-      item.name.trim() || reservedName,
-      ".spf",
-      fitAndTabulateNames,
+    const requestedName = item.name.trim();
+    const resolved = resolveProjectBasename(
+      requestedName || nextFitYByXName(),
+      "fitYByX",
     );
-    const created = { ...item, name };
+    if (resolved.error) {
+      alert(resolved.error);
+      return;
+    }
+    if (resolved.basename === null) return;
+    const created = { ...item, name: resolved.basename };
     const source = datasets.find((dataset) => dataset.id === created.sourceDatasetId)?.name ?? created.sourceDatasetId;
     addFitYByX(created);
     setActiveDataset(null);

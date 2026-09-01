@@ -526,7 +526,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
 
             zip.start_file(&table_ref.file, file_opts)
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
-            write_table_header(&mut zip, dataset, &columns)?;
+            write_table_header(&mut zip, dataset, &table_ref.name, &columns)?;
             run_save_test_hook!(
                 SaveFailurePoint::AfterHeader,
                 Some(dataset.id.clone()),
@@ -839,13 +839,14 @@ fn table_columns_from_plan(
 fn write_table_header<W: Write>(
     writer: &mut W,
     dataset: &crate::models::table::DatasetMeta,
+    resolved_name: &str,
     columns: &[TableColumn],
 ) -> Result<(), AppError> {
     writer.write_all(b"{\"id\":")?;
     serde_json::to_writer(&mut *writer, &dataset.id)
         .map_err(|e| AppError::FileIO(format!("failed to write table id: {e}")))?;
     writer.write_all(b",\"name\":")?;
-    serde_json::to_writer(&mut *writer, &dataset.name)
+    serde_json::to_writer(&mut *writer, resolved_name)
         .map_err(|e| AppError::FileIO(format!("failed to write table name: {e}")))?;
     writer.write_all(b",\"sourceType\":")?;
     serde_json::to_writer(&mut *writer, &dataset.source_type)
@@ -1651,6 +1652,32 @@ mod tests {
                 Some(snapshot_ref.name.as_str())
             );
         }
+
+        let _ = std::fs::remove_file(destination);
+    }
+
+    #[test]
+    fn stream_writer_reopens_tables_after_manifest_name_collision_resolution() {
+        let state = AppState::new().unwrap();
+        let first = seed_named_dataset(&state, "table_1", "Data");
+        let mut second = seed_named_dataset(&state, "table_2", "Other");
+        second.name = "data".to_string();
+        let destination = temp_path("v4-table-name-sync");
+        let snapshot = save_snapshot(&destination, vec![first, second]);
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::new(&state, &guard);
+        writer.write(&snapshot, &destination, None).unwrap();
+
+        let reopened = spprj_archive::read_project_file(destination.to_str().unwrap()).unwrap();
+        assert_eq!(
+            reopened
+                .tables
+                .iter()
+                .map(|table| table.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Data", "data-2"]
+        );
 
         let _ = std::fs::remove_file(destination);
     }
