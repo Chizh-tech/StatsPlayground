@@ -1018,7 +1018,12 @@ fn normalize_legacy_basename(name: &str, fallback: &str) -> String {
         };
     }
 
-    if WINDOWS_RESERVED_NAMES.contains(&base.to_ascii_uppercase().as_str()) {
+    let stem_upper = base
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if WINDOWS_RESERVED_NAMES.contains(&stem_upper.as_str()) {
         base.push('_');
     }
     base
@@ -2184,6 +2189,11 @@ mod tests {
                     name: " CON ".into(),
                     file: "tables/t3.sptb".into(),
                 },
+                TableEntryRef {
+                    id: "t4".into(),
+                    name: "LPT9.log".into(),
+                    file: "tables/t4.sptb".into(),
+                },
             ],
             graphs: vec![
                 GraphEntryRef {
@@ -2239,6 +2249,11 @@ mod tests {
         );
         write_zip_entry(
             &mut zip,
+            "tables/t4.sptb",
+            &serde_json::to_vec_pretty(&table_doc("t4", "LPT9.log")).unwrap(),
+        );
+        write_zip_entry(
+            &mut zip,
             "graphs/g1.spgh",
             &serde_json::to_vec_pretty(&serde_json::json!({"id": "g1", "name": "Plot"}))
                 .unwrap(),
@@ -2267,8 +2282,8 @@ mod tests {
             .unwrap();
 
         assert!(result.requires_migration);
-        assert_eq!(result.dataset_name_migrations.len(), 2);
-        assert_eq!(result.document_name_migrations.len(), 9);
+        assert_eq!(result.dataset_name_migrations.len(), 3);
+        assert_eq!(result.document_name_migrations.len(), 10);
 
         let migration_keys = result
             .document_name_migrations
@@ -2293,6 +2308,12 @@ mod tests {
             "table".to_string(),
             " CON ".to_string(),
             "CON_".to_string()
+        )));
+        assert!(migration_keys.contains(&(
+            "t4".to_string(),
+            "table".to_string(),
+            "LPT9.log".to_string(),
+            "LPT9.log_".to_string()
         )));
         assert!(migration_keys.contains(&(
             "g2".to_string(),

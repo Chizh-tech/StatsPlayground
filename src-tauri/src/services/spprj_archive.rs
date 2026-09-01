@@ -1386,7 +1386,8 @@ fn validate_display_basename(name: &str) -> Result<(), AppError> {
         )));
     }
 
-    let upper = name.to_ascii_uppercase();
+    let stem = name.split('.').next().unwrap_or_default();
+    let upper = stem.to_ascii_uppercase();
     if WINDOWS_RESERVED_NAMES.contains(&upper.as_str()) {
         return Err(AppError::FileIO(format!(
             "Document name is a reserved Windows device name: {}",
@@ -1875,6 +1876,42 @@ mod tests {
             vec![],
         );
         assert!(matches!(reserved, Err(AppError::FileIO(message)) if message.contains("reserved")));
+
+        let reserved_with_extension = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table_doc("table-1", "CON.txt")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        assert!(matches!(reserved_with_extension, Err(AppError::FileIO(message)) if message.contains("reserved")));
+
+        let reserved_lpt_with_extension = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table_doc("table-1", "LPT9.log")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        assert!(matches!(reserved_lpt_with_extension, Err(AppError::FileIO(message)) if message.contains("reserved")));
 
         let control = build_bundle(
             "Project".into(),

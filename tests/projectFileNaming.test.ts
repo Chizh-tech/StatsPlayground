@@ -62,6 +62,11 @@ assert.deepEqual(normalizeProjectBasenameInput("table.spgh", ".sptb"), {
   strippedExtension: false,
   wrongExtension: ".spgh",
 });
+assert.deepEqual(normalizeProjectBasenameInput(".sptb", ".sptb"), {
+  basename: "",
+  strippedExtension: true,
+  wrongExtension: null,
+});
 
 // Validation categories.
 assert.equal(validateProjectBasename(""), "empty");
@@ -75,6 +80,7 @@ assert.equal(validateProjectBasename("name\u0001"), "controlChars");
 assert.equal(validateProjectBasename("NUL"), "reserved");
 assert.equal(validateProjectBasename("com1"), "reserved");
 assert.equal(validateProjectBasename("Lpt9.log"), "reserved");
+assert.equal(validateProjectBasename(normalizeProjectBasenameInput(".sptb", ".sptb").basename), "empty");
 assert.equal(validateProjectBasename("good.name"), null);
 
 // Snapshot namespace is separate from active .spf docs.

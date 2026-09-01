@@ -9,6 +9,22 @@ export type ProjectBasenameValidationError =
   | "controlChars"
   | "reserved";
 
+export type ProjectBasenameResolutionError = ProjectBasenameValidationError | "wrongExtension";
+
+export type ProjectBasenameResolution =
+  | {
+      basename: string;
+      error: null;
+      expectedExtension: ProjectFileExtension;
+      actualExtension: null;
+    }
+  | {
+      basename: null;
+      error: ProjectBasenameResolutionError;
+      expectedExtension: ProjectFileExtension;
+      actualExtension: ProjectFileExtension | null;
+    };
+
 const WINDOWS_RESERVED_STEM = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const INVALID_CHARS_RE = /[/\\:*?"<>|]/;
 const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/;
@@ -92,4 +108,37 @@ export function allocateProjectBasename(
   let n = 2;
   while (occupied.has(`${basename}-${n}`.toLowerCase())) n += 1;
   return `${basename}-${n}`;
+}
+
+export function resolveProjectBasenameForKind(
+  requestedName: string,
+  kind: ProjectDocumentKind,
+  existing: Iterable<string>,
+  currentName?: string,
+): ProjectBasenameResolution {
+  const extension = projectFileExtension(kind);
+  const normalized = normalizeProjectBasenameInput(requestedName, extension);
+  if (normalized.wrongExtension) {
+    return {
+      basename: null,
+      error: "wrongExtension",
+      expectedExtension: extension,
+      actualExtension: normalized.wrongExtension,
+    };
+  }
+  const validationError = validateProjectBasename(normalized.basename);
+  if (validationError) {
+    return {
+      basename: null,
+      error: validationError,
+      expectedExtension: extension,
+      actualExtension: null,
+    };
+  }
+  return {
+    basename: allocateProjectBasename(normalized.basename, extension, existing, currentName),
+    error: null,
+    expectedExtension: extension,
+    actualExtension: null,
+  };
 }

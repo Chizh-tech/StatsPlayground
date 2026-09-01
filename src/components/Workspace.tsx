@@ -41,9 +41,7 @@ import { modKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import {
   allocateProjectBasename,
-  normalizeProjectBasenameInput,
-  projectFileExtension,
-  validateProjectBasename,
+  resolveProjectBasenameForKind,
   type ProjectBasenameValidationError,
   type ProjectDocumentKind,
 } from "@/utils/projectFileNaming";
@@ -294,22 +292,6 @@ export function Workspace() {
     kind: ProjectDocumentKind,
     currentName?: string,
   ): { basename: string; error: null } | { basename: null; error: string } => {
-    const extension = projectFileExtension(kind);
-    const normalized = normalizeProjectBasenameInput(requestedName, extension);
-    if (normalized.wrongExtension) {
-      return {
-        basename: null,
-        error: t("alert.invalidName.wrongExtension", {
-          defaultValue: "Use the {{expected}} extension for this item (not {{actual}}).",
-          expected: extension,
-          actual: normalized.wrongExtension,
-        }),
-      };
-    }
-    const validationError = validateProjectBasename(normalized.basename);
-    if (validationError) {
-      return { basename: null, error: invalidProjectNameMessage(validationError) };
-    }
     let existingNames: string[];
     if (kind === "table") {
       existingNames = datasets.map((d) => d.name);
@@ -320,8 +302,21 @@ export function Workspace() {
     } else {
       existingNames = [];
     }
-    const basename = allocateProjectBasename(normalized.basename, extension, existingNames, currentName);
-    return { basename, error: null };
+    const resolved = resolveProjectBasenameForKind(requestedName, kind, existingNames, currentName);
+    if (resolved.error === "wrongExtension") {
+      return {
+        basename: null,
+        error: t("alert.invalidName.wrongExtension", {
+          defaultValue: "Use the {{expected}} extension for this item (not {{actual}}).",
+          expected: resolved.expectedExtension,
+          actual: resolved.actualExtension,
+        }),
+      };
+    }
+    if (resolved.error) {
+      return { basename: null, error: invalidProjectNameMessage(resolved.error) };
+    }
+    return { basename: resolved.basename, error: null };
   }, [datasets, fitAndTabulateNames, graphBuilders, invalidProjectNameMessage, t]);
 
   /** Called when history/snapshot is restored — refresh all UI */
@@ -443,11 +438,23 @@ export function Workspace() {
   const handleCreateTable = async () => {
     if (readOnly) return;
     tableCounter.current += 1;
-    const name = allocateProjectBasename(
+    const resolved = resolveProjectBasenameForKind(
       `Table${tableCounter.current}`,
-      ".sptb",
+      "table",
       datasets.map((dataset) => dataset.name),
     );
+    if (resolved.error) {
+      const message = resolved.error === "wrongExtension"
+        ? t("alert.invalidName.wrongExtension", {
+            defaultValue: "Use the {{expected}} extension for this item (not {{actual}}).",
+            expected: resolved.expectedExtension,
+            actual: resolved.actualExtension,
+          })
+        : invalidProjectNameMessage(resolved.error);
+      alert(message);
+      return;
+    }
+    const name = resolved.basename;
     const meta = await dataService.createTable(name, [], []);
     await refreshDatasets();
     markDirty();
@@ -647,10 +654,16 @@ export function Workspace() {
       return;
     }
     if (resolved.basename !== oldName) {
-      await dataService.renameDataset(id, resolved.basename);
-      await refreshDatasets();
-      markDirty();
-      recordAction(t("history.renameTable", { old: oldName, new: resolved.basename }));
+      try {
+        await dataService.renameDataset(id, resolved.basename);
+        await refreshDatasets();
+        markDirty();
+        recordAction(t("history.renameTable", { old: oldName, new: resolved.basename }));
+      } catch (error) {
+        alert(t("alert.renameTableFailed", {
+          defaultValue: "Rename table failed: ",
+        }) + String(error));
+      }
     }
     setRenamingId(null);
   };
@@ -1541,9 +1554,9 @@ export function Workspace() {
               className="ds-rename-input"
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => handleRenameSubmit(ds.id)}
+              onBlur={() => void handleRenameSubmit(ds.id)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameSubmit(ds.id);
+                if (e.key === "Enter") void handleRenameSubmit(ds.id);
                 if (e.key === "Escape") setRenamingId(null);
               }}
               onClick={(e) => e.stopPropagation()}
