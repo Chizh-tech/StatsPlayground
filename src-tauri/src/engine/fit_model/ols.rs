@@ -1455,23 +1455,20 @@ mod tests {
     #[test]
     fn ill_conditioned_noisy_full_rank_matches_python_oracle_and_inference_policy() {
         let n = 20_usize;
-        let x1 = (0..n).map(|index| 1.0 + index as f64).collect::<Vec<_>>();
+        let scale = 1.8e-11;
+        let x1 = (0..n).map(|index| index as f64 - 9.5).collect::<Vec<_>>();
+        let x1_square_mean = x1.iter().map(|value| value * value).sum::<f64>() / n as f64;
         let x2 = x1
             .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                let delta = 1.0e-11 * value * value;
-                let wobble = if index % 2 == 0 { 1.0e-12 } else { -1.0e-12 };
-                value + delta + wobble
-            })
+            .map(|value| scale * (value * value - x1_square_mean))
             .collect::<Vec<_>>();
         let y = x1
             .iter()
             .zip(x2.iter())
             .enumerate()
             .map(|(index, (a, b))| {
-                let noise = ((index % 5) as f64 - 2.0) * 2.0e-4;
-                5.0 + 3.0 * a - 2.0 * b + noise
+                let noise = ((index % 7) as f64 - 3.0) * 2.0e-4;
+                2.5 - 1.75 * a + 8.0e10 * b + noise
             })
             .collect::<Vec<_>>();
 
@@ -1505,60 +1502,60 @@ mod tests {
         );
         assert!(fitted.summary_of_fit.error_degrees_of_freedom > 0);
 
-        assert_close(fitted.parameter_estimates[0].estimate, 4.999873736631717);
-        assert_close(fitted.parameter_estimates[1].estimate, -65.0933797030966);
-        assert_close(fitted.parameter_estimates[2].estimate, 66.0933917188732);
+        assert_close(fitted.parameter_estimates[0].estimate, 2.4999699999999994);
+        assert_close(fitted.parameter_estimates[1].estimate, -1.7499842105263166);
+        assert_close(fitted.parameter_estimates[2].estimate, 7.9999906964380661e10);
 
-        assert_close(fitted.anova[1].sum_of_squares, 1.5037593904106566e-06);
-        assert_close(fitted.anova[0].sum_of_squares, 665.0159995376738);
-        assert_close(fitted.anova[2].sum_of_squares, 665.0160010414331);
+        assert_close(fitted.anova[1].sum_of_squares, 2.766976076546134e-06);
+        assert_close(fitted.anova[0].sum_of_squares, 38440.562678215014);
+        assert_close(fitted.anova[2].sum_of_squares, 38440.56268098199);
         assert_close(
             fitted.anova[0].sum_of_squares + fitted.anova[1].sum_of_squares,
             fitted.anova[2].sum_of_squares,
         );
-        assert_close(fitted.anova[0].mean_square.expect("ms_model"), 332.5079997688369);
-        assert_close(fitted.anova[0].f_ratio.expect("f_ratio"), 3759002957.5985346);
-        assert_close(fitted.anova[0].p_value.expect("model p"), 3.2504472024673718e-74);
+        assert_close(fitted.anova[0].mean_square.expect("ms_model"), 19220.281339107507);
+        assert_close(fitted.anova[0].f_ratio.expect("f_ratio"), 118087317607.99515);
+        assert_close(fitted.anova[0].p_value.expect("model p"), 6.1141090285572085e-87);
         assert_close(
             fitted.anova[1].mean_square.expect("ms_error"),
-            8.845643473003862e-08,
+            1.6276329862036082e-07,
         );
 
         assert_close(
             fitted.summary_of_fit.root_mean_square_error.expect("rmse"),
-            0.0002974162650731103,
+            0.00040343933697690017,
         );
         assert_close(
             fitted.summary_of_fit.r_squared.expect("r_squared"),
-            0.9999999977387621,
+            0.9999999999280194,
         );
         assert_close(
             fitted
                 .summary_of_fit
                 .adjusted_r_squared
                 .expect("adjusted_r_squared"),
-            0.9999999974727342,
+            0.999999999919551,
         );
 
         let expected_se = [
-            2.2124384364694233e-04,
-            2.2446535943080770e+05,
-            2.2446535938367335e+05,
+            9.0211778227779332e-05,
+            1.5644706453961283e-05,
+            1.6915815911285867e+05,
         ];
         let expected_t = [
-            2.2598928197118300e+04,
-            -2.8999298541279770e-04,
-            2.9444806940522760e-04,
+            2.7712235021991528e+04,
+            -1.1185791281390363e+05,
+            4.7292963806142187e+05,
         ];
         let expected_p = [
-            5.243907010356369e-65,
-            9.997719949170468e-01,
-            9.997684921366126e-01,
+            1.6358065008838666e-66,
+            8.1623331651686628e-77,
+            1.8518567029685031e-87,
         ];
         let expected_ci = [
-            (4.9994069529238910e+00, 5.0003405203395435e+00),
-            (-4.7364560539076576e+05, 4.7351541863135950e+05),
-            (-4.7351441851989900e+05, 4.7364660530333675e+05),
+            (2.4997796697849903e+00, 2.5001603302150084e+00),
+            (-1.7500172179717037e+00, -1.7499512030809294e+00),
+            (7.9999550071861450e+10, 8.0000263856899872e+10),
         ];
 
         for (index, parameter) in fitted.parameter_estimates.iter().enumerate() {
