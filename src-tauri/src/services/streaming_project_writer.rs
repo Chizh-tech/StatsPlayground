@@ -1573,7 +1573,7 @@ mod tests {
             "data/data.spgh".to_string(),
             "data/data.spf".to_string(),
             "data/data-2.spf".to_string(),
-            "snapshots/data.spf".to_string(),
+            "snapshots/data.json".to_string(),
             ".history.json".to_string(),
         ]);
 

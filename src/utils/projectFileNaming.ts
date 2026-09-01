@@ -1,4 +1,4 @@
-export type ProjectFileExtension = ".sptb" | ".spgh" | ".spf";
+export type ProjectFileExtension = ".sptb" | ".spgh" | ".spf" | ".json";
 
 export type ProjectDocumentKind = "table" | "graph" | "fitYByX" | "tabulate" | "snapshot";
 
@@ -29,12 +29,25 @@ const WINDOWS_RESERVED_STEM = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const INVALID_CHARS_RE = /[/\\:*?"<>|]/;
 const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/;
 
-const KNOWN_EXTENSIONS: ProjectFileExtension[] = [".sptb", ".spgh", ".spf"];
+const KNOWN_EXTENSIONS: ProjectFileExtension[] = [".sptb", ".spgh", ".spf", ".json"];
 
 export function projectFileExtension(kind: ProjectDocumentKind): ProjectFileExtension {
   if (kind === "table") return ".sptb";
   if (kind === "graph") return ".spgh";
+  if (kind === "snapshot") return ".json";
   return ".spf";
+}
+
+export function formatSnapshotTimestamp(date: Date): string {
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join("");
 }
 
 function lowerKnownExtension(value: string): ProjectFileExtension | null {

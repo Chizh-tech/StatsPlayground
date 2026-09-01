@@ -1141,12 +1141,11 @@ fn normalize_visible_document_names(bundle: &mut ProjectBundle) -> Vec<DocumentN
         }
     }
 
-    let mut snapshot_spf_names = std::collections::HashSet::new();
+    let mut snapshot_names = std::collections::HashSet::new();
     for (index, snapshot) in bundle.snapshots.iter_mut().enumerate() {
         let snapshot_id = value_id(snapshot, "snapshot", index);
         let old_name = value_name_or_id(snapshot, &snapshot_id);
-        let new_name =
-            allocate_case_insensitive_name(&old_name, &snapshot_id, &mut snapshot_spf_names);
+        let new_name = allocate_case_insensitive_name(&old_name, &snapshot_id, &mut snapshot_names);
         if new_name != old_name {
             set_object_name(snapshot, &new_name);
             migrations.push(DocumentNameMigration {

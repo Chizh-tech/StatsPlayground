@@ -8,7 +8,7 @@
 //! data/<name>.sptb             TableDoc as JSON (one per dataset)
 //! data/<name>.spgh             GraphDoc as JSON (one per graph builder)
 //! data/<name>.spf              Fit/Tabulate docs (indexed in manifest)
-//! snapshots/<name>.spf         Snapshot docs (indexed in manifest)
+//! snapshots/<name>.json        Snapshot docs (indexed in manifest)
 //! .history.json                opaque [HistoryEntry] (optional)
 //! .snapshots.json              legacy snapshot fallback (optional)
 //! ```
@@ -998,7 +998,7 @@ pub fn build_bundle(
     let mut used_table_paths: HashSet<String> = HashSet::new();
     let mut used_graph_paths: HashSet<String> = HashSet::new();
     let mut used_data_spf_paths: HashSet<String> = HashSet::new();
-    let mut used_snapshot_spf_paths: HashSet<String> = HashSet::new();
+    let mut used_snapshot_json_paths: HashSet<String> = HashSet::new();
 
     let mut table_refs: Vec<TableEntryRef> = Vec::with_capacity(tables.len());
     for t in &mut tables {
@@ -1066,9 +1066,9 @@ pub fn build_bundle(
         let (resolved_name, resolved_file) = allocate_archive_name(
             &snapshot_name,
             &snapshot_id,
-            ".spf",
+            ".json",
             "snapshots",
-            &mut used_snapshot_spf_paths,
+            &mut used_snapshot_json_paths,
         )?;
         set_value_name(snapshot, &resolved_name, "snapshot")?;
         snapshot_refs.push(SnapshotEntryRef {
@@ -1730,13 +1730,18 @@ fn validate_manifest_entry_refs(manifest: &ProjectManifest) -> Result<(), AppErr
     }
 
     for entry in &manifest.snapshot_files {
-        validate_indexed_path(&entry.file, "snapshots", ".spf", "snapshot")?;
+        let extension = if entry.file.to_ascii_lowercase().ends_with(".json") {
+            ".json"
+        } else {
+            ".spf"
+        };
+        validate_indexed_path(&entry.file, "snapshots", extension, "snapshot")?;
         validate_display_basename(&entry.name)?;
         if strict_v4_name_checks {
             validate_manifest_name_matches_file_basename(
                 &entry.file,
                 &entry.name,
-                ".spf",
+                extension,
                 "snapshot",
             )?;
         }
@@ -2053,7 +2058,10 @@ mod tests {
         assert_eq!(bundle.manifest.graphs[0].file, "data/data.spgh");
         assert_eq!(bundle.manifest.fit_y_by_x_files[0].file, "data/data.spf");
         assert_eq!(bundle.manifest.tabulate_files[0].file, "data/data-2.spf");
-        assert_eq!(bundle.manifest.snapshot_files[0].file, "snapshots/data.spf");
+        assert_eq!(
+            bundle.manifest.snapshot_files[0].file,
+            "snapshots/data.json"
+        );
         assert_eq!(bundle.manifest.table_folders.as_ref(), Some(&table_folders));
         assert_eq!(bundle.manifest.graph_folders.as_ref(), Some(&graph_folders));
 
@@ -3068,7 +3076,7 @@ mod tests {
             "data/data.spgh".to_string(),
             "data/data.spf".to_string(),
             "data/data-2.spf".to_string(),
-            "snapshots/data.spf".to_string(),
+            "snapshots/data.json".to_string(),
             ".history.json".to_string(),
         ]);
         assert_eq!(entries, expected);
@@ -3828,6 +3836,40 @@ mod tests {
             Err(error) => error,
         };
         assert!(matches!(error, AppError::FileIO(message) if message.contains("document name")));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_project_file_accepts_legacy_spf_snapshot_entry() {
+        let path = temp_project_path("v4-legacy-spf-snapshot");
+        let manifest = json!({
+            "name": "Project",
+            "version": "4.0.0",
+            "createdAt": "now",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+            "fitYByXFiles": [],
+            "tabulateFiles": [],
+            "snapshotFiles": [
+                { "id": "snap-1", "name": "snap", "file": "snapshots/snap.spf" }
+            ]
+        });
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.start_file("snapshots/snap.spf", opts).unwrap();
+        zip.write_all(br#"{"id":"snap-1","name":"snap"}"#).unwrap();
+        zip.finish().unwrap();
+
+        let bundle = read_project_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(bundle.snapshots[0]["id"], "snap-1");
 
         let _ = std::fs::remove_file(path);
     }

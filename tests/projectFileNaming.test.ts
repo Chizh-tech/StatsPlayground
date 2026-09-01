@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   allocateProjectBasename,
+  formatSnapshotTimestamp,
   normalizeProjectBasenameInput,
   projectFileExtension,
   validateProjectBasename,
@@ -12,7 +13,11 @@ assert.equal(projectFileExtension("table"), ".sptb");
 assert.equal(projectFileExtension("graph"), ".spgh");
 assert.equal(projectFileExtension("fitYByX"), ".spf");
 assert.equal(projectFileExtension("tabulate"), ".spf");
-assert.equal(projectFileExtension("snapshot"), ".spf");
+assert.equal(projectFileExtension("snapshot"), ".json");
+assert.equal(
+  formatSnapshotTimestamp(new Date(2026, 8, 1, 13, 34, 5)),
+  "20260901133405",
+);
 
 // Cross-extension coexistence is allowed because each extension namespace is isolated.
 assert.equal(
@@ -83,13 +88,13 @@ assert.equal(validateProjectBasename("Lpt9.log"), "reserved");
 assert.equal(validateProjectBasename(normalizeProjectBasenameInput(".sptb", ".sptb").basename), "empty");
 assert.equal(validateProjectBasename("good.name"), null);
 
-// Snapshot namespace is separate from active .spf docs.
+// Snapshot JSON namespace is separate from active .spf docs.
 const activeSpf = ["snapshot", "summary"];
 const snapshots = ["snapshot", "snapshot-2"];
-assert.equal(allocateProjectBasename("snapshot", ".spf", activeSpf), "snapshot-2");
-assert.equal(allocateProjectBasename("snapshot", ".spf", snapshots), "snapshot-3");
+assert.equal(allocateProjectBasename("snapshot", ".json", activeSpf), "snapshot-2");
+assert.equal(allocateProjectBasename("snapshot", ".json", snapshots), "snapshot-3");
 
-const explicitExtension: ProjectFileExtension = ".spf";
-assert.equal(explicitExtension, ".spf");
+const explicitExtension: ProjectFileExtension = ".json";
+assert.equal(explicitExtension, ".json");
 
 console.log("project-file-naming contract passed");

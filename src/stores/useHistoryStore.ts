@@ -13,7 +13,11 @@ import {
   redoIncrementalEntry,
   undoIncrementalEntry,
 } from "@/utils/historyTimeline";
-import { allocateProjectBasename } from "@/utils/projectFileNaming";
+import {
+  allocateProjectBasename,
+  formatSnapshotTimestamp,
+  projectFileExtension,
+} from "@/utils/projectFileNaming";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { assertProjectMutable } from "@/utils/saveReadOnly";
 
@@ -308,11 +312,10 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       const snapshot = await historyService.captureProjectSnapshot();
       const ts = nowISO();
       const d = new Date(ts);
-      const pad = (n: number) => n.toString().padStart(2, "0");
-      const defaultName = `Snapshot ${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      const defaultName = `Snapshot ${formatSnapshotTimestamp(d)}`;
       const resolvedName = allocateProjectBasename(
         name || defaultName,
-        ".spf",
+        projectFileExtension("snapshot"),
         get().snapshots.map((snap) => snap.name),
       );
       const entry: NamedSnapshot = {

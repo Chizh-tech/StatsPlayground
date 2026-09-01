@@ -43,7 +43,7 @@ assert_eq!(bundle.manifest.tables[0].file, "data/data.sptb");
 assert_eq!(bundle.manifest.graphs[0].file, "data/data.spgh");
 assert_eq!(bundle.manifest.fit_y_by_x_files[0].file, "data/data.spf");
 assert_eq!(bundle.manifest.tabulate_files[0].file, "data/data-2.spf");
-assert_eq!(bundle.manifest.snapshot_files[0].file, "snapshots/data.spf");
+assert_eq!(bundle.manifest.snapshot_files[0].file, "snapshots/data.json");
 ```
 
 Also assert case-insensitive suffixing, Windows reserved/control-character rejection, absence of logical folder ZIP paths, v4 missing entry rejection, and successful reads of inline Fit/Tabulate plus aggregate legacy snapshots.
@@ -164,11 +164,11 @@ git commit -m "feat(project): migrate legacy document names"
 - Modify: `src/components/HistoryPanel.tsx`
 
 **Interfaces:**
-- Produces: `type ProjectFileExtension = ".sptb" | ".spgh" | ".spf"`.
+- Produces: `type ProjectFileExtension = ".sptb" | ".spgh" | ".spf" | ".json"`.
 - Produces: `projectFileExtension(kind): ProjectFileExtension`.
 - Produces: `allocateProjectBasename(requested, extension, existing, currentName?): string` using case-insensitive `-N` suffixing.
 - Produces: `validateProjectBasename(name)` using the same invalid-name categories as Rust.
-- Consumes: all table names for `.sptb`, graph names for `.spgh`, and combined Fit/Tabulate names for `.spf`; snapshots use their own `.spf` namespace.
+- Consumes: all table names for `.sptb`, graph names for `.spgh`, and combined Fit/Tabulate names for `.spf`; snapshots use their own `.json` namespace.
 
 - [ ] **Step 1: Write the naming contract test**
 
@@ -217,7 +217,7 @@ git commit -m "feat(workspace): enforce project filename namespaces"
 
 - [ ] **Step 1: Write failing UI source/contract assertions**
 
-Assert all four DIRECTORY item renderers append the correct extension, Fit and Tabulate both append `.spf`, snapshot labels append `.spf`, and rename markup renders the extension outside the input. Assert open handling consumes generalized migration state.
+Assert all four DIRECTORY item renderers append the correct extension, Fit and Tabulate both append `.spf`, snapshot labels append `.json`, and rename markup renders the extension outside the input. Assert open handling consumes generalized migration state.
 
 - [ ] **Step 2: Verify RED**
 

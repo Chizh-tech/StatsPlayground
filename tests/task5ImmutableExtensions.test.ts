@@ -11,6 +11,7 @@ function requireIncludes(source: string, needle: string, message: string): void 
 
 const workspaceSource = read("../src/components/Workspace.tsx");
 const historySource = read("../src/components/HistoryPanel.tsx");
+const historyStoreSource = read("../src/stores/useHistoryStore.ts");
 const appCss = read("../src/App.css");
 const locales = [
   read("../src/i18n/locales/en.json"),
@@ -104,7 +105,7 @@ requireIncludes(
 requireIncludes(
   historySource,
   "withSnapshotExtension(snap.name)",
-  "Snapshot labels must render full filenames including .spf.",
+  "Snapshot labels must render full filenames including .json.",
 );
 requireIncludes(
   historySource,
@@ -114,7 +115,17 @@ requireIncludes(
 requireIncludes(
   historySource,
   "className=\"snapshot-fixed-ext\"",
-  "Snapshot rename must render immutable .spf suffix outside the input.",
+  "Snapshot rename must render immutable .json suffix outside the input.",
+);
+requireIncludes(
+  historyStoreSource,
+  "formatSnapshotTimestamp",
+  "Default snapshot names must use the filesystem-safe timestamp formatter.",
+);
+assert.equal(
+  historyStoreSource.includes("${pad(d.getHours())}:${pad(d.getMinutes())}"),
+  false,
+  "Default snapshot names must not contain a colon-delimited time.",
 );
 
 assert.match(

@@ -28,7 +28,7 @@ data/<table-name>.sptb
 data/<graph-builder-name>.spgh
 data/<fit-y-by-x-name>.spf
 data/<tabulate-name>.spf
-snapshots/<snapshot-name>.spf
+snapshots/<snapshot-name>.json
 .history.json
 ```
 
@@ -42,13 +42,13 @@ type, display name, and relative archive path. Stable IDs remain the identity
 used by runtime state, data-source references, and folder-assignment maps, but
 they never appear in generated filenames. Fit Y by X and Tabulate bodies move
 out of the manifest into opaque `.spf` documents. Snapshot bodies likewise move
-out of `.snapshots.json` into individual `.spf` documents.
+out of `.snapshots.json` into individual JSON documents.
 
 ## Naming
 
 The displayed filename is the document display name plus its fixed extension:
 `.sptb` for tables, `.spgh` for Graph Builders, and `.spf` for Fit Y by X and
-Tabulate. Snapshot filenames also use `.spf`.
+Tabulate. Snapshot filenames use `.json`.
 
 Names are unique across the whole project within one extension namespace,
 regardless of logical folder. Different extensions may share a basename, so
@@ -69,7 +69,9 @@ extension namespace and suffix rules. The Rust writer independently validates
 uniqueness and portability before mutating the destination archive.
 
 Snapshots use the same basename-only rename interaction and conflict suffixing
-inside the snapshot `.spf` namespace.
+inside the snapshot `.json` namespace. Default snapshot names use the
+filesystem-safe `Snapshot YYYYMMDDHHmmss` format. Readers also accept indexed
+`.spf` snapshot entries written by earlier v4 builds.
 
 ## Logical Folders
 
