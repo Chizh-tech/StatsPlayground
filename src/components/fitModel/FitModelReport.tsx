@@ -1,6 +1,10 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
+import {
+  buildActualByPredictedOption,
+  buildResidualByPredictedOption,
+} from "@/graphCore/fitModelAdapter";
 import type { FitModelItem, FitModelFittedResult } from "@/types/fitModel";
 
 import {
@@ -8,6 +12,7 @@ import {
   formatFitModelReportPValue,
   formatFitModelReportValue,
 } from "./fitModelReportModel";
+import { FitModelDiagnosticChart } from "./FitModelDiagnosticChart";
 import type { FitModelReportState } from "./useFitModelReport";
 
 interface FitModelDisclosureState {
@@ -131,6 +136,42 @@ export function FitModelReport({
     () => (fittedResult ? buildEffectSummary(fittedResult) : []),
     [fittedResult],
   );
+
+  const sampledSubtitle = useMemo(() => {
+    if (!fittedResult?.plotRowsSampled) {
+      return undefined;
+    }
+
+    return t("graph.rowStatus.sampled", {
+      defaultValue: "Sampled: {{processed}} / {{source}} rows",
+      processed: fittedResult.plotRows.length,
+      source: fittedResult.usedRows,
+    });
+  }, [fittedResult, t]);
+
+  const actualByPredictedOption = useMemo(() => {
+    if (!fittedResult) {
+      return null;
+    }
+
+    return buildActualByPredictedOption({
+      title: t("fitModel.report.section.actualByPredicted", { defaultValue: "Actual by Predicted" }),
+      sampledSubtitle,
+      plotRows: fittedResult.plotRows,
+    });
+  }, [fittedResult, sampledSubtitle, t]);
+
+  const residualByPredictedOption = useMemo(() => {
+    if (!fittedResult) {
+      return null;
+    }
+
+    return buildResidualByPredictedOption({
+      title: t("fitModel.report.section.residualByPredicted", { defaultValue: "Residual by Predicted" }),
+      sampledSubtitle,
+      plotRows: fittedResult.plotRows,
+    });
+  }, [fittedResult, sampledSubtitle, t]);
 
   return (
     <section className="sp-fit-model-report-panel" aria-label={t("fitModel.report.title", { defaultValue: "Fit Model report" })}>
@@ -296,7 +337,13 @@ export function FitModelReport({
             open={disclosure.actualByPredicted}
             onToggle={() => toggle("actualByPredicted")}
           >
-            <div>{t("fitModel.report.chartPlaceholder", { defaultValue: "Chart placeholder" })}</div>
+            {actualByPredictedOption ? (
+              <FitModelDiagnosticChart
+                title={t("fitModel.report.section.actualByPredicted", { defaultValue: "Actual by Predicted" })}
+                chartKind="actualByPredicted"
+                option={actualByPredictedOption}
+              />
+            ) : null}
           </Section>
 
           <Section
@@ -304,7 +351,13 @@ export function FitModelReport({
             open={disclosure.residualByPredicted}
             onToggle={() => toggle("residualByPredicted")}
           >
-            <div>{t("fitModel.report.chartPlaceholder", { defaultValue: "Chart placeholder" })}</div>
+            {residualByPredictedOption ? (
+              <FitModelDiagnosticChart
+                title={t("fitModel.report.section.residualByPredicted", { defaultValue: "Residual by Predicted" })}
+                chartKind="residualByPredicted"
+                option={residualByPredictedOption}
+              />
+            ) : null}
           </Section>
 
           <Section
