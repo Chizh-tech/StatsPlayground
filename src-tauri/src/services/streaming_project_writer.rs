@@ -374,8 +374,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 overall_progress: Some(0.0),
             });
 
-            let (temp_archive, temp_file) =
-                create_unique_temp_archive(&snapshot.destination_path)?;
+            let (temp_archive, temp_file) = create_unique_temp_archive(&snapshot.destination_path)?;
             let temp_path = temp_archive.path();
             if let Err(error) = self.write_temp_archive(
                 snapshot,
@@ -1360,10 +1359,7 @@ mod tests {
                     "Root/Nested".to_string(),
                     "Root/Nested/Leaf".to_string(),
                 ],
-                table_folders: HashMap::from([(
-                    "table_1".to_string(),
-                    "Root/Nested".to_string(),
-                )]),
+                table_folders: HashMap::from([("table_1".to_string(), "Root/Nested".to_string())]),
                 graph_folders: HashMap::from([(
                     "graph-1".to_string(),
                     "Root/Nested/Leaf".to_string(),
@@ -1372,10 +1368,7 @@ mod tests {
                     "fit-1".to_string(),
                     "Root/Nested/Leaf".to_string(),
                 )]),
-                tabulate_folders: HashMap::from([(
-                    "tab-1".to_string(),
-                    "Root".to_string(),
-                )]),
+                tabulate_folders: HashMap::from([("tab-1".to_string(), "Root".to_string())]),
             },
         }
     }
@@ -1390,9 +1383,7 @@ mod tests {
             .unwrap();
         db.conn()
             .execute(
-                &format!(
-                    "INSERT INTO \"dataset_{id}\" (\"_row_id\", \"value\") VALUES ($1, $2)"
-                ),
+                &format!("INSERT INTO \"dataset_{id}\" (\"_row_id\", \"value\") VALUES ($1, $2)"),
                 params![1_i64, 10_i64],
             )
             .unwrap();
@@ -1561,7 +1552,8 @@ mod tests {
         let state = AppState::new().unwrap();
         let dataset = seed_named_dataset(&state, "table_1", "data");
         let destination = temp_path("flat-v4-layout");
-        let snapshot = save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
+        let snapshot =
+            save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
 
         let guard = state.save_coordinator.begin_save().unwrap();
         let writer = StreamingProjectWriter::new(&state, &guard);
@@ -1599,7 +1591,8 @@ mod tests {
         let state = AppState::new().unwrap();
         let dataset = seed_named_dataset(&state, "table_1", "data");
         let destination = temp_path("v4-body-name-sync");
-        let snapshot = save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
+        let snapshot =
+            save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
 
         let guard = state.save_coordinator.begin_save().unwrap();
         let writer = StreamingProjectWriter::new(&state, &guard);
@@ -1619,8 +1612,14 @@ mod tests {
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes).unwrap();
             let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(value.get("id").and_then(serde_json::Value::as_str), Some(fit_ref.id.as_str()));
-            assert_eq!(value.get("name").and_then(serde_json::Value::as_str), Some(fit_ref.name.as_str()));
+            assert_eq!(
+                value.get("id").and_then(serde_json::Value::as_str),
+                Some(fit_ref.id.as_str())
+            );
+            assert_eq!(
+                value.get("name").and_then(serde_json::Value::as_str),
+                Some(fit_ref.name.as_str())
+            );
         }
 
         for tabulate_ref in &manifest.tabulate_files {
@@ -1764,7 +1763,9 @@ mod tests {
 
         let events = events.lock().unwrap();
         assert!(events.len() >= 3);
-        assert!(events.iter().all(|event| event.phase == SavePhase::Metadata));
+        assert!(events
+            .iter()
+            .all(|event| event.phase == SavePhase::Metadata));
     }
 
     #[test]
@@ -1889,7 +1890,8 @@ mod tests {
                         "validation hook missing temp archive path context".to_string(),
                     )
                 })?;
-                let rewritten = PathBuf::from(format!("{}.mut", temp_archive_path.to_string_lossy()));
+                let rewritten =
+                    PathBuf::from(format!("{}.mut", temp_archive_path.to_string_lossy()));
                 remove_named_entry_from_archive(&temp_archive_path, &rewritten, "data/fit-1.spf")?;
                 std::fs::remove_file(&temp_archive_path)?;
                 std::fs::rename(&rewritten, &temp_archive_path)?;
@@ -1902,7 +1904,9 @@ mod tests {
         let error = writer.write(&snapshot, &destination, None).unwrap_err();
         install_save_test_hook(None);
 
-        assert!(matches!(error, AppError::FileIO(message) if message.contains("missing fit entry data/fit-1.spf")));
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("missing fit entry data/fit-1.spf"))
+        );
         assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 0);
         assert_eq!(std::fs::read(&destination).unwrap(), original_bytes);
         assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());
@@ -1917,7 +1921,8 @@ mod tests {
         let destination = temp_path("validation-body-parity");
         std::fs::write(&destination, b"destination-before-save").unwrap();
         let original_bytes = std::fs::read(&destination).unwrap();
-        let snapshot = save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
+        let snapshot =
+            save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
 
         let replacer_state = Arc::new(TestReplacerState::default());
         let replacer: Arc<dyn ArchiveReplacer> = Arc::new(TestReplacer {
@@ -1931,7 +1936,8 @@ mod tests {
                         "validation hook missing temp archive path context".to_string(),
                     )
                 })?;
-                let rewritten = PathBuf::from(format!("{}.mut", temp_archive_path.to_string_lossy()));
+                let rewritten =
+                    PathBuf::from(format!("{}.mut", temp_archive_path.to_string_lossy()));
                 rewrite_named_entry_in_archive(
                     &temp_archive_path,
                     &rewritten,

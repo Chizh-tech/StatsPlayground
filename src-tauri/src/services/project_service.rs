@@ -544,9 +544,9 @@ impl<'a> ProjectService<'a> {
 
         let mut row_ids = std::collections::HashSet::with_capacity(doc.rows.len());
         for row in &doc.rows {
-            let row_id = row[0].as_i64().ok_or_else(|| {
-                AppError::InvalidParam("table row IDs must be integers".into())
-            })?;
+            let row_id = row[0]
+                .as_i64()
+                .ok_or_else(|| AppError::InvalidParam("table row IDs must be integers".into()))?;
             if row_id <= 0 {
                 return Err(AppError::InvalidParam(
                     "table row IDs must be positive".into(),
@@ -978,8 +978,8 @@ fn dedupe_zip_path(base: &str, ext: &str, used: &mut std::collections::HashSet<S
 const FORBIDDEN_NAME_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
 
 const WINDOWS_RESERVED_NAMES: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-    "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
 fn requires_archive_migration(version: &str) -> bool {
@@ -1161,6 +1161,7 @@ fn normalize_visible_document_names(bundle: &mut ProjectBundle) -> Vec<DocumentN
     migrations
 }
 
+#[cfg(test)]
 fn normalize_duplicate_dataset_names(docs: &mut [TableDoc]) -> Vec<DatasetNameMigration> {
     let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut migrations = Vec::new();
@@ -1557,7 +1558,10 @@ mod tests {
 
         let bundle = spprj_archive::read_project_file(destination.to_str().unwrap()).unwrap();
         assert_eq!(bundle.manifest.name, "Quarterly");
-        assert_eq!(state.project.read().unwrap().as_ref().unwrap().name, "Quarterly");
+        assert_eq!(
+            state.project.read().unwrap().as_ref().unwrap().name,
+            "Quarterly"
+        );
 
         let _ = std::fs::remove_file(destination);
     }
@@ -1726,8 +1730,7 @@ mod tests {
         let table_folders =
             HashMap::from([("preserve-id".to_string(), "Analysis/Yearly".to_string())]);
         let graph_folders = HashMap::from([("graph-1".to_string(), "Analysis".to_string())]);
-        let fit_y_by_x_folders =
-            HashMap::from([("fit-1".to_string(), "Analysis".to_string())]);
+        let fit_y_by_x_folders = HashMap::from([("fit-1".to_string(), "Analysis".to_string())]);
         let tabulate_folders =
             HashMap::from([("tab-1".to_string(), "Analysis/Yearly".to_string())]);
 
@@ -2255,14 +2258,12 @@ mod tests {
         write_zip_entry(
             &mut zip,
             "graphs/g1.spgh",
-            &serde_json::to_vec_pretty(&serde_json::json!({"id": "g1", "name": "Plot"}))
-                .unwrap(),
+            &serde_json::to_vec_pretty(&serde_json::json!({"id": "g1", "name": "Plot"})).unwrap(),
         );
         write_zip_entry(
             &mut zip,
             "graphs/g2.spgh",
-            &serde_json::to_vec_pretty(&serde_json::json!({"id": "g2", "name": "plot"}))
-                .unwrap(),
+            &serde_json::to_vec_pretty(&serde_json::json!({"id": "g2", "name": "plot"})).unwrap(),
         );
         write_zip_entry(
             &mut zip,
@@ -2361,21 +2362,33 @@ mod tests {
         let fit_names = result
             .fit_y_by_x
             .iter()
-            .map(|item| item.get("name").and_then(serde_json::Value::as_str).unwrap())
+            .map(|item| {
+                item.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap()
+            })
             .collect::<Vec<_>>();
         assert_eq!(fit_names, vec!["Model", "model-2", "A_B"]);
 
         let tabulate_names = result
             .tabulates
             .iter()
-            .map(|item| item.get("name").and_then(serde_json::Value::as_str).unwrap())
+            .map(|item| {
+                item.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap()
+            })
             .collect::<Vec<_>>();
         assert_eq!(tabulate_names, vec!["model-3", "A_B-2"]);
 
         let snapshot_names = result
             .snapshots
             .iter()
-            .map(|item| item.get("name").and_then(serde_json::Value::as_str).unwrap())
+            .map(|item| {
+                item.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap()
+            })
             .collect::<Vec<_>>();
         assert_eq!(snapshot_names, vec!["Snap", "snap-2", "LPT1_"]);
 

@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use crate::models::table::{
-    CreateTableFromRowsRequest, DatasetMeta, SqlQueryResult, TableQueryResult,
-    TableWindowRequest, TableWindowResult,
+    CreateTableFromRowsRequest, DatasetMeta, SqlQueryResult, TableQueryResult, TableWindowRequest,
+    TableWindowResult,
 };
 use crate::services::spprj_archive::{
     normalize_unsafe_portable_basename, validate_portable_basename,
@@ -81,13 +81,17 @@ mod tests {
 
     #[test]
     fn allocator_appends_next_suffix_case_insensitively() {
-        let resolved = allocate_case_insensitive_dataset_name("sales", ["Sales", "sales-2", "SALES-3"]);
+        let resolved =
+            allocate_case_insensitive_dataset_name("sales", ["Sales", "sales-2", "SALES-3"]);
         assert_eq!(resolved, "sales-4");
     }
 
     #[test]
     fn allocator_treats_numeric_suffix_gaps_deterministically() {
-        let resolved = allocate_case_insensitive_dataset_name("Summary", ["summary", "summary-3", "summary-7"]);
+        let resolved = allocate_case_insensitive_dataset_name(
+            "Summary",
+            ["summary", "summary-3", "summary-7"],
+        );
         assert_eq!(resolved, "Summary-2");
     }
 
@@ -100,7 +104,9 @@ mod tests {
             .create_table("NUL.txt", &["value".to_string()], &["VARCHAR".to_string()])
             .expect_err("reserved names must be rejected at create boundary");
 
-        assert!(matches!(err, AppError::InvalidParam(message) if message.contains("reserved Windows device name")));
+        assert!(
+            matches!(err, AppError::InvalidParam(message) if message.contains("reserved Windows device name"))
+        );
     }
 
     #[test]
@@ -113,7 +119,9 @@ mod tests {
             .create_table_from_rows(&request)
             .expect_err("control characters must be rejected at create boundary");
 
-        assert!(matches!(err, AppError::InvalidParam(message) if message.contains("control character")));
+        assert!(
+            matches!(err, AppError::InvalidParam(message) if message.contains("control character"))
+        );
     }
 
     #[test]
@@ -143,7 +151,11 @@ mod tests {
         let before = service.list_datasets().expect("list before");
 
         let err = service
-            .create_table("bad\u{0001}name", &["value".to_string()], &["VARCHAR".to_string()])
+            .create_table(
+                "bad\u{0001}name",
+                &["value".to_string()],
+                &["VARCHAR".to_string()],
+            )
             .expect_err("invalid create must fail");
         assert!(matches!(err, AppError::InvalidParam(_)));
 
@@ -165,7 +177,9 @@ mod tests {
         let err = service
             .create_table_from_sql_query("SELECT 1 AS value", "CON.txt")
             .expect_err("reserved names must be rejected before SQL create");
-        assert!(matches!(err, AppError::InvalidParam(message) if message.contains("reserved Windows device name")));
+        assert!(
+            matches!(err, AppError::InvalidParam(message) if message.contains("reserved Windows device name"))
+        );
 
         let after = service.list_datasets().expect("list after");
         assert_eq!(after.len(), before.len());
@@ -174,9 +188,18 @@ mod tests {
 
     #[test]
     fn import_name_normalization_is_deterministic_for_unsafe_stems() {
-        assert_eq!(normalize_unsafe_portable_basename("NUL.txt", "untitled"), "_NUL.txt");
-        assert_eq!(normalize_unsafe_portable_basename(" bad\u{0001}/name. ", "untitled"), "bad__name");
-        assert_eq!(normalize_unsafe_portable_basename("", "untitled"), "untitled");
+        assert_eq!(
+            normalize_unsafe_portable_basename("NUL.txt", "untitled"),
+            "_NUL.txt"
+        );
+        assert_eq!(
+            normalize_unsafe_portable_basename(" bad\u{0001}/name. ", "untitled"),
+            "bad__name"
+        );
+        assert_eq!(
+            normalize_unsafe_portable_basename("", "untitled"),
+            "untitled"
+        );
     }
 }
 
@@ -313,7 +336,11 @@ impl<'a> DataService<'a> {
         page: usize,
         page_size: usize,
     ) -> Result<SqlQueryResult, AppError> {
-        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         db.execute_sql_query(sql, page, page_size)
     }
 
@@ -333,8 +360,16 @@ impl<'a> DataService<'a> {
         db.create_empty_table(&id, &resolved_name, column_names, column_types)
     }
 
-    pub fn create_table_from_sql_query(&self, sql: &str, name: &str) -> Result<DatasetMeta, AppError> {
-        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+    pub fn create_table_from_sql_query(
+        &self,
+        sql: &str,
+        name: &str,
+    ) -> Result<DatasetMeta, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
         let resolved_name = Self::resolve_create_dataset_name(&db, name)?;
         db.create_table_from_sql_query(&id, &resolved_name, sql)
@@ -376,7 +411,10 @@ impl<'a> DataService<'a> {
             .map_err(|e| AppError::Database(e.to_string()))?;
         let row_ids = db.add_rows(dataset_id, count)?;
         let generation = db.get_dataset_generation(dataset_id)?;
-        Ok(crate::models::table::AddedRowsResult { row_ids, generation })
+        Ok(crate::models::table::AddedRowsResult {
+            row_ids,
+            generation,
+        })
     }
 
     pub fn apply_added_rows(
@@ -585,12 +623,7 @@ impl<'a> DataService<'a> {
             .iter()
             .map(|column| (column.name.clone(), column.column_type.clone()))
             .collect::<Vec<_>>();
-        db.add_columns_with_change_set(
-            dataset_id,
-            &engine_columns,
-            at_index,
-            expected_generation,
-        )
+        db.add_columns_with_change_set(dataset_id, &engine_columns, at_index, expected_generation)
     }
 
     /// Insert a column at a specific visible index and shift any stored display
@@ -670,12 +703,7 @@ impl<'a> DataService<'a> {
                 .map_err(|_| AppError::InvalidParam("source column index is too large".into()))?;
             let to_index = i32::try_from(to)
                 .map_err(|_| AppError::InvalidParam("target column index is too large".into()))?;
-            db.reorder_column_if_generation(
-                dataset_id,
-                from_index,
-                to_index,
-                expected_generation,
-            )?
+            db.reorder_column_if_generation(dataset_id, from_index, to_index, expected_generation)?
         };
         let mut display = self
             .state
@@ -904,7 +932,14 @@ impl<'a> DataService<'a> {
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
         let resolved_name = Self::resolve_create_dataset_name(&db, new_name)?;
-        db.split_table(&id, &resolved_name, source_id, split_col, value_col, id_cols)
+        db.split_table(
+            &id,
+            &resolved_name,
+            source_id,
+            split_col,
+            value_col,
+            id_cols,
+        )
     }
 
     pub fn summary_table(
