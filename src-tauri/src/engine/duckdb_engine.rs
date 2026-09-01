@@ -7282,14 +7282,7 @@ impl DuckDbEngine {
         dataset_id: &str,
     ) -> Result<ArchiveKeysetReadPlan, AppError> {
         self.get_dataset_meta(dataset_id)?;
-        let mut statement = self.conn.prepare(
-            "SELECT col_name, col_type FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
-        )?;
-        let columns: Vec<(String, String)> = statement
-            .query_map(params![dataset_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        let columns = self.get_user_columns(dataset_id)?;
         let table_name = Self::quote_identifier(&Self::internal_table_name(dataset_id));
 
         let select_projection = if columns.is_empty() {
