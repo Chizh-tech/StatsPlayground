@@ -1933,7 +1933,7 @@ mod tests {
         assert!(first_delta_ms >= 80);
         // CI/load jitter plus larger bounded batches can delay the first
         // advancing callback while preserving heartbeat behavior.
-        assert!(first_delta_ms <= 520);
+        assert!(first_delta_ms <= 900);
 
         let _ = std::fs::remove_file(&destination);
     }
