@@ -4,6 +4,11 @@ import { useHistoryStore } from "@/stores/useHistoryStore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { useLocaleStore } from "@/stores/useLocaleStore";
 import { bcp47For } from "@/i18n";
+import {
+  allocateProjectBasename,
+  normalizeProjectBasenameInput,
+  validateProjectBasename,
+} from "@/utils/projectFileNaming";
 import { listen } from "@tauri-apps/api/event";
 
 export interface SnapshotMenuData {
@@ -96,10 +101,44 @@ export function HistoryPanel({
       setRenamingId(null);
       return;
     }
-    const trimmed = renameValue.trim();
-    if (trimmed) {
+    const snap = snapshots.find((entry) => entry.id === id);
+    if (!snap) {
+      setRenamingId(null);
+      return;
+    }
+    const normalized = normalizeProjectBasenameInput(renameValue, ".spf");
+    if (normalized.wrongExtension) {
+      alert(t("alert.invalidName.wrongExtension", {
+        defaultValue: "Use the {{expected}} extension for this item (not {{actual}}).",
+        expected: ".spf",
+        actual: normalized.wrongExtension,
+      }));
+      return;
+    }
+    const validationError = validateProjectBasename(normalized.basename);
+    if (validationError) {
+      if (validationError === "controlChars") {
+        alert(t("alert.invalidName.controlChars", {
+          defaultValue: "Name contains control characters.",
+        }));
+      } else if (validationError === "reserved") {
+        alert(t("alert.invalidName.reserved", {
+          defaultValue: "Name is reserved by Windows and cannot be used.",
+        }));
+      } else {
+        alert(t(`alert.invalidName.${validationError}`, { defaultValue: "Invalid name." }));
+      }
+      return;
+    }
+    const resolved = allocateProjectBasename(
+      normalized.basename,
+      ".spf",
+      snapshots.map((entry) => entry.name),
+      snap.name,
+    );
+    if (resolved !== snap.name) {
       const { renameSnapshot } = useHistoryStore.getState();
-      renameSnapshot(id, trimmed);
+      renameSnapshot(id, resolved);
     }
     setRenamingId(null);
   };

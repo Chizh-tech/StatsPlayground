@@ -39,6 +39,14 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { modKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
+import {
+  allocateProjectBasename,
+  normalizeProjectBasenameInput,
+  projectFileExtension,
+  validateProjectBasename,
+  type ProjectBasenameValidationError,
+  type ProjectDocumentKind,
+} from "@/utils/projectFileNaming";
 import type { NamedSnapshot } from "@/types/history";
 
 function formatStat(n: number): string {
@@ -262,6 +270,60 @@ export function Workspace() {
     recordHistory(desc);
   }, [recordHistory]);
 
+  const fitAndTabulateNames = useMemo(
+    () => [...fitYByXItems.map((item) => item.name), ...tabulates.map((item) => item.name)],
+    [fitYByXItems, tabulates],
+  );
+
+  const invalidProjectNameMessage = useCallback((code: ProjectBasenameValidationError): string => {
+    if (code === "controlChars") {
+      return t("alert.invalidName.controlChars", {
+        defaultValue: "Name contains control characters.",
+      });
+    }
+    if (code === "reserved") {
+      return t("alert.invalidName.reserved", {
+        defaultValue: "Name is reserved by Windows and cannot be used.",
+      });
+    }
+    return t(`alert.invalidName.${code}`, { defaultValue: "Invalid name." });
+  }, [t]);
+
+  const resolveProjectBasename = useCallback((
+    requestedName: string,
+    kind: ProjectDocumentKind,
+    currentName?: string,
+  ): { basename: string; error: null } | { basename: null; error: string } => {
+    const extension = projectFileExtension(kind);
+    const normalized = normalizeProjectBasenameInput(requestedName, extension);
+    if (normalized.wrongExtension) {
+      return {
+        basename: null,
+        error: t("alert.invalidName.wrongExtension", {
+          defaultValue: "Use the {{expected}} extension for this item (not {{actual}}).",
+          expected: extension,
+          actual: normalized.wrongExtension,
+        }),
+      };
+    }
+    const validationError = validateProjectBasename(normalized.basename);
+    if (validationError) {
+      return { basename: null, error: invalidProjectNameMessage(validationError) };
+    }
+    let existingNames: string[];
+    if (kind === "table") {
+      existingNames = datasets.map((d) => d.name);
+    } else if (kind === "graph") {
+      existingNames = graphBuilders.map((item) => item.name);
+    } else if (kind === "fitYByX" || kind === "tabulate") {
+      existingNames = fitAndTabulateNames;
+    } else {
+      existingNames = [];
+    }
+    const basename = allocateProjectBasename(normalized.basename, extension, existingNames, currentName);
+    return { basename, error: null };
+  }, [datasets, fitAndTabulateNames, graphBuilders, invalidProjectNameMessage, t]);
+
   /** Called when history/snapshot is restored — refresh all UI */
   const handleHistoryRestored = useCallback(async () => {
     await refreshDatasets();
@@ -381,7 +443,11 @@ export function Workspace() {
   const handleCreateTable = async () => {
     if (readOnly) return;
     tableCounter.current += 1;
-    const name = `Table${tableCounter.current}`;
+    const name = allocateProjectBasename(
+      `Table${tableCounter.current}`,
+      ".sptb",
+      datasets.map((dataset) => dataset.name),
+    );
     const meta = await dataService.createTable(name, [], []);
     await refreshDatasets();
     markDirty();
@@ -422,7 +488,11 @@ export function Workspace() {
         const n = parseInt(g.name.slice(prefix.length), 10);
         return Number.isFinite(n) && n > max ? n : max;
       }, 0);
-    const name = `${ds.name} - Graph${perTableMax + 1}`;
+    const name = allocateProjectBasename(
+      `${ds.name} - Graph${perTableMax + 1}`,
+      ".spgh",
+      graphBuilders.map((item) => item.name),
+    );
     const item: GraphBuilderItem = {
       id,
       name,
@@ -456,7 +526,11 @@ export function Workspace() {
     const id = crypto.randomUUID();
     const item: TabulateItem = {
       id,
-      name: useTabulateStore.getState().nextName(),
+      name: allocateProjectBasename(
+        useTabulateStore.getState().nextName(),
+        ".spf",
+        fitAndTabulateNames,
+      ),
       sourceDatasetId: activeDatasetId,
       rowFields: [],
       columnFields: [],
@@ -487,7 +561,11 @@ export function Workspace() {
 
   const handleCreateFitYByXItem = (item: FitYByXItem) => {
     const reservedName = nextFitYByXName();
-    const name = item.name.trim() || reservedName;
+    const name = allocateProjectBasename(
+      item.name.trim() || reservedName,
+      ".spf",
+      fitAndTabulateNames,
+    );
     const created = { ...item, name };
     const source = datasets.find((dataset) => dataset.id === created.sourceDatasetId)?.name ?? created.sourceDatasetId;
     addFitYByX(created);
@@ -515,40 +593,64 @@ export function Workspace() {
     // 是图表项还是数据表？
     const gb = useGraphBuilderStore.getState().items.find((it) => it.id === id);
     if (gb) {
-      if (trimmed !== gb.name) {
-        renameGraphBuilder(id, trimmed);
+      const resolved = resolveProjectBasename(trimmed, "graph", gb.name);
+      if (resolved.error) {
+        alert(resolved.error);
+        return;
+      }
+      if (resolved.basename !== gb.name) {
+        renameGraphBuilder(id, resolved.basename);
         markDirty();
-        recordAction(t("history.renameGraph", { old: gb.name, new: trimmed }));
+        recordAction(t("history.renameGraph", { old: gb.name, new: resolved.basename }));
       }
       setRenamingId(null);
       return;
     }
     const tabulate = useTabulateStore.getState().items.find((it) => it.id === id);
     if (tabulate) {
-      if (trimmed !== tabulate.name) {
-        renameTabulate(id, trimmed);
+      const resolved = resolveProjectBasename(trimmed, "tabulate", tabulate.name);
+      if (resolved.error) {
+        alert(resolved.error);
+        return;
+      }
+      if (resolved.basename !== tabulate.name) {
+        renameTabulate(id, resolved.basename);
         markDirty();
-        recordAction(t("history.renameTabulate", { old: tabulate.name, new: trimmed }));
+        recordAction(t("history.renameTabulate", { old: tabulate.name, new: resolved.basename }));
       }
       setRenamingId(null);
       return;
     }
     const fitYByX = useFitYByXStore.getState().items.find((it) => it.id === id);
     if (fitYByX) {
-      if (trimmed !== fitYByX.name) {
-        renameFitYByX(id, trimmed);
+      const resolved = resolveProjectBasename(trimmed, "fitYByX", fitYByX.name);
+      if (resolved.error) {
+        alert(resolved.error);
+        return;
+      }
+      if (resolved.basename !== fitYByX.name) {
+        renameFitYByX(id, resolved.basename);
         markDirty();
-        recordAction(t("history.renameFitYByX", { old: fitYByX.name, new: trimmed }));
+        recordAction(t("history.renameFitYByX", { old: fitYByX.name, new: resolved.basename }));
       }
       setRenamingId(null);
       return;
     }
     const oldName = datasets.find((d) => d.id === id)?.name;
-    if (trimmed !== oldName) {
-      await dataService.renameDataset(id, trimmed);
+    if (!oldName) {
+      setRenamingId(null);
+      return;
+    }
+    const resolved = resolveProjectBasename(trimmed, "table", oldName);
+    if (resolved.error) {
+      alert(resolved.error);
+      return;
+    }
+    if (resolved.basename !== oldName) {
+      await dataService.renameDataset(id, resolved.basename);
       await refreshDatasets();
       markDirty();
-      recordAction(t("history.renameTable", { old: oldName ?? "", new: trimmed }));
+      recordAction(t("history.renameTable", { old: oldName, new: resolved.basename }));
     }
     setRenamingId(null);
   };
