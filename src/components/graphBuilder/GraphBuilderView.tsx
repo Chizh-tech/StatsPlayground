@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } fr
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { dataService } from "@/services/dataService";
-import { Graph, inferFieldType, isMissing, DEFAULT_GROUP_KEY, type FieldRef, type GraphSpec, type GraphData, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type RefLineStyle, type BandRefLine, type YAxisConfig, type GridLineStyle } from "@/graphCore";
+import { isMissing, DEFAULT_GROUP_KEY, type FieldRef, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type YAxisConfig } from "@/graphCore";
 import { SCATTER_RENDER_BUDGET } from "@/graphCore/scatterBudget";
 import type { DatasetMeta } from "@/types/data";
 import type { GraphBuilderItem, GraphBuilderMode, GraphSlotKey } from "@/types/graphBuilder";
@@ -31,11 +31,13 @@ import { useGraphPaletteStore, type CustomPalette } from "@/stores/useGraphPalet
 import { useTableSelectionStore } from "@/stores/useTableSelectionStore";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { AddPaletteDialog } from "./AddPaletteDialog";
+import { AxisSettingsDialog, isAxisConfigEmpty } from "./AxisSettingsDialog";
 import { prepareAxisBinding } from "./axisBinding";
+import { updateGraphBuilder2D } from "./graphBuilderAxisInteractions";
+import { resolveVisualGraphSlots } from "./graphBuilderSlotLayout";
 import {
   clampSampleSize,
   DEFAULT_GRAPH_SAMPLE_SIZE,
-  getRawPointNotice,
 } from "./graphSamplingPolicy";
 import { FilterPanel } from "@/components/filter";
 import { defaultLayerOptions, GRAPH_LAYER_DEFS, getLayerMode, type GraphLayerDef } from "./graphLayerConfig";
@@ -52,7 +54,8 @@ import {
   deriveMultivariateSlotBinding,
   resolveCanvasDropSlot,
 } from "./multivariateInteractions";
-import { useGraphDataPipeline } from "./useGraphDataPipeline";
+import { GraphRuntime, type GraphRuntimeState } from "./GraphRuntime";
+import { buildGraphRuntimeModel, FILL_PALETTE, LINE_PALETTE, POINT_PALETTE, shade, SHADE_RATIO_FILL, SHADE_RATIO_LINE, SHADE_RATIO_POINT, STYLE_COLORS } from "./graphRuntimeModel";
 
 interface GraphBuilderViewProps {
   item: GraphBuilderItem;
@@ -72,7 +75,6 @@ const GRAPH_LAYER_DEFS_WITH_CORRELATION: readonly GraphLayerDef[] = GRAPH_LAYER_
   ? GRAPH_LAYER_DEFS
   : [...GRAPH_LAYER_DEFS, { kind: "correlationMatrix" as ElementKind, icon: "▦" }];
 const DRAG_MIME = "text/plain";
-const CORRELATION_MIN_COLUMNS = 2;
 const CORRELATION_MAX_COLUMNS = MAX_MULTIVARIATE_COLUMNS;
 type MultivariateDropNotice = "invalidFieldType" | "duplicateField" | "maxColumns";
 
@@ -84,6 +86,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   const threeD = item.modeStates.threeD;
   const multivariate = item.modeStates.multivariate;
   const cartesianState = isThreeDMode ? threeD : twoD;
+  const visualSlots = resolveVisualGraphSlots(item.mode === "2d" && twoD.transposed === true);
   const modeStates = item.modeStates;
   const updateItemRaw = useGraphBuilderStore((s) => s.updateItem);
   const markDirtyRaw = useProjectStore((s) => s.markDirty);
@@ -103,16 +106,14 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   }, [item.id, item.mode, updateItem, markDirty]);
   const setTwoDState = useCallback(
     (updater: typeof twoD | ((prev: typeof twoD) => typeof twoD)) => {
-      const next = typeof updater === "function" ? updater(twoD) : updater;
+      const currentItem = useGraphBuilderStore.getState().items.find((candidate) => candidate.id === item.id) ?? item;
+      const nextItem = updateGraphBuilder2D(currentItem, updater);
       updateItem(item.id, {
-        modeStates: {
-          ...modeStates,
-          twoD: next,
-        },
+        modeStates: nextItem.modeStates,
       });
       markDirty();
     },
-    [item.id, twoD, modeStates, updateItem, markDirty],
+    [item, twoD, updateItem, markDirty],
   );
   const setThreeDState = useCallback(
     (updater: typeof threeD | ((prev: typeof threeD) => typeof threeD)) => {
@@ -156,12 +157,18 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // a less-frequent mode used for navigating an already-zoomed view.
   const [cursorMode, setCursorMode] = useState<"pan" | "select">("select");
 
-  const [columns, setColumns] = useState<FieldRef[]>([]);
-  const [colSqlTypes, setColSqlTypes] = useState<string[]>([]);
-  const [metaLoading, setMetaLoading] = useState(true);
-  const [metaError, setMetaError] = useState<string | null>(null);
-  const [viewport, setViewport] = useState({ width: 1280, height: 720 });
-  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const runtimeModel = useMemo(
+    () => buildGraphRuntimeModel(item, { columns: [], displayProps: [] }),
+    [item],
+  );
+
+  const [runtimeState, setRuntimeState] = useState<GraphRuntimeState | null>(null);
+  const columns = runtimeState?.columns ?? [];
+  const colSqlTypes = runtimeState?.colSqlTypes ?? [];
+  const graphData = runtimeState?.graphData ?? { columns: [], rows: [] };
+  const runtimeSpec = runtimeState?.spec ?? runtimeModel.spec;
+  const metaLoading = runtimeState?.metaLoading ?? true;
+  const metaError = runtimeState?.metaError ?? null;
   // Y-axis settings dialog open state. Opened by double-clicking the Y
   // axis (or its label/title area) in <Graph>; closed via the dialog's
   // Done button or overlay click.
@@ -169,23 +176,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // X-axis settings dialog open state. Mirrors `yAxisDialogOpen` —
   // opened by double-clicking the X axis (or its label / title strip).
   const [xAxisDialogOpen, setXAxisDialogOpen] = useState(false);
-  // Per-column user-defined value ordering, keyed by column name. Populated
-  // from the dataset's `ColumnDisplayProps.extras.valueOrder.values`. Used
-  // by <Graph> to reorder categorical X axes, legend entries, boxplot
-  // category positions, and faceted-panel ordering. Re-fetched on focus so
-  // edits made in DataTableView take effect when the user switches back to
-  // the graph tab.
-  const [valueOrders, setValueOrders] = useState<Record<string, string[]>>({});
-
-  // Per-column spec limits (LSL / Target / USL) pulled from the dataset's
-  // `ColumnDisplayProps.extras.spec`. Keyed by column name so the auto
-  // spec-limit overlay can look up the active Y column's limits in O(1).
-  // Only columns with at least one finite limit are included; an empty
-  // map means "no auto-spec-line overlay possible". Reloaded together
-  // with `valueOrders` so DataTableView edits round-trip on tab switch.
-  // Future multi-Y / facet-on-X work will fan this out by group key
-  // instead of by column name.
-  const [specByCol, setSpecByCol] = useState<Record<string, { lsl?: number; target?: number; usl?: number }>>({});
 
   // Multi-select state for the column list (left rail). Plain click =
   // single select; Ctrl/Cmd+click = toggle one; Shift+click = range
@@ -341,35 +331,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     [leftTopPct],
   );
 
-  useLayoutEffect(() => {
-    const host = canvasRef.current;
-    if (!host) return;
-
-    const commitSize = () => {
-      const rect = host.getBoundingClientRect();
-      const width = Math.max(1, Math.floor(rect.width));
-      const height = Math.max(1, Math.floor(rect.height));
-      setViewport((prev) => (
-        prev.width === width && prev.height === height
-          ? prev
-          : { width, height }
-      ));
-    };
-
-    commitSize();
-    const ro = new ResizeObserver(commitSize);
-    ro.observe(host);
-    return () => {
-      ro.disconnect();
-    };
-  }, []);
-
   // 编码状态从 store 派生
   const encoding = cartesianState.encoding as Partial<Record<SlotKey, FieldRef>>;
   const elements = isMultivariateMode
     ? [{ kind: "correlationMatrix", enabled: true, options: { correlationMethod: multivariate.correlationMethod } } as ChartElement]
     : cartesianState.elements;
-  const smootherLambda = cartesianState.smootherLambda;
   const multiX = twoD.multiX ?? [];
   const multiY = isMultivariateMode ? multivariate.columns : (twoD.multiY ?? []);
   const multivariateSlotBinding = deriveMultivariateSlotBinding(multivariate.columns);
@@ -386,6 +352,11 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     const generation = await dataService.getDatasetGeneration(dataset.id);
     return dataService.queryTableFilterValues(dataset.id, field, search, 500, generation);
   }, [dataset.id]);
+  const meltInfo = runtimeModel.meltInfo;
+  const frame = runtimeState?.frame ?? null;
+  const pipelineStatus = runtimeState?.status ?? "idle";
+  const progress = runtimeState?.progress ?? null;
+  const rawPointNotice = runtimeState?.rawPointNotice ?? null;
 
   // Auto-close the manager when its slot is no longer manageable.
   // In 2D, management is meaningful only for 2+ columns (multi mode).
@@ -406,119 +377,9 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     }
   }, [item.mode, managerOpenSlot, multiX, multiY]);
 
-  // ---- Multi-column melt (multi-mode rendering) ---------------------
-  //
-  // When the user drops 2+ numeric columns onto one axis at once,
-  // that axis enters "multi-mode": `item.multiX` or `item.multiY`
-  // holds the list of dropped columns. There are two render modes,
-  // chosen at render time based on whether the OTHER axis is bound:
-  //
-  //   - "axis" mode (other axis empty): the dropped column NAMES
-  //     become the multi-mode axis (categorical) and the dropped
-  //     column VALUES become the other axis (continuous). This lets
-  //     the user instantly compare similar-typed columns side by
-  //     side without a separate melt step.
-  //
-  //   - "merge" mode (other axis bound): all dropped column values
-  //     are concatenated into one anonymous series on the multi-mode
-  //     axis (continuous), against the bound other axis. Mirrors the
-  //     "long-form" data layout — every dropped column contributes
-  //     its rows to the same plotted series.
-  //
-  // The melt rewrites `filteredData` by:
-  //   - keeping all original columns (so legend/overlay/group still
-  //     reference the same data),
-  //   - appending two synthetic columns `__sp_variable__` (the
-  //     source column NAME) and `__sp_value__` (the per-row value
-  //     from that column),
-  //   - emitting N rows per original row, where N = number of
-  //     melted columns.
-  //
-  // The spec then sees a synthetic FieldRef for the affected axis /
-  // axes pointing at these synthetic columns, so transform.ts and
-  // ECharts don't need to know multi-mode exists. */
-  const MELT_VAR = "__sp_variable__";
-  const MELT_VAL = "__sp_value__";
-  const meltInfo = useMemo<
-    | {
-        slot: "x" | "y";
-        cols: FieldRef[];
-        mode: "axis" | "merge";
-        varField: FieldRef;
-        valField: FieldRef;
-      }
-    | null
-  >(() => {
-    if (item.mode !== "2d") return null;
-    // At most one axis can be in multi-mode at a time
-    // (setMultiAtSlot enforces this on the write side). On read,
-    // if both happen to be set (e.g. an older project file), prefer
-    // X — it's the more common axis to multi-drop on.
-    const mx = item.modeStates.twoD.multiX ?? [];
-    const my = item.modeStates.twoD.multiY ?? [];
-    const xActive = mx.length >= 2;
-    const yActive = my.length >= 2;
-    if (!xActive && !yActive) return null;
-    const slot: "x" | "y" = xActive ? "x" : "y";
-    const cols = slot === "x" ? mx : my;
-    const otherBound = slot === "x" ? !!item.modeStates.twoD.encoding.y : !!item.modeStates.twoD.encoding.x;
-    const mode: "axis" | "merge" = otherBound ? "merge" : "axis";
-    return {
-      slot,
-      cols,
-      mode,
-      varField: { name: MELT_VAR, type: "nominal" },
-      valField: { name: MELT_VAL, type: "continuous" },
-    };
-  }, [item.mode, item.modeStates.twoD.multiX, item.modeStates.twoD.multiY, item.modeStates.twoD.encoding.x, item.modeStates.twoD.encoding.y]);
-
-  // Build the effective encoding for the renderer. In multi-mode the
-  // synthetic FieldRefs replace the affected slot(s); other slots
-  // (overlay, group X/Y, etc.) pass through untouched. */
-  const effectiveEncoding = useMemo<typeof encoding>(() => {
-    if (!meltInfo) return encoding;
-    const enc = { ...encoding };
-    if (meltInfo.slot === "x") {
-      if (meltInfo.mode === "axis") {
-        enc.x = meltInfo.varField;
-        enc.y = meltInfo.valField;
-      } else {
-        enc.x = meltInfo.valField;
-        // enc.y stays as the user's bound Y field.
-      }
-    } else {
-      if (meltInfo.mode === "axis") {
-        enc.y = meltInfo.varField;
-        enc.x = meltInfo.valField;
-      } else {
-        enc.y = meltInfo.valField;
-        // enc.x stays as the user's bound X field.
-      }
-    }
-    return enc;
-  }, [encoding, meltInfo]);
-
-  const graphData = useMemo<GraphData>(() => {
-    const baseColumns = columns.map((c) => c.name);
-    if (!meltInfo) {
-      return { columns: baseColumns, rows: [] };
-    }
-    const out = [...baseColumns];
-    if (!out.includes(MELT_VAR)) out.push(MELT_VAR);
-    if (!out.includes(MELT_VAL)) out.push(MELT_VAL);
-    return { columns: out, rows: [] };
-  }, [columns, meltInfo]);
-
-  const {
-    frame,
-    status: pipelineStatus,
-    error: pipelineError,
-    progress,
-  } = useGraphDataPipeline(item, dataset, viewport);
-
   // User-saved CustomPalettes feed into legend default-color assignment:
   // when a group doesn't have an explicit style override yet, the renderer
-  // walks these palettes first before falling back to GROUP_COLORS.
+  // walks these palettes first before falling back to STYLE_COLORS.
   const customPalettes = useGraphPaletteStore((s) => s.palettes);
 
   const groupKeys = useMemo<string[]>(() => {
@@ -628,251 +489,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     },
     [item.id, updateItem, markDirty],
   );
-
-  // 加载列信息和列显示属性（图形数据由 useGraphDataPipeline 提供）。
-  useEffect(() => {
-    let cancelled = false;
-    setMetaLoading(true);
-    setMetaError(null);
-    (async () => {
-      try {
-        const cols = await dataService.getColumns(dataset.id);
-        const fields: FieldRef[] = cols.map(([name, type]) => ({
-          name,
-          type: inferFieldType(type),
-        }));
-        const sqlTypes = cols.map(([, type]) => type);
-        // Pull per-column display props in parallel with data so the
-        // Value Order metadata is available on first render. Display
-        // props can legitimately be missing (older projects, fresh
-        // datasets) — treat any failure as "no value orders".
-        let displayProps: Awaited<ReturnType<typeof dataService.getColumnDisplayProps>> = [];
-        try {
-          displayProps = await dataService.getColumnDisplayProps(dataset.id);
-        } catch { /* ignore — empty value orders are fine */ }
-        if (cancelled) return;
-        // Build the colIndex → name map from `cols` (which already excludes
-        // internal `_row_id` because get_user_columns filters it out). The
-        // colIndex stored in ColumnDisplayProps is the visible-column
-        // index, so it indexes directly into `cols`.
-        const vo: Record<string, string[]> = {};
-        // Build the spec map in the same pass over displayProps so we
-        // only walk the array once. A column is added only if at least
-        // one of LSL / Target / USL is a finite number — columns whose
-        // spec extras are present but blank shouldn't trigger the auto
-        // overlay.
-        const sp: Record<string, { lsl?: number; target?: number; usl?: number }> = {};
-        for (const p of displayProps) {
-          const ex = p.extras as Record<string, unknown> | undefined;
-          const node = ex?.valueOrder as { values?: unknown } | undefined;
-          const vals = node?.values;
-          const colName = cols[p.colIndex]?.[0];
-          if (colName && Array.isArray(vals) && vals.length > 0) {
-            vo[colName] = vals.map((v) => String(v));
-          }
-          const specExtra = ex?.spec as { lsl?: unknown; target?: unknown; usl?: unknown } | undefined;
-          if (colName && specExtra) {
-            const out: { lsl?: number; target?: number; usl?: number } = {};
-            const lsl = Number(specExtra.lsl);
-            const target = Number(specExtra.target);
-            const usl = Number(specExtra.usl);
-            if (Number.isFinite(lsl)) out.lsl = lsl;
-            if (Number.isFinite(target)) out.target = target;
-            if (Number.isFinite(usl)) out.usl = usl;
-            if (out.lsl !== undefined || out.target !== undefined || out.usl !== undefined) {
-              sp[colName] = out;
-            }
-          }
-        }
-        setColumns(fields);
-        setColSqlTypes(sqlTypes);
-        setValueOrders(vo);
-        setSpecByCol(sp);
-      } catch (e) {
-        if (!cancelled) setMetaError(String(e));
-      } finally {
-        if (!cancelled) setMetaLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [dataset.id]);
-
-  /** Resolve final per-element options. The smoother layer used to be
-   *  driven by a single workspace-level `smootherLambda` slider; that
-   *  slider has been replaced by the per-layer SmootherOptions panel
-   *  (algorithm + per-algo params). For backwards compatibility we
-   *  still seed `lambda` from the workspace value when a smoother
-   *  element predates the per-layer panel — i.e. it has neither an
-   *  explicit algorithm choice nor its own `lambda`/`windowFraction`.
-   *  Brand-new layers and explicitly-configured ones are passed
-   *  through untouched so the panel's settings are not overwritten. */
-  const finalElements = useMemo<ChartElement[]>(() => {
-    return elements.map((el) => {
-      if (el.kind !== "smoother") return el;
-      const o = el.options ?? {};
-      if (
-        o.algo !== undefined ||
-        o.lambda !== undefined ||
-        o.windowFraction !== undefined
-      ) {
-        return el;
-      }
-      return { ...el, options: { ...o, lambda: smootherLambda } };
-    });
-  }, [elements, smootherLambda]);
-
-  const spec = useMemo<GraphSpec>(() => {
-    const enc: GraphSpec["encoding"] = {};
-    // Color / Size / Wrap encoding channels were removed in favour of the
-    // per-group Style editor. Drop them when building the spec so legacy
-    // projects don't surprise the user with auto-coloring or auto-sizing.
-    const SKIP_KEYS = new Set<SlotKey>(["color", "size", "wrap"]);
-    (Object.keys(effectiveEncoding) as SlotKey[]).forEach((k) => {
-      if (SKIP_KEYS.has(k)) return;
-      const v = effectiveEncoding[k];
-      if (v) (enc as any)[k] = v;
-    });
-    // Resolve the auto spec-limit overlay independently for each axis.
-    // X and Y each carry their OWN `autoSpecLinesX` / `autoSpecLinesY`
-    // flag, so a chart with two value columns (one on X, one on Y) can
-    // turn the overlay on for one axis, the other, or both —
-    // mirroring how each axis has its own ref-lines and axis-settings
-    // dialog. The legacy single `autoSpecLines` flag (pre-symmetric
-    // build) is used as a fallback for any per-axis field still
-    // `undefined`, so old projects keep their previous behavior on
-    // first load until the user touches either checkbox.
-    //
-    // In multi-mode the auto-spec overlay is handled differently —
-    // the single-column overlay (autoSpecY / autoSpecX) is disabled
-    // because there's no longer a single underlying column; instead
-    // each dropped column contributes its OWN LSL / Target / USL ref
-    // lines on the value axis (computed below). This way the user
-    // can see per-column spec limits side by side on the same axis
-    // even after the columns were merged via melt. */
-    const legacy = twoD.autoSpecLines;
-    const onY = !meltInfo && (twoD.autoSpecLinesY ?? legacy ?? false);
-    const onX = !meltInfo && (twoD.autoSpecLinesX ?? legacy ?? false);
-    const yName = effectiveEncoding.y?.name;
-    const xName = effectiveEncoding.x?.name;
-    const yLimits = onY && yName ? specByCol[yName] : undefined;
-    const xLimits = onX && xName ? specByCol[xName] : undefined;
-    const autoSpecY = yLimits ? { ...yLimits, colName: yName } : undefined;
-    const autoSpecX = xLimits ? { ...xLimits, colName: xName } : undefined;
-
-    // Multi-mode per-column auto-spec ref lines. Computed here (rather
-    // than persisted on the item) so toggling the checkbox in the
-    // axis-settings dialog doesn't pollute the user's editable
-    // ref-lines list. Each column contributes up to three lines (LSL,
-    // Target, USL) drawn on whichever axis ended up carrying the
-    // synthetic value column: in "axis" mode that's the axis opposite
-    // the multi-drop slot; in "merge" mode it's the multi-drop slot
-    // itself.
-    //
-    // Two rendering strategies, picked off `meltInfo.mode`:
-    //
-    //   - "axis" mode (variable column on the OTHER axis): every
-    //     melted column becomes its own category band on the variable
-    //     axis. Drawing full-width spec lines across all categories
-    //     would visually attribute one column's USL to every other
-    //     column AND let labels stack on top of one another when
-    //     limits sit close together. Emit `BandRefLine` entries
-    //     instead — each line is restricted to its source column's
-    //     band on the categorical axis, labels are suppressed (the
-    //     column's position on the cat axis already conveys identity),
-    //     and they ride a separate carrier series in the renderer.
-    //
-    //   - "merge" mode (value column on the multi slot, no variable
-    //     axis exists): there's no category axis to band against, so
-    //     fall back to full-width refLines with column-name labels —
-    //     same shape as a manually-added ref line. */
-    const extraRefLinesY: RefLineY[] = [];
-    const extraRefLinesX: RefLineX[] = [];
-    const extraBandRefLines: BandRefLine[] = [];
-    if (meltInfo) {
-      const valueAxis: "x" | "y" = meltInfo.mode === "axis"
-        ? (meltInfo.slot === "y" ? "x" : "y")
-        : meltInfo.slot;
-      const autoOn = valueAxis === "y"
-        ? (twoD.autoSpecLinesY ?? legacy ?? false)
-        : (twoD.autoSpecLinesX ?? legacy ?? false);
-      if (autoOn) {
-        let seq = 0;
-        if (meltInfo.mode === "axis") {
-          // Per-column band segments. `category` is the column name
-          // because in axis mode the variable axis is rendered as a
-          // category axis with one slot per column (the melt
-          // synthesizes a `__sp_variable__` column whose values are
-          // exactly the source column names).
-          const push = (col: string, kind: "LSL" | "Target" | "USL", v: number) => {
-            const id = `auto-spec-band-${col}-${kind}-${++seq}`;
-            const color = kind === "Target" ? "#00C853" : "#E60000";
-            extraBandRefLines.push({
-              id,
-              value: v,
-              category: col,
-              valueAxis,
-              color,
-              style: "dashed",
-              width: 1,
-            });
-          };
-          for (const c of meltInfo.cols) {
-            const sp = specByCol[c.name];
-            if (!sp) continue;
-            if (sp.lsl !== undefined) push(c.name, "LSL", sp.lsl);
-            if (sp.target !== undefined) push(c.name, "Target", sp.target);
-            if (sp.usl !== undefined) push(c.name, "USL", sp.usl);
-          }
-        } else {
-          // Merge mode: no category axis on the opposite side, so
-          // full-width labeled refLines are the only option. Keep
-          // the column name in the label so users can still tell
-          // which limit came from which column when several columns
-          // were merged onto the same value axis.
-          const push = (col: string, kind: "LSL" | "Target" | "USL", v: number) => {
-            const id = `auto-spec-multi-${col}-${kind}-${++seq}`;
-            const color = kind === "Target" ? "#00C853" : "#E60000";
-            const label = `${kind}[${col}] = ${Number(v.toPrecision(10))}`;
-            const base = { id, label, style: "dashed" as RefLineStyle, color, width: 1 };
-            if (valueAxis === "y") extraRefLinesY.push({ ...base, y: v });
-            else extraRefLinesX.push({ ...base, x: v });
-          };
-          for (const c of meltInfo.cols) {
-            const sp = specByCol[c.name];
-            if (!sp) continue;
-            if (sp.lsl !== undefined) push(c.name, "LSL", sp.lsl);
-            if (sp.target !== undefined) push(c.name, "Target", sp.target);
-            if (sp.usl !== undefined) push(c.name, "USL", sp.usl);
-          }
-        }
-      }
-    }
-    const finalRefLinesY = extraRefLinesY.length
-      ? [...refLinesY, ...extraRefLinesY]
-      : (refLinesY.length > 0 ? refLinesY : undefined);
-    const finalRefLinesX = extraRefLinesX.length
-      ? [...refLinesX, ...extraRefLinesX]
-      : (refLinesX.length > 0 ? refLinesX : undefined);
-    const finalBandRefLines = extraBandRefLines.length ? extraBandRefLines : undefined;
-    return {
-      datasetId: dataset.id,
-      datasetName: dataset.name,
-      encoding: enc,
-      elements: finalElements,
-      styles: effectiveStyles,
-      hiddenGroups: hiddenGroups.length > 0 ? hiddenGroups : undefined,
-      refLinesY: finalRefLinesY,
-      refLinesX: finalRefLinesX,
-      bandRefLines: finalBandRefLines,
-      autoSpecY,
-      autoSpecX,
-      yAxis: yAxisConfig,
-      xAxis: xAxisConfig,
-      threeD: isThreeDMode,
-    };
-  }, [effectiveEncoding, meltInfo, finalElements, dataset.id, dataset.name, effectiveStyles, hiddenGroups, refLinesY, refLinesX, yAxisConfig, xAxisConfig, twoD.autoSpecLines, twoD.autoSpecLinesY, twoD.autoSpecLinesX, isThreeDMode, specByCol, twoD]);
 
   /** Replace the entire group-style entry for one group (or remove it). */
   const setGroupStyle = useCallback(
@@ -1381,73 +997,13 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     setTwoDState(createDefaultGraph2DState());
   }, [item.mode, setThreeDState, setMultivariateState, setTwoDState]);
 
-  /** Swap X and Y completely — encoding (axis + facet) plus axis
-   *  settings and reference lines. The chart should read as if it had
-   *  been rotated 90°.
-   *
-   *  Swapped:
-   *    - encoding.x ↔ encoding.y          (axis content)
-   *    - encoding.groupX ↔ encoding.groupY (facet rails)
-   *    - xAxis ↔ yAxis                     (range / ticks / inverse / gridlines)
-   *    - refLinesX ↔ refLinesY            (with `{x}` ↔ `{y}` field rename)
-   *
-   *  Intentionally NOT swapped:
-   *    - color / size / overlay / wrap / elements / styles / hiddenGroups /
-   *      filters / smootherLambda — these are orientation-agnostic.
-   *    - autoSpecLinesY / autoSpecLinesX swap with each other (mirror
-   *      of refLinesY / refLinesX) so the rotated chart shows the same
-   *      spec overlay on the same column as before the swap.
-   *
-   *  Done as a single atomic `updateItem` so the encoding, axis configs,
-   *  and ref lines re-render in lockstep — partial swaps would briefly
-   *  mismatch and could trigger an inverse / range guard from the wrong
-   *  axis. */
   const swapXY = useCallback(() => {
     if (item.mode !== "2d") return;
-    const enc = twoD.encoding;
-    const nextEncoding = { ...enc };
-    // x ↔ y
-    if (enc.x !== undefined) nextEncoding.y = enc.x;
-    else delete nextEncoding.y;
-    if (enc.y !== undefined) nextEncoding.x = enc.y;
-    else delete nextEncoding.x;
-    // groupX ↔ groupY
-    if (enc.groupX !== undefined) nextEncoding.groupY = enc.groupX;
-    else delete nextEncoding.groupY;
-    if (enc.groupY !== undefined) nextEncoding.groupX = enc.groupY;
-    else delete nextEncoding.groupX;
-    // refLinesY ↔ refLinesX, with the field-name flip. Keep the same id
-    // on each line so React's list-key stays stable across the swap and
-    // any in-flight edit focus doesn't churn.
-    const nextRefLinesX: RefLineX[] | undefined = twoD.refLinesY?.map((r) => ({
-      id: r.id,
-      x: r.y,
-      label: r.label,
-      style: r.style,
-      color: r.color,
-      width: r.width,
-    }));
-    const nextRefLinesY: RefLineY[] | undefined = twoD.refLinesX?.map((r) => ({
-      id: r.id,
-      y: r.x,
-      label: r.label,
-      style: r.style,
-      color: r.color,
-      width: r.width,
-    }));
     setTwoDState((prev) => ({
       ...prev,
-      encoding: nextEncoding,
-      xAxis: twoD.yAxis,
-      yAxis: twoD.xAxis,
-      refLinesX: nextRefLinesX,
-      refLinesY: nextRefLinesY,
-      autoSpecLinesY: twoD.autoSpecLinesX ?? twoD.autoSpecLines,
-      autoSpecLinesX: twoD.autoSpecLinesY ?? twoD.autoSpecLines,
-      multiX: twoD.multiY,
-      multiY: twoD.multiX,
+      transposed: !prev.transposed,
     }));
-  }, [item.mode, twoD, setTwoDState]);
+  }, [item.mode, setTwoDState]);
 
   const samplingMode = item.sampling?.mode === "sample" ? "sample" : "full";
   const sampleSize = useMemo(() => {
@@ -1487,11 +1043,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     });
     markDirty();
   }, [item.id, updateItem, markDirty, sampleSeed, sampleSize]);
-
-  const rawPointNotice = useMemo(
-    () => getRawPointNotice(frame?.rawPointDisposition),
-    [frame?.rawPointDisposition],
-  );
 
   const setSampleSeed = useCallback((raw: number) => {
     const seed = Math.max(0, Math.trunc(raw) || 0);
@@ -1541,21 +1092,6 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
     });
   }, [frame, isMultivariateMode, pipelineStatus, progress, rawPointNotice, t]);
 
-  const correlationColumnCount = useMemo(() => {
-    if (item.mode === "multivariate") {
-      return item.modeStates.multivariate.columns.length;
-    }
-    const twoDColumnsX = item.modeStates.twoD.multiX ?? [];
-    const twoDColumnsY = item.modeStates.twoD.multiY ?? [];
-    if (twoDColumnsX.length > 0) return twoDColumnsX.length;
-    if (twoDColumnsY.length > 0) return twoDColumnsY.length;
-    if (item.modeStates.twoD.encoding.x || item.modeStates.twoD.encoding.y) return 1;
-    return 0;
-  }, [item.mode, item.modeStates.multivariate.columns, item.modeStates.twoD.multiX, item.modeStates.twoD.multiY, item.modeStates.twoD.encoding.x, item.modeStates.twoD.encoding.y]);
-  const correlationColumnsReady =
-    correlationColumnCount >= CORRELATION_MIN_COLUMNS &&
-    correlationColumnCount <= CORRELATION_MAX_COLUMNS;
-
   const correlationNoticeText = useMemo(() => {
     if (!isMultivariateMode || !correlationNotice) {
       return null;
@@ -1602,7 +1138,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   }, [pipelineStatus, metaError, metaLoading, t]);
 
   const activeKinds = new Set(
-    finalElements.filter((e) => e.enabled !== false).map((e) => e.kind),
+    elements.filter((e) => e.enabled !== false).map((e) => e.kind),
   );
 
   return (
@@ -1616,7 +1152,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               className="gb-tb-btn"
               onClick={swapXY}
               title={t("graph.swapXY.tooltip", {
-                defaultValue: "Swap the X and Y axes (encoding, facet rail, and axis settings) — like rotating the chart 90°.",
+                defaultValue: "Transpose the chart visually without changing its data bindings.",
               })}
             >
               {t("graph.swapXY.label", { defaultValue: "Swap X & Y" })}
@@ -1914,15 +1450,15 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
 
         {/* 中栏：画布 + X 轴槽 */}
         <div className={`gb-center${isMultivariateMode ? " gb-center-correlation" : ""}`}>
-          {/* 顶部分组槽 (Group X) — 横跨画布上方 */}
+          {/* 顶部分组槽 — 转置后显示原 Group Y。 */}
           {!isMultivariateMode && (
             <Slot
-              slot="groupX"
-              label="Group X"
-              field={encoding.groupX}
-              onDrop={(e) => handleDropOnSlot("groupX", e)}
-              onClear={() => clearSlot("groupX")}
-              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupX", x, y })}
+              slot={visualSlots.top}
+              label={visualSlots.top === "groupX" ? "Group X" : "Group Y"}
+              field={encoding[visualSlots.top]}
+              onDrop={(e) => handleDropOnSlot(visualSlots.top, e)}
+              onClear={() => clearSlot(visualSlots.top)}
+              onContextMenu={(x, y) => setSlotCtxMenu({ slot: visualSlots.top, x, y })}
               orientation="horizontal-top"
             />
           )}
@@ -1951,25 +1487,28 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               />
             )}
             <Slot
-              slot="y"
-              label={isMultivariateMode ? t("graph.multivariate.variables", { defaultValue: "Y (Variables)" }) : "Y"}
-              field={isMultivariateMode ? multivariateSlotBinding.field : encoding.y}
-              fields={isMultivariateMode ? multivariateSlotBinding.columns : multiY}
-              onDrop={(e) => handleDropOnSlot("y", e)}
-              onClear={() => clearSlot("y")}
+              slot={visualSlots.left}
+              label={isMultivariateMode
+                ? t("graph.multivariate.variables", { defaultValue: "Y (Variables)" })
+                : visualSlots.left.toUpperCase()}
+              field={isMultivariateMode ? multivariateSlotBinding.field : encoding[visualSlots.left]}
+              fields={isMultivariateMode
+                ? multivariateSlotBinding.columns
+                : (visualSlots.left === "x" ? multiX : multiY)}
+              onDrop={(e) => handleDropOnSlot(visualSlots.left, e)}
+              onClear={() => clearSlot(visualSlots.left)}
               onOpenManager={
                 isMultivariateMode && !multivariateSlotBinding.showManager
                   ? undefined
-                  : () => setManagerOpenSlot("y")
+                  : () => setManagerOpenSlot(visualSlots.left)
               }
-              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "y", x, y })}
+              onContextMenu={(x, y) => setSlotCtxMenu({ slot: visualSlots.left, x, y })}
               orientation="vertical-left"
               required={!isMultivariateMode}
-              rejectFlash={rejectFlashSlot === "y"}
+              rejectFlash={rejectFlashSlot === visualSlots.left}
             />
             <div
               className={`gb-canvas${isMultivariateMode ? " gb-canvas-correlation" : ""}`}
-              ref={canvasRef}
               onDragOver={(e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "copy";
@@ -2002,85 +1541,30 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
                 routeDropToSlot(slot, fields);
               }}
             >
-              {isMultivariateMode && !correlationColumnsReady ? (
-                <div className="gb-empty">
-                  {t("graph.correlation.requiresColumns", {
-                    min: CORRELATION_MIN_COLUMNS,
-                    max: CORRELATION_MAX_COLUMNS,
-                    defaultValue: "Correlation matrix requires {{min}}-{{max}} columns.",
-                  })}
-                </div>
-              ) : !isThreeDMode && !encoding.x && !encoding.y && !multiX.length && !multiY.length && !activeKinds.has("histogram") ? (
-                // Drag-hint shows only when neither axis is bound (and
-                // there's no histogram). Y-only renders a vertical strip
-                // and X-only renders a horizontal strip (mirror), so the
-                // moment either axis is bound we drop straight into the
-                // chart builder and let the renderer's horizontal-mode
-                // swap handle the X-only case (see `isHorizontal` /
-                // `xOnlyMirror` in transform.ts). Multi-mode also counts
-                // as "bound" — both axes are populated by the synthetic
-                // melt fields at render time.
-                <div className="gb-empty">{t("graph.dragHint")}</div>
-              ) : (
-                <>
-                  <Graph
-                    spec={spec}
-                    data={graphData}
-                    frame={frame}
-                    valueOrders={valueOrders}
-                    onYAxisDblClick={isMultivariateMode ? undefined : () => setYAxisDialogOpen(true)}
-                    onXAxisDblClick={isMultivariateMode ? undefined : () => setXAxisDialogOpen(true)}
-                    onAxisRangeChange={isMultivariateMode ? undefined : ((axis, min, max) => {
-                      // JMP-style direct-manipulation drag-zoom / drag-pan
-                      // on the axis strip. The renderer previews via
-                      // setOption during the gesture; on mouseup it hands
-                      // back the final numeric bounds, which we pin onto
-                      // the per-builder yAxis / xAxis config. Other
-                      // overrides (decimals / inverse / grid styling) are
-                      // preserved by spreading the existing config first.
-                      if (axis === "y") {
-                        setYAxisConfig({ ...(yAxisConfig ?? {}), min, max });
-                      } else {
-                        setXAxisConfig({ ...(xAxisConfig ?? {}), min, max });
-                      }
-                    })}
-                    onAxisContextMenu={isMultivariateMode ? undefined : ((axis, x, y) => setAxisCtxMenu({ axis, x, y }))}
-                    onPointClick={isMultivariateMode ? undefined : ((pick) => {
-                      pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
-                    })}
-                    brushMode={!isMultivariateMode && cursorMode === "select"}
-                    onBrushSelect={isMultivariateMode ? undefined : ((picks) => {
-                      pickCells(dataset.id, picks);
-                    })}
-                  />
-                  {pipelineStatus === "error" && pipelineError && (
-                    <div className="gb-canvas-overlay gb-canvas-overlay-error">{pipelineError}</div>
-                  )}
-                  {!isMultivariateMode && pipelineStatus === "ready" && rawPointNotice && (
-                    <div className="gb-point-budget-notice" role="status">
-                      <i className="fa-solid fa-circle-info" aria-hidden="true" />
-                      <span className="gb-point-budget-copy">
-                        <strong>{t("graph.sampling.pointsOmitted", {
-                          defaultValue: "Raw points were omitted",
-                        })}</strong>
-                        <span>{t("graph.sampling.pointBudgetCount", {
-                          valid: rawPointNotice.validRows.toLocaleString(),
-                          budget: rawPointNotice.budget.toLocaleString(),
-                          defaultValue: "{{valid}} valid rows; point budget {{budget}}",
-                        })}</span>
-                      </span>
-                      <button
-                        type="button"
-                        className="gb-point-budget-action"
-                        onClick={() => setSamplingMode("sample")}
-                      >
-                        <i className="fa-solid fa-shuffle" aria-hidden="true" />
-                        {t("graph.sampling.switchToSample", { defaultValue: "Switch to Sample" })}
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
+              <GraphRuntime
+                item={item}
+                dataset={dataset}
+                showPointBudgetAction={!isMultivariateMode}
+                onRequestSampleMode={!isMultivariateMode ? () => setSamplingMode("sample") : undefined}
+                onYAxisDblClick={isMultivariateMode || readOnly ? undefined : () => setYAxisDialogOpen(true)}
+                onXAxisDblClick={isMultivariateMode || readOnly ? undefined : () => setXAxisDialogOpen(true)}
+                onAxisRangeChange={isMultivariateMode || readOnly ? undefined : ((axis, min, max) => {
+                  if (axis === "y") {
+                    setYAxisConfig({ ...(yAxisConfig ?? {}), min, max });
+                  } else {
+                    setXAxisConfig({ ...(xAxisConfig ?? {}), min, max });
+                  }
+                })}
+                onAxisContextMenu={isMultivariateMode || readOnly ? undefined : ((axis, x, y) => setAxisCtxMenu({ axis, x, y }))}
+                onPointPick={isMultivariateMode ? undefined : ((pick) => {
+                  pickCell(dataset.id, { rowId: pick.rowId, colName: pick.colName });
+                })}
+                brushMode={!isMultivariateMode && cursorMode === "select"}
+                onBrushSelect={isMultivariateMode ? undefined : ((picks) => {
+                  pickCells(dataset.id, picks);
+                })}
+                onStateChange={setRuntimeState}
+              />
               {correlationNoticeText && (
                 <div className="gb-canvas-overlay gb-canvas-overlay-warn" role="status" aria-live="polite">
                   {correlationNoticeText}
@@ -2089,12 +1573,12 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             </div>
             {!isMultivariateMode && (
               <Slot
-                slot="groupY"
-                label="Group Y"
-                field={encoding.groupY}
-                onDrop={(e) => handleDropOnSlot("groupY", e)}
-                onClear={() => clearSlot("groupY")}
-                onContextMenu={(x, y) => setSlotCtxMenu({ slot: "groupY", x, y })}
+                slot={visualSlots.right}
+                label={visualSlots.right === "groupX" ? "Group X" : "Group Y"}
+                field={encoding[visualSlots.right]}
+                onDrop={(e) => handleDropOnSlot(visualSlots.right, e)}
+                onClear={() => clearSlot(visualSlots.right)}
+                onContextMenu={(x, y) => setSlotCtxMenu({ slot: visualSlots.right, x, y })}
                 orientation="vertical-right"
               />
             )}
@@ -2112,20 +1596,20 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             )}
           </div>
 
-          {/* X 轴槽 */}
+          {/* 底部轴槽 — 转置后显示原 Y。 */}
           {!isMultivariateMode && (
             <Slot
-              slot="x"
-              label="X"
-              field={encoding.x}
-              fields={multiX}
-              onDrop={(e) => handleDropOnSlot("x", e)}
-              onClear={() => clearSlot("x")}
-              onOpenManager={() => setManagerOpenSlot("x")}
-              onContextMenu={(x, y) => setSlotCtxMenu({ slot: "x", x, y })}
+              slot={visualSlots.bottom}
+              label={visualSlots.bottom.toUpperCase()}
+              field={encoding[visualSlots.bottom]}
+              fields={visualSlots.bottom === "x" ? multiX : multiY}
+              onDrop={(e) => handleDropOnSlot(visualSlots.bottom, e)}
+              onClear={() => clearSlot(visualSlots.bottom)}
+              onOpenManager={() => setManagerOpenSlot(visualSlots.bottom)}
+              onContextMenu={(x, y) => setSlotCtxMenu({ slot: visualSlots.bottom, x, y })}
               orientation="horizontal-bottom"
               required
-              rejectFlash={rejectFlashSlot === "x"}
+              rejectFlash={rejectFlashSlot === visualSlots.bottom}
             />
           )}
         </div>
@@ -2147,9 +1631,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
             无论上方激活的是散点还是箱线图，三类样式都会对应应用。 */}
         {!isMultivariateMode && (
           <LegendStylePanel
-            data={graphData}
             encoding={encoding}
-            elements={elements}
             groupStyles={groupStyles}
             groupKeys={groupKeys}
             effectiveStyles={effectiveStyles}
@@ -2181,7 +1663,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           setRefLines={setRefLinesY}
           autoSpecLines={!!(twoD.autoSpecLinesY ?? twoD.autoSpecLines)}
           setAutoSpecLines={setAutoSpecLinesY}
-          resolvedAutoSpec={spec.autoSpecY}
+          resolvedAutoSpec={runtimeSpec.autoSpecY}
           autoSpecColName={encoding.y?.name}
           multiValueColCount={
             meltInfo &&
@@ -2212,7 +1694,7 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
           setRefLines={setRefLinesX}
           autoSpecLines={!!(twoD.autoSpecLinesX ?? twoD.autoSpecLines)}
           setAutoSpecLines={setAutoSpecLinesX}
-          resolvedAutoSpec={spec.autoSpecX}
+          resolvedAutoSpec={runtimeSpec.autoSpecX}
           autoSpecColName={encoding.x?.name}
           multiValueColCount={
             meltInfo &&
@@ -3672,12 +3154,7 @@ function AddLayerCard({ availableKinds, onAdd, t }: AddLayerCardProps) {
 // border + median + whiskers use Line, its outliers use Point.
 
 interface LegendStylePanelProps {
-  data: GraphData | null;
   encoding: Partial<Record<GraphSlotKey, FieldRef>>;
-  /** Active layer kinds — used to pick a sensible Fill default in the
-   *  swatch (box plots want a colored fill even when ungrouped, while
-   *  scatter / line / bar prefer the JMP "hollow" look). */
-  elements: ChartElement[];
   groupStyles: GroupStyleMap;
   /** Group values driving the legend, computed at the parent level so
    *  the same list feeds both the renderer (via spec) and this panel. */
@@ -3706,15 +3183,8 @@ interface LegendStylePanelProps {
   readOnly: boolean;
 }
 
-function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD, readOnly }: LegendStylePanelProps) {
+function LegendStylePanel({ encoding, groupStyles, groupKeys, effectiveStyles, hiddenGroups, toggleGroupHidden, setGroupStyle, resetAllGroupStyles, onDropOverlay, onClearOverlay, onOverlayContextMenu, width, threeD, readOnly }: LegendStylePanelProps) {
   const { t } = useTranslation();
-
-  // `data` and `elements` are still part of the public prop contract for
-  // historical reasons (other call sites can pass them through); reference
-  // them here so TS' noUnusedParameters check stays happy without forcing
-  // every caller to drop them.
-  void data;
-  void elements;
 
   const [selected, setSelected] = useState<string>(groupKeys[0] ?? DEFAULT_GROUP_KEY);
   // Keep the selection valid when the legend list changes underneath us.
@@ -4086,1296 +3556,6 @@ function LegendStylePanel({ data, encoding, elements, groupStyles, groupKeys, ef
   );
 }
 
-// ---- Axis settings dialog ----------------------------------------------
-// Opened by double-clicking either axis (or its label / title strip)
-// inside <Graph>. Modelled after the system Preferences dialog: a
-// fixed-width categories nav on the left and a scrollable detail pane on
-// the right. The `axis` prop selects between Y (default categories: Axis
-// / Tick Grid / Reference Lines) and X (Axis / Tick Grid / Reference
-// Lines). Both axes share the same `AxisSettingsEditor`,
-// `GridSettingsEditor`, AND `RefLinesEditor` since the override config
-// shape is identical between them; only the dialog title, the absence
-// of the Y-only auto-spec block, and the X/Y value-field name differ.
-
-type AxisSettingsDialogProps =
-  | {
-      /** Which axis this dialog edits. Controls the title, the i18n key
-       *  prefix for category labels, and whether the auto-spec block is
-       *  present (Y only — spec extras live on the response variable). */
-      axis: "y";
-      /** Existing manual reference lines on this axis. */
-      refLines?: RefLineY[];
-      setRefLines?: (next: RefLineY[]) => void;
-      /** Whether the auto-spec-limits overlay is currently enabled. */
-      autoSpecLines?: boolean;
-      setAutoSpecLines?: (next: boolean) => void;
-      /** Pre-resolved AutoSpec snapshot for the column currently bound to
-       *  THIS axis — already filtered to finite values by
-       *  GraphBuilderView. `undefined` means either the overlay is off,
-       *  this axis has no bound column, or the bound column has no spec
-       *  extras. */
-      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
-      /** Name of the column currently bound to THIS axis, purely for the
-       *  editor's hint copy ("Reading limits from <col>"). */
-      autoSpecColName?: string | undefined;
-      /** When > 0, this axis is carrying a multi-column melt and the
-       *  auto-spec overlay (if enabled) will draw per-column ref lines
-       *  instead of a single overlay. */
-      multiValueColCount?: number;
-      /** Current axis-override config (range / ticks / decimals / inverse /
-       *  axis line / tick position / minor ticks / grid). */
-      axisConfig: YAxisConfig | undefined;
-      setAxisConfig: (next: YAxisConfig | undefined) => void;
-      onClose: () => void;
-    }
-  | {
-      /** Which axis this dialog edits. Controls the title, the i18n key
-       *  prefix for category labels, and whether the auto-spec block is
-       *  present (Y only — spec extras live on the response variable). */
-      axis: "x";
-      /** Existing manual reference lines on this axis. */
-      refLines?: RefLineX[];
-      setRefLines?: (next: RefLineX[]) => void;
-      /** Whether the auto-spec-limits overlay is currently enabled. */
-      autoSpecLines?: boolean;
-      setAutoSpecLines?: (next: boolean) => void;
-      /** Pre-resolved AutoSpec snapshot for the column currently bound to
-       *  THIS axis — already filtered to finite values by
-       *  GraphBuilderView. `undefined` means either the overlay is off,
-       *  this axis has no bound column, or the bound column has no spec
-       *  extras. */
-      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
-      /** Name of the column currently bound to THIS axis, purely for the
-       *  editor's hint copy ("Reading limits from <col>"). */
-      autoSpecColName?: string | undefined;
-      /** When > 0, this axis is carrying a multi-column melt and the
-       *  auto-spec overlay (if enabled) will draw per-column ref lines
-       *  instead of a single overlay. */
-      multiValueColCount?: number;
-      /** Current axis-override config (range / ticks / decimals / inverse /
-       *  axis line / tick position / minor ticks / grid). */
-      axisConfig: YAxisConfig | undefined;
-      setAxisConfig: (next: YAxisConfig | undefined) => void;
-      onClose: () => void;
-    };
-
-type AxisCategoryKey = "axis" | "tickGrid" | "refLines";
-
-function AxisSettingsDialog({
-  axis,
-  refLines,
-  setRefLines,
-  autoSpecLines,
-  setAutoSpecLines,
-  resolvedAutoSpec,
-  autoSpecColName,
-  multiValueColCount,
-  axisConfig,
-  setAxisConfig,
-  onClose,
-}: AxisSettingsDialogProps) {
-  const { t } = useTranslation();
-  // Axis range / ticks / decimals / inverse is the more frequently
-  // adjusted category, so it opens first.
-  const [active, setActive] = useState<AxisCategoryKey>("axis");
-
-  // The Axis + Tick Grid category labels are axis-neutral copy ("Axis",
-  // "Tick Grid"), so we share the same translation keys under
-  // `graph.yAxisSettings.*`. Only the dialog title and (Y-only)
-  // Reference Lines label change with axis identity.
-  const titleKey = axis === "y" ? "graph.yAxisSettings.title" : "graph.xAxisSettings.title";
-  const titleFallback = axis === "y" ? "Y Axis Settings" : "X Axis Settings";
-
-  const categories: { key: AxisCategoryKey; label: string }[] = [
-    {
-      key: "axis",
-      label: t("graph.yAxisSettings.categoryAxis", { defaultValue: "Axis" }),
-    },
-    {
-      key: "tickGrid",
-      label: t("graph.yAxisSettings.categoryTickGrid", { defaultValue: "Tick Grid" }),
-    },
-    {
-      key: "refLines",
-      label: t("graph.yAxisSettings.categoryRefLines", { defaultValue: "Reference Lines" }),
-    },
-  ];
-
-  return (
-    <div className="sp-dialog-overlay" onClick={onClose}>
-      <div
-        className="sp-dialog sp-dialog-wide pref-dialog"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="sp-dialog-title">
-          {t(titleKey, { defaultValue: titleFallback })}
-        </div>
-        <div className="sp-dialog-body pref-body">
-          <nav className="pref-nav">
-            {categories.map((c) => (
-              <button
-                key={c.key}
-                type="button"
-                className={`pref-nav-item${active === c.key ? " pref-nav-item-active" : ""}`}
-                onClick={() => setActive(c.key)}
-              >
-                {c.label}
-              </button>
-            ))}
-          </nav>
-          <div className="pref-pane">
-            {active === "axis" && (
-              <AxisSettingsEditor config={axisConfig} setConfig={setAxisConfig} />
-            )}
-            {active === "tickGrid" && (
-              <GridSettingsEditor config={axisConfig} setConfig={setAxisConfig} />
-            )}
-            {active === "refLines" && refLines && setRefLines && (
-              axis === "x" ? (
-                <RefLinesEditor
-                  axis="x"
-                  refLines={refLines as RefLineX[]}
-                  setRefLines={setRefLines as (next: RefLineX[]) => void}
-                  autoSpecLines={!!autoSpecLines}
-                  setAutoSpecLines={setAutoSpecLines}
-                  resolvedAutoSpec={resolvedAutoSpec}
-                  autoSpecColName={autoSpecColName}
-                  multiValueColCount={multiValueColCount}
-                />
-              ) : (
-                <RefLinesEditor
-                  axis="y"
-                  refLines={refLines as RefLineY[]}
-                  setRefLines={setRefLines as (next: RefLineY[]) => void}
-                  autoSpecLines={!!autoSpecLines}
-                  setAutoSpecLines={setAutoSpecLines}
-                  resolvedAutoSpec={resolvedAutoSpec}
-                  autoSpecColName={autoSpecColName}
-                  multiValueColCount={multiValueColCount}
-                />
-              )
-            )}
-          </div>
-        </div>
-        <div className="sp-dialog-actions">
-          <button className="sp-dialog-btn sp-dialog-btn-primary" onClick={onClose}>
-            {t("prefs.done")}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---- Axis range / ticks / decimals / inverse editor --------------------
-// Form pane inside the AxisSettingsDialog's "Axis" category. Each row is
-// label + value-input + auto-state indicator; an empty input means
-// "auto", letting ECharts derive the value from the data range. The
-// Reset to auto button clears every field in one click, restoring fully
-// automatic axis behavior. Axis-agnostic — the same editor backs both
-// the X and Y dialogs since the override config shape is identical.
-
-interface AxisSettingsEditorProps {
-  config: YAxisConfig | undefined;
-  setConfig: (next: YAxisConfig | undefined) => void;
-}
-
-/** True when every field in the config is undefined — i.e. we're back to
- *  fully automatic. Used to disable the Reset button and to short-circuit
- *  the patch into a single `undefined` write (cleaner persisted state
- *  than `{}` lingering on every graph item). */
-function isAxisConfigEmpty(c: YAxisConfig | undefined): boolean {
-  if (!c) return true;
-  return (
-    c.min === undefined &&
-    c.max === undefined &&
-    c.tickInterval === undefined &&
-    c.decimals === undefined &&
-    (c.inverse === undefined || c.inverse === false) &&
-    (c.minorTickCount === undefined || c.minorTickCount === 0) &&
-    c.showAxisLine === undefined &&
-    c.tickPosition === undefined &&
-    c.showMajorGrid === undefined &&
-    c.showMinorGrid === undefined &&
-    isGridLineStyleEmpty(c.majorGridStyle) &&
-    isGridLineStyleEmpty(c.minorGridStyle)
-  );
-}
-
-/** A grid-line style is considered "empty" (= use theme default) when
- *  every field is undefined. Lets us normalize `{ style: { } }` back
- *  to `undefined` so the persisted state stays minimal. */
-function isGridLineStyleEmpty(s: GridLineStyle | undefined): boolean {
-  if (!s) return true;
-  return s.color === undefined && s.width === undefined && s.style === undefined;
-}
-
-/** Free-form decimal text input. Uses `type="text"` (rather than
- *  `type="number"`) so the browser doesn't paint the spinner buttons
- *  and so intermediate keystrokes like "1." or "0." aren't silently
- *  rewritten back to the parsed integer by the controlled-input round
- *  trip. We mirror the on-screen text locally and only push valid
- *  positive numbers upstream; the upstream value is left untouched
- *  while the user is mid-typing. */
-function DecimalTextInput({
-  value,
-  onChange,
-  placeholder,
-  className,
-  ariaLabel,
-}: {
-  value: number | undefined;
-  onChange: (n: number | undefined) => void;
-  placeholder: string;
-  className?: string;
-  ariaLabel?: string;
-}) {
-  const [text, setText] = useState(value !== undefined ? String(value) : "");
-  // Sync from the outside (e.g. Reset to auto wiping the parent value)
-  // only when the current text no longer parses to the parent value.
-  useEffect(() => {
-    const trimmed = text.trim();
-    const parsed = trimmed === "" ? undefined : Number(trimmed);
-    if (parsed !== value) {
-      setText(value !== undefined ? String(value) : "");
-    }
-    // We intentionally only react to external `value` changes; reading
-    // `text` here is a snapshot, not a dependency we want to track.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
-  return (
-    <input
-      type="text"
-      inputMode="decimal"
-      className={className}
-      value={text}
-      placeholder={placeholder}
-      aria-label={ariaLabel}
-      onChange={(e) => {
-        const t = e.target.value;
-        setText(t);
-        const trimmed = t.trim();
-        if (trimmed === "") {
-          onChange(undefined);
-          return;
-        }
-        const n = Number(trimmed);
-        // Only push valid positive values upstream. Intermediate states
-        // like "1." or "-" leave the upstream value alone so the user
-        // can keep typing without their progress getting reset.
-        if (Number.isFinite(n) && n > 0) onChange(n);
-      }}
-    />
-  );
-}
-
-function AxisSettingsEditor({ config, setConfig }: AxisSettingsEditorProps) {
-  const { t } = useTranslation();
-  const cfg = config ?? {};
-
-  /** Patch one field at a time, then normalize an all-empty result back
-   *  to `undefined` so we don't leave dead config objects on disk. */
-  const patch = useCallback(
-    (next: Partial<YAxisConfig>) => {
-      const merged: YAxisConfig = { ...cfg, ...next };
-      setConfig(isAxisConfigEmpty(merged) ? undefined : merged);
-    },
-    [cfg, setConfig],
-  );
-
-  /** Translate the <input type="number"> string into either a finite
-   *  number or `undefined` (= auto). Empty / NaN / whitespace inputs all
-   *  collapse to undefined so users can clear a field by erasing the
-   *  number. */
-  const parseNum = (s: string): number | undefined => {
-    const trimmed = s.trim();
-    if (trimmed === "") return undefined;
-    const n = Number(trimmed);
-    return Number.isFinite(n) ? n : undefined;
-  };
-
-  /** Same as parseNum but clamps to an integer within [min, max] —
-   *  used by Decimals and Minor Ticks which only accept whole values. */
-  const parseInt0 = (s: string, min: number, max: number): number | undefined => {
-    const n = parseNum(s);
-    if (n === undefined) return undefined;
-    const i = Math.round(n);
-    if (i < min) return min;
-    if (i > max) return max;
-    return i;
-  };
-
-  const resetAll = useCallback(() => {
-    setConfig(undefined);
-  }, [setConfig]);
-
-  const empty = isAxisConfigEmpty(cfg);
-
-  return (
-    <div className="gb-axis-editor">
-      <div className="gb-axis-header">
-        <span className="gb-axis-title">
-          {t("graph.axis.title", { defaultValue: "Axis" })}
-        </span>
-        <button
-          type="button"
-          className="gb-axis-reset"
-          onClick={resetAll}
-          disabled={empty}
-          title={t("graph.axis.resetHint", {
-            defaultValue: "Restore fully automatic axis behavior",
-          })}
-        >
-          {t("graph.axis.reset", { defaultValue: "Reset to default" })}
-        </button>
-      </div>
-
-      {/* Range: min + max on one row so users see them paired. Leaving
-          either field blank means "auto" for that bound — the other end
-          stays pinned. */}
-      <div className="gb-axis-row">
-        <label className="gb-axis-label">
-          {t("graph.axis.range", { defaultValue: "Range" })}
-        </label>
-        <div className="gb-axis-range">
-          <input
-            type="number"
-            className="gb-axis-num"
-            value={cfg.min ?? ""}
-            step="any"
-            placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
-            onChange={(e) => patch({ min: parseNum(e.target.value) })}
-            aria-label={t("graph.axis.min", { defaultValue: "Min" })}
-            title={t("graph.axis.min", { defaultValue: "Min" })}
-          />
-          <span className="gb-axis-range-sep">—</span>
-          <input
-            type="number"
-            className="gb-axis-num"
-            value={cfg.max ?? ""}
-            step="any"
-            placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
-            onChange={(e) => patch({ max: parseNum(e.target.value) })}
-            aria-label={t("graph.axis.max", { defaultValue: "Max" })}
-            title={t("graph.axis.max", { defaultValue: "Max" })}
-          />
-        </div>
-      </div>
-
-      {/* Tick density: ECharts `interval` (exact value distance between
-          adjacent major ticks). Float-friendly so users can pick e.g.
-          0.5; we use a text-based input to avoid the spinner buttons
-          and to keep intermediate keystrokes like "0." intact. */}
-      <div className="gb-axis-row">
-        <label className="gb-axis-label">
-          {t("graph.axis.tickInterval", { defaultValue: "Tick interval" })}
-        </label>
-        <DecimalTextInput
-          className="gb-axis-num gb-axis-num-narrow"
-          value={cfg.tickInterval}
-          placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
-          ariaLabel={t("graph.axis.tickInterval", { defaultValue: "Tick interval" })}
-          onChange={(n) => patch({ tickInterval: n })}
-        />
-      </div>
-
-      {/* Decimal places: hard cap at 10 (more is meaningless on a chart
-          axis). 0 is a valid value — show integers only. */}
-      <div className="gb-axis-row">
-        <label className="gb-axis-label">
-          {t("graph.axis.decimals", { defaultValue: "Decimals" })}
-        </label>
-        <input
-          type="number"
-          className="gb-axis-num gb-axis-num-narrow"
-          value={cfg.decimals ?? ""}
-          step={1}
-          min={0}
-          max={10}
-          placeholder={t("graph.axis.auto", { defaultValue: "Auto" })}
-          onChange={(e) => patch({ decimals: parseInt0(e.target.value, 0, 10) })}
-        />
-      </div>
-
-      {/* Minor tick count: number of sub-tick intervals between two
-          major ticks (ECharts minorTick.splitNumber). 0 / empty turns
-          minor ticks off — the default. Cap at 20 because any higher
-          and the ticks merge visually. */}
-      <div className="gb-axis-row">
-        <label className="gb-axis-label">
-          {t("graph.axis.minorTickCount", { defaultValue: "Minor ticks" })}
-        </label>
-        <input
-          type="number"
-          className="gb-axis-num gb-axis-num-narrow"
-          value={cfg.minorTickCount ?? ""}
-          step={1}
-          min={0}
-          max={20}
-          placeholder={t("graph.axis.none", { defaultValue: "None" })}
-          onChange={(e) => {
-            const n = parseInt0(e.target.value, 0, 20);
-            // 0 from the spinner means "off", same as empty — normalize
-            // to undefined so isAxisConfigEmpty correctly recognizes it.
-            patch({ minorTickCount: n && n > 0 ? n : undefined });
-          }}
-        />
-      </div>
-
-      {/* Inverse: simple checkbox — flips the axis so larger values sit
-          at the bottom (useful for ranking charts, downward-better KPIs,
-          etc.). */}
-      <div className="gb-axis-row">
-        <label className="gb-axis-label gb-axis-label-checkbox">
-          <input
-            type="checkbox"
-            checked={cfg.inverse === true}
-            onChange={(e) => patch({ inverse: e.target.checked ? true : undefined })}
-          />
-          <span>{t("graph.axis.inverse", { defaultValue: "Reverse axis direction" })}</span>
-        </label>
-      </div>
-
-      {/* Axis boundary line + tick marks: a single combined toggle.
-          Theme default is "visible" — checking the box leaves the line
-          AND the tick marks visible and unlocks the Tick position
-          selector below; unchecking hides both, since one without the
-          other would leave the user looking at a dangling frame or
-          floating tick marks. */}
-      <div className="gb-axis-row">
-        <label className="gb-axis-label gb-axis-label-checkbox">
-          <input
-            type="checkbox"
-            checked={cfg.showAxisLine !== false}
-            onChange={(e) =>
-              patch({
-                // Keep the field undefined when matching the theme default
-                // (visible), so we don't leave dead overrides on disk.
-                showAxisLine: e.target.checked ? undefined : false,
-                // Hiding the axis line also makes the tick position
-                // selector moot — clear it so it goes back to default.
-                tickPosition: e.target.checked ? cfg.tickPosition : undefined,
-              })
-            }
-          />
-          <span>{t("graph.axis.showAxisLine", { defaultValue: "Show axis line & ticks" })}</span>
-        </label>
-      </div>
-
-      {/* Tick position: only meaningful when the axis line is visible.
-          Disable the radios when the line is hidden so the UI doesn't
-          claim to do something it can't. */}
-      <div className="gb-axis-row">
-        <label className="gb-axis-label">
-          {t("graph.axis.tickPosition", { defaultValue: "Tick position" })}
-        </label>
-        <div className="gb-axis-radio-group">
-          {(["outside", "inside"] as const).map((pos) => {
-            const checked = (cfg.tickPosition ?? "outside") === pos;
-            const disabled = cfg.showAxisLine === false;
-            return (
-              <label
-                key={pos}
-                className={`gb-axis-radio${disabled ? " gb-axis-radio-disabled" : ""}`}
-              >
-                <input
-                  type="radio"
-                  name="gb-axis-tick-pos"
-                  value={pos}
-                  checked={checked}
-                  disabled={disabled}
-                  onChange={() =>
-                    patch({
-                      // Outside is the theme default — store undefined for it
-                      // so all-default state collapses back to no override.
-                      tickPosition: pos === "outside" ? undefined : "inside",
-                    })
-                  }
-                />
-                <span>
-                  {pos === "outside"
-                    ? t("graph.axis.tickOutside", { defaultValue: "Outside" })
-                    : t("graph.axis.tickInside", { defaultValue: "Inside" })}
-                </span>
-              </label>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---- Axis grid (split-line) editor -------------------------------------
-// Form pane inside the AxisSettingsDialog's "Tick Grid" category.
-// Controls both the major split-lines (rendered at major ticks — the
-// usual gridlines) and the minor split-lines (rendered at
-// every minor tick when minor ticks are enabled in the Axis category).
-// Each row is a Show checkbox plus a small style strip: color picker,
-// dash dropdown, width input. Leaving the style fields empty means "use
-// theme default" for that particular sub-field.
-
-interface GridSettingsEditorProps {
-  config: YAxisConfig | undefined;
-  setConfig: (next: YAxisConfig | undefined) => void;
-}
-
-/** Default style displayed in the picker / dropdowns when the user
- *  hasn't customized that gridline yet. Pulled from CSS variables would
- *  be ideal, but we want stable hex values for the color picker so we
- *  hardcode the muted gray ECharts/our theme would use anyway. */
-// Per-section theme defaults. Must mirror buildAxisCommon() in
-// graphCore/theme.ts — the major split-line picks the darker shade
-// so it reads as more prominent than the lighter minor split-line.
-// We mirror the constants here (instead of importing from the theme
-// module) so the picker / preset comparison stays a pure constant
-// expression and doesn't depend on the live theme object the renderer
-// uses; the two defaults will normally be the same, but in a custom
-// theme override the picker still defaults to these well-known hexes
-// rather than a runtime CSS variable.
-const GRID_LINE_DEFAULT_COLOR_MAJOR = "#bdbdbd";
-const GRID_LINE_DEFAULT_COLOR_MINOR = "#e2e2e2";
-const GRID_LINE_DEFAULT_WIDTH = 1;
-const GRID_LINE_DEFAULT_STYLE: RefLineStyle = "dashed";
-
-/** Preset color palette for gridlines. Gridlines are usually meant to
- *  be quiet background structure, so the strip leads with the muted
- *  grays (the theme default sits at index 0) and only then exposes a
- *  handful of accent colors for users who want a more deliberate look.
- *  A custom hex is still available via the trailing color picker. */
-const GRID_LINE_PRESETS: readonly string[] = [
-  "#e2e2e2", // light gray (theme default)
-  "#bdbdbd", // medium gray
-  "#757575", // dark gray
-  "#000000", // black
-  "#4a6cf7", // blue accent
-  "#2ca678", // green accent
-  "#ef8a3a", // orange accent
-  "#e74c3c", // red accent
-];
-
-/** Paired (major, minor) color themes for the gridline color theme
- *  picker at the top of the Tick Grid editor. Each entry assigns a
- *  darker shade to the major gridline and a lighter shade to the minor
- *  one so a chart that shows both gridlines simultaneously reads as
- *  two distinct grid layers instead of one uniform pattern.
- *
- *  Slot 0 MUST match the section defaults declared above so picking
- *  the leading swatch effectively "resets" both colors back to the
- *  theme default (we write `undefined` for both colors in that case
- *  to keep the persisted config minimal). The rest run through a small
- *  spectrum of useful accents — a click recolors both gridlines at
- *  once while preserving the user's per-section width and dash. */
-const GRID_LINE_THEMES: readonly { major: string; minor: string }[] = [
-  { major: GRID_LINE_DEFAULT_COLOR_MAJOR, minor: GRID_LINE_DEFAULT_COLOR_MINOR }, // gray (default)
-  { major: "#757575", minor: "#bdbdbd" }, // dark gray
-  { major: "#455a64", minor: "#b0bec5" }, // slate
-  { major: "#1976d2", minor: "#bbdefb" }, // blue
-  { major: "#2e7d32", minor: "#c8e6c9" }, // green
-  { major: "#f57c00", minor: "#ffe0b2" }, // orange
-  { major: "#c62828", minor: "#ffcdd2" }, // red
-  { major: "#6a1b9a", minor: "#e1bee7" }, // purple
-];
-
-function GridSettingsEditor({ config, setConfig }: GridSettingsEditorProps) {
-  const { t } = useTranslation();
-  const cfg = config ?? {};
-
-  /** Patch one or more fields on the root config, normalizing the
-   *  result back to `undefined` when it ends up fully empty. Used by
-   *  the Show checkboxes and by the per-style updater below. */
-  const patch = useCallback(
-    (next: Partial<YAxisConfig>) => {
-      const merged: YAxisConfig = { ...cfg, ...next };
-      setConfig(isAxisConfigEmpty(merged) ? undefined : merged);
-    },
-    [cfg, setConfig],
-  );
-
-  /** Patch a single sub-field on either `majorGridStyle` or
-   *  `minorGridStyle`. When the resulting style object is fully empty
-   *  we collapse it back to `undefined` so we don't leave dead
-   *  `{ }` style objects on the persisted config. */
-  const patchStyle = useCallback(
-    (which: "major" | "minor", next: Partial<GridLineStyle>) => {
-      const key = which === "major" ? "majorGridStyle" : "minorGridStyle";
-      const cur = (which === "major" ? cfg.majorGridStyle : cfg.minorGridStyle) ?? {};
-      const merged: GridLineStyle = { ...cur, ...next };
-      patch({ [key]: isGridLineStyleEmpty(merged) ? undefined : merged } as Partial<YAxisConfig>);
-    },
-    [cfg.majorGridStyle, cfg.minorGridStyle, patch],
-  );
-
-  const resetAll = useCallback(() => {
-    patch({
-      showMajorGrid: undefined,
-      showMinorGrid: undefined,
-      majorGridStyle: undefined,
-      minorGridStyle: undefined,
-    });
-  }, [patch]);
-
-  /** Apply a paired (major, minor) color theme. Only the `color`
-   *  sub-field on each section is touched — width and dash overrides
-   *  the user picked earlier are preserved. Picking the default theme
-   *  collapses the color back to `undefined` so the persisted style
-   *  doesn't carry a redundant explicit hex. */
-  const applyGridTheme = useCallback(
-    (themeIdx: number) => {
-      const theme = GRID_LINE_THEMES[themeIdx];
-      if (!theme) return;
-      const isDefault = themeIdx === 0;
-      const writeColor = (
-        cur: GridLineStyle | undefined,
-        nextColor: string,
-      ): GridLineStyle | undefined => {
-        const merged: GridLineStyle = {
-          ...(cur ?? {}),
-          color: isDefault ? undefined : nextColor,
-        };
-        return isGridLineStyleEmpty(merged) ? undefined : merged;
-      };
-      patch({
-        majorGridStyle: writeColor(cfg.majorGridStyle, theme.major),
-        minorGridStyle: writeColor(cfg.minorGridStyle, theme.minor),
-      });
-    },
-    [cfg.majorGridStyle, cfg.minorGridStyle, patch],
-  );
-
-  /** True when every grid-related override is back to default. Used to
-   *  disable the Reset button — same UX pattern as the Axis editor. */
-  const gridEmpty =
-    cfg.showMajorGrid === undefined &&
-    cfg.showMinorGrid === undefined &&
-    isGridLineStyleEmpty(cfg.majorGridStyle) &&
-    isGridLineStyleEmpty(cfg.minorGridStyle);
-
-  /** Render one (Show, style) section. Major and minor are visually
-   *  identical so we factor the section to avoid drift between them. */
-  const renderGridSection = (which: "major" | "minor") => {
-    const isMajor = which === "major";
-    // Theme defaults: BOTH major and minor gridlines are hidden out of
-    // the box (see theme.ts's splitLine/minorSplitLine `show:false`).
-    // The checkbox must reflect that or else it will display "checked"
-    // on a chart that's actually showing nothing — and any toggle the
-    // user makes will be erased by the `nextShown === defaultShown ?
-    // undefined : nextShown` shortcut below, which would silently
-    // refuse to persist a `true`.
-    const shown = isMajor
-      ? (cfg.showMajorGrid ?? false)
-      : (cfg.showMinorGrid ?? false);
-    const style = (isMajor ? cfg.majorGridStyle : cfg.minorGridStyle) ?? {};
-    // Per-section default color: major picks the darker swatch so the
-    // two sections are visually distinguishable when both are on. We
-    // capture the section's default here once and reuse it for the
-    // "swatch selected" check and the "persist as undefined when the
-    // user picks the default" logic below.
-    const defaultColor = isMajor
-      ? GRID_LINE_DEFAULT_COLOR_MAJOR
-      : GRID_LINE_DEFAULT_COLOR_MINOR;
-    const color = style.color ?? defaultColor;
-    const width = style.width ?? GRID_LINE_DEFAULT_WIDTH;
-    const dash = style.style ?? GRID_LINE_DEFAULT_STYLE;
-    // When the section is hidden, the style controls are visually
-    // dimmed and disabled because they have no effect on a hidden grid.
-    return (
-      <div className={`gb-grid-section${shown ? "" : " gb-grid-section-off"}`}>
-        <label className="gb-axis-label-checkbox gb-grid-section-toggle">
-          <input
-            type="checkbox"
-            checked={shown}
-            onChange={(e) => {
-              // Both major and minor are hidden by theme default, so an
-              // unchecked checkbox matches the default → persist as
-              // undefined (keeps the saved config minimal). A checked
-              // checkbox always needs an explicit `true` override so the
-              // transform-layer `buildAxisOverrides` emits a splitLine
-              // fragment that flips `show:false` back to `true`.
-              const defaultShown = false;
-              const nextShown = e.target.checked;
-              const fieldName = isMajor ? "showMajorGrid" : "showMinorGrid";
-              patch({
-                [fieldName]: nextShown === defaultShown ? undefined : nextShown,
-              } as Partial<YAxisConfig>);
-            }}
-          />
-          <span className="gb-grid-section-label">
-            {isMajor
-              ? t("graph.grid.showMajor", { defaultValue: "Major gridlines" })
-              : t("graph.grid.showMinor", { defaultValue: "Minor gridlines" })}
-          </span>
-        </label>
-
-        <div className="gb-grid-style-row">
-          {/* Preset color strip + custom picker. Muted grays up front
-              (gridlines should usually fade into the chrome) followed
-              by a few accent hues for users who want something bolder.
-              The trailing color picker is the escape hatch for any
-              exact hex. Mirrors the Reference Lines color UI so the
-              two editors feel consistent. */}
-          <div className="gb-refline-swatch-row gb-grid-swatch-row">
-            {GRID_LINE_PRESETS.map((preset) => {
-              const selected =
-                (style.color ?? defaultColor).toLowerCase() ===
-                preset.toLowerCase();
-              return (
-                <button
-                  key={preset}
-                  type="button"
-                  className={`gb-refline-swatch${selected ? " gb-refline-swatch-selected" : ""}`}
-                  style={{ background: preset }}
-                  disabled={!shown}
-                  // Storing the per-section default color back as
-                  // `undefined` keeps the persisted style minimal —
-                  // picking the section's default swatch effectively
-                  // "resets" the color.
-                  onClick={() =>
-                    patchStyle(which, {
-                      color: preset === defaultColor ? undefined : preset,
-                    })
-                  }
-                  title={preset}
-                  aria-label={preset}
-                  aria-pressed={selected}
-                />
-              );
-            })}
-            <span className="gb-refline-swatch-divider" />
-            <input
-              type="color"
-              className={`gb-refline-color-picker${
-                !GRID_LINE_PRESETS.some(
-                  (p) => p.toLowerCase() === color.toLowerCase(),
-                )
-                  ? " gb-refline-color-picker-active"
-                  : ""
-              }`}
-              value={color}
-              disabled={!shown}
-              onChange={(e) =>
-                patchStyle(which, {
-                  color: e.target.value === defaultColor ? undefined : e.target.value,
-                })
-              }
-              title={t("graph.refLine.customColor", { defaultValue: "Custom color" })}
-              aria-label={t("graph.refLine.customColor", { defaultValue: "Custom color" })}
-            />
-          </div>
-
-          {/* Dash + width row: no color control here anymore — the swatch
-              strip above is the canonical color picker. */}
-          <div className="gb-grid-line-row">
-            <select
-              className="gb-grid-dash"
-              value={dash}
-              disabled={!shown}
-              onChange={(e) => patchStyle(which, { style: e.target.value as RefLineStyle })}
-              title={t("graph.grid.style", { defaultValue: "Line style" })}
-              aria-label={t("graph.grid.style", { defaultValue: "Line style" })}
-            >
-              <option value="solid">{t("graph.refLine.styleSolid", { defaultValue: "Solid" })}</option>
-              <option value="dashed">{t("graph.refLine.styleDashed", { defaultValue: "Dashed" })}</option>
-              <option value="dotted">{t("graph.refLine.styleDotted", { defaultValue: "Dotted" })}</option>
-            </select>
-            <input
-              type="number"
-              className="gb-grid-width"
-              value={width}
-              disabled={!shown}
-              min={0.5}
-              max={5}
-              step={0.5}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                patchStyle(which, {
-                  width: Number.isFinite(n) && n > 0 ? n : undefined,
-                });
-              }}
-              title={t("graph.grid.width", { defaultValue: "Width" })}
-              aria-label={t("graph.grid.width", { defaultValue: "Width" })}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div className="gb-axis-editor">
-      <div className="gb-axis-header">
-        <span className="gb-axis-title">
-          {t("graph.grid.title", { defaultValue: "Tick Grid" })}
-        </span>
-        <button
-          type="button"
-          className="gb-axis-reset"
-          onClick={resetAll}
-          disabled={gridEmpty}
-          title={t("graph.grid.resetHint", {
-            defaultValue: "Restore default grid display",
-          })}
-        >
-          {t("graph.axis.reset", { defaultValue: "Reset to default" })}
-        </button>
-      </div>
-
-      {/* Color theme — one-click recolor of both major and minor
-          gridlines. Each swatch is a 2-band horizontal gradient where
-          the left half is the major color and the right half is the
-          minor color, so users can preview the pair before applying.
-          Selection is detected against the resolved (override-or-
-          default) color of each section so the leading default swatch
-          highlights for a clean / unmodified config. */}
-      <div
-        className="gb-grid-theme-row"
-        title={t("graph.grid.themeHint", {
-          defaultValue: "Set major and minor gridline colors at once",
-        })}
-      >
-        <span className="gb-grid-theme-label">
-          {t("graph.grid.theme", { defaultValue: "Theme" })}
-        </span>
-        <div className="gb-grid-theme-swatches">
-          {GRID_LINE_THEMES.map((theme, i) => {
-            const majorCur = (
-              cfg.majorGridStyle?.color ?? GRID_LINE_DEFAULT_COLOR_MAJOR
-            ).toLowerCase();
-            const minorCur = (
-              cfg.minorGridStyle?.color ?? GRID_LINE_DEFAULT_COLOR_MINOR
-            ).toLowerCase();
-            const selected =
-              majorCur === theme.major.toLowerCase() &&
-              minorCur === theme.minor.toLowerCase();
-            const bg = `linear-gradient(90deg, ${theme.major} 0 50%, ${theme.minor} 50% 100%)`;
-            return (
-              <button
-                key={i}
-                type="button"
-                className={`gb-refline-swatch${selected ? " gb-refline-swatch-selected" : ""}`}
-                style={{ background: bg }}
-                title={`${theme.major} / ${theme.minor}`}
-                aria-label={`${theme.major} / ${theme.minor}`}
-                aria-pressed={selected}
-                onClick={() => applyGridTheme(i)}
-              />
-            );
-          })}
-        </div>
-      </div>
-
-      {renderGridSection("major")}
-      {renderGridSection("minor")}
-
-      <div className="gb-grid-hint">
-        {t("graph.grid.minorHint", {
-          defaultValue:
-            "Minor gridlines require at least one minor tick. Set Minor ticks in the Axis tab first.",
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ---- Reference lines editor -------------------------------------------
-// Card-per-line editor used inside the AxisSettingsDialog's right pane.
-// Axis-agnostic: the `axis` prop picks whether each card edits the Y
-// value (`RefLineY.y`, horizontal marker on the Y axis) or the X value
-// (`RefLineX.x`, vertical marker on the X axis). The auto-spec block is
-// Y-only because spec extras (LSL / Target / USL) live on the response
-// variable column bound to Y. The chart (transform.ts -> buildRefLines-
-// Carrier) attaches the rendered markLines to an invisible scatter
-// series so every chart type benefits, and silently skips lines whose
-// axis is currently categorical (no meaningful position there — the
-// lines are preserved in the spec and reappear when the axis becomes
-// value-type again, e.g. after a Swap X & Y).
-
-type RefLinesEditorProps =
-  | {
-      /** Which axis this editor targets. Picks the value-field name
-       *  (`y` or `x`) used to read / write each card, the i18n copy
-       *  (horizontal vs. vertical marker), and whether the Y-only
-       *  auto-spec-limits block is rendered. */
-      axis: "y";
-      refLines: RefLineY[];
-      setRefLines: (next: RefLineY[]) => void;
-      /** When true, the chart auto-draws red (LSL/USL) and green (Target)
-       *  reference lines based on the bound column's `spec` extras. The
-       *  toggle is global — enabling it surfaces spec lines on whichever
-       *  axis (or both) has a value-type column carrying spec metadata. */
-      autoSpecLines?: boolean;
-      setAutoSpecLines?: (next: boolean) => void;
-      /** Pre-resolved spec snapshot for the column bound to THIS axis. */
-      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
-      /** Name of the column bound to THIS axis — used in the helper hint. */
-      autoSpecColName?: string | undefined;
-      /** Number of source columns contributing per-column spec lines on
-       *  THIS axis when a multi-column melt is active. */
-      multiValueColCount?: number;
-    }
-  | {
-      /** Which axis this editor targets. Picks the value-field name
-       *  (`y` or `x`) used to read / write each card, the i18n copy
-       *  (horizontal vs. vertical marker), and whether the Y-only
-       *  auto-spec-limits block is rendered. */
-      axis: "x";
-      refLines: RefLineX[];
-      setRefLines: (next: RefLineX[]) => void;
-      /** When true, the chart auto-draws red (LSL/USL) and green (Target)
-       *  reference lines based on the bound column's `spec` extras. The
-       *  toggle is global — enabling it surfaces spec lines on whichever
-       *  axis (or both) has a value-type column carrying spec metadata. */
-      autoSpecLines?: boolean;
-      setAutoSpecLines?: (next: boolean) => void;
-      /** Pre-resolved spec snapshot for the column bound to THIS axis. */
-      resolvedAutoSpec?: import("@/graphCore").AutoSpec | undefined;
-      /** Name of the column bound to THIS axis — used in the helper hint. */
-      autoSpecColName?: string | undefined;
-      /** Number of source columns contributing per-column spec lines on
-       *  THIS axis when a multi-column melt is active. */
-      multiValueColCount?: number;
-    };
-
-/** Saturated / primary-color palette for reference lines. The chart's
- *  GROUP_COLORS palette intentionally uses *muted* hues so data series
- *  read as natural; ref lines (spec limits, targets, control bounds)
- *  need to *visually stand out* against that data, so we offer a parallel
- *  palette of high-saturation pure-ish colors. Users can still pick any
- *  custom color via the trailing color picker. */
-const REF_LINE_PRESETS: readonly string[] = [
-  "#E60000", // pure red
-  "#FF6F00", // vivid orange
-  "#FFC400", // amber / gold
-  "#76FF03", // lime
-  "#00C853", // vivid green
-  "#00B0FF", // vivid cyan
-  "#2962FF", // vivid blue
-  "#6200EA", // deep purple
-  "#D500F9", // vivid magenta
-  "#000000", // black
-];
-
-/** Default color for a freshly-added reference line. First preset \u2014
- *  high-contrast red so the new line is immediately visible against any
- *  background or chart palette. */
-const REF_LINE_DEFAULT_COLOR = REF_LINE_PRESETS[0];
-
-/** Mint a stable, collision-resistant id for a new ref line. Using a
- *  timestamp + a per-render counter avoids the React-list-key churn we'd
- *  see if we recycled array indexes. */
-let _refLineSeq = 0;
-function nextRefLineId(): string {
-  _refLineSeq += 1;
-  return `rl-${Date.now().toString(36)}-${_refLineSeq}`;
-}
-
-function RefLinesEditor(props: RefLinesEditorProps) {
-  const { t } = useTranslation();
-  const axis = props.axis;
-  const autoSpecLines = props.autoSpecLines;
-  const setAutoSpecLines = props.setAutoSpecLines;
-  const resolvedAutoSpec = props.resolvedAutoSpec;
-  const autoSpecColName = props.autoSpecColName;
-  const multiValueColCount = props.multiValueColCount;
-  const readValue = (r: RefLineY | RefLineX): number =>
-    "x" in r ? r.x : r.y;
-  const writeValue = (n: number): Partial<RefLineY> | Partial<RefLineX> =>
-    axis === "x" ? { x: n } : { y: n };
-
-  const addLine = useCallback(() => {
-    if (props.axis === "x") {
-      const next: RefLineX = {
-        id: nextRefLineId(),
-        x: 0,
-        label: "",
-        style: "dashed",
-        color: REF_LINE_DEFAULT_COLOR,
-        width: 1,
-      };
-      props.setRefLines?.([...(props.refLines ?? []), next]);
-      return;
-    }
-    const next: RefLineY = {
-      id: nextRefLineId(),
-      y: 0,
-      label: "",
-      style: "dashed",
-      color: REF_LINE_DEFAULT_COLOR,
-      width: 1,
-    };
-    props.setRefLines?.([...(props.refLines ?? []), next]);
-  }, [props.axis, props.refLines, props.setRefLines]);
-
-  const updateLine = useCallback(
-    (id: string, patch: Partial<RefLineY> | Partial<RefLineX>) => {
-      if (props.axis === "x") {
-        const next = (props.refLines ?? []).map((r) =>
-          r.id === id ? { ...r, ...(patch as Partial<RefLineX>) } : r,
-        );
-        props.setRefLines?.(next);
-        return;
-      }
-      const next = (props.refLines ?? []).map((r) =>
-        r.id === id ? { ...r, ...(patch as Partial<RefLineY>) } : r,
-      );
-      props.setRefLines?.(next);
-    },
-    [props.axis, props.refLines, props.setRefLines],
-  );
-
-  const removeLine = useCallback(
-    (id: string) => {
-      if (props.axis === "x") {
-        props.setRefLines?.((props.refLines ?? []).filter((r) => r.id !== id));
-        return;
-      }
-      props.setRefLines?.((props.refLines ?? []).filter((r) => r.id !== id));
-    },
-    [props.axis, props.refLines, props.setRefLines],
-  );
-
-  const lines = (props.refLines ?? []) as (RefLineY | RefLineX)[];
-
-  // Auto-spec preview state. We render up to three chips (LSL / Target
-  // / USL) mirroring the colors the chart will use. When the toggle is
-  // on but no limits resolve, the hint copy explains why. Available on
-  // BOTH axes: whichever axis has a value-type column carrying
-  // `extras.spec` metadata gets its own overlay snapshot.
-  const autoChips: { key: "lsl" | "target" | "usl"; value: number; color: string; label: string }[] = [];
-  if (autoSpecLines && resolvedAutoSpec) {
-    if (resolvedAutoSpec.lsl !== undefined) {
-      autoChips.push({ key: "lsl", value: resolvedAutoSpec.lsl, color: "#E60000", label: "LSL" });
-    }
-    if (resolvedAutoSpec.target !== undefined) {
-      autoChips.push({ key: "target", value: resolvedAutoSpec.target, color: "#00C853", label: "Target" });
-    }
-    if (resolvedAutoSpec.usl !== undefined) {
-      autoChips.push({ key: "usl", value: resolvedAutoSpec.usl, color: "#E60000", label: "USL" });
-    }
-  }
-
-  // Axis-aware copy used in the auto-spec hint. The toggle reads
-  // "Auto-show spec limits" identically on both axes — the difference
-  // is just which column the limits are sourced from ("the Y column" /
-  // "the X column"), surfaced in the contextual hint below.
-  const axisColCopy = axis === "y" ? "Y" : "X";
-
-  return (
-    <div className="gb-refline-editor">
-      {/* Auto spec-limit toggle. Available on both axes: when on, the
-          chart reads LSL / Target / USL from THIS axis's bound column
-          (via its `extras.spec` metadata) and overlays red / green
-          dashed lines. The toggle itself is global — flipping it on
-          either dialog activates the overlay everywhere applicable. */}
-      {setAutoSpecLines && (
-        <div className="gb-refline-auto-block">
-          <label className="gb-refline-auto-toggle">
-            <input
-              type="checkbox"
-              checked={!!autoSpecLines}
-              onChange={(e) => setAutoSpecLines(e.target.checked)}
-            />
-            <span>{t("graph.refLine.autoSpec", { defaultValue: "Auto-show spec limits" })}</span>
-          </label>
-          <div className="gb-refline-auto-hint">
-            {autoSpecLines
-              ? (multiValueColCount && multiValueColCount > 0)
-                ? t("graph.refLine.autoSpecMulti", {
-                    defaultValue: "Drawing per-column spec lines from {{n}} multi-mode columns.",
-                    n: multiValueColCount,
-                  })
-                : autoChips.length > 0
-                ? t("graph.refLine.autoSpecActive", {
-                    defaultValue: "Reading limits from {{col}}.",
-                    col: autoSpecColName ?? "",
-                  })
-                : autoSpecColName
-                  ? t("graph.refLine.autoSpecMissing", {
-                      defaultValue: "The {{axis}} column \"{{col}}\" has no spec extras (LSL / Target / USL).",
-                      axis: axisColCopy,
-                      col: autoSpecColName,
-                    })
-                  : t("graph.refLine.autoSpecNoCol", {
-                      defaultValue: "Drop a column on {{axis}} to read its spec limits.",
-                      axis: axisColCopy,
-                    })
-              : (multiValueColCount && multiValueColCount > 0)
-                ? t("graph.refLine.autoSpecHintMulti", {
-                    defaultValue: "Read each multi-mode column's LSL / Target / USL and overlay them as per-column reference lines on the {{axis}} axis.",
-                    axis: axisColCopy,
-                  })
-                : t("graph.refLine.autoSpecHint", {
-                    defaultValue: "Read LSL / Target / USL from the {{axis}} column's spec extras and overlay them as colored reference lines.",
-                    axis: axisColCopy,
-                  })}
-          </div>
-          {autoChips.length > 0 && (
-            <div className="gb-refline-auto-chips">
-              {autoChips.map((c) => (
-                <span
-                  key={c.key}
-                  className="gb-refline-auto-chip"
-                  style={{ borderColor: c.color, color: c.color }}
-                  title={`${c.label} = ${c.value}`}
-                >
-                  <span className="gb-refline-auto-chip-dash" style={{ background: c.color }} />
-                  {c.label} = {c.value}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Section header: title + Add button. Title sits flush with the
-          pane padding so it reads as a normal settings-pane section. */}
-      <div className="gb-refline-header">
-        <span className="gb-refline-title">
-          {t("graph.refLine.title", { defaultValue: "Reference Lines" })}
-        </span>
-        <button
-          type="button"
-          className="gb-refline-add"
-          onClick={addLine}
-        >
-          + {t("graph.refLine.add", { defaultValue: "Add reference line" })}
-        </button>
-      </div>
-
-      {lines.length === 0 ? (
-        <div className="gb-refline-empty">
-          {axis === "y"
-            ? t("graph.refLine.emptyY", {
-                defaultValue: "No reference lines yet. Click \u201cAdd reference line\u201d to draw a horizontal marker on the Y axis.",
-              })
-            : t("graph.refLine.emptyX", {
-                defaultValue: "No reference lines yet. Click \u201cAdd reference line\u201d to draw a vertical marker on the X axis.",
-              })}
-        </div>
-      ) : (
-        <div className="gb-refline-list">
-          {lines.map((r) => {
-            const currentHex = normalizeHex(r.color);
-            // A color is "custom" when it doesn't match any preset — in
-            // that case we highlight the picker swatch instead of a
-            // preset chip so the user can see at a glance that this
-            // card is on a user-defined color.
-            const isCustom = !REF_LINE_PRESETS.some(
-              (p) => p.toLowerCase() === currentHex.toLowerCase(),
-            );
-            return (
-              <div key={r.id} className="gb-refline-card">
-                {/* Preset color strip + free color picker. Saturated
-                    presets up front so users get a one-click contrast
-                    choice; the picker at the end is the escape hatch
-                    for any exact hex. */}
-                <div className="gb-refline-swatch-row">
-                  {REF_LINE_PRESETS.map((preset) => {
-                    const selected = preset.toLowerCase() === currentHex.toLowerCase();
-                    return (
-                      <button
-                        key={preset}
-                        type="button"
-                        className={`gb-refline-swatch${selected ? " gb-refline-swatch-selected" : ""}`}
-                        style={{ background: preset }}
-                        onClick={() => updateLine(r.id, { color: preset })}
-                        title={preset}
-                        aria-label={preset}
-                        aria-pressed={selected}
-                      />
-                    );
-                  })}
-                  <span className="gb-refline-swatch-divider" />
-                  <input
-                    type="color"
-                    className={`gb-refline-color-picker${isCustom ? " gb-refline-color-picker-active" : ""}`}
-                    value={currentHex}
-                    onChange={(e) => updateLine(r.id, { color: e.target.value })}
-                    title={t("graph.refLine.customColor", { defaultValue: "Custom color" })}
-                  />
-                </div>
-
-                {/* Form row: label / Y / style / width / remove. */}
-                <div className="gb-refline-form-row">
-                  <input
-                    type="text"
-                    className="gb-refline-label-input"
-                    value={r.label}
-                    placeholder={t("graph.refLine.label", { defaultValue: "Label" })}
-                    onChange={(e) => updateLine(r.id, { label: e.target.value })}
-                  />
-                  <input
-                    type="number"
-                    className="gb-refline-num"
-                    value={Number.isFinite(readValue(r)) ? readValue(r) : 0}
-                    step="any"
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      updateLine(r.id, writeValue(Number.isFinite(n) ? n : 0));
-                    }}
-                  />
-                  <select
-                    className="gb-refline-style"
-                    value={r.style}
-                    onChange={(e) => updateLine(r.id, { style: e.target.value as RefLineStyle })}
-                  >
-                    <option value="solid">{t("graph.refLine.styleSolid", { defaultValue: "Solid" })}</option>
-                    <option value="dashed">{t("graph.refLine.styleDashed", { defaultValue: "Dashed" })}</option>
-                    <option value="dotted">{t("graph.refLine.styleDotted", { defaultValue: "Dotted" })}</option>
-                  </select>
-                  <input
-                    type="number"
-                    className="gb-refline-width"
-                    value={r.width}
-                    min={1}
-                    max={10}
-                    step={0.5}
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      updateLine(r.id, { width: Number.isFinite(n) && n > 0 ? n : 1 });
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="gb-refline-remove"
-                    onClick={() => removeLine(r.id)}
-                    title={t("graph.refLine.remove", { defaultValue: "Remove" })}
-                    aria-label={t("graph.refLine.remove", { defaultValue: "Remove" })}
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Coerce a stored color to a strict #RRGGBB form so <input type="color">
- *  doesn't fall back to #000000 on shorthand / named colors. */
-function normalizeHex(c: string | undefined): string {
-  if (!c) return "#888888";
-  const s = c.trim();
-  if (/^#[0-9a-fA-F]{6}$/.test(s)) return s;
-  if (/^#[0-9a-fA-F]{3}$/.test(s)) {
-    const r = s[1], g = s[2], b = s[3];
-    return `#${r}${r}${g}${g}${b}${b}`;
-  }
-  return "#888888";
-}
-
-/** Categorical palette for legend defaults — must match DEFAULT_CATEGORICAL
- *  in graphCore/theme.ts. Sorted by contrast: vivid hues first, muted/gray
- *  last, so auto-assigned legend colors stay maximally distinct. */
-const GROUP_COLORS = [
-  "#4a6cf7", "#ef8a3a", "#2ca678", "#e74c3c", // blue / orange / green / red
-  "#9168d6", "#c4ad36", "#d56cb1", "#3aa6b9", // purple / yellow / pink / teal
-  "#5d8aa8", "#8c6e3a", "#b87333", "#7f8c8d", // slate / brown / copper / gray
-];
-
 /** Build the fully-resolved per-group style map handed to the renderer
  *  (`spec.styles`) and to the legend swatches.
  *
@@ -5387,7 +3567,7 @@ const GROUP_COLORS = [
  *          (so users get THEIR favourite colors before falling back to
  *          the built-in palette). Palette.point/line/fill map straight
  *          onto the three sub-marks.
- *       b) Beyond that, derive shades from GROUP_COLORS — but offset
+ *       b) Beyond that, derive shades from STYLE_COLORS — but offset
  *          the index by the palette count so the first un-palette group
  *          still gets the highest-contrast built-in color.
  *    3. When not grouped (single DEFAULT_GROUP_KEY), fill with the JMP
@@ -5425,7 +3605,7 @@ function buildEffectiveStyles(
       autoPoint = { color: "#000000", fillColor: "#000000", marker: "circle", markerSize: 4, opacity: 1 };
       // Ungrouped single 3D surface: a default accent hue (not black,
       // which would render an unreadable dark surface).
-      autoGradient = { color: GROUP_COLORS[0], opacity: 1 };
+      autoGradient = { color: STYLE_COLORS[0], opacity: 1 };
     } else if (idx < customPalettes.length) {
       const p = customPalettes[idx];
       autoLine = { color: p.line, lineWidth: 1.5, opacity: 1 };
@@ -5433,8 +3613,8 @@ function buildEffectiveStyles(
       autoPoint = { color: p.point, fillColor: p.point, marker: "circle", markerSize: 4, opacity: 1 };
       autoGradient = { color: p.line, opacity: 1 };
     } else {
-      const fallbackIdx = (idx - customPalettes.length) % GROUP_COLORS.length;
-      const base = GROUP_COLORS[fallbackIdx];
+      const fallbackIdx = (idx - customPalettes.length) % STYLE_COLORS.length;
+      const base = STYLE_COLORS[fallbackIdx];
       autoLine = { color: shade(base, SHADE_RATIO_LINE), lineWidth: 1.5, opacity: 1 };
       autoFill = { color: shade(base, SHADE_RATIO_FILL), opacity: 1 };
       autoPoint = {
@@ -5584,46 +3764,6 @@ function MarkEditor({ title, mark, value, effective, onChange, fields }: MarkEdi
     </div>
   );
 }
-
-/** A small JMP-like preset palette used by the legend's color picker.
- *  This is the *base* (mid-shade) palette; per-mark pickers (Point / Line /
- *  Fill) derive darker / mid / lighter variants from these via `shade()`
- *  so a single applied theme stays visually layered (the fill doesn't
- *  swallow the line; the point still pops against both). */
-const STYLE_COLORS = [
-  "#000000", "#444444", "#888888", "#bbbbbb",
-  "#e74c3c", "#f39c12",
-  "#2ca678", "#27ae60",
-  "#3498db", "#4a6cf7",
-  "#9168d6", "#d56cb1",
-];
-
-/** Per-mark shade ratios — Point darkest, Line mid (base), Fill lightest.
- *  Picked so that applying one color family across all three sub-marks
- *  keeps each mark distinguishable from the others. */
-export const SHADE_RATIO_POINT = -0.2;
-export const SHADE_RATIO_LINE = 0;
-export const SHADE_RATIO_FILL = 0.55;
-
-/** Mix `hex` toward black (ratio<0) or white (ratio>0). ratio in [-1,1]. */
-export function shade(hex: string, ratio: number): string {
-  if (!hex || ratio === 0) return hex;
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
-  if (!m) return hex;
-  const hh = m[1];
-  const r = parseInt(hh.slice(0, 2), 16);
-  const g = parseInt(hh.slice(2, 4), 16);
-  const b = parseInt(hh.slice(4, 6), 16);
-  const mix = (c: number) =>
-    ratio < 0 ? Math.round(c * (1 + ratio)) : Math.round(c + (255 - c) * ratio);
-  const clamp = (n: number) => Math.max(0, Math.min(255, n));
-  const toHex = (n: number) => clamp(n).toString(16).padStart(2, "0");
-  return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`;
-}
-
-const POINT_PALETTE = STYLE_COLORS.map((c) => shade(c, SHADE_RATIO_POINT));
-const LINE_PALETTE = STYLE_COLORS.map((c) => shade(c, SHADE_RATIO_LINE));
-const FILL_PALETTE = STYLE_COLORS.map((c) => shade(c, SHADE_RATIO_FILL));
 
 const MARK_PALETTE: Record<"line" | "fill" | "point" | "gradient", string[]> = {
   line: LINE_PALETTE,

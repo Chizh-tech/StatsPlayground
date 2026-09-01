@@ -28,6 +28,8 @@ export type Graph3DSlotKey = GraphSlotKey;
 export interface Graph2DState {
   /** 编码槽：字段引用（2D） */
   encoding: Partial<Record<Graph2DSlotKey, FieldRef>>;
+  /** 仅转置最终显示，不改变字段绑定或后端请求。 */
+  transposed?: boolean;
   /** 2D X 轴多列绑定 */
   multiX: FieldRef[];
   /** 2D Y 轴多列绑定 */
@@ -104,6 +106,11 @@ export interface GraphBuilderItem {
  *  统一管理，保存时单独传给后端，绝不持久化在 .spgh 文件体里。 */
   createdAt: string;
 }
+
+export type EmbeddedGraphConfig = Pick<
+  GraphBuilderItem,
+  "mode" | "modeStates" | "filters" | "sampling"
+>;
 
 export function isCorrelationMatrixItem(item: GraphBuilderItem): boolean {
   const asUnknown = item as unknown as {

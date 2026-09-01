@@ -28,7 +28,7 @@ Object.defineProperty(globalThis, "localStorage", {
   configurable: true,
 });
 
-const { buildGraph } = await import("../src/graphCore/transform.ts");
+const { buildGraph, transposeOption } = await import("../src/graphCore/transform.ts");
 
 {
   const transformSource = readFileSync(resolve(TEST_FILE_DIR, "../src/graphCore/transform.ts"), "utf8");
@@ -151,6 +151,30 @@ function frameScatterValues(panel: { option: unknown }): Array<{
     value: [number | string, number | string];
     __pick?: { rowId: number; colName: string };
   }>;
+}
+
+{
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "x", type: "continuous" },
+      y: { name: "y", type: "continuous" },
+    },
+    elements: [{ kind: "points", enabled: true }],
+    transpose: true,
+  };
+  const built = buildGraph(
+    spec,
+    frameBackedAggregateData(["x", "y"], 6),
+    theme,
+    undefined,
+    typedNumericFrame(),
+  );
+
+  assert.deepEqual(
+    frameScatterValues(built.panels[0]).map((point) => point.value),
+    [[2, 1], [4, 2], [5, 3], [8, 4], [9, 5], [12, 6]],
+    "visual transpose must swap rendered coordinates without changing frame roles",
+  );
 }
 
 function typedFacetedNumericFrame(): GraphDataFrame {
@@ -1599,6 +1623,67 @@ for (const element of [
     assert.ok(scatter);
     assert.equal((scatter.data as unknown[]).length, 1, "each facet panel should keep only its local typed points");
   }
+}
+
+{
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "x", type: "continuous" },
+      y: { name: "y", type: "continuous" },
+      groupX: { name: "columnFacet", type: "nominal" },
+      groupY: { name: "rowFacet", type: "nominal" },
+    },
+    elements: [{ kind: "points", enabled: true }],
+    transpose: true,
+  };
+  const data = baseData(
+    ["x", "y", "columnFacet", "rowFacet"],
+    [
+      [1, 10, "Left", "Top"],
+      [2, 20, "Right", "Top"],
+      [3, 30, "Left", "Middle"],
+      [4, 40, "Right", "Middle"],
+      [5, 50, "Left", "Bottom"],
+      [6, 60, "Right", "Bottom"],
+    ],
+  );
+
+  const built = buildGraph(spec, data, theme);
+  assert.equal(built.cols, 3);
+  assert.equal(built.rows, 2);
+  assert.deepEqual(
+    built.panels.map((panel) => [panel.groupXValue, panel.groupYValue, panel.title]),
+    [
+      ["Top", "Left", "columnFacet=Left | rowFacet=Top"],
+      ["Middle", "Left", "columnFacet=Left | rowFacet=Middle"],
+      ["Bottom", "Left", "columnFacet=Left | rowFacet=Bottom"],
+      ["Top", "Right", "columnFacet=Right | rowFacet=Top"],
+      ["Middle", "Right", "columnFacet=Right | rowFacet=Middle"],
+      ["Bottom", "Right", "columnFacet=Right | rowFacet=Bottom"],
+    ],
+  );
+}
+
+{
+  const transposed = transposeOption({
+    xAxis: { type: "value" },
+    yAxis: { type: "value" },
+    series: [{
+      type: "scatter",
+      data: [[1, 2]],
+      markPoint: {
+        data: [
+          { xAxis: 3, yAxis: 4 },
+          { coord: [5, 6], name: "peak" },
+        ],
+      },
+    }],
+  });
+  const series = (transposed.series as Array<Record<string, unknown>>)[0];
+  assert.deepEqual((series.markPoint as { data: unknown[] }).data, [
+    { xAxis: 4, yAxis: 3 },
+    { coord: [6, 5], name: "peak" },
+  ]);
 }
 
 {

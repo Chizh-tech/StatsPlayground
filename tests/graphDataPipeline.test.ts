@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import ts from "typescript";
 import { SCATTER_RENDER_BUDGET } from "../src/graphCore/scatterBudget.ts";
 import { decodeGraphPayload, isGraphAggregatePacket } from "../src/types/graphData.ts";
@@ -23,7 +22,8 @@ import {
   deriveMultivariateSlotBinding,
   resolveCanvasDropSlot,
 } from "../src/components/graphBuilder/multivariateInteractions.ts";
-import { normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
+import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
+import { createEmbeddedGraphItem, normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
 import { createGraphStreamTransport } from "../src/services/graphDataTransport.ts";
 import type {
   GraphChunkHeader,
@@ -34,7 +34,7 @@ import type {
 } from "../src/types/graphData.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
 
-const TEST_FILE_DIR = dirname(fileURLToPath(import.meta.url));
+const TEST_FILE_DIR = resolve(process.cwd(), "tests");
 
 type JsonObject = Record<string, unknown>;
 
@@ -175,8 +175,8 @@ assert.equal(makeGraphRows(10).length, 10);
   assert.match(graphBuilderViewSource, /deriveMultivariateSlotBinding\(/);
   assert.match(
     graphBuilderViewSource,
-    /\{isMultivariateMode && !correlationColumnsReady \? \([\s\S]*?\)\s*:\s*[\s\S]*?\)\s*\}\s*\{correlationNoticeText && \(/,
-    "multivariate rejection status must render outside the correlationColumnsReady conditional",
+    /<GraphRuntime[\s\S]*onStateChange=\{setRuntimeState\}[\s\S]*\/?>[\s\S]*\{correlationNoticeText && \(/,
+    "GraphBuilderView must render the multivariate rejection status outside the extracted GraphRuntime block",
   );
   assert.doesNotMatch(graphBuilderViewSource, /isCorrelationMatrixItem\(item\)/);
   assert.equal(
@@ -296,6 +296,40 @@ assert.equal(makeGraphRows(10).length, 10);
   });
   assert.equal(overflowResult.error, "maxColumns");
   assert.equal(overflowResult.columns.length, 20);
+}
+
+{
+  const fit = createFitYByXItem({
+    id: "fit-bivariate-request",
+    name: "Fit Y by X 1",
+    sourceDatasetId: "dataset-fit",
+    response: { name: "height", type: "continuous" },
+    factor: { name: "age", type: "continuous" },
+    createdAt: new Date(0).toISOString(),
+  });
+  const graphItem = createEmbeddedGraphItem({
+    id: `fit-y-by-x-graph:${fit.id}`,
+    name: fit.name,
+    sourceDatasetId: fit.sourceDatasetId,
+    config: fit.graph,
+    createdAt: fit.createdAt,
+  });
+
+  const { fields, filters, elements, sampling } = deriveGraphRequestParts(graphItem);
+
+  assert.deepEqual(graphItem.modeStates.twoD.encoding.x, { name: "age", type: "continuous" });
+  assert.deepEqual(graphItem.modeStates.twoD.encoding.y, { name: "height", type: "continuous" });
+  assert.deepEqual(fields, [
+    { role: "x", column: "age" },
+    { role: "y", column: "height" },
+  ]);
+  assert.deepEqual(filters, []);
+  assert.deepEqual(elements, [
+    { kind: "points", summaryStat: "none" },
+    { kind: "fitline", summaryStat: "none" },
+  ]);
+  assert.deepEqual(sampling, { mode: "full" });
+  assert.equal(canExecuteGraphRequest(graphItem, fields, elements), true);
 }
 
 {
@@ -1031,6 +1065,21 @@ function makeLegacyGraphBuilderItem(overrides: Record<string, unknown> = {}): Gr
   return makeGraphBuilderItem(raw);
 }
 
+function makeEquivalentEmbeddedGraphItem(item: GraphBuilderItem): GraphBuilderItem {
+  return createEmbeddedGraphItem({
+    id: `${item.id}-embedded`,
+    name: `${item.name} embedded`,
+    sourceDatasetId: item.sourceDatasetId,
+    createdAt: item.createdAt,
+    config: {
+      mode: item.mode,
+      modeStates: item.modeStates,
+      filters: item.filters,
+      sampling: item.sampling,
+    },
+  });
+}
+
 function roleColumns(fields: ReturnType<typeof deriveFields>, role: string): string[] {
   return fields.filter((field) => field.role === role).map((field) => field.column);
 }
@@ -1064,6 +1113,73 @@ function makeProgressedChunk(
       },
     },
   };
+}
+
+{
+  const defaults = defaultModeStates();
+  const interactive = makeCanonicalGraphBuilderItem({
+    mode: "2d",
+    modeStates: {
+      twoD: {
+        encoding: {
+          x: { name: "site", type: "nominal" },
+          y: { name: "height", type: "continuous" },
+          overlay: { name: "batch", type: "ordinal" },
+        },
+        multiX: [],
+        multiY: [],
+        elements: [
+          { kind: "points", enabled: true },
+          { kind: "boxplot", enabled: true },
+        ],
+        smootherLambda: 0.4,
+      },
+      threeD: defaults.threeD,
+      multivariate: defaults.multivariate,
+    },
+    filters: [
+      { op: "AND", rule: { kind: "categorical", field: "site", selected: ["North", "South"] } },
+    ],
+    sampling: { mode: "full" },
+  });
+  const embedded = makeEquivalentEmbeddedGraphItem(interactive);
+
+  assert.deepEqual(
+    deriveGraphRequestParts(interactive),
+    deriveGraphRequestParts(embedded),
+    "equivalent interactive and embedded graph items must derive identical request parts",
+  );
+}
+
+{
+  const fitYByXItem = createFitYByXItem({
+    id: "fit-1",
+    name: "Fit Y by X 1",
+    sourceDatasetId: "dataset-1",
+    response: { name: "height", type: "continuous" },
+    factor: { name: "site", type: "nominal" },
+    createdAt: new Date(0).toISOString(),
+  });
+  const interactive = normalizeGraphBuilderItem({
+    ...fitYByXItem.graph,
+    id: "fit-y-by-x-graph:interactive",
+    name: "Fit Y by X Interactive",
+    sourceDatasetId: fitYByXItem.sourceDatasetId,
+    createdAt: fitYByXItem.createdAt,
+  });
+  const embedded = createEmbeddedGraphItem({
+    id: "fit-y-by-x-graph:fit-1",
+    name: fitYByXItem.name,
+    sourceDatasetId: fitYByXItem.sourceDatasetId,
+    createdAt: fitYByXItem.createdAt,
+    config: fitYByXItem.graph,
+  });
+
+  assert.deepEqual(
+    deriveGraphRequestParts(interactive),
+    deriveGraphRequestParts(embedded),
+    "interactive Fit Y by X and embedded Fit Y by X items must derive identical request parts",
+  );
 }
 
 {

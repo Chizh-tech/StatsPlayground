@@ -33,6 +33,8 @@ pub struct OpenProjectResult {
     #[serde(default)]
     pub graph_builders: Vec<serde_json::Value>,
     #[serde(default)]
+    pub fit_y_by_x: Vec<serde_json::Value>,
+    #[serde(default)]
     pub tabulates: Vec<serde_json::Value>,
     /// All folder paths that exist in the project (including empty ones).
     #[serde(default)]
@@ -43,6 +45,8 @@ pub struct OpenProjectResult {
     /// `graphId -> folder path`.
     #[serde(default)]
     pub graph_folders: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub fit_y_by_x_folders: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub dataset_name_migrations: Vec<DatasetNameMigration>,
     /// `tabulateId -> folder path`.
@@ -127,6 +131,8 @@ impl<'a> ProjectService<'a> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            &empty_folders,
             &empty_folders,
             &empty_folders,
             &empty_folders,
@@ -186,6 +192,7 @@ impl<'a> ProjectService<'a> {
             Some(assignments) => assignments.clone(),
             None => derive_folders_from_entries(&bundle.manifest.graphs, "graphs"),
         };
+        let fit_y_by_x_folders = bundle.manifest.fit_y_by_x_folders.clone();
         let tabulate_folders = bundle.manifest.tabulate_folders.clone();
         let folders = bundle.manifest.folders.clone();
 
@@ -245,10 +252,12 @@ impl<'a> ProjectService<'a> {
             history: bundle.history,
             snapshots: bundle.snapshots,
             graph_builders,
+            fit_y_by_x: bundle.fit_y_by_x,
             tabulates: bundle.tabulates,
             folders,
             table_folders,
             graph_folders,
+            fit_y_by_x_folders,
             dataset_name_migrations,
             tabulate_folders,
         })
@@ -1014,10 +1023,12 @@ mod tests {
         history: Vec<serde_json::Value>,
         snapshots: Vec<serde_json::Value>,
         graph_builders: Vec<serde_json::Value>,
+        fit_y_by_x: Vec<serde_json::Value>,
         tabulates: Vec<serde_json::Value>,
         folders: Vec<String>,
         table_folders: HashMap<String, String>,
         graph_folders: HashMap<String, String>,
+        fit_y_by_x_folders: HashMap<String, String>,
         tabulate_folders: HashMap<String, String>,
     ) -> SaveProjectRequest {
         SaveProjectRequest {
@@ -1025,10 +1036,12 @@ mod tests {
             history,
             snapshots,
             graph_builders,
+            fit_y_by_x,
             tabulates,
             folders,
             table_folders,
             graph_folders,
+            fit_y_by_x_folders,
             tabulate_folders,
         }
     }
@@ -1041,6 +1054,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -1486,6 +1501,12 @@ mod tests {
             "yField": "amount",
             "meta": { "owner": "qa" }
         })];
+        let fit_y_by_x = vec![serde_json::json!({
+            "id": "fit-1",
+            "sourceDatasetId": "preserve-id",
+            "response": { "name": "amount", "type": "continuous" },
+            "factor": { "name": "category", "type": "nominal" }
+        })];
         let tabulates = vec![serde_json::json!({
             "id": "tab-1",
             "name": "Summary",
@@ -1498,6 +1519,8 @@ mod tests {
         let table_folders =
             HashMap::from([("preserve-id".to_string(), "Analysis/Yearly".to_string())]);
         let graph_folders = HashMap::from([("graph-1".to_string(), "Analysis".to_string())]);
+        let fit_y_by_x_folders =
+            HashMap::from([("fit-1".to_string(), "Analysis".to_string())]);
         let tabulate_folders =
             HashMap::from([("tab-1".to_string(), "Analysis/Yearly".to_string())]);
 
@@ -1509,10 +1532,12 @@ mod tests {
                     history.clone(),
                     snapshots.clone(),
                     graph_builders.clone(),
+                    fit_y_by_x.clone(),
                     tabulates.clone(),
                     folders.clone(),
                     table_folders.clone(),
                     graph_folders.clone(),
+                    fit_y_by_x_folders.clone(),
                     tabulate_folders.clone(),
                 ),
                 None,
@@ -1527,10 +1552,12 @@ mod tests {
         assert_eq!(reopened.history, history);
         assert_eq!(reopened.snapshots, snapshots);
         assert_eq!(reopened.graph_builders, graph_builders);
+        assert_eq!(reopened.fit_y_by_x, fit_y_by_x);
         assert_eq!(reopened.tabulates, tabulates);
         assert_eq!(reopened.folders, folders);
         assert_eq!(reopened.table_folders, table_folders);
         assert_eq!(reopened.graph_folders, graph_folders);
+        assert_eq!(reopened.fit_y_by_x_folders, fit_y_by_x_folders);
         assert_eq!(reopened.tabulate_folders, tabulate_folders);
 
         let restored_display = reopened_state.column_display.lock().unwrap();
@@ -1944,6 +1971,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &folders,
             &folders,
             &folders,
             &folders,

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 
 import type { ProjectInfo } from "../src/types/project";
-import type { SaveProgress, SaveProjectRequest } from "../src/services/projectService";
+import type { SaveProgress, SaveProjectFolders, SaveProjectRequest } from "../src/services/projectService";
+import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
 import { createProjectStore } from "../src/stores/useProjectStore.ts";
 import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
@@ -26,15 +27,21 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+const saveFolders: SaveProjectFolders = {
+  folders: [],
+  tableFolders: {},
+  graphFolders: {},
+  fitYByXFolders: { "fit-1": "Analyses" },
+  tabulateFolders: {},
+};
+
 const request: SaveProjectRequest = {
   history: [],
   snapshots: [],
   graphBuilders: [],
+  fitYByX: [{ id: "fit-1", sourceDatasetId: "table-1" }],
   tabulates: [],
-  folders: [],
-  tableFolders: {},
-  graphFolders: {},
-  tabulateFolders: {},
+  ...saveFolders,
 };
 
 const savedProject: ProjectInfo = {
@@ -108,10 +115,12 @@ function resetGraphBuilderStore() {
         history: [],
         snapshots: [],
         graphBuilders: [],
+        fitYByX: [],
         tabulates: [],
         folders: [],
         tableFolders: {},
         graphFolders: {},
+        fitYByXFolders: {},
         tabulateFolders: {},
         datasetNameMigrations: [],
       }),
@@ -137,6 +146,13 @@ function resetGraphBuilderStore() {
     ...request,
     graphBuilders: useGraphBuilderStore.getState().items,
   });
+
+  assert.deepEqual(capturedSaveRequest, {
+    ...request,
+    graphBuilders: useGraphBuilderStore.getState().items,
+  });
+  assert.deepEqual(capturedSaveRequest?.fitYByX, request.fitYByX);
+  assert.deepEqual(capturedSaveRequest?.fitYByXFolders, request.fitYByXFolders);
 
   const savedGraph = capturedSaveRequest?.graphBuilders[0] as GraphBuilderItem;
   assert.equal(savedGraph.mode, "multivariate");
@@ -180,10 +196,12 @@ function resetGraphBuilderStore() {
         history: [],
         snapshots: [],
         graphBuilders: [],
+        fitYByX: [],
         tabulates: [],
         folders: [],
         tableFolders: {},
         graphFolders: {},
+        fitYByXFolders: {},
         tabulateFolders: {},
         datasetNameMigrations: [],
       }),
@@ -237,7 +255,7 @@ function resetGraphBuilderStore() {
     projectService: {
       initProject: async () => savedProject,
       createProject: async () => savedProject,
-      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
+      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
       saveProject: (_request, onProgress) => {
         onProgressRef = onProgress;
         readOnlyAtInvoke = store.getState().readOnly;
@@ -277,13 +295,15 @@ function resetGraphBuilderStore() {
 
   const saveDeferred = deferred<ProjectInfo>();
   let onProgressRef: ((progress: SaveProgress) => void) | undefined;
+  let capturedSaveRequest: SaveProjectRequest | null = null;
 
   const store = createProjectStore({
     projectService: {
       initProject: async () => savedProject,
       createProject: async () => savedProject,
-      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
-      saveProject: (_request, onProgress) => {
+      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
+      saveProject: (saveRequest, onProgress) => {
+        capturedSaveRequest = saveRequest;
         onProgressRef = onProgress;
         return saveDeferred.promise;
       },
@@ -296,6 +316,8 @@ function resetGraphBuilderStore() {
   onProgressRef?.(makeProgress(0.4));
   saveDeferred.reject(new Error("save failed"));
   await assert.rejects(savePromise, /save failed/);
+
+  assert.deepEqual(capturedSaveRequest, request);
 
   assert.equal(store.getState().dirty, false);
   assert.match(store.getState().saveError ?? "", /save failed/);
@@ -310,13 +332,117 @@ function resetGraphBuilderStore() {
 {
   resetGraphBuilderStore();
 
+  const bivariateFit = {
+    ...createFitYByXItem({
+      id: "fit-bivariate",
+      name: "Fit Y by X 2",
+      sourceDatasetId: "table-1",
+      response: continuous("height"),
+      factor: continuous("age"),
+      createdAt: new Date(0).toISOString(),
+    }),
+    graph: {
+      mode: "2d" as const,
+      modeStates: {
+        twoD: {
+          encoding: {
+            x: continuous("age"),
+            y: continuous("height"),
+          },
+          multiX: [],
+          multiY: [],
+          elements: [
+            { kind: "points", enabled: true },
+            { kind: "fitline", enabled: true, options: { fitType: "polynomial", degree: 1, showFitCI: true } },
+          ],
+          smootherLambda: 0.4,
+        },
+        threeD: {
+          encoding: {},
+          elements: [{ kind: "scatter3d", enabled: true }],
+          smootherLambda: 0.4,
+        },
+        multivariate: {
+          columns: [],
+          chartType: "correlationMatrix",
+          correlationMethod: "pearson",
+        },
+      },
+      filters: [],
+      sampling: { mode: "full" as const },
+    },
+  };
+  const fitRequest: SaveProjectRequest = {
+    ...request,
+    fitYByX: [bivariateFit],
+    fitYByXFolders: { [bivariateFit.id]: "Analyses/Bivariate" },
+  };
+  const fitBaseline = JSON.stringify(fitRequest.fitYByX);
+
+  let capturedSaveRequest: SaveProjectRequest | null = null;
+
+  const store = createProjectStore({
+    projectService: {
+      initProject: async () => savedProject,
+      createProject: async () => savedProject,
+      openProject: async () => ({
+        project: savedProject,
+        datasets: [],
+        history: [],
+        snapshots: [],
+        graphBuilders: [],
+        fitYByX: [],
+        tabulates: [],
+        folders: [],
+        tableFolders: {},
+        graphFolders: {},
+        fitYByXFolders: {},
+        tabulateFolders: {},
+        datasetNameMigrations: [],
+      }),
+      saveProject: async (saveRequest) => {
+        capturedSaveRequest = saveRequest;
+        return savedProject;
+      },
+      getCurrentProject: async () => savedProject,
+    },
+  });
+
+  await store.getState().saveProject(fitRequest);
+
+  assert.deepEqual(capturedSaveRequest?.fitYByX, [bivariateFit]);
+  assert.deepEqual(capturedSaveRequest?.fitYByXFolders, { [bivariateFit.id]: "Analyses/Bivariate" });
+  assert.equal(JSON.stringify(fitRequest.fitYByX), fitBaseline);
+
+  const savedFit = capturedSaveRequest?.fitYByX[0] as {
+    personality: string;
+    graph: {
+      modeStates: {
+        twoD: {
+          elements: unknown[];
+        };
+      };
+    };
+  } & Record<string, unknown>;
+
+  assert.equal(savedFit.personality, "bivariate");
+  assert.deepEqual(savedFit.graph.modeStates.twoD.elements, [
+    { kind: "points", enabled: true },
+    { kind: "fitline", enabled: true, options: { fitType: "polynomial", degree: 1, showFitCI: true } },
+  ]);
+  assert.equal(Object.hasOwn(savedFit, "result"), false);
+}
+
+{
+  resetGraphBuilderStore();
+
   const saveDeferred = deferred<ProjectInfo>();
 
   const store = createProjectStore({
     projectService: {
       initProject: async () => savedProject,
       createProject: async () => savedProject,
-      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
+      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
       saveProject: () => saveDeferred.promise,
       getCurrentProject: async () => savedProject,
     },

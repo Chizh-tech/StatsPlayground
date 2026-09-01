@@ -146,6 +146,10 @@ pub struct ProjectManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph_folders: Option<HashMap<String, String>>,
     #[serde(default)]
+    pub fit_y_by_x: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub fit_y_by_x_folders: HashMap<String, String>,
+    #[serde(default)]
     pub tabulates: Vec<serde_json::Value>,
     #[serde(default)]
     pub tabulate_folders: HashMap<String, String>,
@@ -250,6 +254,7 @@ pub struct ProjectBundle {
     pub manifest: ProjectManifest,
     pub tables: Vec<TableDoc>,
     pub graphs: Vec<GraphDoc>,
+    pub fit_y_by_x: Vec<Value>,
     pub tabulates: Vec<Value>,
     pub history: Vec<Value>,
     pub snapshots: Vec<Value>,
@@ -277,6 +282,10 @@ struct LegacySpprj {
     snapshots: Option<Vec<Value>>,
     #[serde(default)]
     graph_builders: Option<Vec<Value>>,
+    #[serde(default)]
+    fit_y_by_x: Option<Vec<Value>>,
+    #[serde(default)]
+    fit_y_by_x_folders: Option<HashMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -517,12 +526,14 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         .or_else(|| read_entry_bytes(&mut zip, "snapshots.json"))
         .map(|b| serde_json::from_slice::<Vec<Value>>(&b).unwrap_or_default())
         .unwrap_or_default();
+    let fit_y_by_x = manifest.fit_y_by_x.clone();
     let tabulates = manifest.tabulates.clone();
 
     Ok(ProjectBundle {
         manifest,
         tables,
         graphs,
+        fit_y_by_x,
         tabulates,
         history,
         snapshots,
@@ -582,6 +593,9 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         }
     }
 
+    let fit_y_by_x = legacy.fit_y_by_x.unwrap_or_default();
+    let fit_y_by_x_folders = legacy.fit_y_by_x_folders.unwrap_or_default();
+
     let manifest = ProjectManifest {
         name: legacy.name,
         version: if legacy.version.is_empty() {
@@ -595,6 +609,8 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         folders: Vec::new(),
         table_folders: None,
         graph_folders: None,
+        fit_y_by_x: fit_y_by_x.clone(),
+        fit_y_by_x_folders,
         tabulates: Vec::new(),
         tabulate_folders: HashMap::new(),
     };
@@ -603,6 +619,7 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         manifest,
         tables,
         graphs,
+        fit_y_by_x,
         tabulates: Vec::new(),
         history: legacy.history.unwrap_or_default(),
         snapshots: legacy.snapshots.unwrap_or_default(),
@@ -657,14 +674,21 @@ pub fn build_bundle(
     created_at: String,
     tables: Vec<TableDoc>,
     graphs: Vec<GraphDoc>,
+    fit_y_by_x: Vec<Value>,
     tabulates: Vec<Value>,
     folders: Vec<String>,
     table_folders: &HashMap<String, String>,
     graph_folders: &HashMap<String, String>,
+    fit_y_by_x_folders: &HashMap<String, String>,
     tabulate_folders: &HashMap<String, String>,
     history: Vec<Value>,
     snapshots: Vec<Value>,
 ) -> ProjectBundle {
+    let sanitized_fit_y_by_x: Vec<Value> = fit_y_by_x
+        .into_iter()
+        .map(strip_transient_fit_y_by_x_fields)
+        .collect();
+
     let mut table_refs: Vec<TableEntryRef> = Vec::with_capacity(tables.len());
     for t in tables.iter() {
         table_refs.push(TableEntryRef {
@@ -698,14 +722,28 @@ pub fn build_bundle(
             folders: normalized_folders,
             table_folders: Some(table_folders.clone()),
             graph_folders: Some(graph_folders.clone()),
+            fit_y_by_x: sanitized_fit_y_by_x.clone(),
+            fit_y_by_x_folders: fit_y_by_x_folders.clone(),
             tabulates: tabulates.clone(),
             tabulate_folders: tabulate_folders.clone(),
         },
         tables,
         graphs,
+        fit_y_by_x: sanitized_fit_y_by_x,
         tabulates,
         history,
         snapshots,
+    }
+}
+
+fn strip_transient_fit_y_by_x_fields(value: Value) -> Value {
+    match value {
+        Value::Object(mut map) => {
+            map.remove("result");
+            map.remove("reportState");
+            Value::Object(map)
+        }
+        other => other,
     }
 }
 
@@ -1029,9 +1067,11 @@ mod tests {
             vec![table],
             vec![graph],
             vec![],
+            vec![],
             vec!["Raw/2026".into(), "Reports".into()],
             &table_folders,
             &graph_folders,
+            &HashMap::new(),
             &HashMap::new(),
             vec![],
             vec![],
@@ -1054,6 +1094,8 @@ mod tests {
             folders: vec![],
             table_folders: Some(HashMap::new()),
             graph_folders: Some(HashMap::new()),
+            fit_y_by_x: vec![],
+            fit_y_by_x_folders: HashMap::new(),
             tabulates: vec![],
             tabulate_folders: HashMap::new(),
         };
@@ -1064,6 +1106,8 @@ mod tests {
 
         assert_eq!(round_trip.table_folders, Some(HashMap::new()));
         assert_eq!(round_trip.graph_folders, Some(HashMap::new()));
+        assert!(round_trip.fit_y_by_x.is_empty());
+        assert!(round_trip.fit_y_by_x_folders.is_empty());
     }
 
     use serde_json::json;
@@ -1095,8 +1139,10 @@ mod tests {
             "2026-08-14T00:00:00Z".to_string(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             vec![tabulate.clone()],
             Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &folders,
@@ -1110,6 +1156,182 @@ mod tests {
         assert_eq!(loaded.manifest.tabulates, vec![tabulate.clone()]);
         assert_eq!(loaded.manifest.tabulate_folders, folders);
         assert_eq!(loaded.tabulates, vec![tabulate]);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fit_y_by_x_round_trip_preserves_opaque_json_and_folder_map() {
+        let path = temp_project_path("fit-y-by-x-round-trip");
+        let fit = json!({
+            "id": "fit-1",
+            "sourceDatasetId": "table-1",
+            "response": { "name": "height", "type": "continuous" },
+            "factor": { "name": "site", "type": "nominal" }
+        });
+        let folders = HashMap::from([("fit-1".to_string(), "Analyses".to_string())]);
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "2.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![fit.clone()],
+            Vec::new(),
+            vec!["Analyses".to_string()],
+            &HashMap::new(),
+            &HashMap::new(),
+            &folders,
+            &HashMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(loaded.manifest.fit_y_by_x, vec![fit.clone()]);
+        assert_eq!(loaded.manifest.fit_y_by_x_folders, folders);
+        assert_eq!(loaded.fit_y_by_x, vec![fit]);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fit_y_by_x_archive_preserves_definition_fields_without_computed_results() {
+        let path = temp_project_path("fit-y-by-x-definition-only");
+        let fit = json!({
+            "id": "fit-1",
+            "name": "Fit Y by X 2",
+            "sourceDatasetId": "table-1",
+            "response": { "name": "height", "type": "continuous" },
+            "factor": { "name": "age", "type": "continuous" },
+            "personality": "bivariate",
+            "graph": {
+                "mode": "2d",
+                "modeStates": {
+                    "twoD": {
+                        "encoding": {
+                            "x": { "name": "age", "type": "continuous" },
+                            "y": { "name": "height", "type": "continuous" }
+                        },
+                        "multiX": [],
+                        "multiY": [],
+                        "elements": [
+                            { "kind": "points", "enabled": true },
+                            {
+                                "kind": "fitline",
+                                "enabled": true,
+                                "options": { "fitType": "polynomial", "degree": 1, "showFitCI": true }
+                            }
+                        ],
+                        "smootherLambda": 0.4
+                    },
+                    "threeD": {
+                        "encoding": {},
+                        "elements": [{ "kind": "scatter3d", "enabled": true }],
+                        "smootherLambda": 0.4
+                    },
+                    "multivariate": {
+                        "columns": [],
+                        "chartType": "correlationMatrix",
+                        "correlationMethod": "pearson"
+                    }
+                },
+                "filters": [],
+                "sampling": { "mode": "full" }
+            },
+            "result": {
+                "kind": "bivariate",
+                "usedRows": 42,
+                "excludedRows": 3,
+                "summaryOfFit": {
+                    "rsquare": 0.91,
+                    "rsquareAdj": 0.9,
+                    "rootMeanSquareError": 1.25,
+                    "meanOfResponse": 18.4,
+                    "observations": 42
+                },
+                "parameterEstimates": [
+                    {
+                        "term": "Intercept",
+                        "estimate": 1.5,
+                        "stdError": 0.2,
+                        "tRatio": 7.5,
+                        "probGtAbsT": 0.001
+                    },
+                    {
+                        "term": "age",
+                        "estimate": 0.8,
+                        "stdError": 0.1,
+                        "tRatio": 8.0,
+                        "probGtAbsT": 0.001
+                    }
+                ]
+            },
+            "reportState": {
+                "selectedTab": "report",
+                "expandedSections": ["summaryOfFit", "parameterEstimates"]
+            },
+            "createdAt": "2026-08-31T00:00:00.000Z"
+        });
+        let mut expected_fit = fit.clone();
+        expected_fit
+            .as_object_mut()
+            .expect("fit should be an object")
+            .remove("result");
+        expected_fit
+            .as_object_mut()
+            .expect("fit should be an object")
+            .remove("reportState");
+        let folders = HashMap::from([("fit-1".to_string(), "Analyses/Bivariate".to_string())]);
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "2.0.0".to_string(),
+            "2026-08-31T00:00:00.000Z".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![fit.clone()],
+            Vec::new(),
+            vec!["Analyses".to_string(), "Analyses/Bivariate".to_string()],
+            &HashMap::new(),
+            &HashMap::new(),
+            &folders,
+            &HashMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let archive = std::fs::File::open(&path).unwrap();
+        let mut zip = zip::ZipArchive::new(archive).unwrap();
+        let mut manifest_entry = zip.by_name("manifest.json").unwrap();
+        let mut manifest_bytes = Vec::new();
+        manifest_entry.read_to_end(&mut manifest_bytes).unwrap();
+        let manifest_json: Value = serde_json::from_slice(&manifest_bytes).unwrap();
+
+        let persisted_fit = manifest_json
+            .get("fitYByX")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(Value::as_object)
+            .unwrap();
+
+        assert_eq!(persisted_fit.get("name"), fit.get("name"));
+        assert_eq!(persisted_fit.get("response"), fit.get("response"));
+        assert_eq!(persisted_fit.get("factor"), fit.get("factor"));
+        assert_eq!(persisted_fit.get("personality"), fit.get("personality"));
+        assert_eq!(persisted_fit.get("graph"), fit.get("graph"));
+        assert_eq!(persisted_fit.get("createdAt"), fit.get("createdAt"));
+        assert!(!persisted_fit.contains_key("result"));
+        assert!(!persisted_fit.contains_key("reportState"));
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.manifest.fit_y_by_x, vec![expected_fit.clone()]);
+        assert_eq!(loaded.fit_y_by_x, vec![expected_fit]);
 
         let _ = std::fs::remove_file(path);
     }
@@ -1144,6 +1366,35 @@ mod tests {
     }
 
     #[test]
+    fn fit_y_by_x_missing_manifest_fields_default_cleanly() {
+        let path = temp_project_path("fit-y-by-x-defaults");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let manifest = json!({
+            "name": "Compat Project",
+            "version": "2.0.0",
+            "createdAt": "2026-08-14T00:00:00Z",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+        });
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(&manifest_bytes).unwrap();
+        zip.finish().unwrap();
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert!(loaded.manifest.fit_y_by_x.is_empty());
+        assert!(loaded.manifest.fit_y_by_x_folders.is_empty());
+        assert!(loaded.fit_y_by_x.is_empty());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn validate_archive_accepts_table_entry_without_deep_table_body_validation() {
         let path = temp_project_path("validate-table-open-only");
 
@@ -1159,6 +1410,8 @@ mod tests {
             vec![graph_doc("graph-1", "Graph 1")],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -1201,6 +1454,8 @@ mod tests {
             vec![graph_doc("graph-1", "Graph 1")],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -1251,6 +1506,8 @@ mod tests {
             vec![graph_doc("graph-1", "Graph 1")],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -1284,6 +1541,8 @@ mod tests {
             vec![graph_doc("graph-1", "Graph 1")],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -1335,6 +1594,8 @@ mod tests {
             vec![graph_doc("graph-1", "Graph 1")],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),

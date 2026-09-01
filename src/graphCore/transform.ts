@@ -11,7 +11,6 @@ import { DEFAULT_GROUP_KEY } from "./types.ts";
 import { buildAxisCommon, buildCorrelationDivergingPalette, type GraphTheme } from "./theme.ts";
 import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand.ts";
 import type { BoxPlotPacket, CorrelationMatrixPacket, GraphDataFrame, GraphAggregatePacket, HeatmapPacket, HistogramPacket, SummaryPacket } from "../types/graphData.ts";
-import type { RawPointPanelDescriptor } from "./rawPoints.ts";
 import { buildFrameScatterItems, type FrameScatterItem } from "./frameScatter.ts";
 import {
   computeJitterOffsets as computeStableJitterOffsets,
@@ -2709,13 +2708,14 @@ function mergeAxis(base: EChartsOption, userY: EChartsOption): EChartsOption {
 function transposeMarkPoint(m: any): any {
   if (!m || typeof m !== "object") return m;
   const out: any = { ...m };
-  if ("xAxis" in out) {
-    out.yAxis = out.xAxis;
-    delete out.xAxis;
-  } else if ("yAxis" in out) {
-    out.xAxis = out.yAxis;
-    delete out.yAxis;
-  }
+  const hasX = "xAxis" in out;
+  const hasY = "yAxis" in out;
+  const xAxis = out.xAxis;
+  const yAxis = out.yAxis;
+  delete out.xAxis;
+  delete out.yAxis;
+  if (hasX) out.yAxis = xAxis;
+  if (hasY) out.xAxis = yAxis;
   if (Array.isArray(out.coord) && out.coord.length >= 2) {
     out.coord = [out.coord[1], out.coord[0], ...out.coord.slice(2)];
   }
@@ -2846,6 +2846,9 @@ function transposeSeriesData(s: any): any {
   if (s.markArea && Array.isArray(s.markArea.data)) {
     out.markArea = { ...s.markArea, data: transposeMarkData(s.markArea.data) };
   }
+  if (s.markPoint && Array.isArray(s.markPoint.data)) {
+    out.markPoint = { ...s.markPoint, data: transposeMarkData(s.markPoint.data) };
+  }
   return out;
 }
 
@@ -2855,7 +2858,7 @@ function transposeSeriesData(s: any): any {
  *  surrounding `grid`, `tooltip`, `textStyle`, `backgroundColor`,
  *  `animationDuration`, etc. are orientation-agnostic and copied
  *  verbatim. */
-function transposeOption(opt: EChartsOption): EChartsOption {
+export function transposeOption(opt: EChartsOption): EChartsOption {
   if (!opt || typeof opt !== "object") return opt;
   const out: EChartsOption = { ...opt };
   out.xAxis = opt.yAxis;
@@ -6886,7 +6889,7 @@ function collectFacetKeysFromFrame(
   return applyValueOrder([...dict], order);
 }
 
-export function buildGraph(
+function buildGraphBase(
   spec: GraphSpec,
   data: GraphData,
   theme: GraphTheme,
@@ -6909,7 +6912,6 @@ export function buildGraph(
       panels: [{
         title: spec.title || "",
         option: buildSingleOption(spec, frameSafeData, theme, undefined, valueOrders, undefined, frame?.aggregates),
-        rawPoints: null,
         groupXValue: null,
         groupYValue: null,
       }],
@@ -7098,4 +7100,34 @@ export function buildGraph(
     cols: Math.max(1, effectiveXKeys.length),
     rows: Math.max(1, effectiveYKeys.length),
   };
+}
+
+function transposeBuiltGraph(graph: BuiltGraph): BuiltGraph {
+  const panels: BuiltGraph["panels"] = new Array(graph.panels.length);
+  for (let row = 0; row < graph.rows; row += 1) {
+    for (let col = 0; col < graph.cols; col += 1) {
+      const sourceIndex = row * graph.cols + col;
+      const targetIndex = col * graph.rows + row;
+      const panel = graph.panels[sourceIndex];
+      if (!panel) continue;
+      panels[targetIndex] = {
+        ...panel,
+        option: transposeOption(panel.option),
+        groupXValue: panel.groupYValue,
+        groupYValue: panel.groupXValue,
+      };
+    }
+  }
+  return { panels, cols: graph.rows, rows: graph.cols };
+}
+
+export function buildGraph(
+  spec: GraphSpec,
+  data: GraphData,
+  theme: GraphTheme,
+  valueOrders?: Record<string, string[]>,
+  frame?: GraphDataFrame,
+): BuiltGraph {
+  const graph = buildGraphBase({ ...spec, transpose: false }, data, theme, valueOrders, frame);
+  return spec.transpose ? transposeBuiltGraph(graph) : graph;
 }
