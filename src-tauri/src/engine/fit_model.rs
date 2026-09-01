@@ -1,4 +1,5 @@
 pub mod matrix;
+pub mod ols;
 pub mod terms;
 
 pub use matrix::{MatrixError, ModelMatrixSpec};
