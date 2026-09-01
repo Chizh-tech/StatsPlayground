@@ -10,7 +10,17 @@ import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerSh
 import { DEFAULT_GROUP_KEY } from "./types.ts";
 import { buildAxisCommon, buildCorrelationDivergingPalette, type GraphTheme } from "./theme.ts";
 import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand.ts";
-import type { BoxPlotPacket, CorrelationMatrixPacket, GraphDataFrame, GraphAggregatePacket, HeatmapPacket, HistogramPacket, SummaryPacket } from "../types/graphData.ts";
+import type {
+  BoxPlotPacket,
+  CorrelationMatrixPacket,
+  GraphDataFrame,
+  GraphAggregatePacket,
+  HeatmapPacket,
+  HistogramPacket,
+  PrecomputedCurvePacket,
+  PrecomputedPointPacket,
+  SummaryPacket,
+} from "../types/graphData.ts";
 import { buildFrameScatterItems, type FrameScatterItem } from "./frameScatter.ts";
 import {
   computeJitterOffsets as computeStableJitterOffsets,
@@ -1509,6 +1519,72 @@ function findCorrelationMatrixPacket(
   const packet = aggregatePackets.find((candidate) => candidate.kind === "correlationMatrix");
   if (!packet || packet.kind !== "correlationMatrix") return null;
   return packet;
+}
+
+function findPrecomputedPointPacket(
+  aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+  elementId: string,
+): PrecomputedPointPacket | null {
+  if (!aggregatePackets || aggregatePackets.length === 0) return null;
+  const packet = aggregatePackets.find((candidate) =>
+    candidate.kind === "precomputedPoints" && candidate.elementId === elementId,
+  );
+  if (!packet || packet.kind !== "precomputedPoints") return null;
+  return packet;
+}
+
+function findPrecomputedCurvePacket(
+  aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+  elementId: string,
+): PrecomputedCurvePacket | null {
+  if (!aggregatePackets || aggregatePackets.length === 0) return null;
+  const packet = aggregatePackets.find((candidate) =>
+    candidate.kind === "precomputedCurve" && candidate.elementId === elementId,
+  );
+  if (!packet || packet.kind !== "precomputedCurve") return null;
+  return packet;
+}
+
+function buildPrecomputedPointSeries(
+  packet: PrecomputedPointPacket,
+  seriesName: string,
+  style: ResolvedGroupStyle,
+): Record<string, unknown> {
+  const symbol = markerToSymbol(style.point.marker);
+  return {
+    id: packet.elementId,
+    type: "scatter",
+    name: seriesName,
+    symbol: symbol.symbol,
+    symbolSize: style.point.size,
+    itemStyle: pointItemStyle(style.point, symbol.hollow),
+    data: packet.points.map((point) => [point.x, point.y]),
+    progressive: 0,
+    z: 5,
+  };
+}
+
+function buildPrecomputedCurveSeries(
+  packet: PrecomputedCurvePacket,
+  seriesName: string,
+  style: ResolvedGroupStyle,
+): Record<string, unknown> {
+  return {
+    id: packet.elementId,
+    type: "line",
+    name: seriesName,
+    showSymbol: false,
+    symbol: "none",
+    smooth: false,
+    step: packet.interpolation === "stepEnd" ? "end" : undefined,
+    lineStyle: {
+      color: style.line.color,
+      width: style.line.width,
+      opacity: style.line.opacity,
+    },
+    data: packet.points.map((point) => [point.x, point.y]),
+    z: 3,
+  };
 }
 
 function formatCorrelationCoefficient(value: number): string {
@@ -5154,6 +5230,23 @@ function buildSingleOption(
     const resolvedStyle = resolveGroupStyle(styleKey, color, !!grouping, theme, spec.styles);
 
     enabledElements.forEach((el) => {
+      const elementId = getOpt<string>(el.options, "elementId", "");
+      if (frameBackedAggregateMode && elementId.length > 0) {
+        if (el.kind === "points") {
+          const pointPacket = findPrecomputedPointPacket(aggregatePackets, elementId);
+          if (pointPacket) {
+            series.push(buildPrecomputedPointSeries(pointPacket, seriesName, resolvedStyle));
+            return;
+          }
+        }
+        if (el.kind === "line") {
+          const curvePacket = findPrecomputedCurvePacket(aggregatePackets, elementId);
+          if (curvePacket) {
+            series.push(buildPrecomputedCurveSeries(curvePacket, seriesName, resolvedStyle));
+            return;
+          }
+        }
+      }
       if (
         frame &&
         el.kind === "points" &&
