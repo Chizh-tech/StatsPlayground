@@ -3,27 +3,20 @@ import { useTranslation } from "react-i18next";
 
 import { useFitModelStore } from "@/stores/useFitModelStore";
 import type { DatasetMeta } from "@/types/data";
-import type { FitModelCenteringMethod, FitModelItem, FitModelTerm } from "@/types/fitModel";
+import type { FitModelItem } from "@/types/fitModel";
 
 import { FitModelReport } from "./FitModelReport";
-import { removeFitModelTerm } from "./fitModelReportModel";
+import {
+  applyFitModelTermRemoval,
+  applyFitModelTermUndo,
+  createFitModelDefinitionConfig,
+  type FitModelUndoSnapshot,
+} from "./fitModelReportModel";
 import { useFitModelReport } from "./useFitModelReport";
-
-interface FitModelUndoSnapshot {
-  terms: FitModelTerm[];
-  centeringMethod: FitModelCenteringMethod;
-}
 
 export interface FitModelViewProps {
   item: FitModelItem;
   dataset: DatasetMeta | undefined;
-}
-
-function cloneTerms(terms: readonly FitModelTerm[]): FitModelTerm[] {
-  return terms.map((term) => ({
-    kind: term.kind,
-    columnNames: [...term.columnNames],
-  }));
 }
 
 export function FitModelView({ item, dataset }: FitModelViewProps) {
@@ -34,10 +27,15 @@ export function FitModelView({ item, dataset }: FitModelViewProps) {
 
   const reportState = useFitModelReport(dataset ? item : null, dataset?.updatedAt ?? null);
 
+  const definition = useMemo(() => createFitModelDefinitionConfig({
+    terms: item.terms,
+    centeringMethod: item.centeringMethod,
+  }), [item.centeringMethod, item.terms]);
+
   const termCount = useMemo(() => item.terms.length, [item.terms]);
 
   const handleRemoveTerm = (termId: string) => {
-    const removal = removeFitModelTerm(item.terms, termId);
+    const removal = applyFitModelTermRemoval(definition, termId, undoSnapshot);
 
     if (!removal.ok) {
       const key = `fitModel.report.removeBlocked.${removal.reason}`;
@@ -47,26 +45,19 @@ export function FitModelView({ item, dataset }: FitModelViewProps) {
     }
 
     setRemoveMessage(null);
-    setUndoSnapshot({
-      terms: cloneTerms(removal.undoSnapshot.terms),
-      centeringMethod: item.centeringMethod,
-    });
-    updateDefinition(item.id, {
-      terms: removal.nextTerms,
-      centeringMethod: item.centeringMethod,
-    });
+    setUndoSnapshot(removal.undoSnapshot);
+    updateDefinition(item.id, removal.nextDefinition);
   };
 
   const handleUndo = () => {
-    if (!undoSnapshot) {
+    const undo = applyFitModelTermUndo(definition, undoSnapshot);
+
+    if (!undo.restored) {
       return;
     }
 
-    updateDefinition(item.id, {
-      terms: undoSnapshot.terms,
-      centeringMethod: undoSnapshot.centeringMethod,
-    });
-    setUndoSnapshot(null);
+    updateDefinition(item.id, undo.nextDefinition);
+    setUndoSnapshot(undo.nextUndoSnapshot);
     setRemoveMessage(null);
   };
 

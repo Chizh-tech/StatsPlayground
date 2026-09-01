@@ -2,7 +2,11 @@ import {
   canonicalInteraction,
   canonicalizeFitModelTerms,
 } from "@/components/fitModel/fitModelConfig";
-import type { FitModelFittedResult, FitModelTerm } from "@/types/fitModel";
+import type {
+  FitModelCenteringMethod,
+  FitModelFittedResult,
+  FitModelTerm,
+} from "@/types/fitModel";
 
 const DEFAULT_UNDEFINED_VALUE = "\u2014";
 
@@ -15,7 +19,12 @@ export interface FitModelEffectRow {
 }
 
 export interface FitModelUndoSnapshot {
-  terms: FitModelTerm[];
+  definition: FitModelDefinitionConfig;
+}
+
+export interface FitModelDefinitionConfig {
+  terms: readonly FitModelTerm[];
+  centeringMethod: FitModelCenteringMethod;
 }
 
 export type FitModelRemoveBlockedReason =
@@ -27,7 +36,7 @@ export type FitModelRemoveResult =
   | {
       ok: true;
       nextTerms: FitModelTerm[];
-      undoSnapshot: FitModelUndoSnapshot;
+      undoSnapshot: { terms: FitModelTerm[] };
     }
   | {
       ok: false;
@@ -35,11 +44,41 @@ export type FitModelRemoveResult =
       requiredByTermIds?: string[];
     };
 
+export type FitModelRemoveTransitionResult =
+  | {
+      ok: true;
+      nextDefinition: FitModelDefinitionConfig;
+      undoSnapshot: FitModelUndoSnapshot;
+      shouldRefit: true;
+    }
+  | {
+      ok: false;
+      reason: FitModelRemoveBlockedReason;
+      requiredByTermIds?: string[];
+      nextDefinition: FitModelDefinitionConfig;
+      undoSnapshot: FitModelUndoSnapshot | null;
+      shouldRefit: false;
+    };
+
+export interface FitModelUndoTransitionResult {
+  restored: boolean;
+  nextDefinition: FitModelDefinitionConfig;
+  nextUndoSnapshot: FitModelUndoSnapshot | null;
+  shouldRefit: boolean;
+}
+
 function cloneTerms(terms: readonly FitModelTerm[]): FitModelTerm[] {
   return terms.map((term) => ({
     kind: term.kind,
     columnNames: [...term.columnNames],
   }));
+}
+
+export function createFitModelDefinitionConfig(input: FitModelDefinitionConfig): FitModelDefinitionConfig {
+  return {
+    terms: cloneTerms(canonicalizeFitModelTerms(input.terms)),
+    centeringMethod: input.centeringMethod,
+  };
 }
 
 function canonicalTermColumns(term: FitModelTerm): string[] {
@@ -150,7 +189,7 @@ export function removeFitModelTerm(
   }
 
   const target = canonicalTerms[targetIndex];
-  const undoSnapshot: FitModelUndoSnapshot = {
+  const undoSnapshot = {
     terms: cloneTerms(canonicalTerms),
   };
 
@@ -188,5 +227,55 @@ export function removeFitModelTerm(
     ok: true,
     nextTerms: canonicalTerms.filter((_, index) => index !== targetIndex),
     undoSnapshot,
+  };
+}
+
+export function applyFitModelTermRemoval(
+  definition: FitModelDefinitionConfig,
+  termId: string,
+  undoSnapshot: FitModelUndoSnapshot | null,
+): FitModelRemoveTransitionResult {
+  const removal = removeFitModelTerm(definition.terms, termId);
+
+  if (!removal.ok) {
+    return {
+      ...removal,
+      nextDefinition: definition,
+      undoSnapshot,
+      shouldRefit: false,
+    };
+  }
+
+  return {
+    ok: true,
+    nextDefinition: {
+      terms: removal.nextTerms,
+      centeringMethod: definition.centeringMethod,
+    },
+    undoSnapshot: {
+      definition,
+    },
+    shouldRefit: true,
+  };
+}
+
+export function applyFitModelTermUndo(
+  definition: FitModelDefinitionConfig,
+  undoSnapshot: FitModelUndoSnapshot | null,
+): FitModelUndoTransitionResult {
+  if (!undoSnapshot) {
+    return {
+      restored: false,
+      nextDefinition: definition,
+      nextUndoSnapshot: null,
+      shouldRefit: false,
+    };
+  }
+
+  return {
+    restored: true,
+    nextDefinition: undoSnapshot.definition,
+    nextUndoSnapshot: null,
+    shouldRefit: true,
   };
 }

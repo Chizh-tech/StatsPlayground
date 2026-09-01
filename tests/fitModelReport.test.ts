@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import { createInstance, type i18n as I18nInstance } from "i18next";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { I18nextProvider, initReactI18next } from "react-i18next";
 
 import {
+  applyFitModelTermRemoval,
+  applyFitModelTermUndo,
   FitModelReport,
   buildEffectSummary,
+  createFitModelDefinitionConfig,
   fitModelTermId,
   logWorth,
   removeFitModelTerm,
@@ -19,6 +24,48 @@ const VIEW_SOURCE_PATH = path.resolve(
   process.cwd(),
   "src/components/fitModel/FitModelView.tsx",
 );
+
+const testI18n = createTestI18n();
+
+function createTestI18n(): I18nInstance {
+  const instance = createInstance();
+  void instance
+    .use(initReactI18next)
+    .init({
+      lng: "en",
+      fallbackLng: "en",
+      initImmediate: false,
+      interpolation: { escapeValue: false },
+      resources: {
+        en: {
+          translation: {
+            fitModel: {
+              report: {
+                title: "Fit Model report",
+                loading: "Loading report...",
+                stale: "Stale result",
+                errorWithOldResult: "Failed to refresh. Showing previous result.",
+                section: {
+                  effectSummary: "Effect Summary",
+                  summaryOfFit: "Summary of Fit",
+                  analysisOfVariance: "Analysis of Variance",
+                  parameterEstimates: "Parameter Estimates",
+                  actualByPredicted: "Actual by Predicted",
+                  residualByPredicted: "Residual by Predicted",
+                  warnings: "Warnings",
+                },
+                remove: "Remove",
+                undo: "Undo",
+                chartPlaceholder: "Chart placeholder",
+                notComputable: "Not Computable",
+              },
+            },
+          },
+        },
+      },
+    });
+  return instance;
+}
 
 function createItem(overrides: Partial<FitModelItem> = {}): FitModelItem {
   return {
@@ -122,14 +169,18 @@ function createFittedResult(overrides: Partial<FitModelFittedResult> = {}): FitM
 
 function renderReport(state: FitModelReportState): string {
   return renderToStaticMarkup(
-    React.createElement(FitModelReport, {
-      item: createItem(),
-      state,
-      datasetMissing: false,
-      removeMessage: null,
-      onRemoveTerm: () => undefined,
-      onUndoRemove: () => undefined,
-    }),
+    React.createElement(
+      I18nextProvider,
+      { i18n: testI18n },
+      React.createElement(FitModelReport, {
+        item: createItem(),
+        state,
+        datasetMissing: false,
+        removeMessage: null,
+        onRemoveTerm: () => undefined,
+        onUndoRemove: () => undefined,
+      }),
+    ),
   );
 }
 
@@ -230,6 +281,81 @@ function testValidMainRemovalReturnsUndoSnapshot(): void {
   ]);
 }
 
+function testBlockedRemoveTransitionLeavesDefinitionUnchangedWithoutRefit(): void {
+  const definition = createFitModelDefinitionConfig({
+    terms: createItem().terms,
+    centeringMethod: "mean",
+  });
+  const existingUndo = {
+    definition: createFitModelDefinitionConfig({
+      terms: [{ kind: "main", columnNames: ["B"] }],
+      centeringMethod: "mean",
+    }),
+  };
+
+  const result = applyFitModelTermRemoval(
+    definition,
+    fitModelTermId({ kind: "main", columnNames: ["A"] }),
+    existingUndo,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.shouldRefit, false);
+  assert.equal(result.reason, "requiredByInteraction");
+  assert.strictEqual(result.nextDefinition, definition);
+  assert.strictEqual(result.undoSnapshot, existingUndo);
+}
+
+function testValidRemoveTransitionReturnsUpdatedTermsAndExactUndoIdentity(): void {
+  const definition = createFitModelDefinitionConfig({
+    terms: createItem().terms,
+    centeringMethod: "mean",
+  });
+
+  const result = applyFitModelTermRemoval(
+    definition,
+    fitModelTermId({ kind: "interaction", columnNames: ["B", "A"] }),
+    null,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.shouldRefit, true);
+  assert.notStrictEqual(result.nextDefinition, definition);
+  assert.deepEqual(result.nextDefinition.terms, [
+    { kind: "main", columnNames: ["A"] },
+    { kind: "main", columnNames: ["B"] },
+  ]);
+  assert.equal(result.nextDefinition.centeringMethod, "mean");
+  assert.strictEqual(result.undoSnapshot.definition, definition);
+}
+
+function testUndoTransitionRestoresOnceAndClearsSnapshot(): void {
+  const definition = createFitModelDefinitionConfig({
+    terms: createItem().terms,
+    centeringMethod: "mean",
+  });
+  const removal = applyFitModelTermRemoval(
+    definition,
+    fitModelTermId({ kind: "interaction", columnNames: ["A", "B"] }),
+    null,
+  );
+  assert.equal(removal.ok, true);
+  if (!removal.ok) return;
+
+  const restored = applyFitModelTermUndo(removal.nextDefinition, removal.undoSnapshot);
+  assert.equal(restored.restored, true);
+  assert.equal(restored.shouldRefit, true);
+  assert.strictEqual(restored.nextDefinition, definition);
+  assert.equal(restored.nextUndoSnapshot, null);
+  assert.equal(restored.nextDefinition.centeringMethod, "mean");
+
+  const noSecondUndo = applyFitModelTermUndo(restored.nextDefinition, restored.nextUndoSnapshot);
+  assert.equal(noSecondUndo.restored, false);
+  assert.equal(noSecondUndo.shouldRefit, false);
+  assert.strictEqual(noSecondUndo.nextDefinition, restored.nextDefinition);
+  assert.equal(noSecondUndo.nextUndoSnapshot, null);
+}
+
 function testRenderFittedContracts(): void {
   const result = createFittedResult();
   const state: FitModelReportState = {
@@ -313,16 +439,6 @@ function testViewSourceContracts(): void {
     /useFitModelReport\(dataset \? item : null, dataset\?\.updatedAt \?\? null\)/,
     "FitModelView must gate report loading by dataset and dataset update signal.",
   );
-  assert.match(
-    source,
-    /updateDefinition\(item\.id,[\s\S]*terms:[\s\S]*centeringMethod:/,
-    "FitModelView remove/undo path must update persisted model definition via store update.",
-  );
-  assert.match(
-    source,
-    /setUndoSnapshot\(null\)/,
-    "FitModelView undo must clear snapshot for one-step undo behavior.",
-  );
 }
 
 testLogWorthContracts();
@@ -332,6 +448,9 @@ testRemoveInteractionSucceeds();
 testRemoveMainBlockedByInteraction();
 testRemoveLastMainBlocked();
 testValidMainRemovalReturnsUndoSnapshot();
+testBlockedRemoveTransitionLeavesDefinitionUnchangedWithoutRefit();
+testValidRemoveTransitionReturnsUpdatedTermsAndExactUndoIdentity();
+testUndoTransitionRestoresOnceAndClearsSnapshot();
 testRenderFittedContracts();
 testRenderNotComputableContract();
 testRenderLoadingStaleAndErrorOldResultContracts();
