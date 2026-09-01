@@ -14,20 +14,12 @@ pub struct SaveProjectRequest {
     #[serde(default)]
     pub fit_y_by_x: Vec<serde_json::Value>,
     pub tabulates: Vec<serde_json::Value>,
-    #[serde(default)]
-    pub distributions: Vec<serde_json::Value>,
-    #[serde(default)]
-    pub derived_formulas: Vec<serde_json::Value>,
-    #[serde(default)]
-    pub distribution_issues: Vec<serde_json::Value>,
     pub folders: Vec<String>,
     pub table_folders: HashMap<String, String>,
     pub graph_folders: HashMap<String, String>,
     #[serde(default)]
     pub fit_y_by_x_folders: HashMap<String, String>,
     pub tabulate_folders: HashMap<String, String>,
-    #[serde(default)]
-    pub distribution_folders: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]

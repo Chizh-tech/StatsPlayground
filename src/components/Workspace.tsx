@@ -13,7 +13,6 @@ import {
 import { dataService } from "@/services/dataService";
 import { ioService } from "@/services/ioService";
 import { projectService } from "@/services/projectService";
-import { distributionService } from "@/services/distributionService";
 import { DataTableView } from "./DataTableView";
 import { HistoryPanel, type SnapshotMenuData } from "./HistoryPanel";
 import { PreferencesDialog } from "./PreferencesDialog";
@@ -23,23 +22,11 @@ import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
 import { GraphBuilderView } from "./graphBuilder";
 import { FitYByXRoleDialog, FitYByXView } from "./fitYByX";
 import { TabulateView } from "./tabulate";
-import {
-  DistributionDialog,
-  DistributionDirectoryItem,
-  DistributionWorkspace,
-} from "./distribution";
-import {
-  createDefaultDistributionContinuousFitConfig,
-  createDefaultDistributionVisualDiagnosticsConfig,
-  isDistributionMenuEnabled,
-} from "./distribution/distributionConfig";
-import { applyContinuousFitChange } from "./distribution/continuousFitRun";
 import "./graphBuilder/graphBuilder.css";
 import "./fitYByX/fitYByX.css";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useFitYByXStore } from "@/stores/useFitYByXStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";
-import { useDistributionStore } from "@/stores/useDistributionStore";
 import type { GraphBuilderItem } from "@/types/graphBuilder";
 import {
   createDefaultGraph2DState,
@@ -48,15 +35,17 @@ import {
 } from "@/components/graphBuilder/graphBuilderMode";
 import type { FitYByXItem } from "@/types/fitYByX";
 import type { TabulateItem } from "@/types/tabulate";
-import type {
-  DistributionAnalysisConfigV1,
-  DistributionColumnInfoV1,
-  DistributionDocV1,
-} from "@/types/distribution";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { modKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
+import {
+  allocateProjectBasename,
+  projectFileExtension,
+  resolveProjectBasenameForKind,
+  type ProjectBasenameValidationError,
+  type ProjectDocumentKind,
+} from "@/utils/projectFileNaming";
 import type { NamedSnapshot } from "@/types/history";
 
 function formatStat(n: number): string {
@@ -192,30 +181,6 @@ export function Workspace() {
   const resetFitYByX = useFitYByXStore((s) => s.reset);
   const loadFitYByXFromProject = useFitYByXStore((s) => s.loadFromProject);
   const tabulates = useTabulateStore((s) => s.items);
-  const distributions = useDistributionStore((s) => s.items);
-  const derivedFormulas = useDistributionStore((s) => s.derivedFormulas);
-  const distributionIssues = useDistributionStore((s) => s.issues);
-  const distributionBootstrap = useDistributionStore((s) => s.bootstrap);
-  const setDistributionBootstrap = useDistributionStore((s) => s.setBootstrap);
-  const distributionRunState = useDistributionStore((s) => s.runState);
-  const distributionRunStateByAnalysisId = useDistributionStore((s) => s.runStateByAnalysisId);
-  const distributionResultByAnalysisId = useDistributionStore((s) => s.resultByAnalysisId);
-  const distributionFailureByAnalysisId = useDistributionStore((s) => s.failureByAnalysisId);
-  const selectedDistributionId = useDistributionStore((s) => s.selectedAnalysisId);
-  const selectDistribution = useDistributionStore((s) => s.selectItem);
-  const createDistribution = useDistributionStore((s) => s.createItem);
-  const commitDistributionConfig = useDistributionStore((s) => s.commitConfig);
-  const updateDistributionReportPreferences = useDistributionStore((s) => s.updateReportPreferences);
-  const copyDistribution = useDistributionStore((s) => s.copyItem);
-  const renameDistribution = useDistributionStore((s) => s.renameItem);
-  const deleteDistribution = useDistributionStore((s) => s.deleteItem);
-  const beginDistributionRun = useDistributionStore((s) => s.beginRun);
-  const cancelDistributionRun = useDistributionStore((s) => s.cancelRun);
-  const updateDistributionProgress = useDistributionStore((s) => s.updateProgress);
-  const acceptDistributionResult = useDistributionStore((s) => s.acceptResult);
-  const failDistributionRun = useDistributionStore((s) => s.failRun);
-  const resetDistributions = useDistributionStore((s) => s.reset);
-  const loadDistributionsFromProject = useDistributionStore((s) => s.loadFromProject);
   const addGraphBuilder = useGraphBuilderStore((s) => s.addItem);
   const renameGraphBuilder = useGraphBuilderStore((s) => s.renameItem);
   const deleteGraphBuilder = useGraphBuilderStore((s) => s.deleteItem);
@@ -241,13 +206,6 @@ export function Workspace() {
   const [helpDialog, setHelpDialog] = useState<"about" | "license" | null>(null);
   const [tableOp, setTableOp] = useState<TableOpType | null>(null);
   const [showFitYByXDialog, setShowFitYByXDialog] = useState(false);
-  const [distributionDialog, setDistributionDialog] = useState<{
-    datasetId: string;
-    columns: DistributionColumnInfoV1[];
-    analysisId?: string;
-    baseConfigRevision?: number;
-    initialConfig?: DistributionAnalysisConfigV1;
-  } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
 
@@ -257,7 +215,6 @@ export function Workspace() {
   const graphFolders = useFolderStore((s) => s.graphFolders);
   const fitYByXFolders = useFolderStore((s) => s.fitYByXFolders);
   const tabulateFolders = useFolderStore((s) => s.tabulateFolders);
-  const distributionFolders = useFolderStore((s) => s.distributionFolders);
   const collapsedFolders = useFolderStore((s) => s.collapsed);
   const fsCreateFolder = useFolderStore((s) => s.createFolder);
   const fsRenameFolder = useFolderStore((s) => s.renameFolder);
@@ -267,7 +224,6 @@ export function Workspace() {
   const fsSetGraphFolder = useFolderStore((s) => s.setGraphFolder);
   const fsSetFitYByXFolder = useFolderStore((s) => s.setFitYByXFolder);
   const fsSetTabulateFolder = useFolderStore((s) => s.setTabulateFolder);
-  const fsSetDistributionFolder = useFolderStore((s) => s.setDistributionFolder);
   const fsToggleCollapsed = useFolderStore((s) => s.toggleCollapsed);
   const fsCollapseAll = useFolderStore((s) => s.collapseAll);
   const fsLoadFromProject = useFolderStore((s) => s.loadFromProject);
@@ -289,7 +245,6 @@ export function Workspace() {
     | { kind: "graph"; id: string; x: number; y: number }
     | { kind: "fitYByX"; id: string; x: number; y: number }
     | { kind: "tabulate"; id: string; x: number; y: number }
-    | { kind: "distribution"; id: string; x: number; y: number }
     | { kind: "folder"; path: string; x: number; y: number }
     | { kind: "empty"; x: number; y: number };
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
@@ -309,42 +264,65 @@ export function Workspace() {
   const renameInputRef = useRef<HTMLInputElement>(null);
   const tableCounter = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    void distributionService.bootstrapWorkspace()
-      .then((bootstrap) => {
-        if (!cancelled) setDistributionBootstrap(bootstrap);
-      })
-      .catch(() => {
-        if (!cancelled) setDistributionBootstrap(null);
-      });
-    return () => { cancelled = true; };
-  }, [datasets.length, setDistributionBootstrap]);
-
-  useEffect(() => {
-    const unlisteners = Promise.all([
-      listen<import("@/types/distribution").DistributionProgressV1>(
-        "distribution-progress",
-        ({ payload }) => updateDistributionProgress(payload),
-      ),
-      listen<import("@/types/distribution").DistributionResultEnvelopeV1>(
-        "distribution-completed",
-        ({ payload }) => { acceptDistributionResult(payload); },
-      ),
-      listen<import("@/types/distribution").DistributionRunFailureV1>(
-        "distribution-failed",
-        ({ payload }) => { failDistributionRun(payload); },
-      ),
-    ]);
-    return () => {
-      void unlisteners.then((items) => items.forEach((unlisten) => unlisten()));
-    };
-  }, [acceptDistributionResult, failDistributionRun, updateDistributionProgress]);
-
   /** Record an action to history (synchronous — no IPC) */
   const recordAction = useCallback((desc: string) => {
     recordHistory(desc);
   }, [recordHistory]);
+
+  const fitAndTabulateNames = useMemo(
+    () => [...fitYByXItems.map((item) => item.name), ...tabulates.map((item) => item.name)],
+    [fitYByXItems, tabulates],
+  );
+
+  const withProjectExtension = useCallback((basename: string, kind: ProjectDocumentKind): string => {
+    return `${basename}${projectFileExtension(kind)}`;
+  }, []);
+
+  const invalidProjectNameMessage = useCallback((code: ProjectBasenameValidationError): string => {
+    if (code === "controlChars") {
+      return t("alert.invalidName.controlChars", {
+        defaultValue: "Name contains control characters.",
+      });
+    }
+    if (code === "reserved") {
+      return t("alert.invalidName.reserved", {
+        defaultValue: "Name is reserved by Windows and cannot be used.",
+      });
+    }
+    return t(`alert.invalidName.${code}`, { defaultValue: "Invalid name." });
+  }, [t]);
+
+  const resolveProjectBasename = useCallback((
+    requestedName: string,
+    kind: ProjectDocumentKind,
+    currentName?: string,
+  ): { basename: string; error: null } | { basename: null; error: string } => {
+    let existingNames: string[];
+    if (kind === "table") {
+      existingNames = datasets.map((d) => d.name);
+    } else if (kind === "graph") {
+      existingNames = graphBuilders.map((item) => item.name);
+    } else if (kind === "fitYByX" || kind === "tabulate") {
+      existingNames = fitAndTabulateNames;
+    } else {
+      existingNames = [];
+    }
+    const resolved = resolveProjectBasenameForKind(requestedName, kind, existingNames, currentName);
+    if (resolved.error === "wrongExtension") {
+      return {
+        basename: null,
+        error: t("alert.invalidName.wrongExtension", {
+          defaultValue: "Use the {{expected}} extension for this item (not {{actual}}).",
+          expected: resolved.expectedExtension,
+          actual: resolved.actualExtension,
+        }),
+      };
+    }
+    if (resolved.error) {
+      return { basename: null, error: invalidProjectNameMessage(resolved.error) };
+    }
+    return { basename: resolved.basename, error: null };
+  }, [datasets, fitAndTabulateNames, graphBuilders, invalidProjectNameMessage, t]);
 
   /** Called when history/snapshot is restored — refresh all UI */
   const handleHistoryRestored = useCallback(async () => {
@@ -412,9 +390,8 @@ export function Workspace() {
     const gbIds = new Set(graphBuilders.map((g) => g.id));
     const tabulateIds = new Set(tabulates.map((item) => item.id));
     const fitYByXIds = new Set(fitYByXItems.map((item) => item.id));
-    const distributionIds = new Set(distributions.map((item) => item.analysisId));
-    fsPrune(dsIds, gbIds, tabulateIds, fitYByXIds, distributionIds);
-  }, [datasets, graphBuilders, tabulates, fitYByXItems, distributions, fsPrune]);
+    fsPrune(dsIds, gbIds, tabulateIds, fitYByXIds);
+  }, [datasets, graphBuilders, tabulates, fitYByXItems, fsPrune]);
 
   // Cmd/Ctrl+,: open preferences
   useEffect(() => {
@@ -466,7 +443,23 @@ export function Workspace() {
   const handleCreateTable = async () => {
     if (readOnly) return;
     tableCounter.current += 1;
-    const name = `Table${tableCounter.current}`;
+    const resolved = resolveProjectBasenameForKind(
+      `Table${tableCounter.current}`,
+      "table",
+      datasets.map((dataset) => dataset.name),
+    );
+    if (resolved.error) {
+      const message = resolved.error === "wrongExtension"
+        ? t("alert.invalidName.wrongExtension", {
+            defaultValue: "Use the {{expected}} extension for this item (not {{actual}}).",
+            expected: resolved.expectedExtension,
+            actual: resolved.actualExtension,
+          })
+        : invalidProjectNameMessage(resolved.error);
+      alert(message);
+      return;
+    }
+    const name = resolved.basename;
     const meta = await dataService.createTable(name, [], []);
     await refreshDatasets();
     markDirty();
@@ -474,10 +467,10 @@ export function Workspace() {
     setActiveFitYByXId(null);
     setActiveTabulateId(null);
     setActiveDataset(meta.id);
-    recordAction(t("history.newTable", { name }));
+    recordAction(t("history.newTable", { name: meta.name }));
     // Enter rename mode
     setRenamingId(meta.id);
-    setRenameValue(name);
+    setRenameValue(meta.name);
   };
   handleCreateTableRef.current = handleCreateTable;
 
@@ -507,7 +500,11 @@ export function Workspace() {
         const n = parseInt(g.name.slice(prefix.length), 10);
         return Number.isFinite(n) && n > max ? n : max;
       }, 0);
-    const name = `${ds.name} - Graph${perTableMax + 1}`;
+    const name = allocateProjectBasename(
+      `${ds.name} - Graph${perTableMax + 1}`,
+      ".spgh",
+      graphBuilders.map((item) => item.name),
+    );
     const item: GraphBuilderItem = {
       id,
       name,
@@ -541,7 +538,11 @@ export function Workspace() {
     const id = crypto.randomUUID();
     const item: TabulateItem = {
       id,
-      name: useTabulateStore.getState().nextName(),
+      name: allocateProjectBasename(
+        useTabulateStore.getState().nextName(),
+        ".spf",
+        fitAndTabulateNames,
+      ),
       sourceDatasetId: activeDatasetId,
       rowFields: [],
       columnFields: [],
@@ -571,9 +572,17 @@ export function Workspace() {
   };
 
   const handleCreateFitYByXItem = (item: FitYByXItem) => {
-    const reservedName = nextFitYByXName();
-    const name = item.name.trim() || reservedName;
-    const created = { ...item, name };
+    const requestedName = item.name.trim();
+    const resolved = resolveProjectBasename(
+      requestedName || nextFitYByXName(),
+      "fitYByX",
+    );
+    if (resolved.error) {
+      alert(resolved.error);
+      return;
+    }
+    if (resolved.basename === null) return;
+    const created = { ...item, name: resolved.basename };
     const source = datasets.find((dataset) => dataset.id === created.sourceDatasetId)?.name ?? created.sourceDatasetId;
     addFitYByX(created);
     setActiveDataset(null);
@@ -585,128 +594,6 @@ export function Workspace() {
     recordAction(t("history.newFitYByX", { name: created.name, source }));
     setRenamingId(created.id);
     setRenameValue(created.name);
-  };
-
-  const getDistributionColumns = async (datasetId: string): Promise<DistributionColumnInfoV1[]> => {
-    const rawColumns = await dataService.getDistributionColumns(datasetId);
-    return rawColumns.map((column) => {
-      const normalizedType = column.sqlType.toUpperCase();
-      const integerCompatible = /^(?:U?INT(?:8|16|32|64|128)?|TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT)$/.test(normalizedType);
-      return {
-        ...column,
-        modelingType: /DATE|TIME/.test(normalizedType) ? "datetime" as const : "continuous" as const,
-        integerCompatible,
-      };
-    });
-  };
-
-  const handleOpenDistribution = async () => {
-    if (!activeDatasetId || readOnly) return;
-    try {
-      setDistributionDialog({
-        datasetId: activeDatasetId,
-        columns: await getDistributionColumns(activeDatasetId),
-      });
-    } catch (error) {
-      alert(t("alert.openDistributionFailed") + String(error));
-    }
-  };
-
-  const handleEditDistributionInputs = async (item: DistributionDocV1) => {
-    if (item.loadStatus !== "ready" && item.loadStatus !== "missingSource") return;
-    const datasetId = datasets.some((dataset) => dataset.id === item.sourceDatasetId)
-      ? item.sourceDatasetId
-      : datasets[0]?.id;
-    if (!datasetId || readOnly) return;
-    setDistributionDialog({
-      datasetId,
-      columns: await getDistributionColumns(datasetId),
-      analysisId: item.analysisId,
-      baseConfigRevision: item.configRevision,
-      initialConfig: { ...item.currentConfig, sourceDatasetId: datasetId },
-    });
-  };
-
-  const handleDistributionDatasetChange = async (datasetId: string) => {
-    const columns = await getDistributionColumns(datasetId);
-    setDistributionDialog((current) => current ? {
-      ...current,
-      datasetId,
-      columns,
-      initialConfig: current.initialConfig
-        ? { ...current.initialConfig, sourceDatasetId: datasetId }
-        : undefined,
-    } : null);
-  };
-
-  const handleStartDistributionRun = async (item: DistributionDocV1) => {
-    if (item.loadStatus !== "ready" || !distributionBootstrap) return;
-    const previousRun = useDistributionStore.getState().runStateByAnalysisId[item.analysisId];
-    if (previousRun?.status === "running") {
-      try {
-        await distributionService.cancelRun({ cancelToken: previousRun.cancelToken });
-      } finally {
-        cancelDistributionRun(previousRun.cancelToken);
-      }
-    }
-    const request = {
-      schemaVersion: "1",
-      analysisId: item.analysisId,
-      configRevision: item.configRevision,
-      sourceDatasetId: item.currentConfig.sourceDatasetId,
-      sourceDataVersion: null,
-      mode: "continuous",
-      yColumns: item.currentConfig.yColumns,
-      weightColumnId: item.currentConfig.weightColumnId,
-      frequencyColumnId: item.currentConfig.frequencyColumnId,
-      byColumnIds: item.currentConfig.byColumnIds,
-      filterExpr: item.currentConfig.filterExpr,
-      confidenceLevel: item.currentConfig.confidenceLevel,
-      histogramsOnly: item.currentConfig.histogramsOnly,
-      continuousFit: item.currentConfig.continuousFit ?? createDefaultDistributionContinuousFitConfig(),
-      visualDiagnostics: item.currentConfig.visualDiagnostics ?? createDefaultDistributionVisualDiagnosticsConfig(),
-      enabledCapabilityIds: item.currentConfig.enabledCapabilityIds,
-      capabilityOverrides: item.currentConfig.capabilityOverrides,
-      observationPolicy: distributionBootstrap.observationPolicy,
-      resourceBudget: { ...distributionBootstrap.resourceBudget, cancelToken: null },
-      exact: true,
-    } as const;
-    const accepted = await distributionService.startRun(request);
-    beginDistributionRun({ ...accepted, status: "running", progress: null });
-    try {
-      acceptDistributionResult(await distributionService.executeRun(request, accepted));
-    } catch {
-      failDistributionRun({
-        analysisId: accepted.analysisId,
-        configRevision: accepted.configRevision,
-        runId: accepted.runId,
-        snapshotId: accepted.snapshotId,
-        code: "distribution.run.failed",
-        messageKey: "distribution.run.failed",
-      });
-    }
-  };
-
-  const handleCancelDistributionRun = async (analysisId: string) => {
-    const run = distributionRunStateByAnalysisId[analysisId];
-    if (!run || run.status !== "running") return;
-    await distributionService.cancelRun({ cancelToken: run.cancelToken });
-    cancelDistributionRun(run.cancelToken);
-  };
-
-  const handleContinuousFitChange = async (
-    item: DistributionDocV1,
-    continuousFit: NonNullable<DistributionAnalysisConfigV1["continuousFit"]>,
-  ) => {
-    await applyContinuousFitChange(item, continuousFit, {
-      getRun: (analysisId) => useDistributionStore.getState().runStateByAnalysisId[analysisId],
-      cancelBackendRun: (cancelToken) => distributionService.cancelRun({ cancelToken }),
-      cancelStoreRun: cancelDistributionRun,
-      commitConfig: commitDistributionConfig,
-      getItem: (analysisId) => useDistributionStore.getState().items.find((entry) => entry.analysisId === analysisId),
-      markDirty,
-      startRun: handleStartDistributionRun,
-    });
   };
 
   const handleRenameSubmit = async (id: string) => {
@@ -722,49 +609,74 @@ export function Workspace() {
     // 是图表项还是数据表？
     const gb = useGraphBuilderStore.getState().items.find((it) => it.id === id);
     if (gb) {
-      if (trimmed !== gb.name) {
-        renameGraphBuilder(id, trimmed);
+      const resolved = resolveProjectBasename(trimmed, "graph", gb.name);
+      if (resolved.error !== null) {
+        alert(resolved.error);
+        return;
+      }
+      const basename = resolved.basename;
+      if (basename !== gb.name) {
+        renameGraphBuilder(id, basename);
         markDirty();
-        recordAction(t("history.renameGraph", { old: gb.name, new: trimmed }));
+        recordAction(t("history.renameGraph", { old: gb.name, new: basename }));
       }
       setRenamingId(null);
       return;
     }
     const tabulate = useTabulateStore.getState().items.find((it) => it.id === id);
     if (tabulate) {
-      if (trimmed !== tabulate.name) {
-        renameTabulate(id, trimmed);
+      const resolved = resolveProjectBasename(trimmed, "tabulate", tabulate.name);
+      if (resolved.error !== null) {
+        alert(resolved.error);
+        return;
+      }
+      const basename = resolved.basename;
+      if (basename !== tabulate.name) {
+        renameTabulate(id, basename);
         markDirty();
-        recordAction(t("history.renameTabulate", { old: tabulate.name, new: trimmed }));
+        recordAction(t("history.renameTabulate", { old: tabulate.name, new: basename }));
       }
       setRenamingId(null);
       return;
     }
     const fitYByX = useFitYByXStore.getState().items.find((it) => it.id === id);
     if (fitYByX) {
-      if (trimmed !== fitYByX.name) {
-        renameFitYByX(id, trimmed);
-        markDirty();
-        recordAction(t("history.renameFitYByX", { old: fitYByX.name, new: trimmed }));
+      const resolved = resolveProjectBasename(trimmed, "fitYByX", fitYByX.name);
+      if (resolved.error !== null) {
+        alert(resolved.error);
+        return;
       }
-      setRenamingId(null);
-      return;
-    }
-    const distribution = useDistributionStore.getState().items.find((it) => it.analysisId === id);
-    if (distribution) {
-      if (trimmed !== distribution.name) {
-        renameDistribution(id, trimmed);
+      const basename = resolved.basename;
+      if (basename !== fitYByX.name) {
+        renameFitYByX(id, basename);
         markDirty();
+        recordAction(t("history.renameFitYByX", { old: fitYByX.name, new: basename }));
       }
       setRenamingId(null);
       return;
     }
     const oldName = datasets.find((d) => d.id === id)?.name;
-    if (trimmed !== oldName) {
-      await dataService.renameDataset(id, trimmed);
-      await refreshDatasets();
-      markDirty();
-      recordAction(t("history.renameTable", { old: oldName ?? "", new: trimmed }));
+    if (!oldName) {
+      setRenamingId(null);
+      return;
+    }
+    const resolved = resolveProjectBasename(trimmed, "table", oldName);
+    if (resolved.error !== null) {
+      alert(resolved.error);
+      return;
+    }
+    const basename = resolved.basename;
+    if (basename !== oldName) {
+      try {
+        await dataService.renameDataset(id, basename);
+        await refreshDatasets();
+        markDirty();
+        recordAction(t("history.renameTable", { old: oldName, new: basename }));
+      } catch (error) {
+        alert(t("alert.renameTableFailed", {
+          defaultValue: "Rename table failed: ",
+        }) + String(error));
+      }
     }
     setRenamingId(null);
   };
@@ -791,32 +703,6 @@ export function Workspace() {
     if (activeFitYByXId === id) setActiveFitYByXId(null);
     markDirty();
     if (item) recordAction(t("history.deleteFitYByX", { name: item.name }));
-  };
-
-  const handleCopyDistribution = (analysisId: string) => {
-    const copy = copyDistribution(analysisId);
-    if (!copy) return;
-    fsSetDistributionFolder(copy.analysisId, distributionFolders[analysisId] ?? null);
-    selectDistribution(copy.analysisId);
-    setActiveDataset(null);
-    setActiveGraphBuilderId(null);
-    setActiveFitYByXId(null);
-    setActiveTabulateId(null);
-    markDirty();
-  };
-
-  const handleDeleteDistribution = async (analysisId: string) => {
-    const run = distributionRunStateByAnalysisId[analysisId];
-    if (run?.status === "running") {
-      try {
-        await distributionService.cancelRun({ cancelToken: run.cancelToken });
-      } catch {
-        // The local delete remains valid if the backend run has already ended.
-      }
-    }
-    deleteDistribution(analysisId);
-    fsSetDistributionFolder(analysisId, null);
-    markDirty();
   };
 
   const handleDeleteDataset = async (id: string) => {
@@ -1044,7 +930,6 @@ export function Workspace() {
       graphFolders,
       fitYByXFolders,
       tabulateFolders,
-      distributionFolders,
     };
     try {
       if (!project?.filePath) {
@@ -1061,15 +946,11 @@ export function Workspace() {
           graphBuilders: gbItems,
           fitYByX: fitYByXItems,
           tabulates,
-          distributions,
-          derivedFormulas,
-          distributionIssues,
           folders: folderPayload.folders,
           tableFolders: folderPayload.tableFolders,
           graphFolders: folderPayload.graphFolders,
           fitYByXFolders: folderPayload.fitYByXFolders,
           tabulateFolders: folderPayload.tabulateFolders,
-          distributionFolders: folderPayload.distributionFolders,
         });
       } else {
         await saveProject({
@@ -1078,15 +959,11 @@ export function Workspace() {
           graphBuilders: gbItems,
           fitYByX: fitYByXItems,
           tabulates,
-          distributions,
-          derivedFormulas,
-          distributionIssues,
           folders: folderPayload.folders,
           tableFolders: folderPayload.tableFolders,
           graphFolders: folderPayload.graphFolders,
           fitYByXFolders: folderPayload.fitYByXFolders,
           tabulateFolders: folderPayload.tabulateFolders,
-          distributionFolders: folderPayload.distributionFolders,
         });
       }
       showToast(t("common.saved"), 1500);
@@ -1108,19 +985,14 @@ export function Workspace() {
   };
 
   const handleCloseProject = async () => {
-    const activeRuns = Object.values(useDistributionStore.getState().runStateByAnalysisId)
-      .filter((run) => run.status === "running");
-    await Promise.allSettled(activeRuns.map((run) => distributionService.cancelRun({ cancelToken: run.cancelToken })));
     setActiveDataset(null);
     setActiveGraphBuilderId(null);
     setActiveFitYByXId(null);
     setActiveTabulateId(null);
-    selectDistribution(null);
     resetHistory();
     resetGraphBuilders();
     resetFitYByX();
     resetTabulates();
-    resetDistributions();
     fsReset();
     await initProject();
     await refreshDatasets();
@@ -1134,19 +1006,14 @@ export function Workspace() {
       multiple: false,
     });
     if (selected) {
-      const activeRuns = Object.values(useDistributionStore.getState().runStateByAnalysisId)
-        .filter((run) => run.status === "running");
-      await Promise.allSettled(activeRuns.map((run) => distributionService.cancelRun({ cancelToken: run.cancelToken })));
       setActiveDataset(null);
       setActiveGraphBuilderId(null);
       setActiveFitYByXId(null);
       setActiveTabulateId(null);
-      selectDistribution(null);
       resetHistory();
       resetGraphBuilders();
       resetFitYByX();
       resetTabulates();
-      resetDistributions();
       setBusyMessage(t("workspace.openingProject"));
       const unlisten = await listen<{
         datasetIndex: number;
@@ -1167,12 +1034,10 @@ export function Workspace() {
         setActiveGraphBuilderId(null);
         setActiveFitYByXId(null);
         setActiveTabulateId(null);
-        selectDistribution(null);
         resetHistory();
         resetGraphBuilders();
         resetFitYByX();
         resetTabulates();
-        resetDistributions();
         await refreshDatasets();
         tableCounter.current = 0;
         // Restore snapshots from project file (history is session-only)
@@ -1189,11 +1054,6 @@ export function Workspace() {
         }
         loadFitYByXFromProject((result.fitYByX ?? []) as FitYByXItem[]);
         loadTabulatesFromProject((result.tabulates ?? []) as TabulateItem[]);
-        loadDistributionsFromProject(
-          result.distributions ?? [],
-          result.derivedFormulas ?? [],
-          result.distributionIssues ?? [],
-        );
         // Restore folder tree + table/graph→folder assignments. We do this
         // after datasets/graphs are loaded so a subsequent prune pass keeps
         // assignments in sync with currently-existing items.
@@ -1203,11 +1063,15 @@ export function Workspace() {
           graphFolders: result.graphFolders ?? {},
           fitYByXFolders: result.fitYByXFolders ?? {},
           tabulateFolders: result.tabulateFolders ?? {},
-          distributionFolders: result.distributionFolders ?? {},
         });
-        if (result.datasetNameMigrations.length > 0) {
+        if (result.documentNameMigrations.length > 0) {
           showToast(
-            t("workspace.datasetNameMigrations", { count: result.datasetNameMigrations.length }),
+            t("workspace.documentNameMigrations", { count: result.documentNameMigrations.length }),
+            4000,
+          );
+        } else if (result.requiresMigration) {
+          showToast(
+            t("workspace.projectRequiresMigration"),
             4000,
           );
         }
@@ -1501,7 +1365,6 @@ export function Workspace() {
     | { kind: "graph"; id: string }
     | { kind: "fitYByX"; id: string }
     | { kind: "tabulate"; id: string }
-    | { kind: "distribution"; id: string }
     | { kind: "folder"; path: string };
 
   const handleDragStart = (e: React.DragEvent, payload: DragPayload) => {
@@ -1537,7 +1400,6 @@ export function Workspace() {
     else if (payload.kind === "graph") fsSetGraphFolder(payload.id, target);
     else if (payload.kind === "fitYByX") fsSetFitYByXFolder(payload.id, target);
     else if (payload.kind === "tabulate") fsSetTabulateFolder(payload.id, target);
-    else if (payload.kind === "distribution") fsSetDistributionFolder(payload.id, target);
     else if (payload.kind === "folder") fsMoveFolder(payload.path, target);
     markDirty();
   };
@@ -1603,15 +1465,8 @@ export function Workspace() {
       arr.push(item);
       tabulatesByParent.set(p, arr);
     }
-    const distributionsByParent = new Map<string, DistributionDocV1[]>();
-    for (const item of distributions) {
-      const p = distributionFolders[item.analysisId] ?? ROOT;
-      const arr = distributionsByParent.get(p) ?? [];
-      arr.push(item);
-      distributionsByParent.set(p, arr);
-    }
-    return { ROOT, childFolders, tablesByParent, graphsByParent, fitYByXByParent, tabulatesByParent, distributionsByParent };
-  }, [folders, tableFolders, graphFolders, fitYByXFolders, tabulateFolders, distributionFolders, datasets, graphBuilders, fitYByXItems, tabulates, distributions]);
+    return { ROOT, childFolders, tablesByParent, graphsByParent, fitYByXByParent, tabulatesByParent };
+  }, [folders, tableFolders, graphFolders, fitYByXFolders, tabulateFolders, datasets, graphBuilders, fitYByXItems, tabulates]);
 
   /** Recursively render one folder level. */
   const renderFolderLevel = (parent: string | null, depth: number): React.ReactNode[] => {
@@ -1623,7 +1478,6 @@ export function Workspace() {
     const graphChildren = tree.graphsByParent.get(key) ?? [];
     const fitYByXChildren = tree.fitYByXByParent.get(key) ?? [];
     const tabulateChildren = tree.tabulatesByParent.get(key) ?? [];
-    const distributionChildren = tree.distributionsByParent.get(key) ?? [];
     // Folders first, then tables, then graphs, matching the prior visual order
     // (tables-then-graphs at the root level).
     for (const fp of folderChildren) {
@@ -1713,21 +1567,24 @@ export function Workspace() {
         >
           <i className="ds-icon fa-solid fa-table" aria-hidden="true" />
           {renamingId === ds.id ? (
-            <input
-              ref={renameInputRef}
-              className="ds-rename-input"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => handleRenameSubmit(ds.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameSubmit(ds.id);
-                if (e.key === "Escape") setRenamingId(null);
-              }}
-              onClick={(e) => e.stopPropagation()}
-              autoFocus
-            />
+            <span className="ds-rename-shell">
+              <input
+                ref={renameInputRef}
+                className="ds-rename-input"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => void handleRenameSubmit(ds.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleRenameSubmit(ds.id);
+                  if (e.key === "Escape") setRenamingId(null);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                autoFocus
+              />
+              <span className="ds-fixed-ext">{projectFileExtension("table")}</span>
+            </span>
           ) : (
-            <span className="ds-name">{ds.name}</span>
+            <span className="ds-name">{withProjectExtension(ds.name, "table")}</span>
           )}
           <span className="ds-info">{ds.rowCount}×{ds.colCount}</span>
         </div>,
@@ -1762,21 +1619,24 @@ export function Workspace() {
         >
           <i className="ds-icon fa-solid fa-chart-pie" aria-hidden="true" />
           {renamingId === gb.id ? (
-            <input
-              ref={renameInputRef}
-              className="ds-rename-input"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => handleRenameSubmit(gb.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameSubmit(gb.id);
-                if (e.key === "Escape") setRenamingId(null);
-              }}
-              onClick={(e) => e.stopPropagation()}
-              autoFocus
-            />
+            <span className="ds-rename-shell">
+              <input
+                ref={renameInputRef}
+                className="ds-rename-input"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => handleRenameSubmit(gb.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRenameSubmit(gb.id);
+                  if (e.key === "Escape") setRenamingId(null);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                autoFocus
+              />
+              <span className="ds-fixed-ext">{projectFileExtension("graph")}</span>
+            </span>
           ) : (
-            <span className="ds-name">{gb.name}</span>
+            <span className="ds-name">{withProjectExtension(gb.name, "graph")}</span>
           )}
           <span className="ds-info gb-source-tag">
             {sourceDs ? sourceDs.name : t("workspace.datasourceMissing")}
@@ -1813,21 +1673,24 @@ export function Workspace() {
         >
           <i className="ds-icon fa-solid fa-chart-column" aria-hidden="true" />
           {renamingId === item.id ? (
-            <input
-              ref={renameInputRef}
-              className="ds-rename-input"
-              value={renameValue}
-              onChange={(event) => setRenameValue(event.target.value)}
-              onBlur={() => handleRenameSubmit(item.id)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") handleRenameSubmit(item.id);
-                if (event.key === "Escape") setRenamingId(null);
-              }}
-              onClick={(event) => event.stopPropagation()}
-              autoFocus
-            />
+            <span className="ds-rename-shell">
+              <input
+                ref={renameInputRef}
+                className="ds-rename-input"
+                value={renameValue}
+                onChange={(event) => setRenameValue(event.target.value)}
+                onBlur={() => handleRenameSubmit(item.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") handleRenameSubmit(item.id);
+                  if (event.key === "Escape") setRenamingId(null);
+                }}
+                onClick={(event) => event.stopPropagation()}
+                autoFocus
+              />
+              <span className="ds-fixed-ext">{projectFileExtension("fitYByX")}</span>
+            </span>
           ) : (
-            <span className="ds-name">{item.name}</span>
+            <span className="ds-name">{withProjectExtension(item.name, "fitYByX")}</span>
           )}
           <span className="ds-info gb-source-tag">
             {sourceDs ? sourceDs.name : t("fitYByX.sourceMissing")}
@@ -1864,61 +1727,29 @@ export function Workspace() {
         >
           <i className="ds-icon fa-solid fa-table-cells-large" aria-hidden="true" />
           {renamingId === item.id ? (
-            <input
-              ref={renameInputRef}
-              className="ds-rename-input"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => handleRenameSubmit(item.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameSubmit(item.id);
-                if (e.key === "Escape") setRenamingId(null);
-              }}
-              onClick={(e) => e.stopPropagation()}
-              autoFocus
-            />
+            <span className="ds-rename-shell">
+              <input
+                ref={renameInputRef}
+                className="ds-rename-input"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => handleRenameSubmit(item.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRenameSubmit(item.id);
+                  if (e.key === "Escape") setRenamingId(null);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                autoFocus
+              />
+              <span className="ds-fixed-ext">{projectFileExtension("tabulate")}</span>
+            </span>
           ) : (
-            <span className="ds-name">{item.name}</span>
+            <span className="ds-name">{withProjectExtension(item.name, "tabulate")}</span>
           )}
           <span className="ds-info gb-source-tag">
             {sourceDs ? sourceDs.name : t("workspace.tabulateSourceMissing")}
           </span>
         </div>,
-      );
-    }
-    for (const item of distributionChildren) {
-      const sourceDataset = datasets.find((dataset) => dataset.id === item.sourceDatasetId);
-      out.push(
-        <DistributionDirectoryItem
-          key={`distribution:${item.analysisId}`}
-          item={item}
-          sourceName={sourceDataset ? sourceDataset.name : t("workspace.datasourceMissing")}
-          selected={selectedDistributionId === item.analysisId}
-          paddingLeft={8 + depth * 12 + 12}
-          onDragStart={(event) => handleDragStart(event, { kind: "distribution", id: item.analysisId })}
-          onSelect={() => {
-            setActiveDataset(null);
-            setActiveGraphBuilderId(null);
-            setActiveFitYByXId(null);
-            setActiveTabulateId(null);
-            selectDistribution(item.analysisId);
-          }}
-          onRename={(analysisId, name) => {
-            renameDistribution(analysisId, name);
-            markDirty();
-          }}
-          onCopy={handleCopyDistribution}
-          onDelete={(analysisId) => void handleDeleteDistribution(analysisId)}
-          onOpenSource={(analysisId) => {
-            const distribution = distributions.find((entry) => entry.analysisId === analysisId);
-            if (!distribution || !datasets.some((dataset) => dataset.id === distribution.sourceDatasetId)) return;
-            selectDistribution(null);
-            setActiveGraphBuilderId(null);
-            setActiveFitYByXId(null);
-            setActiveTabulateId(null);
-            setActiveDataset(distribution.sourceDatasetId);
-          }}
-        />,
       );
     }
     return out;
@@ -1972,12 +1803,6 @@ export function Workspace() {
                 onClick={activeDatasetId && !readOnly ? handleCreateFitYByX : undefined}
               >
                 {t("menu.fitYByX")}
-              </div>
-              <div
-                className={`menu-item${isDistributionMenuEnabled(activeDatasetId) && !readOnly ? "" : " menu-item-disabled"}`}
-                onClick={isDistributionMenuEnabled(activeDatasetId) && !readOnly ? () => void handleOpenDistribution() : undefined}
-              >
-                {t("menu.distribution")}
               </div>
             </MenuDropdown>
             <MenuDropdown label={t("menu.help")}>
@@ -2087,7 +1912,7 @@ export function Workspace() {
                   }
                 }}
               >
-                {datasets.length === 0 && graphBuilders.length === 0 && fitYByXItems.length === 0 && tabulates.length === 0 && distributions.length === 0 && folders.length === 0 ? (
+                {datasets.length === 0 && graphBuilders.length === 0 && fitYByXItems.length === 0 && tabulates.length === 0 && folders.length === 0 ? (
                   <div className="empty-hint">{t("common.noContent")}</div>
                 ) : (
                   renderFolderLevel(null, 0)
@@ -2105,30 +1930,7 @@ export function Workspace() {
 
         {/* Right: Main Content */}
         <div className="main-area">
-          {selectedDistributionId ? (
-            (() => {
-              const item = distributions.find((distribution) => distribution.analysisId === selectedDistributionId);
-              if (!item) return null;
-              return (
-                <DistributionWorkspace
-                  item={item}
-                  sourceAvailable={datasets.some((dataset) => dataset.id === item.sourceDatasetId)}
-                  bootstrap={distributionBootstrap}
-                  runState={distributionRunStateByAnalysisId[item.analysisId] ?? distributionRunState}
-                  result={distributionResultByAnalysisId[item.analysisId] ?? null}
-                  failure={distributionFailureByAnalysisId[item.analysisId] ?? null}
-                  onEditInputs={() => void handleEditDistributionInputs(item)}
-                  onRun={() => void handleStartDistributionRun(item)}
-                  onCancel={() => void handleCancelDistributionRun(item.analysisId)}
-                  onContinuousFitChange={(continuousFit) => void handleContinuousFitChange(item, continuousFit)}
-                  onReportPreferencesChange={(yColumnId, preferences) => {
-                    updateDistributionReportPreferences(item.analysisId, yColumnId, preferences);
-                    markDirty();
-                  }}
-                />
-              );
-            })()
-          ) : activeTabulateId ? (
+          {activeTabulateId ? (
             (() => {
               const item = tabulates.find((entry) => entry.id === activeTabulateId);
               if (!item) {
@@ -2139,6 +1941,7 @@ export function Workspace() {
                 <TabulateView
                   item={item}
                   dataset={ds}
+                  existingDatasetNames={datasets.map((entry) => entry.name)}
                   onTableCreated={async (dataset) => {
                     await refreshDatasets();
                     markDirty();
@@ -2229,51 +2032,6 @@ export function Workspace() {
       </div>
 
       {showPrefs && <PreferencesDialog onClose={() => setShowPrefs(false)} />}
-
-      {distributionDialog && (
-        <DistributionDialog
-          open
-          datasetId={distributionDialog.datasetId}
-          columns={distributionDialog.columns}
-          initialConfig={distributionDialog.initialConfig}
-          recallConfig={distributionDialog.initialConfig}
-          datasets={datasets.map((dataset) => ({ id: dataset.id, name: dataset.name }))}
-          onDatasetChange={handleDistributionDatasetChange}
-          bootstrap={distributionBootstrap}
-          onCancel={() => setDistributionDialog(null)}
-          onSave={(config) => {
-            const existingAnalysisId = distributionDialog.analysisId;
-            if (existingAnalysisId && distributionDialog.baseConfigRevision !== undefined) {
-              if (!commitDistributionConfig(existingAnalysisId, distributionDialog.baseConfigRevision, config).ok) return;
-            } else {
-              selectDistribution(createDistribution(config).analysisId);
-            }
-            setDistributionDialog(null);
-            setActiveDataset(null);
-            setActiveGraphBuilderId(null);
-            setActiveFitYByXId(null);
-            setActiveTabulateId(null);
-            markDirty();
-          }}
-          onRun={async (config) => {
-            const existingAnalysisId = distributionDialog.analysisId;
-            const item = existingAnalysisId && distributionDialog.baseConfigRevision !== undefined
-              ? (commitDistributionConfig(existingAnalysisId, distributionDialog.baseConfigRevision, config).ok
-                ? useDistributionStore.getState().items.find((entry) => entry.analysisId === existingAnalysisId)
-                : undefined)
-              : createDistribution(config);
-            if (!item) return;
-            setDistributionDialog(null);
-            setActiveDataset(null);
-            setActiveGraphBuilderId(null);
-            setActiveFitYByXId(null);
-            setActiveTabulateId(null);
-            selectDistribution(item.analysisId);
-            markDirty();
-            await handleStartDistributionRun(item);
-          }}
-        />
-      )}
 
       {helpDialog && <HelpDialog mode={helpDialog} onClose={() => setHelpDialog(null)} />}
 

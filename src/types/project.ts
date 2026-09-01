@@ -1,9 +1,3 @@
-import type {
-  DerivedFormulaDocV1,
-  DistributionDocV1,
-  DistributionIssueV1,
-} from "./distribution";
-
 /** 项目元数据 */
 export interface ProjectInfo {
   name: string;
@@ -13,6 +7,13 @@ export interface ProjectInfo {
 
 export interface DatasetNameMigration {
   datasetId: string;
+  oldName: string;
+  newName: string;
+}
+
+export interface DocumentNameMigration {
+  id: string;
+  kind: string;
   oldName: string;
   newName: string;
 }
@@ -32,13 +33,11 @@ export interface OpenProjectResult {
   /** graphId → folder path（根目录的图不在此映射中）。 */
   graphFolders: Record<string, string>;
   fitYByXFolders: Record<string, string>;
+  documentNameMigrations: DocumentNameMigration[];
   datasetNameMigrations: DatasetNameMigration[];
+  requiresMigration: boolean;
   /** tabulateId → folder path。 */
   tabulateFolders: Record<string, string>;
-  distributions: DistributionDocV1[];
-  distributionFolders: Record<string, string>;
-  derivedFormulas: DerivedFormulaDocV1[];
-  distributionIssues: DistributionIssueV1[];
 }
 
 /** 导入 .sptb 的返回值。

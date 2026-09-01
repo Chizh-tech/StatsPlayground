@@ -52,7 +52,6 @@
     "analyze": "Analyze",
     "tabulate": "Tabulate",
     "fitYByX": "配適 Y by X",
-    "distribution": "分配",
     "ops": "操作",
     "opSummary": "彙總",
     "opSubset": "子集",
@@ -79,8 +78,7 @@
     "exportGraphFailed": "匯出圖形失敗：",
     "importGraphFailed": "匯入圖形失敗：",
     "exportFolderFailed": "匯出資料夾失敗：",
-    "openProjectFailed": "開啟專案失敗：{{msg}}",
-    "openDistributionFailed": "開啟 Distribution 失敗：",
+    "openProjectFailed": "開啟專案失敗：",
     "invalidName": {
       "empty": "名稱不可為空。",
       "invalidChars": "名稱包含非法字元：/ \\ : * ? \" < > |",
@@ -163,6 +161,8 @@
     "creatingSnapshot": "正在建立快照…",
     "restoringSnapshot": "正在還原快照…",
     "importingSqlite": "正在匯入 SQLite 資料庫…",
+    "documentNameMigrations": "開啟專案時已重新命名 {{count}} 個專案文件名稱。請儲存專案以保留這些更新後的名稱。",
+    "projectRequiresMigration": "開啟專案時已在記憶體中完成遷移。請儲存專案以保留升級後的格式。",
     "datasetNameMigrations": "開啟專案時已重新命名 {{count}} 個重複的資料表名稱。請儲存專案以保留這些更新後的名稱。",
     "importProgressTable": "資料表 {{i}}/{{total}}：{{name}}",
     "importProgressRows": "列",
@@ -180,41 +180,6 @@
     "zoomOut": "縮小表格",
     "zoomReset": "重設為 100%",
     "zoomTooltip": "表格縮放"
-  },
-  "distribution": {
-    "title": "分佈",
-    "recall": "重新叫用",
-    "searchColumns": "搜尋欄位",
-    "sourceDataset": "來源資料表",
-    "openSource": "開啟來源資料",
-    "editInputs": "編輯輸入",
-    "progress": "進度",
-    "renameLabel": "重新命名 {{name}}",
-    "roleLabel": "{{role}} 角色",
-    "roleEmpty": "拖放或指派欄位",
-    "assignToRole": "將 {{column}} 指派到 {{role}}",
-    "removeFromRole": "從 {{role}} 移除 {{column}}",
-    "confidenceLevel": "信賴水準",
-    "frequencyShort": "頻數",
-    "histogramsOnly": "僅直方圖",
-    "invalidConfig": "請至少指派一個有效的 Y 欄位。",
-    "runDisabledHint": "目前系統狀態下統計方法無法使用。",
-    "saving": "正在儲存...",
-    "run": "執行",
-    "roles": {
-      "y": "Y",
-      "weight": "權重",
-      "frequency": "頻數",
-      "by": "分組"
-    },
-    "specification": {
-      "useOverride": "使用分析規格限覆寫",
-      "lsl": "規格下限",
-      "target": "目標值",
-      "usl": "規格上限",
-      "allYHint": "此分析層級覆寫適用於所有 Y 欄位。",
-      "overrideSource": "僅隨此分析儲存，不會變更資料表欄位屬性。"
-    }
   },
   "fitYByX": {
     "title": "配適 Y by X",

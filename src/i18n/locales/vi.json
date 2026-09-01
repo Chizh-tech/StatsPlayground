@@ -52,7 +52,6 @@
     "analyze": "Analyze",
     "tabulate": "Tabulate",
     "fitYByX": "Khớp Y theo X",
-    "distribution": "Phân phối",
     "ops": "Thao tác",
     "opSummary": "Tổng hợp",
     "opSubset": "Tập con",
@@ -79,8 +78,7 @@
     "exportGraphFailed": "Xuất biểu đồ thất bại: ",
     "importGraphFailed": "Nhập biểu đồ thất bại: ",
     "exportFolderFailed": "Xuất thư mục thất bại: ",
-    "openProjectFailed": "Mở dự án thất bại: {{msg}}",
-    "openDistributionFailed": "Mở Distribution thất bại: ",
+    "openProjectFailed": "Mở dự án thất bại: ",
     "invalidName": {
       "empty": "Tên không được để trống.",
       "invalidChars": "Tên chứa ký tự không hợp lệ: / \\ : * ? \" < > |",
@@ -163,6 +161,8 @@
     "creatingSnapshot": "Đang tạo ảnh chụp…",
     "restoringSnapshot": "Đang khôi phục ảnh chụp…",
     "importingSqlite": "Đang nhập cơ sở dữ liệu SQLite…",
+    "documentNameMigrations": "Đã đổi tên {{count}} tài liệu dự án khi mở dự án này. Hãy lưu dự án để ghi lại các tên đã cập nhật.",
+    "projectRequiresMigration": "Dự án đã được di trú trong bộ nhớ khi mở. Hãy lưu dự án để ghi lại định dạng đã nâng cấp.",
     "datasetNameMigrations": "Đã đổi tên {{count}} bảng có tên trùng khi mở dự án này. Hãy lưu dự án để ghi lại các tên đã cập nhật.",
     "importProgressTable": "Bảng {{i}}/{{total}}: {{name}}",
     "importProgressRows": "hàng",
@@ -180,41 +180,6 @@
     "zoomOut": "Thu nhỏ bảng",
     "zoomReset": "Đặt lại về 100%",
     "zoomTooltip": "Thu phóng bảng"
-  },
-  "distribution": {
-    "title": "Phân phối",
-    "recall": "Gọi lại",
-    "searchColumns": "Tìm cột",
-    "sourceDataset": "Bảng dữ liệu nguồn",
-    "openSource": "Mở dữ liệu nguồn",
-    "editInputs": "Sửa đầu vào",
-    "progress": "Tiến độ",
-    "renameLabel": "Đổi tên {{name}}",
-    "roleLabel": "Vai trò {{role}}",
-    "roleEmpty": "Kéo thả hoặc gán cột",
-    "assignToRole": "Gán {{column}} vào {{role}}",
-    "removeFromRole": "Xóa {{column}} khỏi {{role}}",
-    "confidenceLevel": "Mức tin cậy",
-    "frequencyShort": "Tần số",
-    "histogramsOnly": "Chỉ biểu đồ tần suất",
-    "invalidConfig": "Hãy gán ít nhất một cột Y hợp lệ.",
-    "runDisabledHint": "Phương pháp thống kê không khả dụng trong trạng thái hệ thống hiện tại.",
-    "saving": "Đang lưu...",
-    "run": "Chạy",
-    "roles": {
-      "y": "Y",
-      "weight": "Trọng số",
-      "frequency": "Tần số",
-      "by": "Phân nhóm"
-    },
-    "specification": {
-      "useOverride": "Dùng giới hạn kỹ thuật riêng cho phân tích",
-      "lsl": "Giới hạn kỹ thuật dưới",
-      "target": "Mục tiêu",
-      "usl": "Giới hạn kỹ thuật trên",
-      "allYHint": "Thiết lập ở cấp phân tích này áp dụng cho mọi cột Y.",
-      "overrideSource": "Chỉ lưu cùng phân tích này; thuộc tính cột của bảng không thay đổi."
-    }
   },
   "fitYByX": {
     "title": "Khớp Y theo X",
