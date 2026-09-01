@@ -562,6 +562,7 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         .map_err(|e| AppError::FileIO(format!("Invalid manifest.json: {}", e)))?;
 
     validate_manifest_entry_refs(&manifest)?;
+    let strict_v4_name_checks = is_format_v4(&manifest.version);
 
     let mut tables = Vec::with_capacity(manifest.tables.len());
     for entry in &manifest.tables {
@@ -573,6 +574,12 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
             return Err(AppError::FileIO(format!(
                 "Mismatched table id in {}: manifest={}, body={}",
                 entry.file, entry.id, doc.id
+            )));
+        }
+        if strict_v4_name_checks && doc.name != entry.name {
+            return Err(AppError::FileIO(format!(
+                "Mismatched table name in {}: manifest={}, body={}",
+                entry.file, entry.name, doc.name
             )));
         }
         tables.push(doc);
@@ -589,6 +596,12 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
                 entry.file, entry.id, doc.id
             )));
         }
+        if strict_v4_name_checks && doc.name != entry.name {
+            return Err(AppError::FileIO(format!(
+                "Mismatched graph name in {}: manifest={}, body={}",
+                entry.file, entry.name, doc.name
+            )));
+        }
         graphs.push(doc);
     }
 
@@ -597,17 +610,27 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         .map(|b| serde_json::from_slice::<Vec<Value>>(&b).unwrap_or_default())
         .unwrap_or_default();
     let fit_y_by_x = if !manifest.fit_y_by_x_files.is_empty() {
-        read_indexed_values(&mut zip, &manifest.fit_y_by_x_files, DocumentKind::FitYByX)?
+        read_indexed_values(
+            &mut zip,
+            &manifest.fit_y_by_x_files,
+            DocumentKind::FitYByX,
+            strict_v4_name_checks,
+        )?
     } else {
         manifest.fit_y_by_x.clone()
     };
     let tabulates = if !manifest.tabulate_files.is_empty() {
-        read_indexed_values(&mut zip, &manifest.tabulate_files, DocumentKind::Tabulate)?
+        read_indexed_values(
+            &mut zip,
+            &manifest.tabulate_files,
+            DocumentKind::Tabulate,
+            strict_v4_name_checks,
+        )?
     } else {
         manifest.tabulates.clone()
     };
     let snapshots = if !manifest.snapshot_files.is_empty() {
-        read_indexed_snapshots(&mut zip, &manifest.snapshot_files)?
+        read_indexed_snapshots(&mut zip, &manifest.snapshot_files, strict_v4_name_checks)?
     } else {
         read_entry_bytes(&mut zip, ".snapshots.json")
             .or_else(|| read_entry_bytes(&mut zip, "snapshots.json"))
@@ -630,6 +653,7 @@ fn read_indexed_values<R: Read + Seek>(
     zip: &mut zip::ZipArchive<R>,
     refs: &[DocumentEntryRef],
     expected_kind: DocumentKind,
+    strict_v4_name_checks: bool,
 ) -> Result<Vec<Value>, AppError> {
     let mut out = Vec::with_capacity(refs.len());
     for entry in refs {
@@ -653,6 +677,15 @@ fn read_indexed_values<R: Read + Seek>(
                 entry.file, entry.id, body_id
             )));
         }
+        if strict_v4_name_checks {
+            let body_name = value_required_name(&value, &entry.file, "document")?;
+            if body_name != entry.name {
+                return Err(AppError::FileIO(format!(
+                    "Mismatched document name in {}: manifest={}, body={}",
+                    entry.file, entry.name, body_name
+                )));
+            }
+        }
         out.push(value);
     }
     Ok(out)
@@ -661,6 +694,7 @@ fn read_indexed_values<R: Read + Seek>(
 fn read_indexed_snapshots<R: Read + Seek>(
     zip: &mut zip::ZipArchive<R>,
     refs: &[SnapshotEntryRef],
+    strict_v4_name_checks: bool,
 ) -> Result<Vec<Value>, AppError> {
     let mut out = Vec::with_capacity(refs.len());
     for entry in refs {
@@ -677,6 +711,15 @@ fn read_indexed_snapshots<R: Read + Seek>(
                 "Mismatched snapshot id in {}: manifest={}, body={}",
                 entry.file, entry.id, body_id
             )));
+        }
+        if strict_v4_name_checks {
+            let body_name = value_required_name(&value, &entry.file, "snapshot")?;
+            if body_name != entry.name {
+                return Err(AppError::FileIO(format!(
+                    "Mismatched snapshot name in {}: manifest={}, body={}",
+                    entry.file, entry.name, body_name
+                )));
+            }
         }
         out.push(value);
     }
@@ -1386,16 +1429,19 @@ fn allocate_archive_name(
 
 fn validate_manifest_entry_refs(manifest: &ProjectManifest) -> Result<(), AppError> {
     let mut seen_files = HashSet::new();
+    let strict_v4_name_checks = is_format_v4(&manifest.version);
 
-    if is_format_v4(&manifest.version) {
+    if strict_v4_name_checks {
         for entry in &manifest.tables {
             validate_indexed_path(&entry.file, "data", ".sptb", "table")?;
             validate_display_basename(&entry.name)?;
+            validate_manifest_name_matches_file_basename(&entry.file, &entry.name, ".sptb", "table")?;
             ensure_unique_file(&mut seen_files, &entry.file)?;
         }
         for entry in &manifest.graphs {
             validate_indexed_path(&entry.file, "data", ".spgh", "graph")?;
             validate_display_basename(&entry.name)?;
+            validate_manifest_name_matches_file_basename(&entry.file, &entry.name, ".spgh", "graph")?;
             ensure_unique_file(&mut seen_files, &entry.file)?;
         }
     }
@@ -1409,6 +1455,9 @@ fn validate_manifest_entry_refs(manifest: &ProjectManifest) -> Result<(), AppErr
         }
         validate_indexed_path(&entry.file, "data", ".spf", "fitYByX")?;
         validate_display_basename(&entry.name)?;
+        if strict_v4_name_checks {
+            validate_manifest_name_matches_file_basename(&entry.file, &entry.name, ".spf", "fitYByX")?;
+        }
         ensure_unique_file(&mut seen_files, &entry.file)?;
     }
 
@@ -1421,12 +1470,18 @@ fn validate_manifest_entry_refs(manifest: &ProjectManifest) -> Result<(), AppErr
         }
         validate_indexed_path(&entry.file, "data", ".spf", "tabulate")?;
         validate_display_basename(&entry.name)?;
+        if strict_v4_name_checks {
+            validate_manifest_name_matches_file_basename(&entry.file, &entry.name, ".spf", "tabulate")?;
+        }
         ensure_unique_file(&mut seen_files, &entry.file)?;
     }
 
     for entry in &manifest.snapshot_files {
         validate_indexed_path(&entry.file, "snapshots", ".spf", "snapshot")?;
         validate_display_basename(&entry.name)?;
+        if strict_v4_name_checks {
+            validate_manifest_name_matches_file_basename(&entry.file, &entry.name, ".spf", "snapshot")?;
+        }
         ensure_unique_file(&mut seen_files, &entry.file)?;
     }
 
@@ -1490,6 +1545,32 @@ fn validate_indexed_path(file: &str, root: &str, extension: &str, label: &str) -
     validate_display_basename(basename)
 }
 
+fn validate_manifest_name_matches_file_basename(
+    file: &str,
+    manifest_name: &str,
+    extension: &str,
+    label: &str,
+) -> Result<(), AppError> {
+    let leaf = file
+        .rsplit('/')
+        .next()
+        .ok_or_else(|| AppError::FileIO(format!("Invalid {label} archive path: {}", file)))?;
+    if !leaf.ends_with(extension) || leaf.len() <= extension.len() {
+        return Err(AppError::FileIO(format!(
+            "Invalid {label} archive extension in {}",
+            file
+        )));
+    }
+    let basename = &leaf[..leaf.len() - extension.len()];
+    if basename != manifest_name {
+        return Err(AppError::FileIO(format!(
+            "Mismatched {label} name and archive basename in {}: manifest={}, basename={}",
+            file, manifest_name, basename
+        )));
+    }
+    Ok(())
+}
+
 fn value_required_id(value: &Value, kind: &str) -> Result<String, AppError> {
     value
         .get("id")
@@ -1506,6 +1587,14 @@ fn value_name_or_fallback(value: &Value, fallback_id: &str) -> String {
         .filter(|name| !name.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| fallback_id.to_string())
+}
+
+fn value_required_name<'a>(value: &'a Value, file: &str, kind: &str) -> Result<&'a str, AppError> {
+    value
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| AppError::FileIO(format!("Indexed {kind} file {} missing required name", file)))
 }
 
 fn set_value_name(value: &mut Value, name: &str, kind: &str) -> Result<(), AppError> {
@@ -2728,10 +2817,10 @@ mod tests {
             "graphs": [],
             "folders": [],
             "fitYByXFiles": [
-                { "id": "fit-1", "name": "data", "file": "data/shared.spf", "kind": "fitYByX" }
+                { "id": "fit-1", "name": "shared", "file": "data/shared.spf", "kind": "fitYByX" }
             ],
             "tabulateFiles": [
-                { "id": "tab-1", "name": "shared", "file": "data/SHARED.spf", "kind": "tabulate" }
+                { "id": "tab-1", "name": "SHARED", "file": "data/SHARED.spf", "kind": "tabulate" }
             ],
             "snapshotFiles": []
         });
@@ -2791,6 +2880,165 @@ mod tests {
             };
             assert!(matches!(error, AppError::FileIO(message) if message.contains("Invalid fitYByX archive")), "case {} expected invalid indexed path error", index);
         }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_project_file_rejects_v4_manifest_when_entry_name_differs_from_file_basename() {
+        let path = temp_project_path("v4-name-basename-mismatch");
+        let manifest = json!({
+            "name": "Project",
+            "version": "4.0.0",
+            "createdAt": "now",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+            "fitYByXFiles": [
+                { "id": "fit-1", "name": "DisplayName", "file": "data/data.spf", "kind": "fitYByX" }
+            ],
+            "tabulateFiles": [],
+            "snapshotFiles": []
+        });
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.start_file("data/data.spf", opts).unwrap();
+        zip.write_all(br#"{"id":"fit-1","name":"DisplayName"}"#)
+            .unwrap();
+        zip.finish().unwrap();
+
+        let error = match read_project_file(path.to_str().unwrap()) {
+            Ok(_) => panic!("expected v4 name/path mismatch to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("basename")));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_project_file_rejects_v4_manifest_with_table_body_name_mismatch() {
+        let path = temp_project_path("v4-table-body-name-mismatch");
+        let manifest = json!({
+            "name": "Project",
+            "version": "4.0.0",
+            "createdAt": "now",
+            "tables": [
+                { "id": "table-1", "name": "data", "file": "data/data.sptb" }
+            ],
+            "graphs": [],
+            "folders": [],
+            "fitYByXFiles": [],
+            "tabulateFiles": [],
+            "snapshotFiles": []
+        });
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.start_file("data/data.sptb", opts).unwrap();
+        zip.write_all(
+            br#"{"id":"table-1","name":"stale-name","sourceType":"manual","version":"1","columns":[],"rows":[]}"#,
+        )
+        .unwrap();
+        zip.finish().unwrap();
+
+        let error = match read_project_file(path.to_str().unwrap()) {
+            Ok(_) => panic!("expected v4 table body-name mismatch to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("table name")));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_project_file_rejects_v4_manifest_with_graph_body_name_mismatch() {
+        let path = temp_project_path("v4-graph-body-name-mismatch");
+        let manifest = json!({
+            "name": "Project",
+            "version": "4.0.0",
+            "createdAt": "now",
+            "tables": [],
+            "graphs": [
+                { "id": "graph-1", "name": "data", "file": "data/data.spgh" }
+            ],
+            "folders": [],
+            "fitYByXFiles": [],
+            "tabulateFiles": [],
+            "snapshotFiles": []
+        });
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.start_file("data/data.spgh", opts).unwrap();
+        zip.write_all(br#"{"id":"graph-1","name":"stale-name","version":"1"}"#)
+            .unwrap();
+        zip.finish().unwrap();
+
+        let error = match read_project_file(path.to_str().unwrap()) {
+            Ok(_) => panic!("expected v4 graph body-name mismatch to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("graph name")));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_project_file_rejects_v4_manifest_with_indexed_body_name_mismatch() {
+        let path = temp_project_path("v4-indexed-body-name-mismatch");
+        let manifest = json!({
+            "name": "Project",
+            "version": "4.0.0",
+            "createdAt": "now",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+            "fitYByXFiles": [
+                { "id": "fit-1", "name": "data", "file": "data/data.spf", "kind": "fitYByX" }
+            ],
+            "tabulateFiles": [],
+            "snapshotFiles": [
+                { "id": "snap-1", "name": "snap", "file": "snapshots/snap.spf" }
+            ]
+        });
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.start_file("data/data.spf", opts).unwrap();
+        zip.write_all(br#"{"id":"fit-1","name":"stale-fit"}"#)
+            .unwrap();
+        zip.start_file("snapshots/snap.spf", opts).unwrap();
+        zip.write_all(br#"{"id":"snap-1","name":"stale-snapshot"}"#)
+            .unwrap();
+        zip.finish().unwrap();
+
+        let error = match read_project_file(path.to_str().unwrap()) {
+            Ok(_) => panic!("expected v4 indexed body-name mismatch to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("document name")));
 
         let _ = std::fs::remove_file(path);
     }
