@@ -101,14 +101,54 @@ assert.equal(
     validGraphIds: Set<string>,
     validTabulateIds: Set<string>,
     validFitYByXIds: Set<string>,
-    validFitModelIds: Set<string>,
     validDistributionIds: Set<string>,
+    validFitModelIds: Set<string>,
   ) => void;
-}).pruneAssignments(new Set(), new Set(), new Set(), new Set(), new Set(["fit-model-1"]), new Set());
+}).pruneAssignments(new Set(), new Set(), new Set(), new Set(), new Set(), new Set(["fit-model-1"]));
 
 assert.deepEqual(
   (useFolderStore.getState() as unknown as { fitModelFolders: Record<string, string> }).fitModelFolders,
   { "fit-model-1": "models" },
+);
+
+resetStore();
+
+(useFolderStore.getState() as unknown as {
+  loadFromProject: (data: {
+    folders: string[];
+    tableFolders: Record<string, string>;
+    graphFolders: Record<string, string>;
+    tabulateFolders: Record<string, string>;
+    fitYByXFolders: Record<string, string>;
+    fitModelFolders: Record<string, string>;
+    distributionFolders: Record<string, string>;
+  }) => void;
+}).loadFromProject({
+  folders: ["analysis"],
+  tableFolders: {},
+  graphFolders: {},
+  tabulateFolders: {},
+  fitYByXFolders: {},
+  fitModelFolders: {},
+  distributionFolders: {
+    "dist-keep": "analysis/distributions",
+    "dist-stale": "analysis/old",
+  },
+});
+
+(useFolderStore.getState() as unknown as {
+  pruneAssignments: (
+    validDatasetIds: Set<string>,
+    validGraphIds: Set<string>,
+    validTabulateIds: Set<string>,
+    validFitYByXIds: Set<string>,
+    validDistributionIds: Set<string>,
+  ) => void;
+}).pruneAssignments(new Set(), new Set(), new Set(), new Set(), new Set(["dist-keep"]));
+
+assert.deepEqual(
+  (useFolderStore.getState() as unknown as { distributionFolders: Record<string, string> }).distributionFolders,
+  { "dist-keep": "analysis/distributions" },
 );
 
 useFolderStore.getState().reset();

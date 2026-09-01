@@ -111,9 +111,9 @@ interface FolderStore {
     tableFolders: Record<string, string>;
     graphFolders: Record<string, string>;
     tabulateFolders: Record<string, string>;
-    fitYByXFolders: Record<string, string>;
-    fitModelFolders: Record<string, string>;
-    distributionFolders: Record<string, string>;
+    fitYByXFolders?: Record<string, string>;
+    fitModelFolders?: Record<string, string>;
+    distributionFolders?: Record<string, string>;
   }) => void;
 
   /** 关闭项目时重置。 */
@@ -154,8 +154,8 @@ interface FolderStore {
     validGraphIds: Set<string>,
     validTabulateIds: Set<string>,
     validFitYByXIds: Set<string>,
-    validFitModelIds: Set<string>,
-    validDistributionIds: Set<string>,
+    validDistributionIds?: Set<string>,
+    validFitModelIds?: Set<string>,
   ) => void;
 
   /** 切换文件夹折叠态。 */
@@ -202,7 +202,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     tableFolders,
     graphFolders,
     tabulateFolders,
-    fitYByXFolders,
+    fitYByXFolders = {},
     fitModelFolders = {},
     distributionFolders = {},
   }) => {
@@ -533,8 +533,8 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     validGraphIds,
     validTabulateIds,
     validFitYByXIds,
-    validFitModelIds = new Set<string>(),
     validDistributionIds = new Set<string>(),
+    validFitModelIds = new Set<string>(),
   ) => {
     const { tableFolders, graphFolders, tabulateFolders, fitYByXFolders, fitModelFolders, distributionFolders } = get();
     const tbl: Record<string, string> = {};
