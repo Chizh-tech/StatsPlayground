@@ -17,7 +17,7 @@ export type FitModelReportState =
   | { status: "loading"; result: FitModelResult | null; error: null; configurationKey: string }
   | { status: "success"; result: FitModelResult; error: null; configurationKey: string }
   | { status: "stale"; result: FitModelResult; error: string | null; configurationKey: string }
-  | { status: "error"; result: FitModelResult | null; error: string; configurationKey: string };
+  | { status: "error"; result: FitModelResult | null; error: string; configurationKey: string | null };
 
 export const FIT_MODEL_IDLE_REPORT_STATE: FitModelReportState = {
   status: "idle",
@@ -98,6 +98,23 @@ function normalizeFitModelReportError(error: unknown): string {
 
 function resultFromState(state: FitModelReportState): FitModelResult | null {
   return state.result;
+}
+
+function generationFromConfigurationKey(configurationKey: string | null): number | null {
+  if (configurationKey == null) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(configurationKey) as { generation?: unknown };
+    if (typeof parsed.generation === "number" && Number.isFinite(parsed.generation)) {
+      return parsed.generation;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 export function createFitModelReportController(
@@ -220,27 +237,47 @@ export function createFitModelReportController(
         }
 
         const message = normalizeFitModelReportError(error);
-        const configurationKey = nextConfigurationKey ?? current.configurationKey;
-        if (configurationKey == null) {
-          emit({
-            status: "idle",
-            result: null,
-            error: null,
-            configurationKey: null,
-          });
-          return;
-        }
-
         const previousResult = resultFromState(state);
+        const previousConfigurationKey = state.configurationKey;
+        const inferredGeneration = generationFromConfigurationKey(previousConfigurationKey);
+        const inferredConfigurationKey = inferredGeneration == null
+          ? null
+          : fitModelConfigurationKey({
+            responseColumn: item.response.name,
+            terms: item.terms,
+            centeringMethod: item.centeringMethod,
+            confidenceLevel: FIT_MODEL_CONFIDENCE_LEVEL,
+            generation: inferredGeneration,
+          });
+
         if (previousResult !== null) {
+          const staleConfigurationKey = nextConfigurationKey
+            ?? current.configurationKey
+            ?? inferredConfigurationKey
+            ?? previousConfigurationKey;
+          if (staleConfigurationKey == null) {
+            emit({
+              status: "error",
+              result: previousResult,
+              error: message,
+              configurationKey: null,
+            });
+            return;
+          }
+
           emit({
             status: "stale",
             result: previousResult,
             error: message,
-            configurationKey,
+            configurationKey: staleConfigurationKey,
           });
           return;
         }
+
+        const configurationKey = nextConfigurationKey
+          ?? current.configurationKey
+          ?? inferredConfigurationKey
+          ?? previousConfigurationKey;
 
         emit({
           status: "error",

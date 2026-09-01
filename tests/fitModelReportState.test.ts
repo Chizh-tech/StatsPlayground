@@ -428,6 +428,124 @@ async function testFailedReplacementKeepsOldResultWithCurrentError(): Promise<vo
   expectStale(states.at(-1)!, originalResult, replacementKey, "replacement failed");
 }
 
+async function testPriorSuccessThenGenerationLookupRejectsYieldsStaleWithError(): Promise<void> {
+  const itemA = createItem({ terms: [{ kind: "main", columnNames: ["A"] }] });
+  const itemB = createItem({ terms: [{ kind: "main", columnNames: ["B"] }] });
+
+  const generation = createDeferred<number>();
+  const firstRun = createDeferred<FitModelResult>();
+  const states: FitModelReportState[] = [];
+  let generationCalls = 0;
+
+  const controller = createFitModelReportController({
+    onStateChange: (state) => {
+      states.push(state);
+    },
+    getDatasetGeneration: async () => {
+      generationCalls += 1;
+      if (generationCalls === 1) {
+        return generation.promise;
+      }
+      throw new Error("generation lookup failed");
+    },
+    run: async () => firstRun.promise,
+  });
+
+  const firstLoad = controller.load(itemA);
+  generation.resolve(31);
+  await flushMicrotasks();
+
+  const firstResult = makeFittedResult({ usedRows: 71 });
+  firstRun.resolve(firstResult);
+  await firstLoad;
+
+  const replacement = controller.load(itemB);
+  await replacement;
+
+  const replacementKey = fitModelConfigurationKey({
+    responseColumn: itemB.response.name,
+    terms: itemB.terms,
+    centeringMethod: itemB.centeringMethod,
+    confidenceLevel: 0.95,
+    generation: 31,
+  });
+  expectStale(states.at(-1)!, firstResult, replacementKey, "generation lookup failed");
+}
+
+async function testFirstLoadGenerationLookupRejectsYieldsErrorWithNullResult(): Promise<void> {
+  const item = createItem();
+  const states: FitModelReportState[] = [];
+
+  const controller = createFitModelReportController({
+    onStateChange: (state) => {
+      states.push(state);
+    },
+    getDatasetGeneration: async () => {
+      throw new Error("generation lookup failed");
+    },
+    run: async () => {
+      throw new Error("run should not be called");
+    },
+  });
+
+  await controller.load(item);
+
+  const finalState = states.at(-1)!;
+  assert.equal(finalState.status, "error");
+  assert.equal(finalState.result, null);
+  assert.equal(finalState.error, "generation lookup failed");
+  assert.equal(finalState.configurationKey, null);
+}
+
+async function testLatestConfigurationRemainsCurrentWhenOlderResolvesLast(): Promise<void> {
+  const generation = createDeferred<number>();
+  const runA = createDeferred<FitModelResult>();
+  const runB = createDeferred<FitModelResult>();
+  const requests: FitModelRequest[] = [];
+  const states: FitModelReportState[] = [];
+
+  const itemA = createItem({ terms: [{ kind: "main", columnNames: ["A"] }] });
+  const itemB = createItem({ terms: [{ kind: "main", columnNames: ["B"] }] });
+
+  const controller = createFitModelReportController({
+    onStateChange: (state) => {
+      states.push(state);
+    },
+    getDatasetGeneration: async () => generation.promise,
+    run: async (request) => {
+      requests.push(request);
+      return requests.length === 1 ? runA.promise : runB.promise;
+    },
+  });
+
+  const loadA = controller.load(itemA);
+  generation.resolve(44);
+  await flushMicrotasks();
+  assert.equal(requests.length, 1);
+
+  const loadB = controller.load(itemB);
+  await flushMicrotasks();
+  assert.equal(requests.length, 2);
+
+  const resultB = makeFittedResult({ usedRows: 82, predictorColumns: ["B"] });
+  runB.resolve(resultB);
+  await loadB;
+
+  const keyB = fitModelConfigurationKey({
+    responseColumn: itemB.response.name,
+    terms: itemB.terms,
+    centeringMethod: itemB.centeringMethod,
+    confidenceLevel: 0.95,
+    generation: 44,
+  });
+  expectSuccess(states.at(-1)!, resultB, keyB);
+
+  runA.resolve(makeFittedResult({ usedRows: 999, predictorColumns: ["A"] }));
+  await loadA;
+
+  expectSuccess(states.at(-1)!, resultB, keyB);
+}
+
 async function testItemSwitchAndDisposeFenceOldResults(): Promise<void> {
   const itemA = createItem({ id: "fit-a" });
   const itemB = createItem({
@@ -509,6 +627,9 @@ await testLatestTokenWinsEvenWhenConfigurationKeyMatches();
 await testDatasetGenerationChangeInvalidatesOlderRequestBeforeRun();
 await testConfigurationChangeShowsStaleUntilReplacementSucceeds();
 await testFailedReplacementKeepsOldResultWithCurrentError();
+await testPriorSuccessThenGenerationLookupRejectsYieldsStaleWithError();
+await testFirstLoadGenerationLookupRejectsYieldsErrorWithNullResult();
+await testLatestConfigurationRemainsCurrentWhenOlderResolvesLast();
 await testItemSwitchAndDisposeFenceOldResults();
 
 console.log("fitModel report state contract passed");
