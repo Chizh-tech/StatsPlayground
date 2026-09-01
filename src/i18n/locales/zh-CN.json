@@ -1109,6 +1109,7 @@
       "termKindInteraction": "交互",
       "create": "创建",
       "cancel": "取消",
+      "createError": "创建拟合模型失败: {{message}}",
       "validation": {
         "responseCollision": "{{field}} 已分配到其他角色。",
         "mainRequiredByInteraction": "{{field}} 被 {{interactions}} 使用。",

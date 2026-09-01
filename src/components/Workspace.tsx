@@ -2328,7 +2328,6 @@ export function Workspace() {
                     setActiveGraphBuilderId(null);
                     setActiveFitYByXId(null);
                     setActiveFitModelId(null);
-                    setActiveFitModelId(null);
                     setActiveTabulateId(null);
                     setActiveDataset(dataset.id);
                     recordAction(t("history.tabulateTableCreated", { name: dataset.name }));
@@ -2528,7 +2527,7 @@ export function Workspace() {
         <FitModelRoleDialog
           dataset={datasets.find((dataset) => dataset.id === activeDatasetId)!}
           onCancel={() => setShowFitModelDialog(false)}
-          onCreateDefinition={(definition) => { void handleCreateFitModelItem(definition); }}
+          onCreateDefinition={handleCreateFitModelItem}
         />
       )}
 

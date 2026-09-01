@@ -56,6 +56,24 @@ export interface FitModelFieldLoadSnapshot {
   fields: FitModelFieldInfo[];
 }
 
+export interface FitModelCreateDefinition {
+  response: FieldRef;
+  terms: FitModelTerm[];
+  centeringMethod: FitModelCenteringMethod;
+}
+
+export interface FitModelSubmitState {
+  creating: boolean;
+  createError: string | null;
+}
+
+export interface FitModelSubmitCoordinator {
+  getState: () => FitModelSubmitState;
+  submit: (definition: FitModelCreateDefinition) => Promise<boolean>;
+}
+
+export type FitModelCreateHandler = (definition: FitModelCreateDefinition) => void | Promise<void>;
+
 export function createFitModelDraft(): FitModelDraft {
   return {
     response: null,
@@ -73,6 +91,43 @@ export function createFitModelFieldLoadSnapshot(): FitModelFieldLoadSnapshot {
     error: null,
     fields: [],
   };
+}
+
+export function createFitModelSubmitState(): FitModelSubmitState {
+  return {
+    creating: false,
+    createError: null,
+  };
+}
+
+export function createFitModelSubmitCoordinator(onCreate: FitModelCreateHandler): FitModelSubmitCoordinator {
+  let state = createFitModelSubmitState();
+  let inFlight: Promise<void> | null = null;
+
+  const getState = () => state;
+
+  const submit = async (definition: FitModelCreateDefinition): Promise<boolean> => {
+    if (inFlight) {
+      return false;
+    }
+
+    state = { creating: true, createError: null };
+    const attempt = Promise.resolve().then(() => onCreate(definition));
+    inFlight = attempt;
+
+    try {
+      await attempt;
+      state = { creating: false, createError: null };
+      return true;
+    } catch (reason) {
+      state = { creating: false, createError: String(reason) };
+      return false;
+    } finally {
+      inFlight = null;
+    }
+  };
+
+  return { getState, submit };
 }
 
 export function beginFitModelFieldLoad(snapshot: FitModelFieldLoadSnapshot): FitModelFieldLoadSnapshot {

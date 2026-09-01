@@ -1094,6 +1094,7 @@
       "termKindInteraction": "Tương tác",
       "create": "Tạo",
       "cancel": "Hủy",
+      "createError": "Tạo Khớp Mô hình thất bại: {{message}}",
       "validation": {
         "responseCollision": "{{field}} đã được gán cho vai trò khác.",
         "mainRequiredByInteraction": "{{field}} đang được dùng bởi {{interactions}}.",

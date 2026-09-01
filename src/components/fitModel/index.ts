@@ -42,6 +42,8 @@ export {
   FIT_MODEL_DIALOG_FIELD_DRAG_MIME,
   assignFitModelResponse,
   canCreateFitModel,
+  createFitModelSubmitCoordinator,
+  createFitModelSubmitState,
   createAssignResponseAction,
   createFitModelDropAction,
   createFitModelDraft,
@@ -60,11 +62,15 @@ export {
   type FitModelDragPayload,
   type FitModelDialogMessage,
   type FitModelDialogMessageCode,
+  type FitModelCreateDefinition,
+  type FitModelCreateHandler,
   type FitModelDropZone,
   type FitModelDraft,
   type FitModelDraftAction,
   type FitModelFieldLoadSnapshot,
   type FitModelFieldInfo,
+  type FitModelSubmitCoordinator,
+  type FitModelSubmitState,
 } from "./fitModelDialogState";
 
 export {

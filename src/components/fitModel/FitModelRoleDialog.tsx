@@ -1,17 +1,17 @@
-import { useEffect, useId, useMemo, useState, type DragEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { fitModelParameterCount } from "@/components/fitModel/fitModelConfig";
-import type { FieldRef } from "@/graphCore/types";
 import { dataService } from "@/services/dataService";
 import type { ColumnDisplayProps, DatasetMeta } from "@/types/data";
-import type { FitModelCenteringMethod, FitModelTerm } from "@/types/fitModel";
 
 import {
   beginFitModelFieldLoad,
   FIT_MODEL_DIALOG_FIELD_DRAG_MIME,
   canCreateFitModel,
   createAssignResponseAction,
+  createFitModelSubmitCoordinator,
+  createFitModelSubmitState,
   createFitModelDropAction,
   createFitModelDraft,
   createFitModelFieldLoadSnapshot,
@@ -25,17 +25,14 @@ import {
   resolveFitModelFieldLoadSuccess,
   termsFromDraft,
   toFitModelFieldInfo,
+  type FitModelCreateDefinition,
   type FitModelDialogMessage,
   type FitModelFieldInfo,
 } from "./fitModelDialogState";
 
 export interface FitModelRoleDialogProps {
   dataset: DatasetMeta;
-  onCreateDefinition: (definition: {
-    response: FieldRef;
-    terms: FitModelTerm[];
-    centeringMethod: FitModelCenteringMethod;
-  }) => void;
+  onCreateDefinition: (definition: FitModelCreateDefinition) => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -49,13 +46,26 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
   const [responseDragOver, setResponseDragOver] = useState(false);
   const [mainEffectsDragOver, setMainEffectsDragOver] = useState(false);
   const [search, setSearch] = useState("");
+  const [submitState, setSubmitState] = useState(() => createFitModelSubmitState());
+  const mountedRef = useRef(true);
+  const onCreateDefinitionRef = useRef(onCreateDefinition);
+  const submitCoordinatorRef = useRef(createFitModelSubmitCoordinator((definition) => onCreateDefinitionRef.current(definition)));
 
   const fields = loadSnapshot.fields;
   const loading = loadSnapshot.loading;
   const loadError = loadSnapshot.error;
 
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    onCreateDefinitionRef.current = onCreateDefinition;
+  }, [onCreateDefinition]);
+
   useEffect(() => {
     setDraft(createFitModelDraft());
+    setSubmitState(createFitModelSubmitState());
   }, [dataset.id]);
 
   useEffect(() => {
@@ -106,7 +116,13 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
   const terms = useMemo(() => termsFromDraft(draft), [draft]);
   const parameterCount = useMemo(() => fitModelParameterCount(terms), [terms]);
   const validationText = useMemo(() => toValidationText(draft.validationMessage, t), [draft.validationMessage, t]);
-  const createDisabled = loading || !canCreateFitModel(draft);
+  const createDisabled = loading || submitState.creating || !canCreateFitModel(draft);
+  const createErrorText = submitState.createError
+    ? t("fitModel.dialog.createError", {
+      defaultValue: "Failed to create Fit Model: {{message}}",
+      message: submitState.createError,
+    })
+    : null;
 
   const assignedMainNames = new Set(draft.mainEffects.map((field) => field.name));
   const fieldsByName = useMemo(
@@ -126,16 +142,23 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
     return pairs;
   }, [draft.mainEffects]);
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (createDisabled || !draft.response) {
       return;
     }
 
-    onCreateDefinition({
+    const definition: FitModelCreateDefinition = {
       response: { ...draft.response },
       terms,
       centeringMethod: draft.centeringMethod,
-    });
+    };
+
+    const submitPromise = submitCoordinatorRef.current.submit(definition);
+    setSubmitState(submitCoordinatorRef.current.getState());
+    await submitPromise;
+    if (mountedRef.current) {
+      setSubmitState(submitCoordinatorRef.current.getState());
+    }
   };
 
   const handleDropAssignment = (zone: "response" | "mainEffects", event: DragEvent<HTMLElement>) => {
@@ -522,6 +545,7 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
               </button>
             </div>
           ) : null}
+          {createErrorText ? <div className="sp-dialog-error" role="alert">{createErrorText}</div> : null}
           {validationText ? <div id={validationId} className="sp-dialog-error" role="alert">{validationText}</div> : null}
         </div>
 

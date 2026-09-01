@@ -1094,6 +1094,7 @@
       "termKindInteraction": "交互作用",
       "create": "建立",
       "cancel": "取消",
+      "createError": "建立配適模型失敗: {{message}}",
       "validation": {
         "responseCollision": "{{field}} 已被指派到其他角色。",
         "mainRequiredByInteraction": "{{field}} 被 {{interactions}} 使用。",

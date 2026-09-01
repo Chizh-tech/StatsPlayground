@@ -1098,6 +1098,7 @@
       "termKindInteraction": "Interaction",
       "create": "Create",
       "cancel": "Cancel",
+      "createError": "Failed to create Fit Model: {{message}}",
       "validation": {
         "responseCollision": "{{field}} is already assigned to another role.",
         "mainRequiredByInteraction": "{{field}} is used by {{interactions}}.",

@@ -34,6 +34,7 @@ const workspaceSource = readSource("../src/components/Workspace.tsx");
 assertSourceIncludes(workspaceSource, "useFitModelStore", "Workspace must consume the Fit Model store");
 assertSourceIncludes(workspaceSource, "FitModelRoleDialog", "Workspace must render the Fit Model role dialog");
 assertSourceIncludes(workspaceSource, "FitModelView", "Workspace must render the Fit Model main-pane view");
+assertSourceIncludes(workspaceSource, "onCreateDefinition={handleCreateFitModelItem}", "Workspace must pass the async fit model creation callback directly for awaited error handling");
 
 assertSourceIncludes(workspaceSource, "menu.fitModel", "Analysis menu must include menu.fitModel");
 assertSourceIncludes(workspaceSource, "handleCreateFitModel", "Fit Model menu entry must open the creation flow");
@@ -128,6 +129,7 @@ const requiredLocalePaths = [
   "fitModel.dialog.termKindInteraction",
   "fitModel.dialog.create",
   "fitModel.dialog.cancel",
+  "fitModel.dialog.createError",
   "fitModel.dialog.validation.responseCollision",
   "fitModel.dialog.validation.mainRequiredByInteraction",
   "fitModel.dialog.validation.lastMainEffect",

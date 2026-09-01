@@ -9,6 +9,7 @@ import {
   FIT_MODEL_DIALOG_FIELD_DRAG_MIME,
   assignFitModelResponse,
   canCreateFitModel,
+  createFitModelSubmitCoordinator,
   createAssignResponseAction,
   createFitModelDropAction,
   createFitModelDraft,
@@ -411,5 +412,69 @@ assert.deepEqual(continuousColumn, {
 const ordinalColumn = toFitModelFieldInfo("lot", "DOUBLE", { extras: { valueOrder: { values: ["1", "2"] } } });
 assert.equal(ordinalColumn.field.type, "ordinal");
 assert.equal(ordinalColumn.modelingRole, "Ordinal");
+
+assert.equal(
+  fitModelRoleDialogSource.includes("createFitModelSubmitCoordinator")
+    && fitModelRoleDialogSource.includes("createError")
+    && fitModelRoleDialogSource.includes("creating"),
+  true,
+  "FitModelRoleDialog must coordinate async submit state with helper-backed creating/createError state",
+);
+
+function createDeferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolveDeferred: (() => void) | null = null;
+  let rejectDeferred: ((reason: unknown) => void) | null = null;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolveDeferred = resolvePromise;
+    rejectDeferred = rejectPromise;
+  });
+  return {
+    promise,
+    resolve: () => resolveDeferred?.(),
+    reject: (reason) => rejectDeferred?.(reason),
+  };
+}
+
+let invocationCount = 0;
+let deferred = createDeferred();
+const coordinator = createFitModelSubmitCoordinator(async () => {
+  invocationCount += 1;
+  return deferred.promise;
+});
+
+assert.deepEqual(coordinator.getState(), { creating: false, createError: null });
+
+const submitDefinition = {
+  response: response.field,
+  terms: termsFromDraft(validDraft),
+  centeringMethod: validDraft.centeringMethod,
+};
+
+const firstSubmit = coordinator.submit(submitDefinition);
+await Promise.resolve();
+assert.equal(invocationCount, 1);
+assert.deepEqual(coordinator.getState(), { creating: true, createError: null });
+
+const secondSubmit = await coordinator.submit(submitDefinition);
+assert.equal(secondSubmit, false);
+assert.equal(invocationCount, 1, "duplicate submits must be ignored while one submit is in flight");
+
+deferred.reject(new Error("create failed"));
+assert.equal(await firstSubmit, false);
+assert.equal(coordinator.getState().creating, false);
+assert.equal(coordinator.getState().createError?.includes("create failed"), true);
+
+deferred = createDeferred();
+const retrySubmit = coordinator.submit(submitDefinition);
+await Promise.resolve();
+assert.equal(invocationCount, 2, "retry after failure must invoke submit again");
+assert.deepEqual(coordinator.getState(), { creating: true, createError: null });
+deferred.resolve();
+assert.equal(await retrySubmit, true);
+assert.deepEqual(coordinator.getState(), { creating: false, createError: null });
 
 console.log("fitModel dialog contract tests passed");
