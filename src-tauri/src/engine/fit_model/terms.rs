@@ -1,8 +1,83 @@
 use std::collections::BTreeSet;
 
-use crate::models::fit_model::{FitModelResolvedTerm, FitModelTerm, FitModelTermKind};
+use crate::models::fit_model::{FitModelTerm, FitModelTermKind};
 
-pub type ResolvedTerm = FitModelResolvedTerm;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedTerm {
+    term_id: String,
+    kind: FitModelTermKind,
+    column_names: Vec<String>,
+    label: String,
+}
+
+impl ResolvedTerm {
+    fn main(column_name: String) -> Self {
+        Self {
+            term_id: column_name.clone(),
+            kind: FitModelTermKind::Main,
+            column_names: vec![column_name.clone()],
+            label: column_name,
+        }
+    }
+
+    fn interaction(left: String, right: String) -> Self {
+        let term_id = format!("{left}*{right}");
+        Self {
+            term_id: term_id.clone(),
+            kind: FitModelTermKind::Interaction,
+            column_names: vec![left, right],
+            label: term_id,
+        }
+    }
+
+    pub fn term_id(&self) -> &str {
+        &self.term_id
+    }
+
+    pub fn kind(&self) -> &FitModelTermKind {
+        &self.kind
+    }
+
+    pub fn column_names(&self) -> &[String] {
+        &self.column_names
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub fn main_column(&self) -> Option<&str> {
+        if self.kind == FitModelTermKind::Main && self.column_names.len() == 1 {
+            return Some(self.column_names[0].as_str());
+        }
+        None
+    }
+
+    pub fn interaction_columns(&self) -> Option<(&str, &str)> {
+        if self.kind == FitModelTermKind::Interaction && self.column_names.len() == 2 {
+            return Some((
+                self.column_names[0].as_str(),
+                self.column_names[1].as_str(),
+            ));
+        }
+        None
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_parts_for_test(
+        term_id: String,
+        kind: FitModelTermKind,
+        column_names: Vec<String>,
+        label: String,
+    ) -> Self {
+        Self {
+            term_id,
+            kind,
+            column_names,
+            label,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TermError {
@@ -43,12 +118,7 @@ pub fn resolve_terms(terms: &[FitModelTerm]) -> Result<Vec<ResolvedTerm>, TermEr
                     return Err(TermError::DuplicateTerm(column));
                 }
                 mains_seen.insert(column.clone());
-                mains.push(ResolvedTerm {
-                    term_id: column.clone(),
-                    kind: FitModelTermKind::Main,
-                    column_names: vec![column.clone()],
-                    label: column,
-                });
+                mains.push(ResolvedTerm::main(column));
             }
             FitModelTermKind::Interaction => {
                 if term.column_names.len() != 2 {
@@ -69,25 +139,20 @@ pub fn resolve_terms(terms: &[FitModelTerm]) -> Result<Vec<ResolvedTerm>, TermEr
                     return Err(TermError::DuplicateTerm(id));
                 }
 
-                interactions.push(ResolvedTerm {
-                    term_id: id.clone(),
-                    kind: FitModelTermKind::Interaction,
-                    column_names: cols,
-                    label: id,
-                });
+                interactions.push(ResolvedTerm::interaction(cols[0].clone(), cols[1].clone()));
             }
         }
     }
 
     for interaction in &interactions {
-        for column in &interaction.column_names {
+        for column in interaction.column_names() {
             if !mains_seen.contains(column) {
                 return Err(TermError::MissingMainEffect(column.clone()));
             }
         }
     }
 
-    interactions.sort_by(|left, right| left.term_id.cmp(&right.term_id));
+    interactions.sort_by(|left, right| left.term_id().cmp(right.term_id()));
 
     let mut resolved = Vec::with_capacity(mains.len() + interactions.len());
     resolved.extend(mains);
@@ -133,6 +198,32 @@ mod tests {
         assert_eq!(
             resolve_terms(&terms),
             Err(TermError::DuplicateTerm("A*B".into()))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_wire_main_arity() {
+        let terms = vec![term("main", &["A", "B"])];
+        assert_eq!(
+            resolve_terms(&terms),
+            Err(TermError::InvalidArity {
+                kind: FitModelTermKind::Main,
+                expected: 1,
+                actual: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_wire_interaction_arity() {
+        let terms = vec![term("interaction", &["A"])];
+        assert_eq!(
+            resolve_terms(&terms),
+            Err(TermError::InvalidArity {
+                kind: FitModelTermKind::Interaction,
+                expected: 2,
+                actual: 1,
+            })
         );
     }
 }

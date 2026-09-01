@@ -16,13 +16,14 @@ pub enum MatrixError {
     },
     EmptyTrainingData,
     MissingCenter(String),
+    InvalidResolvedTerm(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelMatrixSpec {
-    pub terms: Vec<ResolvedTerm>,
-    pub centering_method: FitModelCenteringMethod,
-    pub centers: Vec<FitModelCenter>,
+    terms: Vec<ResolvedTerm>,
+    centering_method: FitModelCenteringMethod,
+    centers: Vec<FitModelCenter>,
 }
 
 impl ModelMatrixSpec {
@@ -31,6 +32,7 @@ impl ModelMatrixSpec {
         centering_method: FitModelCenteringMethod,
         columns: &BTreeMap<String, Vec<f64>>,
     ) -> Result<Self, MatrixError> {
+        validate_resolved_terms(&terms)?;
         let referenced = referenced_columns(&terms);
         let row_count = validate_columns(&referenced, columns)?;
         if row_count == 0 {
@@ -56,10 +58,23 @@ impl ModelMatrixSpec {
         })
     }
 
+    pub fn terms(&self) -> &[ResolvedTerm] {
+        &self.terms
+    }
+
+    pub fn centering_method(&self) -> &FitModelCenteringMethod {
+        &self.centering_method
+    }
+
+    pub fn centers(&self) -> &[FitModelCenter] {
+        &self.centers
+    }
+
     pub fn transform_training_columns(
         &self,
         columns: &BTreeMap<String, Vec<f64>>,
     ) -> Result<DMatrix<f64>, MatrixError> {
+        validate_resolved_terms(&self.terms)?;
         let referenced = referenced_columns(&self.terms);
         let row_count = validate_columns(&referenced, columns)?;
         if row_count == 0 {
@@ -76,27 +91,39 @@ impl ModelMatrixSpec {
         for row in 0..row_count {
             data.push(1.0);
             for term in &self.terms {
-                let value = match term.kind {
+                let value = match term.kind() {
                     FitModelTermKind::Main => {
-                        let column_name = &term.column_names[0];
+                        let column_name = term.main_column().ok_or_else(|| {
+                            MatrixError::InvalidResolvedTerm(format!(
+                                "main term '{}' does not have exactly one column",
+                                term.term_id()
+                            ))
+                        })?;
                         read_value(columns, column_name, row)?
                     }
                     FitModelTermKind::Interaction => {
-                        let left_name = &term.column_names[0];
-                        let right_name = &term.column_names[1];
+                        let (left_name, right_name) =
+                            term.interaction_columns().ok_or_else(|| {
+                                MatrixError::InvalidResolvedTerm(format!(
+                                    "interaction term '{}' does not have exactly two columns",
+                                    term.term_id()
+                                ))
+                            })?;
                         let left = read_value(columns, left_name, row)?;
                         let right = read_value(columns, right_name, row)?;
                         match self.centering_method {
                             FitModelCenteringMethod::None => left * right,
                             FitModelCenteringMethod::Mean => {
                                 let left_center = center_by_name
-                                    .get(left_name.as_str())
+                                    .get(left_name)
                                     .copied()
-                                    .ok_or_else(|| MatrixError::MissingCenter(left_name.clone()))?;
+                                    .ok_or_else(|| MatrixError::MissingCenter(left_name.to_string()))?;
                                 let right_center = center_by_name
-                                    .get(right_name.as_str())
+                                    .get(right_name)
                                     .copied()
-                                    .ok_or_else(|| MatrixError::MissingCenter(right_name.clone()))?;
+                                    .ok_or_else(|| {
+                                        MatrixError::MissingCenter(right_name.to_string())
+                                    })?;
                                 (left - left_center) * (right - right_center)
                             }
                         }
@@ -113,7 +140,7 @@ impl ModelMatrixSpec {
 fn referenced_columns(terms: &[ResolvedTerm]) -> BTreeSet<String> {
     let mut referenced = BTreeSet::new();
     for term in terms {
-        for name in &term.column_names {
+        for name in term.column_names() {
             referenced.insert(name.clone());
         }
     }
@@ -123,8 +150,8 @@ fn referenced_columns(terms: &[ResolvedTerm]) -> BTreeSet<String> {
 fn interaction_columns(terms: &[ResolvedTerm]) -> Vec<String> {
     let mut names = BTreeSet::new();
     for term in terms {
-        if term.kind == FitModelTermKind::Interaction {
-            for name in &term.column_names {
+        if term.kind() == &FitModelTermKind::Interaction {
+            for name in term.column_names() {
                 names.insert(name.clone());
             }
         }
@@ -241,23 +268,26 @@ fn read_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::fit_model::resolve_terms;
+    use crate::models::fit_model::FitModelTerm;
 
-    fn main(name: &str) -> ResolvedTerm {
-        ResolvedTerm {
-            term_id: name.to_string(),
-            kind: FitModelTermKind::Main,
-            column_names: vec![name.to_string()],
-            label: name.to_string(),
-        }
-    }
+    fn resolved_terms(terms: &[(&str, &[&str])]) -> Vec<ResolvedTerm> {
+        let wire_terms = terms
+            .iter()
+            .map(|(kind, columns)| {
+                let mapped_kind = match *kind {
+                    "main" => FitModelTermKind::Main,
+                    "interaction" => FitModelTermKind::Interaction,
+                    _ => panic!("unsupported test term kind: {kind}"),
+                };
+                FitModelTerm {
+                    kind: mapped_kind,
+                    column_names: columns.iter().map(|value| (*value).to_string()).collect(),
+                }
+            })
+            .collect::<Vec<_>>();
 
-    fn interaction(left: &str, right: &str) -> ResolvedTerm {
-        ResolvedTerm {
-            term_id: format!("{left}*{right}"),
-            kind: FitModelTermKind::Interaction,
-            column_names: vec![left.to_string(), right.to_string()],
-            label: format!("{left}*{right}"),
-        }
+        resolve_terms(&wire_terms).expect("terms should resolve")
     }
 
     fn columns() -> BTreeMap<String, Vec<f64>> {
@@ -269,7 +299,7 @@ mod tests {
 
     #[test]
     fn raw_interaction_uses_uncentered_inputs() {
-        let terms = vec![main("A"), main("B"), interaction("A", "B")];
+        let terms = resolved_terms(&[("main", &["A"]), ("main", &["B"]), ("interaction", &["A", "B"])]);
         let spec = ModelMatrixSpec::from_columns(terms, FitModelCenteringMethod::None, &columns())
             .expect("spec should build");
 
@@ -279,12 +309,12 @@ mod tests {
 
         let expected = DMatrix::from_row_slice(2, 4, &[1.0, 1.0, 2.0, 2.0, 1.0, 3.0, 6.0, 18.0]);
         assert_eq!(matrix, expected);
-        assert!(spec.centers.is_empty());
+        assert!(spec.centers().is_empty());
     }
 
     #[test]
     fn mean_centered_interaction_keeps_main_effect_columns_raw() {
-        let terms = vec![main("A"), main("B"), interaction("A", "B")];
+        let terms = resolved_terms(&[("main", &["A"]), ("main", &["B"]), ("interaction", &["A", "B"])]);
         let spec = ModelMatrixSpec::from_columns(terms, FitModelCenteringMethod::Mean, &columns())
             .expect("spec should build");
 
@@ -295,7 +325,7 @@ mod tests {
         let expected = DMatrix::from_row_slice(2, 4, &[1.0, 1.0, 2.0, 2.0, 1.0, 3.0, 6.0, 2.0]);
         assert_eq!(matrix, expected);
         assert_eq!(
-            spec.centers,
+            spec.centers(),
             vec![
                 FitModelCenter {
                     column_name: "A".into(),
@@ -308,4 +338,63 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn read_only_accessors_expose_spec_state() {
+        let terms = resolved_terms(&[("main", &["A"]), ("main", &["B"]), ("interaction", &["A", "B"])]);
+        let spec = ModelMatrixSpec::from_columns(terms, FitModelCenteringMethod::Mean, &columns())
+            .expect("spec should build");
+
+        assert_eq!(spec.terms().len(), 3);
+        assert_eq!(spec.centering_method(), &FitModelCenteringMethod::Mean);
+        assert_eq!(spec.centers().len(), 2);
+    }
+
+    #[test]
+    fn malformed_internal_term_returns_error_not_panic() {
+        let malformed = ResolvedTerm::from_parts_for_test(
+            "A".into(),
+            FitModelTermKind::Main,
+            vec![],
+            "A".into(),
+        );
+        let spec = ModelMatrixSpec {
+            terms: vec![malformed],
+            centering_method: FitModelCenteringMethod::None,
+            centers: vec![],
+        };
+
+        let result = spec.transform_training_columns(&columns());
+        assert_eq!(
+            result,
+            Err(MatrixError::InvalidResolvedTerm(
+                "main term 'A' does not have exactly one column".into(),
+            ))
+        );
+    }
+}
+
+fn validate_resolved_terms(terms: &[ResolvedTerm]) -> Result<(), MatrixError> {
+    for term in terms {
+        match term.kind() {
+            FitModelTermKind::Main => {
+                if term.main_column().is_none() {
+                    return Err(MatrixError::InvalidResolvedTerm(format!(
+                        "main term '{}' does not have exactly one column",
+                        term.term_id()
+                    )));
+                }
+            }
+            FitModelTermKind::Interaction => {
+                if term.interaction_columns().is_none() {
+                    return Err(MatrixError::InvalidResolvedTerm(format!(
+                        "interaction term '{}' does not have exactly two columns",
+                        term.term_id()
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
