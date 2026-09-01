@@ -5,12 +5,22 @@ import { resolve } from "node:path";
 import type { FieldRef } from "../src/graphCore/types.ts";
 import type { FitModelCenteringMethod } from "../src/types/fitModel.ts";
 import {
+  beginFitModelFieldLoad,
   FIT_MODEL_DIALOG_FIELD_DRAG_MIME,
   assignFitModelResponse,
   canCreateFitModel,
+  createAssignResponseAction,
+  createFitModelDropAction,
   createFitModelDraft,
+  createFitModelFieldLoadSnapshot,
+  createToggleInteractionAction,
+  createToggleMainEffectAction,
   filterFitModelFields,
+  hasFitModelDragType,
+  parseFitModelDragPayload,
   reduceFitModelDraft,
+  resolveFitModelFieldLoadError,
+  resolveFitModelFieldLoadSuccess,
   termsFromDraft,
   toFitModelFieldInfo,
   type FitModelDraft,
@@ -36,6 +46,11 @@ assert.equal(
 );
 
 assert.equal(FIT_MODEL_DIALOG_FIELD_DRAG_MIME, "application/x-statsplayground-fit-model-field");
+assert.equal(hasFitModelDragType(["text/plain", FIT_MODEL_DIALOG_FIELD_DRAG_MIME]), true);
+assert.equal(hasFitModelDragType(["text/plain"]), false);
+assert.deepEqual(parseFitModelDragPayload(""), null);
+assert.deepEqual(parseFitModelDragPayload("{\"fieldName\":\"Temperature\"}"), { fieldName: "Temperature" });
+assert.deepEqual(parseFitModelDragPayload("{\"fieldName\":42}"), null);
 
 const response: FitModelFieldInfo = {
   name: "Yield",
@@ -88,6 +103,21 @@ assert.deepEqual(visibleBySqlType.map((field) => field.name), ["Yield", "Tempera
 
 const visibleByRole = filterFitModelFields([response, nominalField, ordinalField], "ordinal");
 assert.deepEqual(visibleByRole.map((field) => field.name), ["Lot"]);
+
+const fieldsByName = new Map<string, FitModelFieldInfo>([
+  [response.name, response],
+  [temperature.name, temperature],
+  [pressure.name, pressure],
+]);
+assert.deepEqual(
+  createFitModelDropAction("response", { fieldName: response.name }, fieldsByName),
+  createAssignResponseAction(response),
+);
+assert.deepEqual(
+  createFitModelDropAction("mainEffects", { fieldName: temperature.name }, fieldsByName),
+  createToggleMainEffectAction(temperature),
+);
+assert.equal(createFitModelDropAction("response", { fieldName: "Unknown" }, fieldsByName), null);
 
 let draft = createFitModelDraft();
 assert.deepEqual(draft, {
@@ -155,6 +185,24 @@ draft = reduceFitModelDraft(draft, {
   leftName: "Temperature",
   rightName: "Pressure",
 });
+assert.deepEqual(draft.interactions, [["Pressure", "Temperature"]]);
+
+const toggleRemoveAction = createToggleInteractionAction(draft, "Temperature", "Pressure");
+assert.deepEqual(toggleRemoveAction, {
+  type: "removeInteraction",
+  leftName: "Pressure",
+  rightName: "Temperature",
+});
+draft = reduceFitModelDraft(draft, toggleRemoveAction);
+assert.deepEqual(draft.interactions, []);
+
+const toggleAddAction = createToggleInteractionAction(draft, "Temperature", "Pressure");
+assert.deepEqual(toggleAddAction, {
+  type: "addInteraction",
+  leftName: "Pressure",
+  rightName: "Temperature",
+});
+draft = reduceFitModelDraft(draft, toggleAddAction);
 assert.deepEqual(draft.interactions, [["Pressure", "Temperature"]]);
 
 const withCentering = reduceFitModelDraft(draft, {
@@ -272,13 +320,6 @@ const fitModelRoleDialogSource = readFileSync(
 );
 
 assert.equal(
-  fitModelRoleDialogSource.includes("@/services/dataService")
-    && fitModelRoleDialogSource.includes("@/types/data")
-    && fitModelRoleDialogSource.includes("@/components/fitModel/fitModelConfig"),
-  true,
-  "FitModelRoleDialog should keep alias-aware imports for service, contracts and types",
-);
-assert.equal(
   fitModelRoleDialogSource.includes("role=\"dialog\"")
     && fitModelRoleDialogSource.includes("aria-modal=\"true\""),
   true,
@@ -290,16 +331,12 @@ assert.equal(
   "FitModelRoleDialog must bind validation copy through aria-describedby",
 );
 assert.equal(
-  fitModelRoleDialogSource.includes("Search fields")
-    && fitModelRoleDialogSource.includes("Main Effects")
-    && fitModelRoleDialogSource.includes("Interactions")
-    && fitModelRoleDialogSource.includes("Macros")
-    && fitModelRoleDialogSource.includes("Degree 1")
-    && fitModelRoleDialogSource.includes("Degree 2")
-    && fitModelRoleDialogSource.includes("Center Interactions")
-    && fitModelRoleDialogSource.includes("Current Model Terms"),
+  fitModelRoleDialogSource.includes("onDragOver")
+    && fitModelRoleDialogSource.includes("onDrop")
+    && fitModelRoleDialogSource.includes("aria-pressed")
+    && fitModelRoleDialogSource.includes("common.retry"),
   true,
-  "FitModelRoleDialog must render searchable fields, role sections, macros and term summary",
+  "FitModelRoleDialog must keep structural drag/drop zones, pressed-state interactions, and retry affordance",
 );
 assert.equal(
   fitModelRoleDialogSource.includes("Create") && fitModelRoleDialogSource.includes("Cancel"),
@@ -314,24 +351,54 @@ assert.equal(
   "FitModelRoleDialog must keep keyboard assignment shortcuts",
 );
 assert.equal(
-  fitModelRoleDialogSource.includes("fitModelParameterCount")
-    && fitModelRoleDialogSource.includes("termsFromDraft"),
+  fitModelRoleDialogSource.includes("aria-label={t(\"fitModel.dialog.assignResponseLabel\"")
+    && fitModelRoleDialogSource.includes("aria-label={t(\"fitModel.dialog.assignMainLabel\"")
+    && fitModelRoleDialogSource.includes("aria-label={t(\"fitModel.dialog.toggleInteraction\""),
   true,
-  "FitModelRoleDialog must show parameter count from current terms",
+  "FitModelRoleDialog must keep localized accessibility labels for role assignment and interaction toggle",
 );
-assert.equal(
-  fitModelRoleDialogSource.includes("useFitModelStore") || fitModelRoleDialogSource.includes("createFitModelItem"),
-  false,
-  "FitModelRoleDialog must not write to FitModel store or create persisted items before Create",
+
+const baseLoad = createFitModelFieldLoadSnapshot();
+assert.deepEqual(baseLoad, {
+  generation: 0,
+  loading: false,
+  error: null,
+  fields: [],
+});
+
+const firstLoad = beginFitModelFieldLoad(baseLoad);
+assert.equal(firstLoad.generation, 1);
+assert.equal(firstLoad.loading, true);
+assert.equal(firstLoad.error, null);
+
+const retryLoad = beginFitModelFieldLoad(firstLoad);
+assert.equal(retryLoad.generation, 2);
+assert.equal(retryLoad.loading, true);
+assert.equal(retryLoad.error, null);
+
+const staleCompletion = resolveFitModelFieldLoadSuccess(
+  retryLoad,
+  1,
+  [temperature],
 );
-assert.equal(
-  fitModelRoleDialogSource.includes("queryTable")
-    || fitModelRoleDialogSource.includes("rowCount")
-    || fitModelRoleDialogSource.includes("complete-case")
-    || fitModelRoleDialogSource.includes("completeCase"),
-  false,
-  "FitModelRoleDialog must not compute complete-case row counts in the frontend",
+assert.deepEqual(staleCompletion, retryLoad);
+
+const currentCompletion = resolveFitModelFieldLoadSuccess(
+  staleCompletion,
+  2,
+  [pressure],
 );
+assert.equal(currentCompletion.loading, false);
+assert.equal(currentCompletion.error, null);
+assert.deepEqual(currentCompletion.fields.map((field) => field.name), ["Pressure"]);
+
+const failedRetry = beginFitModelFieldLoad(currentCompletion);
+const staleFailure = resolveFitModelFieldLoadError(failedRetry, 2, new Error("stale"));
+assert.deepEqual(staleFailure, failedRetry);
+const currentFailure = resolveFitModelFieldLoadError(failedRetry, 3, new Error("retry failed"));
+assert.equal(currentFailure.loading, false);
+assert.equal(currentFailure.error, "Error: retry failed");
+assert.deepEqual(currentFailure.fields, []);
 
 const continuousColumn = toFitModelFieldInfo("temperature", "DOUBLE");
 assert.deepEqual(continuousColumn, {

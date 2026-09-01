@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { fitModelParameterCount } from "@/components/fitModel/fitModelConfig";
@@ -8,11 +8,21 @@ import type { ColumnDisplayProps, DatasetMeta } from "@/types/data";
 import type { FitModelCenteringMethod, FitModelTerm } from "@/types/fitModel";
 
 import {
+  beginFitModelFieldLoad,
   FIT_MODEL_DIALOG_FIELD_DRAG_MIME,
   canCreateFitModel,
+  createAssignResponseAction,
+  createFitModelDropAction,
   createFitModelDraft,
+  createFitModelFieldLoadSnapshot,
+  createToggleInteractionAction,
+  createToggleMainEffectAction,
   filterFitModelFields,
+  hasFitModelDragType,
+  readFitModelDragPayload,
   reduceFitModelDraft,
+  resolveFitModelFieldLoadError,
+  resolveFitModelFieldLoadSuccess,
   termsFromDraft,
   toFitModelFieldInfo,
   type FitModelDialogMessage,
@@ -34,10 +44,15 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
   const titleId = useId();
   const validationId = `${titleId}-validation`;
   const [draft, setDraft] = useState(() => createFitModelDraft());
-  const [fields, setFields] = useState<FitModelFieldInfo[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadSnapshot, setLoadSnapshot] = useState(() => createFitModelFieldLoadSnapshot());
+  const [retryGeneration, setRetryGeneration] = useState(0);
+  const [responseDragOver, setResponseDragOver] = useState(false);
+  const [mainEffectsDragOver, setMainEffectsDragOver] = useState(false);
   const [search, setSearch] = useState("");
+
+  const fields = loadSnapshot.fields;
+  const loading = loadSnapshot.loading;
+  const loadError = loadSnapshot.error;
 
   useEffect(() => {
     setDraft(createFitModelDraft());
@@ -45,8 +60,12 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setLoadError(null);
+    let generation = 0;
+    setLoadSnapshot((current) => {
+      const next = beginFitModelFieldLoad(current);
+      generation = next.generation;
+      return next;
+    });
 
     Promise.all([
       dataService.getColumns(dataset.id),
@@ -56,22 +75,23 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
         if (!active) {
           return;
         }
-        setFields(buildFitModelFieldInfoList(columns, displayProps));
-        setLoading(false);
+        setLoadSnapshot((current) => resolveFitModelFieldLoadSuccess(
+          current,
+          generation,
+          buildFitModelFieldInfoList(columns, displayProps),
+        ));
       })
       .catch((reason: unknown) => {
         if (!active) {
           return;
         }
-        setFields([]);
-        setLoading(false);
-        setLoadError(String(reason));
+        setLoadSnapshot((current) => resolveFitModelFieldLoadError(current, generation, reason));
       });
 
     return () => {
       active = false;
     };
-  }, [dataset.id]);
+  }, [dataset.id, retryGeneration]);
 
   const visibleFields = useMemo(
     () => filterFitModelFields(fields, search),
@@ -89,6 +109,10 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
   const createDisabled = loading || !canCreateFitModel(draft);
 
   const assignedMainNames = new Set(draft.mainEffects.map((field) => field.name));
+  const fieldsByName = useMemo(
+    () => new Map(fields.map((field) => [field.name, field])),
+    [fields],
+  );
   const interactionSet = new Set(draft.interactions.map(([leftName, rightName]) => `${leftName}*${rightName}`));
   const interactionOptions = useMemo(() => {
     const pairs: Array<[string, string]> = [];
@@ -112,6 +136,23 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
       terms,
       centeringMethod: draft.centeringMethod,
     });
+  };
+
+  const handleDropAssignment = (zone: "response" | "mainEffects", event: DragEvent<HTMLElement>) => {
+    const payload = readFitModelDragPayload(event.dataTransfer);
+    setResponseDragOver(false);
+    setMainEffectsDragOver(false);
+    if (!payload) {
+      return;
+    }
+
+    const action = createFitModelDropAction(zone, payload, fieldsByName);
+    if (!action) {
+      return;
+    }
+
+    event.preventDefault();
+    setDraft((current) => reduceFitModelDraft(current, action));
   };
 
   return (
@@ -187,16 +228,10 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
                             const key = event.key.toLowerCase();
                             if (key === "y") {
                               event.preventDefault();
-                              setDraft((current) => reduceFitModelDraft(current, {
-                                type: "assignResponse",
-                                field,
-                              }));
+                              setDraft((current) => reduceFitModelDraft(current, createAssignResponseAction(field)));
                             } else if (key === "m") {
                               event.preventDefault();
-                              setDraft((current) => reduceFitModelDraft(current, {
-                                type: "toggleMainEffect",
-                                field,
-                              }));
+                              setDraft((current) => reduceFitModelDraft(current, createToggleMainEffectAction(field)));
                             }
                           }}
                         >
@@ -210,10 +245,7 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
                             <button
                               type="button"
                               className="sp-tabulate-inline-button"
-                              onClick={() => setDraft((current) => reduceFitModelDraft(current, {
-                                type: "assignResponse",
-                                field,
-                              }))}
+                              onClick={() => setDraft((current) => reduceFitModelDraft(current, createAssignResponseAction(field)))}
                               disabled={!continuous}
                               aria-label={t("fitModel.dialog.assignResponseLabel", {
                                 defaultValue: "Assign {{field}} as response",
@@ -226,10 +258,7 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
                             <button
                               type="button"
                               className="sp-tabulate-inline-button"
-                              onClick={() => setDraft((current) => reduceFitModelDraft(current, {
-                                type: "toggleMainEffect",
-                                field,
-                              }))}
+                              onClick={() => setDraft((current) => reduceFitModelDraft(current, createToggleMainEffectAction(field)))}
                               disabled={!continuous}
                               aria-label={t("fitModel.dialog.assignMainLabel", {
                                 defaultValue: "Toggle {{field}} as main effect",
@@ -248,7 +277,19 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
             </section>
 
             <div className="sp-fit-model-roles-column">
-              <section className="sp-tabulate-zone sp-fit-model-zone" aria-label={t("fitModel.dialog.response", { defaultValue: "Response" })}>
+              <section
+                className={`sp-tabulate-zone sp-fit-model-zone${responseDragOver ? " is-drop-target" : ""}`}
+                aria-label={t("fitModel.dialog.response", { defaultValue: "Response" })}
+                onDragOver={(event) => {
+                  if (!hasFitModelDragType(event.dataTransfer.types)) {
+                    return;
+                  }
+                  event.preventDefault();
+                  setResponseDragOver(true);
+                }}
+                onDragLeave={() => setResponseDragOver(false)}
+                onDrop={(event) => handleDropAssignment("response", event)}
+              >
                 <div className="sp-panel-header">
                   <span className="sp-panel-header-title">{t("fitModel.response", { defaultValue: "Y, Response" })}</span>
                   <span className="sp-tabulate-header-hint">{t("fitModel.dialog.continuousOnly", { defaultValue: "Continuous" })}</span>
@@ -260,7 +301,7 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
                     <div role="listitem" className="sp-tabulate-zone-item">
                       <div className="sp-tabulate-zone-copy">
                         <span className="sp-tabulate-zone-label">{draft.response.name}</span>
-                        <span className="sp-tabulate-zone-hint">continuous</span>
+                        <span className="sp-tabulate-zone-hint">{t("fitModel.dialog.responseHint", { defaultValue: "Continuous" })}</span>
                       </div>
                       <div className="sp-tabulate-zone-actions">
                         <button
@@ -280,7 +321,19 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
                 </div>
               </section>
 
-              <section className="sp-tabulate-zone sp-fit-model-zone" aria-label={t("fitModel.dialog.mainEffects", { defaultValue: "Main Effects" })}>
+              <section
+                className={`sp-tabulate-zone sp-fit-model-zone${mainEffectsDragOver ? " is-drop-target" : ""}`}
+                aria-label={t("fitModel.dialog.mainEffects", { defaultValue: "Main Effects" })}
+                onDragOver={(event) => {
+                  if (!hasFitModelDragType(event.dataTransfer.types)) {
+                    return;
+                  }
+                  event.preventDefault();
+                  setMainEffectsDragOver(true);
+                }}
+                onDragLeave={() => setMainEffectsDragOver(false)}
+                onDrop={(event) => handleDropAssignment("mainEffects", event)}
+              >
                 <div className="sp-panel-header">
                   <span className="sp-panel-header-title">{t("fitModel.dialog.mainEffects", { defaultValue: "Main Effects" })}</span>
                   <span className="sp-tabulate-header-hint">{t("fitModel.dialog.continuousOnly", { defaultValue: "Continuous" })}</span>
@@ -297,15 +350,14 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
                         <button
                           type="button"
                           className="sp-tabulate-inline-button"
-                          onClick={() => setDraft((current) => reduceFitModelDraft(current, {
-                            type: "toggleMainEffect",
-                            field: {
+                          onClick={() => setDraft((current) => reduceFitModelDraft(current, createToggleMainEffectAction(
+                            fieldsByName.get(field.name) ?? {
                               name: field.name,
                               sqlType: "",
                               modelingRole: "Continuous",
                               field,
                             },
-                          }))}
+                          )))}
                           aria-label={t("fitModel.dialog.removeMainEffect", {
                             defaultValue: "Remove main effect {{field}}",
                             field: field.name,
@@ -364,11 +416,10 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
                           key={termLabel}
                           type="button"
                           className={`sp-tabulate-inline-button${selected ? " sp-tabulate-inline-button-selected" : ""}`}
-                          onClick={() => setDraft((current) => reduceFitModelDraft(current, {
-                            type: "addInteraction",
-                            leftName,
-                            rightName,
-                          }))}
+                          onClick={() => setDraft((current) => reduceFitModelDraft(
+                            current,
+                            createToggleInteractionAction(current, leftName, rightName),
+                          ))}
                           aria-pressed={selected}
                           aria-label={t("fitModel.dialog.toggleInteraction", {
                             defaultValue: "Toggle interaction {{term}}",
@@ -445,7 +496,11 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
                       <div key={`${term.kind}:${termLabel}`} role="listitem" className="sp-tabulate-zone-item">
                         <div className="sp-tabulate-zone-copy">
                           <span className="sp-tabulate-zone-label">{termLabel}</span>
-                          <span className="sp-tabulate-zone-hint">{term.kind === "main" ? "main" : "interaction"}</span>
+                          <span className="sp-tabulate-zone-hint">
+                            {term.kind === "main"
+                              ? t("fitModel.dialog.termKindMain", { defaultValue: "Main" })
+                              : t("fitModel.dialog.termKindInteraction", { defaultValue: "Interaction" })}
+                          </span>
                         </div>
                       </div>
                     );
@@ -455,7 +510,18 @@ export function FitModelRoleDialog({ dataset, onCreateDefinition, onCancel }: Fi
             </div>
           </div>
 
-          {loadError ? <div className="sp-tabulate-inline-error">{loadError}</div> : null}
+          {loadError ? (
+            <div className="sp-tabulate-inline-error" role="alert">
+              <span>{loadError}</span>
+              <button
+                type="button"
+                className="sp-tabulate-inline-button"
+                onClick={() => setRetryGeneration((current) => current + 1)}
+              >
+                {t("common.retry", { defaultValue: "Retry" })}
+              </button>
+            </div>
+          ) : null}
           {validationText ? <div id={validationId} className="sp-dialog-error" role="alert">{validationText}</div> : null}
         </div>
 

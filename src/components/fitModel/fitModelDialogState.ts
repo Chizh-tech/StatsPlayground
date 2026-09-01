@@ -5,6 +5,12 @@ import type { FitModelCenteringMethod, FitModelTerm } from "@/types/fitModel";
 
 export const FIT_MODEL_DIALOG_FIELD_DRAG_MIME = "application/x-statsplayground-fit-model-field";
 
+export interface FitModelDragPayload {
+  fieldName: string;
+}
+
+export type FitModelDropZone = "response" | "mainEffects";
+
 export interface FitModelFieldInfo {
   name: string;
   sqlType: string;
@@ -43,6 +49,13 @@ export type FitModelDraftAction =
   | { type: "setCenteringMethod"; centeringMethod: FitModelCenteringMethod }
   | { type: "clearValidation" };
 
+export interface FitModelFieldLoadSnapshot {
+  generation: number;
+  loading: boolean;
+  error: string | null;
+  fields: FitModelFieldInfo[];
+}
+
 export function createFitModelDraft(): FitModelDraft {
   return {
     response: null,
@@ -51,6 +64,129 @@ export function createFitModelDraft(): FitModelDraft {
     centeringMethod: "none",
     validationMessage: null,
   };
+}
+
+export function createFitModelFieldLoadSnapshot(): FitModelFieldLoadSnapshot {
+  return {
+    generation: 0,
+    loading: false,
+    error: null,
+    fields: [],
+  };
+}
+
+export function beginFitModelFieldLoad(snapshot: FitModelFieldLoadSnapshot): FitModelFieldLoadSnapshot {
+  return {
+    ...snapshot,
+    generation: snapshot.generation + 1,
+    loading: true,
+    error: null,
+  };
+}
+
+export function resolveFitModelFieldLoadSuccess(
+  snapshot: FitModelFieldLoadSnapshot,
+  generation: number,
+  fields: FitModelFieldInfo[],
+): FitModelFieldLoadSnapshot {
+  if (generation !== snapshot.generation) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    loading: false,
+    error: null,
+    fields,
+  };
+}
+
+export function resolveFitModelFieldLoadError(
+  snapshot: FitModelFieldLoadSnapshot,
+  generation: number,
+  reason: unknown,
+): FitModelFieldLoadSnapshot {
+  if (generation !== snapshot.generation) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    loading: false,
+    error: String(reason),
+    fields: [],
+  };
+}
+
+export function createAssignResponseAction(field: FitModelFieldInfo): FitModelDraftAction {
+  return {
+    type: "assignResponse",
+    field,
+  };
+}
+
+export function createToggleMainEffectAction(field: FitModelFieldInfo): FitModelDraftAction {
+  return {
+    type: "toggleMainEffect",
+    field,
+  };
+}
+
+export function createToggleInteractionAction(
+  draft: Pick<FitModelDraft, "interactions">,
+  leftName: string,
+  rightName: string,
+): FitModelDraftAction {
+  const [left, right] = canonicalInteraction(leftName, rightName);
+  const exists = draft.interactions.some(([existingLeft, existingRight]) => (
+    existingLeft === left && existingRight === right
+  ));
+
+  return exists
+    ? { type: "removeInteraction", leftName: left, rightName: right }
+    : { type: "addInteraction", leftName: left, rightName: right };
+}
+
+export function hasFitModelDragType(types: readonly string[]): boolean {
+  return types.includes(FIT_MODEL_DIALOG_FIELD_DRAG_MIME);
+}
+
+export function parseFitModelDragPayload(raw: string): FitModelDragPayload | null {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(raw) as FitModelDragPayload;
+    if (payload && typeof payload === "object" && typeof payload.fieldName === "string") {
+      return payload;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+export function readFitModelDragPayload(dataTransfer: Pick<DataTransfer, "getData">): FitModelDragPayload | null {
+  return parseFitModelDragPayload(dataTransfer.getData(FIT_MODEL_DIALOG_FIELD_DRAG_MIME));
+}
+
+export function createFitModelDropAction(
+  zone: FitModelDropZone,
+  payload: FitModelDragPayload,
+  fieldsByName: ReadonlyMap<string, FitModelFieldInfo>,
+): FitModelDraftAction | null {
+  const field = fieldsByName.get(payload.fieldName);
+  if (!field) {
+    return null;
+  }
+
+  if (zone === "response") {
+    return createAssignResponseAction(field);
+  }
+
+  return createToggleMainEffectAction(field);
 }
 
 export function toFitModelFieldInfo(
