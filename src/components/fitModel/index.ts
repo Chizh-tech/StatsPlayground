@@ -1,4 +1,9 @@
 export {
+  FitModelRoleDialog,
+  type FitModelRoleDialogProps,
+} from "./FitModelRoleDialog";
+
+export {
   FitModelReport,
   type FitModelReportProps,
 } from "./FitModelReport";
@@ -31,6 +36,22 @@ export {
   createFitModelReportController,
   type FitModelReportState,
 } from "./useFitModelReport";
+
+export {
+  FIT_MODEL_DIALOG_FIELD_DRAG_MIME,
+  assignFitModelResponse,
+  canCreateFitModel,
+  createFitModelDraft,
+  filterFitModelFields,
+  reduceFitModelDraft,
+  termsFromDraft,
+  toFitModelFieldInfo,
+  type FitModelDialogMessage,
+  type FitModelDialogMessageCode,
+  type FitModelDraft,
+  type FitModelDraftAction,
+  type FitModelFieldInfo,
+} from "./fitModelDialogState";
 
 export {
   applyFactorialDegree,
