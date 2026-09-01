@@ -123,6 +123,8 @@ function resetGraphBuilderStore() {
         fitYByXFolders: {},
         tabulateFolders: {},
         datasetNameMigrations: [],
+        documentNameMigrations: [],
+        requiresMigration: false,
       }),
       saveProject: async (req) => {
         capturedSaveRequest = req;
@@ -204,6 +206,8 @@ function resetGraphBuilderStore() {
         fitYByXFolders: {},
         tabulateFolders: {},
         datasetNameMigrations: [],
+        documentNameMigrations: [],
+        requiresMigration: false,
       }),
       saveProject: async (req) => {
         capturedSaveRequest = req;
@@ -255,7 +259,7 @@ function resetGraphBuilderStore() {
     projectService: {
       initProject: async () => savedProject,
       createProject: async () => savedProject,
-      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
+      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [], documentNameMigrations: [], requiresMigration: false }),
       saveProject: (_request, onProgress) => {
         onProgressRef = onProgress;
         readOnlyAtInvoke = store.getState().readOnly;
@@ -301,7 +305,7 @@ function resetGraphBuilderStore() {
     projectService: {
       initProject: async () => savedProject,
       createProject: async () => savedProject,
-      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
+      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [], documentNameMigrations: [], requiresMigration: false }),
       saveProject: (saveRequest, onProgress) => {
         capturedSaveRequest = saveRequest;
         onProgressRef = onProgress;
@@ -399,6 +403,8 @@ function resetGraphBuilderStore() {
         fitYByXFolders: {},
         tabulateFolders: {},
         datasetNameMigrations: [],
+        documentNameMigrations: [],
+        requiresMigration: false,
       }),
       saveProject: async (saveRequest) => {
         capturedSaveRequest = saveRequest;
@@ -442,7 +448,7 @@ function resetGraphBuilderStore() {
     projectService: {
       initProject: async () => savedProject,
       createProject: async () => savedProject,
-      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [] }),
+      openProject: async () => ({ project: savedProject, datasets: [], history: [], snapshots: [], graphBuilders: [], fitYByX: [], tabulates: [], folders: [], tableFolders: {}, graphFolders: {}, fitYByXFolders: {}, tabulateFolders: {}, datasetNameMigrations: [], documentNameMigrations: [], requiresMigration: false }),
       saveProject: () => saveDeferred.promise,
       getCurrentProject: async () => savedProject,
     },
@@ -459,6 +465,79 @@ function resetGraphBuilderStore() {
 
   saveDeferred.resolve(savedProject);
   await first;
+}
+
+{
+  resetGraphBuilderStore();
+
+  const store = createProjectStore({
+    projectService: {
+      initProject: async () => savedProject,
+      createProject: async () => savedProject,
+      openProject: async () => ({
+        project: savedProject,
+        history: [],
+        snapshots: [],
+        graphBuilders: [],
+        fitYByX: [],
+        tabulates: [],
+        folders: [],
+        tableFolders: {},
+        graphFolders: {},
+        fitYByXFolders: {},
+        tabulateFolders: {},
+        datasetNameMigrations: [],
+        documentNameMigrations: [],
+        requiresMigration: true,
+      }),
+      saveProject: async () => savedProject,
+      getCurrentProject: async () => savedProject,
+    },
+  });
+
+  const result = await store.getState().openProject(savedProject.filePath);
+  assert.equal(result.requiresMigration, true);
+  assert.equal(store.getState().dirty, true);
+}
+
+{
+  resetGraphBuilderStore();
+
+  const store = createProjectStore({
+    projectService: {
+      initProject: async () => savedProject,
+      createProject: async () => savedProject,
+      openProject: async () => ({
+        project: savedProject,
+        history: [],
+        snapshots: [],
+        graphBuilders: [],
+        fitYByX: [],
+        tabulates: [],
+        folders: [],
+        tableFolders: {},
+        graphFolders: {},
+        fitYByXFolders: {},
+        tabulateFolders: {},
+        datasetNameMigrations: [],
+        documentNameMigrations: [
+          {
+            id: "fit-1",
+            kind: "fitYByX",
+            oldName: "model",
+            newName: "model-2",
+          },
+        ],
+        requiresMigration: false,
+      }),
+      saveProject: async () => savedProject,
+      getCurrentProject: async () => savedProject,
+    },
+  });
+
+  const result = await store.getState().openProject(savedProject.filePath);
+  assert.equal(result.documentNameMigrations.length, 1);
+  assert.equal(store.getState().dirty, true);
 }
 
 console.log("useProjectStore save lifecycle passed");

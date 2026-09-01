@@ -84,7 +84,10 @@ export function createProjectStore(
         const result = await deps.projectService.openProject(filePath);
         set({
           project: result.project,
-          dirty: result.datasetNameMigrations.length > 0,
+          dirty:
+            result.requiresMigration
+            || result.documentNameMigrations.length > 0
+            || result.datasetNameMigrations.length > 0,
           saveError: null,
         });
         return result;
