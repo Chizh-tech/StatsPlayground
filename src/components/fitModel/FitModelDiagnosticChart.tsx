@@ -10,29 +10,51 @@ interface FitModelDiagnosticChartProps {
 
 export function FitModelDiagnosticChart({ option, title, chartKind }: FitModelDiagnosticChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+  const optionRef = useRef<EChartsOption>(option);
+
+  optionRef.current = option;
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    const instance = echarts.init(container, undefined, { renderer: "canvas" });
-    const update = () => {
-      instance.setOption(option, { notMerge: true });
-    };
+    chartRef.current = echarts.init(container, undefined, { renderer: "canvas" });
+    chartRef.current.setOption(optionRef.current, { notMerge: true });
 
-    update();
-    const observer = new ResizeObserver(() => instance.resize());
+    const observer = new ResizeObserver(() => {
+      chartRef.current?.resize();
+    });
     observer.observe(container);
-
-    const themeObserver = new MutationObserver(update);
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme"] });
 
     return () => {
       observer.disconnect();
-      themeObserver.disconnect();
-      instance.dispose();
+      chartRef.current?.dispose();
+      chartRef.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    chartRef.current?.setOption(option, { notMerge: true });
   }, [option]);
+
+  useEffect(() => {
+    const themeObserver = new MutationObserver(() => {
+      const container = containerRef.current;
+      if (!container) return;
+
+      chartRef.current?.dispose();
+      chartRef.current = echarts.init(container, undefined, { renderer: "canvas" });
+      chartRef.current.setOption(optionRef.current, { notMerge: true });
+      chartRef.current.resize();
+    });
+
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme"] });
+
+    return () => {
+      themeObserver.disconnect();
+    };
+  }, []);
 
   return (
     <div

@@ -6,6 +6,18 @@ import {
 } from "../src/graphCore/fitModelAdapter.ts";
 import type { FitModelPlotRow } from "../src/types/fitModel.ts";
 
+const SAMPLE_LABELS = {
+  predictedAxisName: "Predicted",
+  actualAxisName: "Actual",
+  residualAxisName: "Residual",
+  actualSeriesName: "Actual",
+  residualSeriesName: "Residual",
+  identityReferenceName: "y=x",
+  zeroReferenceName: "y=0",
+  tooltipXLabel: "Predicted",
+  tooltipYLabel: "Actual",
+};
+
 function findLineSeries(option: unknown, name: string): { data: Array<[number, number]> } {
   const series = (option as { series?: Array<{ name?: string; type?: string; data?: Array<[number, number]> }> }).series ?? [];
   const line = series.find((entry) => entry.type === "line" && entry.name === name);
@@ -28,6 +40,7 @@ function testActualAndResidualPointsAndAxes(): void {
 
   const actual = buildActualByPredictedOption({
     title: "Actual by Predicted",
+    labels: SAMPLE_LABELS,
     plotRows: rows,
   }) as {
     xAxis: { name: string };
@@ -37,6 +50,7 @@ function testActualAndResidualPointsAndAxes(): void {
 
   const residual = buildResidualByPredictedOption({
     title: "Residual by Predicted",
+    labels: { ...SAMPLE_LABELS, tooltipYLabel: "Residual" },
     plotRows: rows,
   }) as {
     xAxis: { name: string };
@@ -57,8 +71,12 @@ function testReferenceLinesFiniteAndCorrect(): void {
     { rowIndex: 1, observed: 4, fitted: 4.5, residual: -0.5 },
   ];
 
-  const actual = buildActualByPredictedOption({ title: "Actual by Predicted", plotRows: rows });
-  const residual = buildResidualByPredictedOption({ title: "Residual by Predicted", plotRows: rows });
+  const actual = buildActualByPredictedOption({ title: "Actual by Predicted", labels: SAMPLE_LABELS, plotRows: rows });
+  const residual = buildResidualByPredictedOption({
+    title: "Residual by Predicted",
+    labels: { ...SAMPLE_LABELS, tooltipYLabel: "Residual" },
+    plotRows: rows,
+  });
 
   const identity = findLineSeries(actual, "y=x");
   const zero = findLineSeries(residual, "y=0");
@@ -75,7 +93,11 @@ function testTooltipValuesAreFinite(): void {
     { rowIndex: 1, observed: 4, fitted: 4.5, residual: -0.5 },
   ];
 
-  const actual = buildActualByPredictedOption({ title: "Actual by Predicted", plotRows: rows }) as {
+  const actual = buildActualByPredictedOption({
+    title: "Actual by Predicted",
+    labels: SAMPLE_LABELS,
+    plotRows: rows,
+  }) as {
     tooltip?: { formatter?: (params: unknown) => string };
   };
 
@@ -96,6 +118,7 @@ function testTooltipValuesAreFinite(): void {
 function testEmptyInputProducesNonblankOption(): void {
   const option = buildActualByPredictedOption({
     title: "Actual by Predicted",
+    labels: SAMPLE_LABELS,
     plotRows: [],
   }) as {
     title?: { text?: string };
@@ -117,6 +140,7 @@ function testSampledSubtitlePreservesPoints(): void {
 
   const option = buildActualByPredictedOption({
     title: "Actual by Predicted",
+    labels: SAMPLE_LABELS,
     sampledSubtitle: "Sampled: 2 / 3 rows",
     plotRows: rows,
   }) as {
@@ -132,6 +156,7 @@ function testNonFiniteBoundaryValuesThrow(): void {
   assert.throws(
     () => buildActualByPredictedOption({
       title: "Actual by Predicted",
+      labels: SAMPLE_LABELS,
       plotRows: [{ rowIndex: 0, observed: 2, fitted: Number.NaN, residual: 0 }],
     }),
     /non-finite/i,
@@ -140,10 +165,39 @@ function testNonFiniteBoundaryValuesThrow(): void {
   assert.throws(
     () => buildResidualByPredictedOption({
       title: "Residual by Predicted",
+      labels: { ...SAMPLE_LABELS, tooltipYLabel: "Residual" },
       plotRows: [{ rowIndex: 0, observed: 2, fitted: Number.POSITIVE_INFINITY, residual: 0 }],
     }),
     /non-finite/i,
   );
+}
+
+function testSinglePointReferenceLinesUseExpandedFiniteExtent(): void {
+  const rows: FitModelPlotRow[] = [{ rowIndex: 0, observed: 5, fitted: 5, residual: 0 }];
+
+  const actual = buildActualByPredictedOption({
+    title: "Actual by Predicted",
+    labels: SAMPLE_LABELS,
+    plotRows: rows,
+  });
+  const residual = buildResidualByPredictedOption({
+    title: "Residual by Predicted",
+    labels: { ...SAMPLE_LABELS, tooltipYLabel: "Residual" },
+    plotRows: rows,
+  });
+
+  const identity = findLineSeries(actual, "y=x");
+  const zero = findLineSeries(residual, "y=0");
+
+  assert.equal(identity.data.length, 2);
+  assert.equal(zero.data.length, 2);
+  assert.notEqual(identity.data[0]?.[0], identity.data[1]?.[0]);
+  assert.notEqual(identity.data[0]?.[1], identity.data[1]?.[1]);
+  assert.notEqual(zero.data[0]?.[0], zero.data[1]?.[0]);
+  assert.equal(zero.data[0]?.[1], 0);
+  assert.equal(zero.data[1]?.[1], 0);
+  assertAllFinite(identity.data, "single-point-identity");
+  assertAllFinite(zero.data, "single-point-zero");
 }
 
 testActualAndResidualPointsAndAxes();
@@ -152,5 +206,6 @@ testTooltipValuesAreFinite();
 testEmptyInputProducesNonblankOption();
 testSampledSubtitlePreservesPoints();
 testNonFiniteBoundaryValuesThrow();
+testSinglePointReferenceLinesUseExpandedFiniteExtent();
 
 console.log("fitModel graph adapter contract passed");

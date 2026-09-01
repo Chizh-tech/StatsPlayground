@@ -154,10 +154,23 @@ export function FitModelReport({
       return null;
     }
 
+    const labels = {
+      predictedAxisName: t("fitModel.report.chart.axis.predicted"),
+      actualAxisName: t("fitModel.report.chart.axis.actual"),
+      residualAxisName: t("fitModel.report.chart.axis.residual"),
+      actualSeriesName: t("fitModel.report.chart.series.actual"),
+      residualSeriesName: t("fitModel.report.chart.series.residual"),
+      identityReferenceName: t("fitModel.report.chart.reference.identity"),
+      zeroReferenceName: t("fitModel.report.chart.reference.zero"),
+      tooltipXLabel: t("fitModel.report.chart.tooltip.x"),
+      tooltipYLabel: t("fitModel.report.chart.tooltip.yActual"),
+    };
+
     return buildActualByPredictedOption({
       title: t("fitModel.report.section.actualByPredicted", { defaultValue: "Actual by Predicted" }),
       sampledSubtitle,
       plotRows: fittedResult.plotRows,
+      labels,
     });
   }, [fittedResult, sampledSubtitle, t]);
 
@@ -166,10 +179,23 @@ export function FitModelReport({
       return null;
     }
 
+    const labels = {
+      predictedAxisName: t("fitModel.report.chart.axis.predicted"),
+      actualAxisName: t("fitModel.report.chart.axis.actual"),
+      residualAxisName: t("fitModel.report.chart.axis.residual"),
+      actualSeriesName: t("fitModel.report.chart.series.actual"),
+      residualSeriesName: t("fitModel.report.chart.series.residual"),
+      identityReferenceName: t("fitModel.report.chart.reference.identity"),
+      zeroReferenceName: t("fitModel.report.chart.reference.zero"),
+      tooltipXLabel: t("fitModel.report.chart.tooltip.x"),
+      tooltipYLabel: t("fitModel.report.chart.tooltip.yResidual"),
+    };
+
     return buildResidualByPredictedOption({
       title: t("fitModel.report.section.residualByPredicted", { defaultValue: "Residual by Predicted" }),
       sampledSubtitle,
       plotRows: fittedResult.plotRows,
+      labels,
     });
   }, [fittedResult, sampledSubtitle, t]);
 

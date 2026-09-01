@@ -54,6 +54,26 @@ function createTestI18n(): I18nInstance {
                   residualByPredicted: "Residual by Predicted",
                   warnings: "Warnings",
                 },
+                chart: {
+                  axis: {
+                    predicted: "Predicted",
+                    actual: "Actual",
+                    residual: "Residual",
+                  },
+                  series: {
+                    actual: "Actual",
+                    residual: "Residual",
+                  },
+                  reference: {
+                    identity: "y=x",
+                    zero: "y=0",
+                  },
+                  tooltip: {
+                    x: "Predicted",
+                    yActual: "Actual",
+                    yResidual: "Residual",
+                  },
+                },
                 remove: "Remove",
                 undo: "Undo",
                 chartPlaceholder: "Chart placeholder",

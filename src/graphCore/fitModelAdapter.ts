@@ -11,6 +11,19 @@ export interface FitModelChartInput {
   title: string;
   sampledSubtitle?: string;
   plotRows: FitModelPlotRow[];
+  labels: FitModelChartLabels;
+}
+
+export interface FitModelChartLabels {
+  predictedAxisName: string;
+  actualAxisName: string;
+  residualAxisName: string;
+  actualSeriesName: string;
+  residualSeriesName: string;
+  identityReferenceName: string;
+  zeroReferenceName: string;
+  tooltipXLabel: string;
+  tooltipYLabel: string;
 }
 
 type AxisExtent = {
@@ -92,7 +105,12 @@ function tooltipValue(value: number): string {
   return Number.parseFloat(value.toPrecision(6)).toString();
 }
 
-function baseOption(title: string, sampledSubtitle: string | undefined): EChartsOption {
+function baseOption(
+  title: string,
+  sampledSubtitle: string | undefined,
+  tooltipXLabel: string,
+  tooltipYLabel: string,
+): EChartsOption {
   const theme = getGraphTheme();
   return {
     animation: false,
@@ -115,7 +133,7 @@ function baseOption(title: string, sampledSubtitle: string | undefined): ECharts
         const value = Array.isArray(payload.value) ? payload.value : [];
         const x = typeof value[0] === "number" ? value[0] : Number.NaN;
         const y = typeof value[1] === "number" ? value[1] : Number.NaN;
-        return `${payload.seriesName ?? ""}<br/>x: ${tooltipValue(x)}<br/>y: ${tooltipValue(y)}`;
+        return `${payload.seriesName ?? ""}<br/>${tooltipXLabel}: ${tooltipValue(x)}<br/>${tooltipYLabel}: ${tooltipValue(y)}`;
       },
     },
   };
@@ -135,12 +153,12 @@ export function buildActualByPredictedOption(input: FitModelChartInput): ECharts
   const combinedAxisExtent = axisExtentFromRaw(combinedExtent.min, combinedExtent.max);
 
   return {
-    ...baseOption(input.title, input.sampledSubtitle),
+    ...baseOption(input.title, input.sampledSubtitle, input.labels.tooltipXLabel, input.labels.tooltipYLabel),
     xAxis: {
       type: "value",
       min: predictedAxisExtent.min,
       max: predictedAxisExtent.max,
-      name: "Predicted",
+      name: input.labels.predictedAxisName,
       axisLine: { show: true, lineStyle: { color: theme.axisLine } },
       axisTick: { show: true, lineStyle: { color: theme.axisLine } },
       axisLabel: { color: theme.fgSecondary, fontSize: 10 },
@@ -150,7 +168,7 @@ export function buildActualByPredictedOption(input: FitModelChartInput): ECharts
       type: "value",
       min: combinedAxisExtent.min,
       max: combinedAxisExtent.max,
-      name: "Actual",
+      name: input.labels.actualAxisName,
       axisLine: { show: true, lineStyle: { color: theme.axisLine } },
       axisTick: { show: true, lineStyle: { color: theme.axisLine } },
       axisLabel: { color: theme.fgSecondary, fontSize: 10 },
@@ -158,7 +176,7 @@ export function buildActualByPredictedOption(input: FitModelChartInput): ECharts
     },
     series: [
       {
-        name: "Actual",
+        name: input.labels.actualSeriesName,
         type: "scatter",
         clip: true,
         symbolSize: POINT_SYMBOL_SIZE,
@@ -168,15 +186,15 @@ export function buildActualByPredictedOption(input: FitModelChartInput): ECharts
         data: points,
       },
       {
-        name: "y=x",
+        name: input.labels.identityReferenceName,
         type: "line",
         clip: true,
         showSymbol: false,
         silent: true,
         lineStyle: { color: theme.fgDim, width: 1.5, type: "dashed" },
         data: [
-          [combinedExtent.min, combinedExtent.min],
-          [combinedExtent.max, combinedExtent.max],
+          [combinedAxisExtent.min, combinedAxisExtent.min],
+          [combinedAxisExtent.max, combinedAxisExtent.max],
         ],
       },
     ],
@@ -197,12 +215,12 @@ export function buildResidualByPredictedOption(input: FitModelChartInput): EChar
   const residualAxisExtent = axisExtentFromRaw(residualExtent.min, residualExtent.max);
 
   return {
-    ...baseOption(input.title, input.sampledSubtitle),
+    ...baseOption(input.title, input.sampledSubtitle, input.labels.tooltipXLabel, input.labels.tooltipYLabel),
     xAxis: {
       type: "value",
       min: predictedAxisExtent.min,
       max: predictedAxisExtent.max,
-      name: "Predicted",
+      name: input.labels.predictedAxisName,
       axisLine: { show: true, lineStyle: { color: theme.axisLine } },
       axisTick: { show: true, lineStyle: { color: theme.axisLine } },
       axisLabel: { color: theme.fgSecondary, fontSize: 10 },
@@ -212,7 +230,7 @@ export function buildResidualByPredictedOption(input: FitModelChartInput): EChar
       type: "value",
       min: residualAxisExtent.min,
       max: residualAxisExtent.max,
-      name: "Residual",
+      name: input.labels.residualAxisName,
       axisLine: { show: true, lineStyle: { color: theme.axisLine } },
       axisTick: { show: true, lineStyle: { color: theme.axisLine } },
       axisLabel: { color: theme.fgSecondary, fontSize: 10 },
@@ -220,7 +238,7 @@ export function buildResidualByPredictedOption(input: FitModelChartInput): EChar
     },
     series: [
       {
-        name: "Residual",
+        name: input.labels.residualSeriesName,
         type: "scatter",
         clip: true,
         symbolSize: POINT_SYMBOL_SIZE,
@@ -230,15 +248,15 @@ export function buildResidualByPredictedOption(input: FitModelChartInput): EChar
         data: points,
       },
       {
-        name: "y=0",
+        name: input.labels.zeroReferenceName,
         type: "line",
         clip: true,
         showSymbol: false,
         silent: true,
         lineStyle: { color: theme.fgDim, width: 1.5 },
         data: [
-          [predictedExtent.min, 0],
-          [predictedExtent.max, 0],
+          [predictedAxisExtent.min, 0],
+          [predictedAxisExtent.max, 0],
         ],
       },
     ],
