@@ -96,9 +96,9 @@ The framework follows the same ownership boundaries as Fit Y by X:
 
 ```text
 DistributionItem
-  |-- presentation definition -> shared graph host or Distribution chart adapter
-  `-- DistributionRequest     -> service -> DuckDB materialization -> Rust kernels
-                                                        `-> report and chart payload
+  |-- EmbeddedGraphConfig[] -> createEmbeddedGraphItem -> GraphRuntime
+  `-- DistributionRequest  -> service -> DuckDB materialization -> Rust kernels
+                                               `-> report + GraphDataFrame payloads
 ```
 
 The persisted item owns the analysis definition. Computed results remain
@@ -161,23 +161,51 @@ stale-response fencing.
 
 ### Charts
 
-Distribution adopts Fit Y by X's two-output analysis layout but does not force
-all visuals through Graph Builder when doing so would change their statistical
-meaning.
+Every Distribution chart renders through the same embedded Graph Builder path
+as Fit Y by X:
 
-No new generic Graph Builder element is required to complete Distribution V1.
-Reference-line behavior and compatible axis interactions may reuse current
-graph utilities, but Distribution charts remain owned by a focused adapter fed
-exclusively by backend-precomputed payloads. This includes weighted histograms,
-weighted box summaries, ECDF steps, fitted PDFs, normal quantile coordinates,
-and process-capability overlays. React and ECharts adapters must not re-bin,
-refit, or calculate statistics.
+```text
+EmbeddedGraphConfig
+  -> createEmbeddedGraphItem
+  -> GraphRuntime
+  -> graphCore transform
+  -> ECharts
+```
 
-Making every Distribution visual directly authorable in Graph Builder is a
-separate future feature. It would require generic contracts for weighted and
-frequency roles, backend-precomputed line and step coordinates, normal
-quantile plots, and synchronized multi-grid histogram/box-plot layouts. Those
-contracts are neither required nor introduced by this refactor.
+`GraphRuntimeProps` gains an optional external data-state contract containing a
+precomputed `GraphDataFrame`, loading state, and error state. When supplied,
+the runtime does not issue its normal graph-data request. It still derives the
+`GraphSpec` from the embedded `GraphBuilderItem` and continues to own viewport
+sizing, themes, axis settings, drag range changes, context menus, and rendering.
+The graph-data hook remains unconditionally mounted with execution disabled so
+React hook ordering does not depend on the data source.
+
+The Distribution service returns report blocks and one or more precomputed
+graph frames atomically. Existing histogram and box-plot aggregate packets are
+reused. The generic graph-data contract gains element-keyed precomputed point
+and curve packets. A curve packet records coordinates and whether the line is
+ordinary or stepped; it does not contain distribution names or fitting
+parameters. These packets support fitted PDFs, ECDF steps, Q-Q points, and
+reference lines without adding frontend statistical calculations.
+
+Specification limits use the existing reference-line behavior. React and
+graphCore must not re-bin, refit, calculate quantiles, derive capability
+indices, or otherwise change backend coordinates.
+
+Distribution stores Weight, Freq, and By roles only in its own persisted
+definition. They are inputs to the Distribution request and are not added to
+Graph Builder's interactive encoding slots.
+
+The view materializes separate embedded graph items for the overview
+histogram/density, box plot, ECDF, and normal quantile plot. Histogram and box
+plot runtimes share a controlled continuous-axis range so zooming or editing
+one keeps them aligned. Multiple runtimes avoid adding a Distribution-specific
+multi-grid layout to the generic `GraphSpec`.
+
+The PR #82 `DistributionChart` standalone renderer is removed. Its
+`distributionAdapter` may retain pure conversion helpers for constructing
+generic aggregate packets, but it must not build or render a complete ECharts
+option outside graphCore.
 
 The Distribution view uses the Fit Y by X layout conventions: one outer
 scroller, bounded graph height, independent graph and report loading/error
@@ -259,7 +287,10 @@ separate from IPC orchestration tests.
 
 Tests verify role assignment, config creation and normalization, store
 lifecycle, stale response rejection, report sections, backend-coordinate-only
-chart adapters, and independent graph/report failures.
+graph frames, and independent graph/report failures. Runtime tests verify that
+an external frame disables graph-data fetching while preserving graphCore
+rendering and axis callbacks. Transform tests verify histogram, box-plot,
+precomputed point, ordinary curve, and stepped curve packets.
 
 ### Project And Workspace
 
@@ -285,4 +316,7 @@ X and project lifecycle tests remain green, `npx vite build` succeeds, and
 - Persisted computed results.
 - Distribution as a Fit Y by X personality.
 - Reintroducing PR #82's progress/cancellation system in V1.
+- A standalone Distribution ECharts renderer outside GraphRuntime.
+- Adding Weight or Freq to Graph Builder's interactive role palette.
+- A generic multi-grid GraphSpec extension.
 - A generic analysis SDK or registry refactor before Distribution is working.
