@@ -5216,6 +5216,7 @@ function buildSingleOption(
     );
   }
 
+  const emittedPrecomputedElementIds = new Set<string>();
   groupKeys.forEach((gKey) => {
     // Skip groups hidden via the legend show/hide toggle.
     if (isHidden(gKey)) return;
@@ -5235,14 +5236,20 @@ function buildSingleOption(
         if (el.kind === "points") {
           const pointPacket = findPrecomputedPointPacket(aggregatePackets, elementId);
           if (pointPacket) {
-            series.push(buildPrecomputedPointSeries(pointPacket, seriesName, resolvedStyle));
+            if (!emittedPrecomputedElementIds.has(elementId)) {
+              series.push(buildPrecomputedPointSeries(pointPacket, seriesName, resolvedStyle));
+              emittedPrecomputedElementIds.add(elementId);
+            }
             return;
           }
         }
         if (el.kind === "line") {
           const curvePacket = findPrecomputedCurvePacket(aggregatePackets, elementId);
           if (curvePacket) {
-            series.push(buildPrecomputedCurveSeries(curvePacket, seriesName, resolvedStyle));
+            if (!emittedPrecomputedElementIds.has(elementId)) {
+              series.push(buildPrecomputedCurveSeries(curvePacket, seriesName, resolvedStyle));
+              emittedPrecomputedElementIds.add(elementId);
+            }
             return;
           }
         }

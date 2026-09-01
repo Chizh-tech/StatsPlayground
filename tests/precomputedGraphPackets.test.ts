@@ -155,6 +155,24 @@ assert.equal(
 assert.equal(
   isGraphAggregatePacket({
     kind: "precomputedPoints",
+    elementId: "",
+    points: [{ x: 1, y: 2 }],
+  }),
+  false,
+  "blank element IDs must be rejected",
+);
+assert.equal(
+  isGraphAggregatePacket({
+    kind: "precomputedPoints",
+    elementId: "bad-points",
+    points: null,
+  }),
+  false,
+  "non-array point payloads must be rejected",
+);
+assert.equal(
+  isGraphAggregatePacket({
+    kind: "precomputedPoints",
     elementId: "bad-label",
     points: [{ x: 1, y: 2, label: 7 }],
   }),
@@ -246,4 +264,32 @@ assert.deepEqual(
   stepSeries.data,
   [[-1, 5], [4, 6]],
   "stepped precomputed curve must preserve exact coordinate order and values",
+);
+
+const groupedBuilt = buildGraph(
+  {
+    ...graphSpec,
+    encoding: {
+      ...graphSpec.encoding,
+      color: { name: "group", type: "nominal" },
+    },
+  },
+  baseData(["x", "y", "group"]),
+  theme,
+  undefined,
+  {
+    ...frame,
+    dictionaries: { group: ["A", "B"] },
+  },
+);
+const groupedSeries = seriesList(groupedBuilt.panels[0].option as Record<string, unknown>);
+assert.equal(
+  groupedSeries.filter((entry) => entry.id === "pts-main").length,
+  1,
+  "element-keyed point packets must render once across color groups",
+);
+assert.equal(
+  groupedSeries.filter((entry) => entry.id === "curve-linear").length,
+  1,
+  "element-keyed curve packets must render once across color groups",
 );
