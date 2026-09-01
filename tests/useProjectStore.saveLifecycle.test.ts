@@ -174,6 +174,16 @@ function resetGraphBuilderStore() {
   assert.deepEqual(capturedSaveRequest?.fitModels, request.fitModels);
   assert.deepEqual(capturedSaveRequest?.fitModelFolders, request.fitModelFolders);
 
+  const savedFitModel = capturedSaveRequest?.fitModels[0] as Record<string, unknown>;
+  assert.equal(savedFitModel.response?.name, "height");
+  assert.equal(savedFitModel.response?.type, "continuous");
+  assert.deepEqual(savedFitModel.terms, [
+    { kind: "main", columnNames: ["age"] },
+  ]);
+  assert.equal(Object.hasOwn(savedFitModel, "result"), false);
+  assert.equal(Object.hasOwn(savedFitModel, "plotRows"), false);
+  assert.equal(Object.hasOwn(savedFitModel, "reportState"), false);
+
   const savedGraph = capturedSaveRequest?.graphBuilders[0] as GraphBuilderItem;
   assert.equal(savedGraph.mode, "multivariate");
   assert.deepEqual(savedGraph.modeStates.multivariate, {

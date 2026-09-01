@@ -65,7 +65,8 @@
     "opConcatenate": "Nối",
     "help": "Trợ giúp",
     "about": "Giới thiệu",
-    "license": "Giấy phép"
+    "license": "Giấy phép",
+    "fitModel": "Khớp Mô hình"
   },
   "alert": {
     "selectDatasetFirst": "Vui lòng chọn một bảng dữ liệu làm nguồn trước.",
@@ -139,7 +140,10 @@
     "pasteData": "Dán dữ liệu",
     "resizeColumn": "Đổi kích thước cột",
     "autoFitColumn": "Tự động chỉnh cột",
-    "sqlQueryTableCreated": "Tạo bảng \"{{name}}\" từ truy vấn SQL"
+    "sqlQueryTableCreated": "Tạo bảng \"{{name}}\" từ truy vấn SQL",
+    "newFitModel": "Khớp Mô hình mới \"{{name}}\" (nguồn: {{source}})",
+    "renameFitModel": "Đổi tên Khớp Mô hình \"{{old}}\" -> \"{{new}}\"",
+    "deleteFitModel": "Xóa Khớp Mô hình \"{{name}}\""
   },
   "workspace": {
     "directory": "Thư mục",
@@ -178,7 +182,9 @@
     "zoomIn": "Phóng to bảng",
     "zoomOut": "Thu nhỏ bảng",
     "zoomReset": "Đặt lại về 100%",
-    "zoomTooltip": "Thu phóng bảng"
+    "zoomTooltip": "Thu phóng bảng",
+    "fitModelMissing": "Phân tích Khớp Mô hình không còn tồn tại",
+    "fitModelSourceMissing": "Bảng dữ liệu nguồn không khả dụng"
   },
   "fitYByX": {
     "title": "Khớp Y theo X",
@@ -761,14 +767,48 @@
       "fiveNumberSummary": "Tóm tắt 5 số",
       "widthProportion": "Tỷ lệ độ rộng",
       "auto": "Tự động",
-      "summary": { "none": "Không", "mean": "Trung bình", "median": "Trung vị", "sum": "Tổng" },
-      "interval": { "stdErr": "Sai số chuẩn", "stdDev": "Độ lệch chuẩn", "ci95": "CI 95%" },
-      "style": { "errorBar": "Thanh sai số", "band": "Dải", "sphere": "Hình cầu" },
-      "jitterMode": { "stacked": "Xếp chồng", "uniform": "Đều", "normal": "Chuẩn" },
-      "conn": { "line": "Đường thẳng", "step": "Bậc", "spline": "Đường cong" },
-      "fillMode": { "toZero": "Về 0", "between": "Giữa" },
-      "missing": { "skip": "Bỏ qua", "include": "Bao gồm", "connect": "Nối qua", "break": "Ngắt" },
-      "box": { "outlier": "Ngoại lai", "quantile": "Phân vị", "normal": "Bình thường", "notched": "Có khe" },
+      "summary": {
+        "none": "Không",
+        "mean": "Trung bình",
+        "median": "Trung vị",
+        "sum": "Tổng"
+      },
+      "interval": {
+        "stdErr": "Sai số chuẩn",
+        "stdDev": "Độ lệch chuẩn",
+        "ci95": "CI 95%"
+      },
+      "style": {
+        "errorBar": "Thanh sai số",
+        "band": "Dải",
+        "sphere": "Hình cầu"
+      },
+      "jitterMode": {
+        "stacked": "Xếp chồng",
+        "uniform": "Đều",
+        "normal": "Chuẩn"
+      },
+      "conn": {
+        "line": "Đường thẳng",
+        "step": "Bậc",
+        "spline": "Đường cong"
+      },
+      "fillMode": {
+        "toZero": "Về 0",
+        "between": "Giữa"
+      },
+      "missing": {
+        "skip": "Bỏ qua",
+        "include": "Bao gồm",
+        "connect": "Nối qua",
+        "break": "Ngắt"
+      },
+      "box": {
+        "outlier": "Ngoại lai",
+        "quantile": "Phân vị",
+        "normal": "Bình thường",
+        "notched": "Có khe"
+      },
       "histStyle": "Kiểu biểu đồ",
       "smoothness": "Độ mịn",
       "surfaceSmoothness": "Độ mịn bề mặt",
@@ -776,21 +816,50 @@
       "histHeight": "Chiều cao biểu đồ",
       "showCounts": "Hiện số đếm",
       "showPercents": "Hiện phần trăm",
-      "histStyles": { "bar": "Cột", "polygon": "Đa giác", "kde": "Kernel Density", "shadowgram": "Shadowgram" },
+      "histStyles": {
+        "bar": "Cột",
+        "polygon": "Đa giác",
+        "kde": "Kernel Density",
+        "shadowgram": "Shadowgram"
+      },
       "smootherAlgo": "Thuật toán",
-      "smootherAlgos": { "spline": "Spline", "kernel": "Kernel cục bộ", "savgol": "Savitzky-Golay", "movingAvg": "Trung bình động", "movingBox": "Trung vị động" },
+      "smootherAlgos": {
+        "spline": "Spline",
+        "kernel": "Kernel cục bộ",
+        "savgol": "Savitzky-Golay",
+        "movingAvg": "Trung bình động",
+        "movingBox": "Trung vị động"
+      },
       "smootherSplineSmoothness": "Độ mịn",
       "smootherKernelBandwidth": "Băng thông",
       "smootherSavgolWindow": "Cửa sổ",
       "smootherSavgolPolyOrder": "Bậc đa thức",
       "smootherWindow": "Cửa sổ",
       "fitType": "Kiểu khớp",
-      "fitTypes": { "polynomial": "Đa thức", "robustCauchy": "Cauchy bền vững" },
+      "fitTypes": {
+        "polynomial": "Đa thức",
+        "robustCauchy": "Cauchy bền vững"
+      },
       "fitDegree": "Bậc",
-      "fitDegrees": { "1": "Bậc 1", "2": "Bậc 2", "3": "Bậc 3", "4": "Bậc 4", "5": "Bậc 5", "6": "Bậc 6" },
-      "fitConf": { "fit": "Khoảng tin cậy khớp", "prediction": "Khoảng tin cậy dự báo" },
+      "fitDegrees": {
+        "1": "Bậc 1",
+        "2": "Bậc 2",
+        "3": "Bậc 3",
+        "4": "Bậc 4",
+        "5": "Bậc 5",
+        "6": "Bậc 6"
+      },
+      "fitConf": {
+        "fit": "Khoảng tin cậy khớp",
+        "prediction": "Khoảng tin cậy dự báo"
+      },
       "fitStats": "Thống kê",
-      "fitStat": { "equation": "Phương trình", "rmse": "RMSE", "r2": "R²", "fTest": "Kiểm định F" }
+      "fitStat": {
+        "equation": "Phương trình",
+        "rmse": "RMSE",
+        "r2": "R²",
+        "fTest": "Kiểm định F"
+      }
     },
     "loading": "Đang tải dữ liệu…",
     "loadingProgress": "{{loaded}} / {{total}} hàng",
@@ -927,7 +996,8 @@
       "diamond": "Thoi (đặc)",
       "emptyDiamond": "Thoi (rỗng)",
       "triangle": "Tam giác (đặc)",
-      "emptyTriangle": "Tam giác (rỗng)"    },
+      "emptyTriangle": "Tam giác (rỗng)"
+    },
     "filter": {
       "toolbarBtn": "Lọc",
       "toggleTitle": "Hiện/Ẩn bộ lọc dữ liệu cục bộ",
@@ -975,6 +1045,139 @@
       "metaLoading": "Đang tải cột...",
       "metaError": "Không tải được metadata cột",
       "progress": "Tiến độ tải dữ liệu đồ thị"
+    }
+  },
+  "fitModel": {
+    "title": "Khớp Mô hình",
+    "response": "Y, đáp ứng",
+    "modelTermCount": "Số hạng mô hình",
+    "centeringMethod": "Tâm hóa",
+    "centering": {
+      "none": "Không",
+      "mean": "Trung bình"
+    },
+    "sourceMissing": "Bảng dữ liệu nguồn không khả dụng.",
+    "dialog": {
+      "title": "Khớp Mô hình",
+      "availableFields": "Các trường có sẵn",
+      "searchFields": "Tìm trường",
+      "searchAvailableFields": "Tìm các trường có sẵn",
+      "loadingFields": "Đang tải trường...",
+      "noFields": "Không có trường khả dụng cho nguồn này.",
+      "noMatch": "Không có trường nào khớp tìm kiếm hiện tại.",
+      "assignResponseLabel": "Gán {{field}} làm đáp ứng",
+      "assignResponse": "Gán làm Y",
+      "assignMainLabel": "Bật/tắt {{field}} làm hiệu ứng chính",
+      "assignMain": "Bật/tắt Main",
+      "response": "Đáp ứng",
+      "continuousOnly": "Liên tục",
+      "responseEmpty": "Thả hoặc gán một trường đáp ứng liên tục.",
+      "responseHint": "Liên tục",
+      "clearResponse": "Xóa đáp ứng {{field}}",
+      "mainEffects": "Hiệu ứng chính",
+      "mainEffectsEmpty": "Chọn một hoặc nhiều biến dự báo liên tục.",
+      "removeMainEffect": "Xóa hiệu ứng chính {{field}}",
+      "interactions": "Tương tác",
+      "twoWayOnly": "Hai chiều",
+      "interactionsEmpty": "Thêm tương tác hai chiều từ các hiệu ứng chính đã chọn.",
+      "removeInteraction": "Xóa tương tác {{term}}",
+      "addInteraction": "Thêm tương tác",
+      "toggleInteraction": "Bật/tắt tương tác {{term}}",
+      "macros": "Macro",
+      "degree1": "Bậc 1",
+      "degree2": "Bậc 2",
+      "centerInteractions": "Tâm hóa tương tác",
+      "currentTerms": "Số hạng mô hình hiện tại",
+      "parameterCount": "{{count}} tham số",
+      "termsEmpty": "Chưa chọn số hạng mô hình.",
+      "termKindMain": "Main",
+      "termKindInteraction": "Tương tác",
+      "create": "Tạo",
+      "cancel": "Hủy",
+      "validation": {
+        "responseCollision": "{{field}} đã được gán cho vai trò khác.",
+        "mainRequiredByInteraction": "{{field}} đang được dùng bởi {{interactions}}.",
+        "lastMainEffect": "Phải có ít nhất một hiệu ứng chính.",
+        "nonContinuousField": "{{field}} phải là trường liên tục.",
+        "invalidInteraction": "Chỉ thêm được tương tác hai chiều hợp lệ."
+      }
+    },
+    "report": {
+      "title": "Báo cáo Khớp Mô hình",
+      "stale": "Kết quả cũ",
+      "loading": "Đang tải báo cáo...",
+      "error": "Không tải được báo cáo.",
+      "errorWithOldResult": "Làm mới thất bại. Đang hiển thị kết quả trước đó.",
+      "undo": "Hoàn tác",
+      "remove": "Xóa",
+      "notComputable": "Không thể tính toán",
+      "usedRows": "Số hàng đã dùng",
+      "excludedRows": "Số hàng bị loại",
+      "noWarnings": "Không có cảnh báo.",
+      "undefinedValue": "-",
+      "section": {
+        "effectSummary": "Tóm tắt hiệu ứng",
+        "summaryOfFit": "Tóm tắt độ khớp",
+        "analysisOfVariance": "Phân tích phương sai",
+        "parameterEstimates": "Ước lượng tham số",
+        "actualByPredicted": "Thực tế theo dự đoán",
+        "residualByPredicted": "Phần dư theo dự đoán",
+        "warnings": "Cảnh báo"
+      },
+      "summaryOfFit": {
+        "rSquared": "R bình phương",
+        "adjustedRSquared": "R bình phương hiệu chỉnh",
+        "rootMeanSquareError": "Sai số RMS"
+      },
+      "column": {
+        "term": "Hạng",
+        "source": "Nguồn",
+        "estimate": "Ước lượng",
+        "standardError": "Sai số chuẩn",
+        "tRatio": "Tỷ số t",
+        "pValue": "Giá trị p",
+        "logWorth": "LogWorth",
+        "action": "Thao tác",
+        "degreesOfFreedom": "DF",
+        "sumOfSquares": "Tổng bình phương",
+        "meanSquare": "Bình phương trung bình",
+        "fRatio": "Tỷ số F"
+      },
+      "reason": {
+        "insufficientRows": "Không còn đủ hàng hợp lệ sau khi loại giá trị thiếu.",
+        "rankDeficient": "Ma trận mô hình bị thiếu hạng với cấu hình hiện tại."
+      },
+      "warning": {
+        "saturatedModel": "Mô hình bão hòa; không còn bậc tự do phần dư.",
+        "constantResponse": "Biến đáp ứng có rất ít hoặc không có biến thiên.",
+        "perfectFit": "Phát hiện khớp hoàn hảo; hãy kiểm tra overfitting.",
+        "illConditioned": "Ma trận thiết kế kém điều kiện; hệ số có thể không ổn định."
+      },
+      "removeBlocked": {
+        "requiredByInteraction": "Không thể xóa hiệu ứng chính này khi còn tương tác liên quan.",
+        "lastMainEffect": "Không thể xóa hiệu ứng chính cuối cùng.",
+        "notFound": "Số hạng mô hình đã chọn không còn tồn tại."
+      },
+      "chart": {
+        "axis": {
+          "predicted": "Dự đoán",
+          "actual": "Thực tế",
+          "residual": "Phần dư"
+        },
+        "series": {
+          "actual": "Thực tế",
+          "residual": "Phần dư"
+        },
+        "reference": {
+          "identity": "y=x",
+          "zero": "y=0"
+        },
+        "tooltip": {
+          "x": "Dự đoán",
+          "yActual": "Thực tế",
+          "yResidual": "Phần dư"
+        }
+      }
     }
   }
 }

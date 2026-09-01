@@ -208,6 +208,8 @@ export function FitModelReport({
         ) : null}
       </div>
 
+      <div className="sp-fit-model-report-shell">
+
       {datasetMissing ? (
         <p>{t("fitModel.sourceMissing", { defaultValue: "Source dataset is unavailable." })}</p>
       ) : null}
@@ -245,33 +247,35 @@ export function FitModelReport({
             open={disclosure.effectSummary}
             onToggle={() => toggle("effectSummary")}
           >
-            <table className="sp-fit-model-report-table">
-              <thead>
-                <tr>
-                  <th>{t("fitModel.report.column.term", { defaultValue: "Term" })}</th>
-                  <th>{t("fitModel.report.column.pValue", { defaultValue: "p-Value" })}</th>
-                  <th>{t("fitModel.report.column.logWorth", { defaultValue: "LogWorth" })}</th>
-                  <th>{t("fitModel.report.column.action", { defaultValue: "Action" })}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {effects.map((effect) => (
-                  <tr key={effect.termId}>
-                    <td>{effect.termLabel}</td>
-                    <td>{formatFitModelReportPValue(effect.pValue, undefinedValue)}</td>
-                    <td>{formatFitModelReportValue(effect.logWorth, undefinedValue)}</td>
-                    <td>
-                      <button
-                        type="button"
-                        onClick={() => onRemoveTerm(effect.termId)}
-                      >
-                        {t("fitModel.report.remove", { defaultValue: "Remove" })}
-                      </button>
-                    </td>
+            <div className="sp-fit-model-report-table-wrap">
+              <table className="sp-fit-model-report-table">
+                <thead>
+                  <tr>
+                    <th>{t("fitModel.report.column.term", { defaultValue: "Term" })}</th>
+                    <th>{t("fitModel.report.column.pValue", { defaultValue: "p-Value" })}</th>
+                    <th>{t("fitModel.report.column.logWorth", { defaultValue: "LogWorth" })}</th>
+                    <th>{t("fitModel.report.column.action", { defaultValue: "Action" })}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {effects.map((effect) => (
+                    <tr key={effect.termId}>
+                      <td>{effect.termLabel}</td>
+                      <td>{formatFitModelReportPValue(effect.pValue, undefinedValue)}</td>
+                      <td>{formatFitModelReportValue(effect.logWorth, undefinedValue)}</td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => onRemoveTerm(effect.termId)}
+                        >
+                          {t("fitModel.report.remove", { defaultValue: "Remove" })}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </Section>
 
           <Section
@@ -280,22 +284,24 @@ export function FitModelReport({
             onToggle={() => toggle("summaryOfFit")}
           >
             <FittedEquation item={item} />
-            <table className="sp-fit-model-report-table">
-              <tbody>
-                <tr>
-                  <th>{t("fitModel.report.summaryOfFit.rSquared", { defaultValue: "RSquare" })}</th>
-                  <td>{formatFitModelReportValue(fittedResult.summaryOfFit.rSquared, undefinedValue)}</td>
-                </tr>
-                <tr>
-                  <th>{t("fitModel.report.summaryOfFit.adjustedRSquared", { defaultValue: "RSquare Adj" })}</th>
-                  <td>{formatFitModelReportValue(fittedResult.summaryOfFit.adjustedRSquared, undefinedValue)}</td>
-                </tr>
-                <tr>
-                  <th>{t("fitModel.report.summaryOfFit.rootMeanSquareError", { defaultValue: "Root Mean Square Error" })}</th>
-                  <td>{formatFitModelReportValue(fittedResult.summaryOfFit.rootMeanSquareError, undefinedValue)}</td>
-                </tr>
-              </tbody>
-            </table>
+            <div className="sp-fit-model-report-table-wrap">
+              <table className="sp-fit-model-report-table">
+                <tbody>
+                  <tr>
+                    <th>{t("fitModel.report.summaryOfFit.rSquared", { defaultValue: "RSquare" })}</th>
+                    <td>{formatFitModelReportValue(fittedResult.summaryOfFit.rSquared, undefinedValue)}</td>
+                  </tr>
+                  <tr>
+                    <th>{t("fitModel.report.summaryOfFit.adjustedRSquared", { defaultValue: "RSquare Adj" })}</th>
+                    <td>{formatFitModelReportValue(fittedResult.summaryOfFit.adjustedRSquared, undefinedValue)}</td>
+                  </tr>
+                  <tr>
+                    <th>{t("fitModel.report.summaryOfFit.rootMeanSquareError", { defaultValue: "Root Mean Square Error" })}</th>
+                    <td>{formatFitModelReportValue(fittedResult.summaryOfFit.rootMeanSquareError, undefinedValue)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </Section>
 
           <Section
@@ -303,30 +309,32 @@ export function FitModelReport({
             open={disclosure.analysisOfVariance}
             onToggle={() => toggle("analysisOfVariance")}
           >
-            <table className="sp-fit-model-report-table">
-              <thead>
-                <tr>
-                  <th>{t("fitModel.report.column.source", { defaultValue: "Source" })}</th>
-                  <th>{t("fitModel.report.column.degreesOfFreedom", { defaultValue: "DF" })}</th>
-                  <th>{t("fitModel.report.column.sumOfSquares", { defaultValue: "Sum of Squares" })}</th>
-                  <th>{t("fitModel.report.column.meanSquare", { defaultValue: "Mean Square" })}</th>
-                  <th>{t("fitModel.report.column.fRatio", { defaultValue: "F Ratio" })}</th>
-                  <th>{t("fitModel.report.column.pValue", { defaultValue: "p-Value" })}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fittedResult.anova.map((row) => (
-                  <tr key={`anova:${row.source}`}>
-                    <td>{row.source}</td>
-                    <td>{formatFitModelReportValue(row.degreesOfFreedom, undefinedValue)}</td>
-                    <td>{formatFitModelReportValue(row.sumOfSquares, undefinedValue)}</td>
-                    <td>{formatFitModelReportValue(row.meanSquare, undefinedValue)}</td>
-                    <td>{formatFitModelReportValue(row.fRatio, undefinedValue)}</td>
-                    <td>{formatFitModelReportPValue(row.pValue, undefinedValue)}</td>
+            <div className="sp-fit-model-report-table-wrap">
+              <table className="sp-fit-model-report-table">
+                <thead>
+                  <tr>
+                    <th>{t("fitModel.report.column.source", { defaultValue: "Source" })}</th>
+                    <th>{t("fitModel.report.column.degreesOfFreedom", { defaultValue: "DF" })}</th>
+                    <th>{t("fitModel.report.column.sumOfSquares", { defaultValue: "Sum of Squares" })}</th>
+                    <th>{t("fitModel.report.column.meanSquare", { defaultValue: "Mean Square" })}</th>
+                    <th>{t("fitModel.report.column.fRatio", { defaultValue: "F Ratio" })}</th>
+                    <th>{t("fitModel.report.column.pValue", { defaultValue: "p-Value" })}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {fittedResult.anova.map((row) => (
+                    <tr key={`anova:${row.source}`}>
+                      <td>{row.source}</td>
+                      <td>{formatFitModelReportValue(row.degreesOfFreedom, undefinedValue)}</td>
+                      <td>{formatFitModelReportValue(row.sumOfSquares, undefinedValue)}</td>
+                      <td>{formatFitModelReportValue(row.meanSquare, undefinedValue)}</td>
+                      <td>{formatFitModelReportValue(row.fRatio, undefinedValue)}</td>
+                      <td>{formatFitModelReportPValue(row.pValue, undefinedValue)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </Section>
 
           <Section
@@ -334,28 +342,30 @@ export function FitModelReport({
             open={disclosure.parameterEstimates}
             onToggle={() => toggle("parameterEstimates")}
           >
-            <table className="sp-fit-model-report-table">
-              <thead>
-                <tr>
-                  <th>{t("fitModel.report.column.term", { defaultValue: "Term" })}</th>
-                  <th>{t("fitModel.report.column.estimate", { defaultValue: "Estimate" })}</th>
-                  <th>{t("fitModel.report.column.standardError", { defaultValue: "Std Error" })}</th>
-                  <th>{t("fitModel.report.column.tRatio", { defaultValue: "t Ratio" })}</th>
-                  <th>{t("fitModel.report.column.pValue", { defaultValue: "p-Value" })}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fittedResult.parameterEstimates.map((row) => (
-                  <tr key={`pe:${row.termId}`}>
-                    <td>{row.termLabel}</td>
-                    <td>{formatFitModelReportValue(row.estimate, undefinedValue)}</td>
-                    <td>{formatFitModelReportValue(row.standardError, undefinedValue)}</td>
-                    <td>{formatFitModelReportValue(row.tRatio, undefinedValue)}</td>
-                    <td>{formatFitModelReportPValue(row.pValue, undefinedValue)}</td>
+            <div className="sp-fit-model-report-table-wrap">
+              <table className="sp-fit-model-report-table">
+                <thead>
+                  <tr>
+                    <th>{t("fitModel.report.column.term", { defaultValue: "Term" })}</th>
+                    <th>{t("fitModel.report.column.estimate", { defaultValue: "Estimate" })}</th>
+                    <th>{t("fitModel.report.column.standardError", { defaultValue: "Std Error" })}</th>
+                    <th>{t("fitModel.report.column.tRatio", { defaultValue: "t Ratio" })}</th>
+                    <th>{t("fitModel.report.column.pValue", { defaultValue: "p-Value" })}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {fittedResult.parameterEstimates.map((row) => (
+                    <tr key={`pe:${row.termId}`}>
+                      <td>{row.termLabel}</td>
+                      <td>{formatFitModelReportValue(row.estimate, undefinedValue)}</td>
+                      <td>{formatFitModelReportValue(row.standardError, undefinedValue)}</td>
+                      <td>{formatFitModelReportValue(row.tRatio, undefinedValue)}</td>
+                      <td>{formatFitModelReportPValue(row.pValue, undefinedValue)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </Section>
 
           <Section
@@ -415,6 +425,7 @@ export function FitModelReport({
           <p>{t("fitModel.report.excludedRows", { defaultValue: "Excluded Rows" })}: {notComputableResult.excludedRows}</p>
         </Section>
       ) : null}
+      </div>
     </section>
   );
 }

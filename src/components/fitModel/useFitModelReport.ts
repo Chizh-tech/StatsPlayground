@@ -350,12 +350,11 @@ export function useFitModelReport(
         }
 
         setState({
-          status: "idle",
+          status: "error",
           result: null,
-          error: null,
+          error: normalizeFitModelReportError(error),
           configurationKey: null,
         });
-        console.warn("failed to initialize Fit Model report controller", error);
       }
     })();
 
