@@ -238,6 +238,7 @@ const customSeries = series.filter((entry) => entry.type === "custom");
 assert.equal(scatterSeries.length, 1, "one scatter should be emitted for precomputedPoints");
 assert.equal(lineSeries.length, 2, "one line should be emitted per precomputedCurve element match");
 assert.equal(customSeries.length, 0, "precomputed packets should use ordinary scatter/line series");
+assert.equal(scatterSeries[0].clip, true, "precomputed scatter must clip to the coordinate system");
 
 const pointValues = scatterSeries[0].data as Array<[number, number]>;
 assert.deepEqual(
@@ -248,6 +249,7 @@ assert.deepEqual(
 
 const linearSeries = lineSeries.find((entry) => entry.id === "curve-linear");
 assert.ok(linearSeries, "linear curve should be matched by elementId");
+assert.equal(linearSeries.clip, true, "linear precomputed curve must clip to the coordinate system");
 assert.equal(linearSeries.showSymbol, false, "linear precomputed curve must be symbol-free");
 assert.equal(linearSeries.step, undefined, "linear precomputed curve should not enable stepping");
 assert.deepEqual(
@@ -258,6 +260,7 @@ assert.deepEqual(
 
 const stepSeries = lineSeries.find((entry) => entry.id === "curve-step");
 assert.ok(stepSeries, "stepped curve should be matched by elementId");
+assert.equal(stepSeries.clip, true, "stepped precomputed curve must clip to the coordinate system");
 assert.equal(stepSeries.showSymbol, false, "stepped precomputed curve must be symbol-free");
 assert.equal(stepSeries.step, "end", "stepEnd interpolation must map to ECharts step='end'");
 assert.deepEqual(
