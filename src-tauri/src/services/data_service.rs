@@ -5,6 +5,30 @@ use crate::models::table::{
 };
 use crate::state::AppState;
 
+fn allocate_case_insensitive_dataset_name<I, S>(requested: &str, existing: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let lower_requested = requested.to_lowercase();
+    let occupied = existing
+        .into_iter()
+        .map(|name| name.as_ref().to_lowercase())
+        .collect::<std::collections::HashSet<_>>();
+    if !occupied.contains(&lower_requested) {
+        return requested.to_string();
+    }
+
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{requested}-{suffix}");
+        if !occupied.contains(&candidate.to_lowercase()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
 /// Compute the new index of a column originally at `idx` after a single column
 /// is moved from `from` to `to`. Mirrors an array `remove(from) + insert(to)`.
 fn remap_moved_index(idx: usize, from: usize, to: usize) -> usize {
@@ -31,6 +55,29 @@ pub struct DataService<'a> {
     state: &'a AppState,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocator_keeps_unique_name_without_suffix() {
+        let resolved = allocate_case_insensitive_dataset_name("Sales", ["Costs", "Gross Margin"]);
+        assert_eq!(resolved, "Sales");
+    }
+
+    #[test]
+    fn allocator_appends_next_suffix_case_insensitively() {
+        let resolved = allocate_case_insensitive_dataset_name("sales", ["Sales", "sales-2", "SALES-3"]);
+        assert_eq!(resolved, "sales-4");
+    }
+
+    #[test]
+    fn allocator_treats_numeric_suffix_gaps_deterministically() {
+        let resolved = allocate_case_insensitive_dataset_name("Summary", ["summary", "summary-3", "summary-7"]);
+        assert_eq!(resolved, "Summary-2");
+    }
+}
+
 impl<'a> DataService<'a> {
     pub fn new(state: &'a AppState) -> Self {
         Self { state }
@@ -43,12 +90,27 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        let name = std::path::Path::new(file_path)
+        let requested_name = std::path::Path::new(file_path)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("untitled")
             .to_string();
-        db.import_csv(&id, &name, file_path)
+        let resolved_name = Self::resolve_create_dataset_name(&db, &requested_name)?;
+        db.import_csv(&id, &resolved_name, file_path)
+    }
+
+    fn resolve_create_dataset_name(
+        db: &crate::engine::duckdb_engine::DuckDbEngine,
+        requested_name: &str,
+    ) -> Result<String, AppError> {
+        let existing_names = db
+            .list_datasets()?
+            .into_iter()
+            .map(|dataset| dataset.name)
+            .collect::<Vec<_>>();
+        let resolved = allocate_case_insensitive_dataset_name(requested_name, existing_names);
+        db.validate_dataset_name(&resolved, None)?;
+        Ok(resolved)
     }
 
     pub fn list_datasets(&self) -> Result<Vec<DatasetMeta>, AppError> {
@@ -159,13 +221,15 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        db.create_empty_table(&id, name, column_names, column_types)
+        let resolved_name = Self::resolve_create_dataset_name(&db, name)?;
+        db.create_empty_table(&id, &resolved_name, column_names, column_types)
     }
 
     pub fn create_table_from_sql_query(&self, sql: &str, name: &str) -> Result<DatasetMeta, AppError> {
         let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        db.create_table_from_sql_query(&id, name, sql)
+        let resolved_name = Self::resolve_create_dataset_name(&db, name)?;
+        db.create_table_from_sql_query(&id, &resolved_name, sql)
     }
 
     pub fn create_table_from_rows(
@@ -178,7 +242,9 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        db.create_table_from_rows(&id, request)
+        let mut resolved_request = request.clone();
+        resolved_request.name = Self::resolve_create_dataset_name(&db, &request.name)?;
+        db.create_table_from_rows(&id, &resolved_request)
     }
 
     pub fn add_row(&self, dataset_id: &str) -> Result<i64, AppError> {
@@ -662,7 +728,8 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        db.sort_table(&id, new_name, source_id, sort_cols, sort_orders)
+        let resolved_name = Self::resolve_create_dataset_name(&db, new_name)?;
+        db.sort_table(&id, &resolved_name, source_id, sort_cols, sort_orders)
     }
 
     pub fn subset_table(
@@ -678,7 +745,8 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        db.subset_table(&id, new_name, source_id, columns, row_filter)
+        let resolved_name = Self::resolve_create_dataset_name(&db, new_name)?;
+        db.subset_table(&id, &resolved_name, source_id, columns, row_filter)
     }
 
     pub fn transpose_table(
@@ -692,7 +760,8 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        db.transpose_table(&id, new_name, source_id)
+        let resolved_name = Self::resolve_create_dataset_name(&db, new_name)?;
+        db.transpose_table(&id, &resolved_name, source_id)
     }
 
     pub fn stack_table(
@@ -708,7 +777,8 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        db.stack_table(&id, new_name, source_id, stack_cols, id_cols)
+        let resolved_name = Self::resolve_create_dataset_name(&db, new_name)?;
+        db.stack_table(&id, &resolved_name, source_id, stack_cols, id_cols)
     }
 
     pub fn split_table(
@@ -725,7 +795,8 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        db.split_table(&id, new_name, source_id, split_col, value_col, id_cols)
+        let resolved_name = Self::resolve_create_dataset_name(&db, new_name)?;
+        db.split_table(&id, &resolved_name, source_id, split_col, value_col, id_cols)
     }
 
     pub fn summary_table(
@@ -742,7 +813,15 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        db.summary_table(&id, new_name, source_id, stat_cols, group_cols, statistics)
+        let resolved_name = Self::resolve_create_dataset_name(&db, new_name)?;
+        db.summary_table(
+            &id,
+            &resolved_name,
+            source_id,
+            stat_cols,
+            group_cols,
+            statistics,
+        )
     }
 
     pub fn join_tables(
@@ -760,8 +839,15 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
+        let resolved_name = Self::resolve_create_dataset_name(&db, new_name)?;
         db.join_tables(
-            &id, new_name, left_id, right_id, join_type, left_key, right_key,
+            &id,
+            &resolved_name,
+            left_id,
+            right_id,
+            join_type,
+            left_key,
+            right_key,
         )
     }
 
@@ -791,6 +877,7 @@ impl<'a> DataService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
-        db.concatenate_tables(&id, new_name, source_ids)
+        let resolved_name = Self::resolve_create_dataset_name(&db, new_name)?;
+        db.concatenate_tables(&id, &resolved_name, source_ids)
     }
 }

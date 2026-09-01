@@ -5,9 +5,7 @@ import { useProjectStore } from "@/stores/useProjectStore";
 import { useLocaleStore } from "@/stores/useLocaleStore";
 import { bcp47For } from "@/i18n";
 import {
-  allocateProjectBasename,
-  normalizeProjectBasenameInput,
-  validateProjectBasename,
+  resolveProjectBasenameForKind,
 } from "@/utils/projectFileNaming";
 import { listen } from "@tauri-apps/api/event";
 
@@ -106,39 +104,37 @@ export function HistoryPanel({
       setRenamingId(null);
       return;
     }
-    const normalized = normalizeProjectBasenameInput(renameValue, ".spf");
-    if (normalized.wrongExtension) {
+    const resolved = resolveProjectBasenameForKind(
+      renameValue,
+      "snapshot",
+      snapshots.map((entry) => entry.name),
+      snap.name,
+    );
+    if (resolved.error === "wrongExtension") {
       alert(t("alert.invalidName.wrongExtension", {
         defaultValue: "Use the {{expected}} extension for this item (not {{actual}}).",
-        expected: ".spf",
-        actual: normalized.wrongExtension,
+        expected: resolved.expectedExtension,
+        actual: resolved.actualExtension,
       }));
       return;
     }
-    const validationError = validateProjectBasename(normalized.basename);
-    if (validationError) {
-      if (validationError === "controlChars") {
+    if (resolved.error) {
+      if (resolved.error === "controlChars") {
         alert(t("alert.invalidName.controlChars", {
           defaultValue: "Name contains control characters.",
         }));
-      } else if (validationError === "reserved") {
+      } else if (resolved.error === "reserved") {
         alert(t("alert.invalidName.reserved", {
           defaultValue: "Name is reserved by Windows and cannot be used.",
         }));
       } else {
-        alert(t(`alert.invalidName.${validationError}`, { defaultValue: "Invalid name." }));
+        alert(t(`alert.invalidName.${resolved.error}`, { defaultValue: "Invalid name." }));
       }
       return;
     }
-    const resolved = allocateProjectBasename(
-      normalized.basename,
-      ".spf",
-      snapshots.map((entry) => entry.name),
-      snap.name,
-    );
-    if (resolved !== snap.name) {
+    if (resolved.basename !== snap.name) {
       const { renameSnapshot } = useHistoryStore.getState();
-      renameSnapshot(id, resolved);
+      renameSnapshot(id, resolved.basename);
     }
     setRenamingId(null);
   };

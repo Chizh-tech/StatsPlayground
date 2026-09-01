@@ -7,6 +7,7 @@ import { useProjectStore } from "@/stores/useProjectStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";
 import type { ColumnDisplayProps, DatasetMeta } from "@/types/data";
 import type { TabulateItem, TabulateRequest, TabulateResult, TabulateStatistic } from "@/types/tabulate";
+import { resolveProjectBasenameForKind } from "@/utils/projectFileNaming";
 
 import {
   TabulateFieldList,
@@ -39,10 +40,11 @@ import "./tabulate.css";
 interface TabulateViewProps {
   item: TabulateItem;
   dataset: DatasetMeta | undefined;
+  existingDatasetNames: string[];
   onTableCreated: (dataset: DatasetMeta) => Promise<void>;
 }
 
-export function TabulateView({ item, dataset, onTableCreated }: TabulateViewProps) {
+export function TabulateView({ item, dataset, existingDatasetNames, onTableCreated }: TabulateViewProps) {
   const { t } = useTranslation();
   const updateItemRaw = useTabulateStore((state) => state.updateItem);
   const markDirtyRaw = useProjectStore((state) => state.markDirty);
@@ -313,13 +315,41 @@ export function TabulateView({ item, dataset, onTableCreated }: TabulateViewProp
       return;
     }
 
+    const resolved = resolveProjectBasenameForKind(
+      item.name,
+      "table",
+      existingDatasetNames,
+    );
+    if (resolved.error === "wrongExtension") {
+      setExportError(t("alert.invalidName.wrongExtension", {
+        defaultValue: "Use the {{expected}} extension for this item (not {{actual}}).",
+        expected: resolved.expectedExtension,
+        actual: resolved.actualExtension,
+      }));
+      return;
+    }
+    if (resolved.error) {
+      if (resolved.error === "controlChars") {
+        setExportError(t("alert.invalidName.controlChars", {
+          defaultValue: "Name contains control characters.",
+        }));
+      } else if (resolved.error === "reserved") {
+        setExportError(t("alert.invalidName.reserved", {
+          defaultValue: "Name is reserved by Windows and cannot be used.",
+        }));
+      } else {
+        setExportError(t(`alert.invalidName.${resolved.error}`, { defaultValue: "Invalid name." }));
+      }
+      return;
+    }
+
     setExporting(true);
     setExportError(null);
 
     try {
       const exportResult = await tabulateService.run(fullQueryRequest);
       const request = buildTabulateExportRequest(item, exportResult, {
-        tableName: item.name,
+        tableName: resolved.basename,
         missingLabel: t("tabulate.missing"),
         statisticLabel: formatStatisticLabel,
       });
