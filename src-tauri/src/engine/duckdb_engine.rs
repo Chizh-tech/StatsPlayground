@@ -7093,7 +7093,7 @@ impl DuckDbEngine {
     ) -> Result<Vec<crate::models::distribution::DistributionColumnDescriptorV1>, AppError> {
         self.get_dataset_meta(dataset_id)?;
         let mut statement = self.conn.prepare(
-            "SELECT column_id, col_name, col_type, role, col_index
+            "SELECT dataset_id || ':' || CAST(col_index AS VARCHAR) AS column_id, col_name, col_type, role, col_index
              FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
         )?;
         statement

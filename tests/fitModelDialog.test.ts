@@ -469,9 +469,18 @@ assert.equal(coordinator.getState().creating, false);
 assert.equal(coordinator.getState().createError?.includes("create failed"), true);
 
 deferred = createDeferred();
+const objectRejectSubmit = coordinator.submit(submitDefinition);
+await Promise.resolve();
+assert.equal(invocationCount, 2, "submit after failure should start a new request");
+deferred.reject({ code: "distribution.config.invalid", detail: "missing column" });
+assert.equal(await objectRejectSubmit, false);
+assert.equal(coordinator.getState().createError?.includes("[object Object]"), false);
+assert.equal(coordinator.getState().createError?.includes("distribution.config.invalid"), true);
+
+deferred = createDeferred();
 const retrySubmit = coordinator.submit(submitDefinition);
 await Promise.resolve();
-assert.equal(invocationCount, 2, "retry after failure must invoke submit again");
+assert.equal(invocationCount, 3, "retry after failure must invoke submit again");
 assert.deepEqual(coordinator.getState(), { creating: true, createError: null });
 deferred.resolve();
 assert.equal(await retrySubmit, true);

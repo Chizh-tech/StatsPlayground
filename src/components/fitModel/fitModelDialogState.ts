@@ -100,6 +100,31 @@ export function createFitModelSubmitState(): FitModelSubmitState {
   };
 }
 
+function formatRejectionReason(reason: unknown): string {
+  if (reason instanceof Error && reason.message.trim().length > 0) {
+    return reason.message;
+  }
+  if (typeof reason === "string" && reason.trim().length > 0) {
+    return reason;
+  }
+  if (reason && typeof reason === "object") {
+    const message = (reason as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim().length > 0) {
+      return message;
+    }
+    try {
+      const serialized = JSON.stringify(reason);
+      if (serialized && serialized !== "{}") {
+        return serialized;
+      }
+    } catch {
+      // Fall through to generic fallback.
+    }
+  }
+  const fallback = String(reason);
+  return fallback === "[object Object]" ? "Unknown error" : fallback;
+}
+
 export function createFitModelSubmitCoordinator(onCreate: FitModelCreateHandler): FitModelSubmitCoordinator {
   let state = createFitModelSubmitState();
   let inFlight: Promise<void> | null = null;
@@ -120,7 +145,7 @@ export function createFitModelSubmitCoordinator(onCreate: FitModelCreateHandler)
       state = { creating: false, createError: null };
       return true;
     } catch (reason) {
-      state = { creating: false, createError: String(reason) };
+      state = { creating: false, createError: formatRejectionReason(reason) };
       return false;
     } finally {
       inFlight = null;
