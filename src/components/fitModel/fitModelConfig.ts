@@ -82,6 +82,16 @@ function termKey(term: FitModelTerm): string {
   return `interaction:${(term.columnNames[0] ?? "")}*${(term.columnNames[1] ?? "")}`;
 }
 
+function duplicateKey(term: FitModelTerm): string {
+  if (term.kind === "main") {
+    return `main\u0000${term.columnNames[0] ?? ""}`;
+  }
+
+  const left = term.columnNames[0] ?? "";
+  const right = term.columnNames[1] ?? "";
+  return `interaction\u0000${left.length}:${left}\u0000${right.length}:${right}`;
+}
+
 export function validateFitModelDefinition(input: {
   response: FieldRef | null;
   terms: readonly FitModelTerm[];
@@ -123,9 +133,9 @@ export function validateFitModelDefinition(input: {
         return { ok: false, reason: "nonContinuousPredictor", columnName };
       }
 
-      const key = termKey(term);
+      const key = duplicateKey(term);
       if (seen.has(key)) {
-        return { ok: false, reason: "duplicateTerm", termKey: key };
+        return { ok: false, reason: "duplicateTerm", termKey: termKey(term) };
       }
       seen.add(key);
       mainEffects.add(columnName);
@@ -153,9 +163,9 @@ export function validateFitModelDefinition(input: {
       return { ok: false, reason: "nonContinuousPredictor", columnName: second };
     }
 
-    const key = termKey(term);
+    const key = duplicateKey(term);
     if (seen.has(key)) {
-      return { ok: false, reason: "duplicateTerm", termKey: key };
+      return { ok: false, reason: "duplicateTerm", termKey: termKey(term) };
     }
     seen.add(key);
     interactions.push([first, second]);

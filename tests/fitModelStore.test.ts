@@ -94,13 +94,22 @@ const malformed = {
 
 useProjectStore.setState({ readOnly: true });
 useFitModelStore.getState().loadFromProject([persisted, malformed]);
-assert.equal(useFitModelStore.getState().items.length, 1);
+assert.equal(useFitModelStore.getState().items.length, 2);
 assert.equal(useFitModelStore.getState().items[0]?.id, "fit-loaded");
 assert.deepEqual(useFitModelStore.getState().items[0]?.terms, [
   { kind: "main", columnNames: ["Temperature"] },
   { kind: "main", columnNames: ["Pressure"] },
   { kind: "interaction", columnNames: ["Pressure", "Temperature"] },
 ]);
+assert.equal(useFitModelStore.getState().items[1]?.id, "fit-malformed");
+assert.equal(useFitModelStore.getState().items[1]?.response.name, "Yield");
+assert.equal(useFitModelStore.getState().items[1]?.response.type, "nominal");
+assert.deepEqual(useFitModelStore.getState().items[1]?.terms, [
+  { kind: "main", columnNames: ["Temperature"] },
+]);
+assert.equal(useFitModelStore.getState().items[1]?.centeringMethod, "none");
+assert.equal(typeof useFitModelStore.getState().items[1]?.loadIssue?.code, "string");
+assert.match(useFitModelStore.getState().items[1]?.loadIssue?.detail ?? "", /nonContinuousResponse/i);
 assert.equal(useFitModelStore.getState().items[0]?.centeringMethod, "none");
 assert.equal(Object.hasOwn(useFitModelStore.getState().items[0]!, "result"), false);
 assert.equal(Object.hasOwn(useFitModelStore.getState().items[0]!, "plotRows"), false);
@@ -114,7 +123,7 @@ assert.equal(useFitModelStore.getState().items[0]?.terms[0]?.columnNames[0], "Te
 assert.equal(useFitModelStore.getState().items[0]?.response.name, "Yield");
 
 useProjectStore.setState({ readOnly: false });
-assert.equal(useFitModelStore.getState().nextName(), "Fit Model 10");
+assert.equal(useFitModelStore.getState().nextName(), "Fit Model 101");
 
 useProjectStore.setState({ readOnly: true });
 assert.throws(

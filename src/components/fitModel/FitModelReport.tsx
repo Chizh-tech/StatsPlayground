@@ -9,11 +9,13 @@ import type { FitModelItem, FitModelFittedResult } from "@/types/fitModel";
 
 import {
   buildEffectSummary,
+  buildFittedEquationModel,
   formatFitModelReportPValue,
   formatFitModelReportValue,
 } from "./fitModelReportModel";
 import { FitModelDiagnosticChart } from "./FitModelDiagnosticChart";
 import type { FitModelReportState } from "./useFitModelReport";
+import type { FitModelLoadIssue } from "@/types/fitModel";
 
 interface FitModelDisclosureState {
   effectSummary: boolean;
@@ -41,6 +43,7 @@ export interface FitModelReportProps {
   item: FitModelItem;
   state: FitModelReportState;
   datasetMissing: boolean;
+  loadIssue: FitModelLoadIssue | null;
   removeMessage: string | null;
   onRemoveTerm: (termId: string) => void;
   onUndoRemove: (() => void) | null;
@@ -63,14 +66,7 @@ function notComputableText(reason: "insufficientRows" | "rankDeficient", t: (key
   return localized === `fitModel.report.reason.${reason}` ? reason : localized;
 }
 
-function FittedEquation({ item }: { item: FitModelItem }) {
-  const response = item.response.name;
-  const terms = item.terms.map((term) => {
-    if (term.kind === "main") {
-      return term.columnNames[0] ?? "";
-    }
-    return `${term.columnNames[0] ?? ""} * ${term.columnNames[1] ?? ""}`;
-  });
+function FittedEquation({ response, terms }: { response: string; terms: string[] }) {
 
   return (
     <div className="sp-fit-model-report-equation" aria-label="fitted-equation-inputs">
@@ -114,10 +110,12 @@ export function FitModelReport({
   item,
   state,
   datasetMissing,
+  loadIssue,
   removeMessage,
   onRemoveTerm,
   onUndoRemove,
 }: FitModelReportProps) {
+  void item;
   const { t } = useTranslation();
   const undefinedValue = resolveUndefinedValueLabel((key) => t(key));
   const [disclosure, setDisclosure] = useState<FitModelDisclosureState>(DEFAULT_DISCLOSURE_STATE);
@@ -134,6 +132,10 @@ export function FitModelReport({
   const notComputableResult = state.result?.kind === "notComputable" ? state.result : null;
   const effects = useMemo(
     () => (fittedResult ? buildEffectSummary(fittedResult) : []),
+    [fittedResult],
+  );
+  const equation = useMemo(
+    () => (fittedResult ? buildFittedEquationModel(fittedResult) : null),
     [fittedResult],
   );
 
@@ -210,7 +212,7 @@ export function FitModelReport({
 
       <div className="sp-fit-model-report-shell">
 
-      {datasetMissing ? (
+      {datasetMissing || loadIssue ? (
         <p>{t("fitModel.sourceMissing", { defaultValue: "Source dataset is unavailable." })}</p>
       ) : null}
 
@@ -283,7 +285,9 @@ export function FitModelReport({
             open={disclosure.summaryOfFit}
             onToggle={() => toggle("summaryOfFit")}
           >
-            <FittedEquation item={item} />
+            {equation ? (
+              <FittedEquation response={equation.response} terms={equation.terms} />
+            ) : null}
             <div className="sp-fit-model-report-table-wrap">
               <table className="sp-fit-model-report-table">
                 <tbody>

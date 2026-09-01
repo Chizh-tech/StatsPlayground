@@ -27,6 +27,11 @@ export interface FitModelDefinitionConfig {
   centeringMethod: FitModelCenteringMethod;
 }
 
+export interface FitModelEquationModel {
+  response: string;
+  terms: string[];
+}
+
 export type FitModelRemoveBlockedReason =
   | "requiredByInteraction"
   | "lastMainEffect"
@@ -173,6 +178,36 @@ export function buildEffectSummary(result: FitModelFittedResult): FitModelEffect
       }
       return left.termLabel.localeCompare(right.termLabel);
     });
+}
+
+export function buildFittedEquationModel(result: FitModelFittedResult): FitModelEquationModel | null {
+  const response = result.responseColumn.trim();
+  if (response.length === 0) {
+    return null;
+  }
+
+  const parameterByTermId = new Map(
+    result.parameterEstimates.map((parameter) => [parameter.termId, parameter]),
+  );
+  const parameterByLabel = new Map(
+    result.parameterEstimates.map((parameter) => [parameter.termLabel, parameter]),
+  );
+
+  const terms: string[] = [];
+  for (const term of result.terms) {
+    const parameter = parameterByTermId.get(term.termId) ?? parameterByLabel.get(term.label);
+    if (!parameter) {
+      return null;
+    }
+
+    const label = parameter.termLabel.trim();
+    if (label.length === 0) {
+      return null;
+    }
+    terms.push(label);
+  }
+
+  return { response, terms };
 }
 
 export function removeFitModelTerm(

@@ -196,6 +196,25 @@ function renderReport(state: FitModelReportState): string {
         item: createItem(),
         state,
         datasetMissing: false,
+        loadIssue: null,
+        removeMessage: null,
+        onRemoveTerm: () => undefined,
+        onUndoRemove: () => undefined,
+      }),
+    ),
+  );
+}
+
+function renderReportWithItem(item: FitModelItem, state: FitModelReportState): string {
+  return renderToStaticMarkup(
+    React.createElement(
+      I18nextProvider,
+      { i18n: testI18n },
+      React.createElement(FitModelReport, {
+        item,
+        state,
+        datasetMissing: false,
+        loadIssue: null,
         removeMessage: null,
         onRemoveTerm: () => undefined,
         onUndoRemove: () => undefined,
@@ -451,12 +470,87 @@ function testRenderLoadingStaleAndErrorOldResultContracts(): void {
   assert.match(oldHtml, /permission denied/);
 }
 
+function testStaleEquationUsesResultTermsNotCurrentItemTerms(): void {
+  const staleResult = createFittedResult({
+    responseColumn: "Y_old",
+    terms: [
+      { termId: "main:A", kind: "main", columnNames: ["A"], label: "A" },
+    ],
+    parameterEstimates: [
+      {
+        termId: "Intercept",
+        termLabel: "Intercept",
+        estimate: 1,
+        standardError: 0.1,
+        tRatio: 10,
+        pValue: 0.01,
+        lowerConfidenceLimit: 0,
+        upperConfidenceLimit: 2,
+      },
+      {
+        termId: "main:A",
+        termLabel: "A",
+        estimate: 2,
+        standardError: 0.2,
+        tRatio: 10,
+        pValue: 0.02,
+        lowerConfidenceLimit: 1,
+        upperConfidenceLimit: 3,
+      },
+    ],
+  });
+  const staleState: FitModelReportState = {
+    status: "stale",
+    result: staleResult,
+    error: null,
+    configurationKey: "cfg-stale-eq",
+  };
+
+  const html = renderReportWithItem(createItem({
+    response: { name: "Y_new", type: "continuous" },
+    terms: [{ kind: "main", columnNames: ["B"] }],
+  }), staleState);
+
+  assert.match(html, /Y_old/);
+  assert.match(html, /\+ A/);
+  assert.doesNotMatch(html, /Y_new/);
+  assert.doesNotMatch(html, /\+ B/);
+}
+
+function testUnavailableLoadIssueRendersWithoutEquation(): void {
+  const html = renderToStaticMarkup(
+    React.createElement(
+      I18nextProvider,
+      { i18n: testI18n },
+      React.createElement(FitModelReport, {
+        item: createItem({
+          loadIssue: { code: "invalidPersistedDefinition", detail: "nonContinuousResponse:Yield" },
+        }),
+        state: {
+          status: "idle",
+          result: null,
+          error: null,
+          configurationKey: null,
+        },
+        datasetMissing: false,
+        loadIssue: { code: "invalidPersistedDefinition", detail: "nonContinuousResponse:Yield" },
+        removeMessage: null,
+        onRemoveTerm: () => undefined,
+        onUndoRemove: null,
+      }),
+    ),
+  );
+
+  assert.match(html, /Source dataset is unavailable|Source data table is unavailable|fitModel\.sourceMissing/);
+  assert.doesNotMatch(html, /fitted-equation-inputs/);
+}
+
 function testViewSourceContracts(): void {
   const source = readFileSync(VIEW_SOURCE_PATH, "utf8").replace(/\r\n/g, "\n");
 
   assert.match(
     source,
-    /useFitModelReport\(dataset \? item : null, dataset\?\.updatedAt \?\? null\)/,
+    /useFitModelReport\(dataset && !item\.loadIssue \? item : null, dataset\?\.updatedAt \?\? null\)/,
     "FitModelView must gate report loading by dataset and dataset update signal.",
   );
 }
@@ -474,6 +568,8 @@ testUndoTransitionRestoresOnceAndClearsSnapshot();
 testRenderFittedContracts();
 testRenderNotComputableContract();
 testRenderLoadingStaleAndErrorOldResultContracts();
+testStaleEquationUsesResultTermsNotCurrentItemTerms();
+testUnavailableLoadIssueRendersWithoutEquation();
 testViewSourceContracts();
 
 console.log("fitModel report contract passed");

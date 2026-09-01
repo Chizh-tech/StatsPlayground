@@ -88,6 +88,20 @@ pub enum TermError {
     InteractionRequiresDistinctColumns(String),
 }
 
+fn duplicate_key_for_main(column: &str) -> String {
+    format!("main\u{0}{column}")
+}
+
+fn duplicate_key_for_interaction(left: &str, right: &str) -> String {
+    format!(
+        "interaction\u{0}{}:{}\u{0}{}:{}",
+        left.len(),
+        left,
+        right.len(),
+        right
+    )
+}
+
 pub fn resolve_terms(terms: &[FitModelTerm]) -> Result<Vec<ResolvedTerm>, TermError> {
     if terms.is_empty() {
         return Ok(Vec::new());
@@ -114,7 +128,8 @@ pub fn resolve_terms(terms: &[FitModelTerm]) -> Result<Vec<ResolvedTerm>, TermEr
                 }
 
                 let column = term.column_names[0].clone();
-                if !seen.insert(column.clone()) {
+                let duplicate_key = duplicate_key_for_main(&column);
+                if !seen.insert(duplicate_key) {
                     return Err(TermError::DuplicateTerm(column));
                 }
                 mains_seen.insert(column.clone());
@@ -134,9 +149,9 @@ pub fn resolve_terms(terms: &[FitModelTerm]) -> Result<Vec<ResolvedTerm>, TermEr
                 if cols[0] == cols[1] {
                     return Err(TermError::InteractionRequiresDistinctColumns(cols[0].clone()));
                 }
-                let id = cols.join("*");
-                if !seen.insert(id.clone()) {
-                    return Err(TermError::DuplicateTerm(id));
+                let duplicate_key = duplicate_key_for_interaction(&cols[0], &cols[1]);
+                if !seen.insert(duplicate_key) {
+                    return Err(TermError::DuplicateTerm(format!("{}*{}", cols[0], cols[1])));
                 }
 
                 interactions.push(ResolvedTerm::interaction(cols[0].clone(), cols[1].clone()));
@@ -199,6 +214,40 @@ mod tests {
             resolve_terms(&terms),
             Err(TermError::DuplicateTerm("A*B".into()))
         );
+    }
+
+    #[test]
+    fn main_name_that_looks_like_interaction_does_not_collide() {
+        let terms = vec![
+            term("main", &["A"]),
+            term("main", &["B"]),
+            term("main", &["A*B"]),
+            term("interaction", &["A", "B"]),
+        ];
+        let resolved = resolve_terms(&terms).expect("term ids should be collision-free by kind");
+        assert_eq!(resolved.len(), 4);
+        assert!(resolved
+            .iter()
+            .any(|entry| entry.kind() == &FitModelTermKind::Main && entry.main_column() == Some("A*B")));
+        assert!(resolved.iter().any(|entry| {
+            entry.kind() == &FitModelTermKind::Interaction
+                && entry.interaction_columns() == Some(("A", "B"))
+        }));
+    }
+
+    #[test]
+    fn interaction_identity_is_tuple_based_not_join_based() {
+        let terms = vec![
+            term("main", &["A"]),
+            term("main", &["B"]),
+            term("main", &["C"]),
+            term("main", &["B*C"]),
+            term("main", &["A*B"]),
+            term("interaction", &["A", "B*C"]),
+            term("interaction", &["A*B", "C"]),
+        ];
+        let resolved = resolve_terms(&terms).expect("interaction keys should be unambiguous");
+        assert_eq!(resolved.len(), 7);
     }
 
     #[test]

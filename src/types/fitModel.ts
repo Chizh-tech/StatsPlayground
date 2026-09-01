@@ -8,6 +8,11 @@ export interface FitModelTerm {
   columnNames: string[];
 }
 
+export interface FitModelLoadIssue {
+  code: string;
+  detail: string;
+}
+
 export interface FitModelItem {
   id: string;
   name: string;
@@ -16,6 +21,7 @@ export interface FitModelItem {
   terms: FitModelTerm[];
   centeringMethod: FitModelCenteringMethod;
   createdAt: string;
+  loadIssue?: FitModelLoadIssue;
 }
 
 export interface FitModelRequest {

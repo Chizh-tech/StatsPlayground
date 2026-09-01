@@ -1960,6 +1960,7 @@ export function Workspace() {
     }
     for (const item of fitModelChildren) {
       const sourceDs = datasets.find((dataset) => dataset.id === item.sourceDatasetId);
+      const fitModelUnavailable = !sourceDs || Boolean(item.loadIssue);
       out.push(
         <div
           key={`fitModel:${item.id}`}
@@ -1984,7 +1985,7 @@ export function Workspace() {
             event.stopPropagation();
             setCtxMenu({ kind: "fitModel", id: item.id, x: event.clientX, y: event.clientY });
           }}
-          title={sourceDs ? t("workspace.datasourceLabel", { name: sourceDs.name }) : t("workspace.fitModelSourceMissing")}
+          title={fitModelUnavailable ? t("workspace.fitModelSourceMissing") : t("workspace.datasourceLabel", { name: sourceDs.name })}
         >
           <i className="ds-icon fa-solid fa-wave-square" aria-hidden="true" />
           {renamingId === item.id ? (
@@ -2005,7 +2006,7 @@ export function Workspace() {
             <span className="ds-name">{item.name}</span>
           )}
           <span className="ds-info gb-source-tag">
-            {sourceDs ? sourceDs.name : t("workspace.fitModelSourceMissing")}
+            {fitModelUnavailable ? t("workspace.fitModelSourceMissing") : sourceDs.name}
           </span>
         </div>,
       );

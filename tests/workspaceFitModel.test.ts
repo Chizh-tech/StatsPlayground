@@ -51,6 +51,8 @@ assertSourceIncludes(workspaceSource, "renameFitModel", "Workspace must rename F
 assertSourceIncludes(workspaceSource, "deleteFitModel", "Workspace must delete Fit Model analyses from the tree");
 assertSourceIncludes(workspaceSource, "deleteFitModelByDataset", "Deleting a source table must cascade-delete dependent Fit Model analyses");
 assertSourceIncludes(workspaceSource, "fsSetFitModelFolder", "Workspace drag/drop must move Fit Model analyses into folders");
+assertSourceIncludes(workspaceSource, "Boolean(item.loadIssue)", "Fit Model tree rows must treat load-issue analyses as unavailable");
+assertSourceIncludes(workspaceSource, "fitModelUnavailable ? t(\"workspace.fitModelSourceMissing\") : sourceDs.name", "Fit Model tree rows must render unavailable text for load-issue analyses");
 
 assertSourceIncludes(workspaceSource, "| { kind: \"fitModel\"; id: string }", "Drag payload and context menu unions must include Fit Model items");
 assertSourceIncludes(workspaceSource, "fitModelByParent", "Tree grouping must include Fit Model documents by folder");

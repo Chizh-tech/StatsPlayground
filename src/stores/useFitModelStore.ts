@@ -7,7 +7,7 @@ import {
 } from "@/components/fitModel/fitModelConfig";
 import type { FieldRef } from "@/graphCore";
 import { useProjectStore } from "@/stores/useProjectStore";
-import type { FitModelItem, FitModelTerm } from "@/types/fitModel";
+import type { FitModelItem, FitModelLoadIssue, FitModelTerm } from "@/types/fitModel";
 import { assertProjectMutable } from "@/utils/saveReadOnly";
 
 interface FitModelStore {
@@ -79,7 +79,48 @@ function sanitizeItem(item: FitModelItem): FitModelItem {
     terms: cloneTerms(canonicalizeFitModelTerms(item.terms)),
     centeringMethod: item.centeringMethod,
     createdAt: item.createdAt,
+    loadIssue: item.loadIssue
+      ? { code: item.loadIssue.code, detail: item.loadIssue.detail }
+      : undefined,
   };
+}
+
+function cloneLoadIssue(value: FitModelLoadIssue): FitModelLoadIssue {
+  return {
+    code: value.code,
+    detail: value.detail,
+  };
+}
+
+function sanitizeOrPreserveItem(item: FitModelItem): FitModelItem {
+  if (item.loadIssue) {
+    return {
+      id: item.id,
+      name: item.name,
+      sourceDatasetId: item.sourceDatasetId,
+      response: cloneResponse(item.response),
+      terms: cloneTerms(canonicalizeFitModelTerms(item.terms)),
+      centeringMethod: item.centeringMethod,
+      createdAt: item.createdAt,
+      loadIssue: cloneLoadIssue(item.loadIssue),
+    };
+  }
+
+  return sanitizeItem(item);
+}
+
+function serializeValidationDetail(error: Exclude<ReturnType<typeof validateFitModelDefinition>, { ok: true }>): string {
+  const parts: string[] = [error.reason];
+  if (error.columnName) {
+    parts.push(`column:${error.columnName}`);
+  }
+  if (error.termKey) {
+    parts.push(`term:${error.termKey}`);
+  }
+  if (error.termKind) {
+    parts.push(`kind:${error.termKind}`);
+  }
+  return parts.join(";");
 }
 
 function parseTerm(value: unknown): FitModelTerm | null {
@@ -107,32 +148,42 @@ function normalizeLoadedFitModel(value: unknown): {
   const id = value.id;
   const name = value.name;
   const sourceDatasetId = value.sourceDatasetId;
-  const response = value.response;
-  const terms = value.terms;
-  const centeringMethod = value.centeringMethod;
   const createdAt = value.createdAt;
 
-  if (
-    typeof id !== "string"
-    || typeof name !== "string"
-    || typeof sourceDatasetId !== "string"
-    || !isObject(response)
-    || typeof response.name !== "string"
-    || (response.type !== "continuous" && response.type !== "ordinal" && response.type !== "nominal")
-    || !Array.isArray(terms)
-    || (centeringMethod !== "none" && centeringMethod !== "mean")
-    || typeof createdAt !== "string"
-  ) {
+  if (typeof id !== "string" || typeof name !== "string" || typeof sourceDatasetId !== "string" || typeof createdAt !== "string") {
     return { item: null, warnings: [] };
   }
 
+  const response = value.response;
+  const terms = value.terms;
+  const centeringMethod = value.centeringMethod;
+
+  const loadIssueDetails: string[] = [];
+
+  let normalizedResponse: FieldRef = { name: "", type: "continuous" };
+  if (isObject(response) && typeof response.name === "string" && (response.type === "continuous" || response.type === "ordinal" || response.type === "nominal")) {
+    normalizedResponse = { name: response.name, type: response.type };
+  } else {
+    loadIssueDetails.push("invalidResponseShape");
+  }
+
   const parsedTerms: FitModelTerm[] = [];
-  for (const term of terms) {
-    const parsed = parseTerm(term);
-    if (!parsed) {
-      return { item: null, warnings: [] };
+  if (Array.isArray(terms)) {
+    for (let index = 0; index < terms.length; index += 1) {
+      const parsed = parseTerm(terms[index]);
+      if (!parsed) {
+        loadIssueDetails.push(`invalidTerm:${index}`);
+        continue;
+      }
+      parsedTerms.push(parsed);
     }
-    parsedTerms.push(parsed);
+  } else {
+    loadIssueDetails.push("invalidTermsShape");
+  }
+
+  const normalizedCenteringMethod = centeringMethod === "mean" ? "mean" : "none";
+  if (centeringMethod !== "none" && centeringMethod !== "mean") {
+    loadIssueDetails.push("invalidCenteringMethod");
   }
 
   const canonicalTerms = canonicalizeFitModelTerms(parsedTerms);
@@ -153,17 +204,39 @@ function normalizeLoadedFitModel(value: unknown): {
     id,
     name,
     sourceDatasetId,
-    response: { name: response.name, type: response.type },
+    response: normalizedResponse,
     terms: dedupedTerms,
-    centeringMethod,
+    centeringMethod: normalizedCenteringMethod,
     createdAt,
   };
 
   try {
+    if (loadIssueDetails.length > 0) {
+      return {
+        item: sanitizeOrPreserveItem({
+          ...candidate,
+          loadIssue: {
+            code: "invalidPersistedDefinition",
+            detail: loadIssueDetails.join(";"),
+          },
+        }),
+        warnings,
+      };
+    }
+
     return { item: sanitizeItem(candidate), warnings };
   } catch (error) {
     if (error instanceof FitModelValidationError) {
-      return { item: null, warnings: [] };
+      return {
+        item: sanitizeOrPreserveItem({
+          ...candidate,
+          loadIssue: {
+            code: "invalidPersistedDefinition",
+            detail: serializeValidationDetail(error.result),
+          },
+        }),
+        warnings,
+      };
     }
     throw error;
   }
@@ -179,7 +252,7 @@ export const useFitModelStore = create<FitModelStore>((set, get) => ({
   migrationWarnings: [],
   addItem: (item) => {
     assertProjectMutable(useProjectStore.getState().readOnly);
-    const normalized = sanitizeItem(item);
+    const normalized = sanitizeOrPreserveItem(item);
     set((state) => ({
       items: [...state.items, normalized],
       counter: Math.max(state.counter, nextCounterValue([normalized])),
@@ -201,9 +274,10 @@ export const useFitModelStore = create<FitModelStore>((set, get) => ({
           terms: patch.terms ? cloneTerms(canonicalizeFitModelTerms(patch.terms)) : cloneTerms(item.terms),
           centeringMethod: patch.centeringMethod ?? item.centeringMethod,
           createdAt: typeof patch.createdAt === "string" ? patch.createdAt : item.createdAt,
+          loadIssue: patch.loadIssue ?? item.loadIssue,
         };
 
-        return sanitizeItem(next);
+        return sanitizeOrPreserveItem(next);
       });
 
       return {
@@ -221,7 +295,7 @@ export const useFitModelStore = create<FitModelStore>((set, get) => ({
         if (item.id !== id) {
           return item;
         }
-        return sanitizeItem({ ...item, name: trimmed });
+        return sanitizeOrPreserveItem({ ...item, name: trimmed });
       });
       return {
         items,
@@ -243,7 +317,7 @@ export const useFitModelStore = create<FitModelStore>((set, get) => ({
           centeringMethod: patch.centeringMethod,
         };
 
-        return sanitizeItem(next);
+        return sanitizeOrPreserveItem(next);
       });
 
       return {

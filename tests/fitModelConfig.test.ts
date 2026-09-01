@@ -100,6 +100,35 @@ assert.deepEqual(
 );
 assert.deepEqual(
   validateFitModelDefinition({
+    response: { name: "Y", type: "continuous" },
+    terms: [
+      { kind: "main", columnNames: ["A"] },
+      { kind: "main", columnNames: ["B"] },
+      { kind: "main", columnNames: ["C"] },
+      { kind: "main", columnNames: ["A*B"] },
+      { kind: "interaction", columnNames: ["A", "B"] },
+      { kind: "interaction", columnNames: ["A*B", "C"] },
+    ],
+  }),
+  { ok: true },
+);
+assert.deepEqual(
+  validateFitModelDefinition({
+    response: { name: "Y", type: "continuous" },
+    terms: [
+      { kind: "main", columnNames: ["A"] },
+      { kind: "main", columnNames: ["B"] },
+      { kind: "main", columnNames: ["C"] },
+      { kind: "main", columnNames: ["B*C"] },
+      { kind: "main", columnNames: ["A*B"] },
+      { kind: "interaction", columnNames: ["A*B", "C"] },
+      { kind: "interaction", columnNames: ["A", "B*C"] },
+    ],
+  }),
+  { ok: true },
+);
+assert.deepEqual(
+  validateFitModelDefinition({
     response,
     terms: [{ kind: "main", columnNames: ["Temperature", "Pressure"] }],
   }),

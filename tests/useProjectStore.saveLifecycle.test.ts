@@ -49,12 +49,20 @@ const fitModelDefinition = createFitModelItem({
   fields: [continuous("height"), continuous("age")],
 });
 
+const fitModelWithLoadIssue = {
+  ...fitModelDefinition,
+  loadIssue: {
+    code: "invalidPersistedDefinition",
+    detail: "nonContinuousResponse:height",
+  },
+};
+
 const request: SaveProjectRequest = {
   history: [],
   snapshots: [],
   graphBuilders: [],
   fitYByX: [{ id: "fit-1", sourceDatasetId: "table-1" }],
-  fitModels: [fitModelDefinition],
+  fitModels: [fitModelWithLoadIssue],
   tabulates: [],
   distributions: [],
   derivedFormulas: [],
@@ -180,6 +188,10 @@ function resetGraphBuilderStore() {
   assert.deepEqual(savedFitModel.terms, [
     { kind: "main", columnNames: ["age"] },
   ]);
+  assert.deepEqual(savedFitModel.loadIssue, {
+    code: "invalidPersistedDefinition",
+    detail: "nonContinuousResponse:height",
+  });
   assert.equal(Object.hasOwn(savedFitModel, "result"), false);
   assert.equal(Object.hasOwn(savedFitModel, "plotRows"), false);
   assert.equal(Object.hasOwn(savedFitModel, "reportState"), false);

@@ -25,7 +25,7 @@ export function FitModelView({ item, dataset }: FitModelViewProps) {
   const [undoSnapshot, setUndoSnapshot] = useState<FitModelUndoSnapshot | null>(null);
   const [removeMessage, setRemoveMessage] = useState<string | null>(null);
 
-  const reportState = useFitModelReport(dataset ? item : null, dataset?.updatedAt ?? null);
+  const reportState = useFitModelReport(dataset && !item.loadIssue ? item : null, dataset?.updatedAt ?? null);
 
   const definition = useMemo(() => createFitModelDefinitionConfig({
     terms: item.terms,
@@ -97,6 +97,7 @@ export function FitModelView({ item, dataset }: FitModelViewProps) {
         item={item}
         state={reportState}
         datasetMissing={dataset == null}
+        loadIssue={item.loadIssue ?? null}
         removeMessage={removeMessage}
         onRemoveTerm={handleRemoveTerm}
         onUndoRemove={undoSnapshot ? handleUndo : null}
