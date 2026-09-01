@@ -41,6 +41,7 @@ import { modKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import {
   allocateProjectBasename,
+  projectFileExtension,
   resolveProjectBasenameForKind,
   type ProjectBasenameValidationError,
   type ProjectDocumentKind,
@@ -272,6 +273,17 @@ export function Workspace() {
     () => [...fitYByXItems.map((item) => item.name), ...tabulates.map((item) => item.name)],
     [fitYByXItems, tabulates],
   );
+
+  const withProjectExtension = useCallback((basename: string, kind: ProjectDocumentKind): string => {
+    return `${basename}${projectFileExtension(kind)}`;
+  }, []);
+
+  const renameKindForId = useCallback((id: string): ProjectDocumentKind => {
+    if (graphBuilders.some((item) => item.id === id)) return "graph";
+    if (fitYByXItems.some((item) => item.id === id)) return "fitYByX";
+    if (tabulates.some((item) => item.id === id)) return "tabulate";
+    return "table";
+  }, [fitYByXItems, graphBuilders, tabulates]);
 
   const invalidProjectNameMessage = useCallback((code: ProjectBasenameValidationError): string => {
     if (code === "controlChars") {
@@ -601,14 +613,15 @@ export function Workspace() {
     const gb = useGraphBuilderStore.getState().items.find((it) => it.id === id);
     if (gb) {
       const resolved = resolveProjectBasename(trimmed, "graph", gb.name);
-      if (resolved.error) {
+      if (resolved.error !== null) {
         alert(resolved.error);
         return;
       }
-      if (resolved.basename !== gb.name) {
-        renameGraphBuilder(id, resolved.basename);
+      const basename = resolved.basename;
+      if (basename !== gb.name) {
+        renameGraphBuilder(id, basename);
         markDirty();
-        recordAction(t("history.renameGraph", { old: gb.name, new: resolved.basename }));
+        recordAction(t("history.renameGraph", { old: gb.name, new: basename }));
       }
       setRenamingId(null);
       return;
@@ -616,14 +629,15 @@ export function Workspace() {
     const tabulate = useTabulateStore.getState().items.find((it) => it.id === id);
     if (tabulate) {
       const resolved = resolveProjectBasename(trimmed, "tabulate", tabulate.name);
-      if (resolved.error) {
+      if (resolved.error !== null) {
         alert(resolved.error);
         return;
       }
-      if (resolved.basename !== tabulate.name) {
-        renameTabulate(id, resolved.basename);
+      const basename = resolved.basename;
+      if (basename !== tabulate.name) {
+        renameTabulate(id, basename);
         markDirty();
-        recordAction(t("history.renameTabulate", { old: tabulate.name, new: resolved.basename }));
+        recordAction(t("history.renameTabulate", { old: tabulate.name, new: basename }));
       }
       setRenamingId(null);
       return;
@@ -631,14 +645,15 @@ export function Workspace() {
     const fitYByX = useFitYByXStore.getState().items.find((it) => it.id === id);
     if (fitYByX) {
       const resolved = resolveProjectBasename(trimmed, "fitYByX", fitYByX.name);
-      if (resolved.error) {
+      if (resolved.error !== null) {
         alert(resolved.error);
         return;
       }
-      if (resolved.basename !== fitYByX.name) {
-        renameFitYByX(id, resolved.basename);
+      const basename = resolved.basename;
+      if (basename !== fitYByX.name) {
+        renameFitYByX(id, basename);
         markDirty();
-        recordAction(t("history.renameFitYByX", { old: fitYByX.name, new: resolved.basename }));
+        recordAction(t("history.renameFitYByX", { old: fitYByX.name, new: basename }));
       }
       setRenamingId(null);
       return;
@@ -649,16 +664,17 @@ export function Workspace() {
       return;
     }
     const resolved = resolveProjectBasename(trimmed, "table", oldName);
-    if (resolved.error) {
+    if (resolved.error !== null) {
       alert(resolved.error);
       return;
     }
-    if (resolved.basename !== oldName) {
+    const basename = resolved.basename;
+    if (basename !== oldName) {
       try {
-        await dataService.renameDataset(id, resolved.basename);
+        await dataService.renameDataset(id, basename);
         await refreshDatasets();
         markDirty();
-        recordAction(t("history.renameTable", { old: oldName, new: resolved.basename }));
+        recordAction(t("history.renameTable", { old: oldName, new: basename }));
       } catch (error) {
         alert(t("alert.renameTableFailed", {
           defaultValue: "Rename table failed: ",
@@ -1051,9 +1067,14 @@ export function Workspace() {
           fitYByXFolders: result.fitYByXFolders ?? {},
           tabulateFolders: result.tabulateFolders ?? {},
         });
-        if (result.datasetNameMigrations.length > 0) {
+        if (result.documentNameMigrations.length > 0) {
           showToast(
-            t("workspace.datasetNameMigrations", { count: result.datasetNameMigrations.length }),
+            t("workspace.documentNameMigrations", { count: result.documentNameMigrations.length }),
+            4000,
+          );
+        } else if (result.requiresMigration) {
+          showToast(
+            t("workspace.projectRequiresMigration"),
             4000,
           );
         }
@@ -1549,21 +1570,24 @@ export function Workspace() {
         >
           <i className="ds-icon fa-solid fa-table" aria-hidden="true" />
           {renamingId === ds.id ? (
-            <input
-              ref={renameInputRef}
-              className="ds-rename-input"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => void handleRenameSubmit(ds.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void handleRenameSubmit(ds.id);
-                if (e.key === "Escape") setRenamingId(null);
-              }}
-              onClick={(e) => e.stopPropagation()}
-              autoFocus
-            />
+            <span className="ds-rename-shell">
+              <input
+                ref={renameInputRef}
+                className="ds-rename-input"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => void handleRenameSubmit(ds.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleRenameSubmit(ds.id);
+                  if (e.key === "Escape") setRenamingId(null);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                autoFocus
+              />
+              <span className="ds-fixed-ext">{projectFileExtension(renameKindForId(ds.id))}</span>
+            </span>
           ) : (
-            <span className="ds-name">{ds.name}</span>
+            <span className="ds-name">{withProjectExtension(ds.name, "table")}</span>
           )}
           <span className="ds-info">{ds.rowCount}×{ds.colCount}</span>
         </div>,
@@ -1598,21 +1622,24 @@ export function Workspace() {
         >
           <i className="ds-icon fa-solid fa-chart-pie" aria-hidden="true" />
           {renamingId === gb.id ? (
-            <input
-              ref={renameInputRef}
-              className="ds-rename-input"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => handleRenameSubmit(gb.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameSubmit(gb.id);
-                if (e.key === "Escape") setRenamingId(null);
-              }}
-              onClick={(e) => e.stopPropagation()}
-              autoFocus
-            />
+            <span className="ds-rename-shell">
+              <input
+                ref={renameInputRef}
+                className="ds-rename-input"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => handleRenameSubmit(gb.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRenameSubmit(gb.id);
+                  if (e.key === "Escape") setRenamingId(null);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                autoFocus
+              />
+              <span className="ds-fixed-ext">{projectFileExtension(renameKindForId(gb.id))}</span>
+            </span>
           ) : (
-            <span className="ds-name">{gb.name}</span>
+            <span className="ds-name">{withProjectExtension(gb.name, "graph")}</span>
           )}
           <span className="ds-info gb-source-tag">
             {sourceDs ? sourceDs.name : t("workspace.datasourceMissing")}
@@ -1649,21 +1676,24 @@ export function Workspace() {
         >
           <i className="ds-icon fa-solid fa-chart-column" aria-hidden="true" />
           {renamingId === item.id ? (
-            <input
-              ref={renameInputRef}
-              className="ds-rename-input"
-              value={renameValue}
-              onChange={(event) => setRenameValue(event.target.value)}
-              onBlur={() => handleRenameSubmit(item.id)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") handleRenameSubmit(item.id);
-                if (event.key === "Escape") setRenamingId(null);
-              }}
-              onClick={(event) => event.stopPropagation()}
-              autoFocus
-            />
+            <span className="ds-rename-shell">
+              <input
+                ref={renameInputRef}
+                className="ds-rename-input"
+                value={renameValue}
+                onChange={(event) => setRenameValue(event.target.value)}
+                onBlur={() => handleRenameSubmit(item.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") handleRenameSubmit(item.id);
+                  if (event.key === "Escape") setRenamingId(null);
+                }}
+                onClick={(event) => event.stopPropagation()}
+                autoFocus
+              />
+              <span className="ds-fixed-ext">{projectFileExtension(renameKindForId(item.id))}</span>
+            </span>
           ) : (
-            <span className="ds-name">{item.name}</span>
+            <span className="ds-name">{withProjectExtension(item.name, "fitYByX")}</span>
           )}
           <span className="ds-info gb-source-tag">
             {sourceDs ? sourceDs.name : t("fitYByX.sourceMissing")}
@@ -1700,21 +1730,24 @@ export function Workspace() {
         >
           <i className="ds-icon fa-solid fa-table-cells-large" aria-hidden="true" />
           {renamingId === item.id ? (
-            <input
-              ref={renameInputRef}
-              className="ds-rename-input"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => handleRenameSubmit(item.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameSubmit(item.id);
-                if (e.key === "Escape") setRenamingId(null);
-              }}
-              onClick={(e) => e.stopPropagation()}
-              autoFocus
-            />
+            <span className="ds-rename-shell">
+              <input
+                ref={renameInputRef}
+                className="ds-rename-input"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => handleRenameSubmit(item.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRenameSubmit(item.id);
+                  if (e.key === "Escape") setRenamingId(null);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                autoFocus
+              />
+              <span className="ds-fixed-ext">{projectFileExtension(renameKindForId(item.id))}</span>
+            </span>
           ) : (
-            <span className="ds-name">{item.name}</span>
+            <span className="ds-name">{withProjectExtension(item.name, "tabulate")}</span>
           )}
           <span className="ds-info gb-source-tag">
             {sourceDs ? sourceDs.name : t("workspace.tabulateSourceMissing")}

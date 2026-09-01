@@ -5,6 +5,7 @@ import { useProjectStore } from "@/stores/useProjectStore";
 import { useLocaleStore } from "@/stores/useLocaleStore";
 import { bcp47For } from "@/i18n";
 import {
+  projectFileExtension,
   resolveProjectBasenameForKind,
 } from "@/utils/projectFileNaming";
 import { listen } from "@tauri-apps/api/event";
@@ -39,6 +40,11 @@ export function HistoryPanel({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameRef = useRef<HTMLInputElement>(null);
+  const snapshotExtension = projectFileExtension("snapshot");
+
+  const withSnapshotExtension = useCallback((basename: string): string => {
+    return `${basename}${snapshotExtension}`;
+  }, [snapshotExtension]);
 
   // Draggable divider state (percentage of history section)
   const [historyPct, setHistoryPct] = useState(60);
@@ -259,21 +265,24 @@ export function HistoryPanel({
                 </div>
                 <div className="snapshot-item-body">
                   {renamingId === snap.id ? (
-                    <input
-                      ref={renameRef}
-                      className="snapshot-rename-input"
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onBlur={() => handleRenameSubmit(snap.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleRenameSubmit(snap.id);
-                        if (e.key === "Escape") setRenamingId(null);
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    />
+                    <span className="snapshot-rename-shell">
+                      <input
+                        ref={renameRef}
+                        className="snapshot-rename-input"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={() => handleRenameSubmit(snap.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleRenameSubmit(snap.id);
+                          if (e.key === "Escape") setRenamingId(null);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <span className="snapshot-fixed-ext">{snapshotExtension}</span>
+                    </span>
                   ) : (
                     <span className="snapshot-item-name">
-                      {snap.name}
+                      {withSnapshotExtension(snap.name)}
                     </span>
                   )}
                   <span className="snapshot-item-time">

@@ -37,10 +37,6 @@ export function projectFileExtension(kind: ProjectDocumentKind): ProjectFileExte
   return ".spf";
 }
 
-function endsWithExtension(value: string, extension: ProjectFileExtension): boolean {
-  return value.toLowerCase().endsWith(extension);
-}
-
 function lowerKnownExtension(value: string): ProjectFileExtension | null {
   const lower = value.toLowerCase();
   for (const extension of KNOWN_EXTENSIONS) {

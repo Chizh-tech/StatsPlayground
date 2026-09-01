@@ -162,6 +162,8 @@
     "creatingSnapshot": "正在创建快照…",
     "restoringSnapshot": "正在恢复快照…",
     "importingSqlite": "正在导入 SQLite 数据库…",
+    "documentNameMigrations": "打开项目时已重命名 {{count}} 个项目文档名称。保存项目以持久化这些更新后的名称。",
+    "projectRequiresMigration": "打开项目时已在内存中完成迁移。请保存项目以持久化升级后的格式。",
     "datasetNameMigrations": "打开项目时已重命名 {{count}} 个重复的数据表名称。保存项目以持久化这些更新后的名称。",
     "importProgressTable": "表 {{i}}/{{total}}: {{name}}",
     "importProgressRows": "行",
