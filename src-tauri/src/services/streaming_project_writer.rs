@@ -359,7 +359,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             &snapshot.request.tabulate_folders,
             snapshot.request.history.clone(),
             snapshot.request.snapshots.clone(),
-        );
+        )?;
 
         thread::scope(|scope| {
             let mut perf = SaveRunPerf::default();

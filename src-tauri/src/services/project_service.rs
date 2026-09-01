@@ -138,7 +138,7 @@ impl<'a> ProjectService<'a> {
             &empty_folders,
             Vec::new(),
             Vec::new(),
-        );
+        )?;
         spprj_archive::write_project_archive(&bundle, file_path)?;
 
         let mut proj = self
@@ -1978,7 +1978,8 @@ mod tests {
             &folders,
             vec![],
             vec![],
-        );
+        )
+        .unwrap();
         let file_path =
             std::env::temp_dir().join(format!("sp_failed_open_{}.spprj", uuid::Uuid::new_v4()));
         spprj_archive::write_project_archive(&bundle, file_path.to_str().unwrap()).unwrap();

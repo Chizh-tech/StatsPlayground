@@ -145,11 +145,11 @@ pub struct ProjectManifest {
     /// archive whose folder layout must be derived from entry paths.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph_folders: Option<HashMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fit_y_by_x: Vec<serde_json::Value>,
     #[serde(default)]
     pub fit_y_by_x_folders: HashMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tabulates: Vec<serde_json::Value>,
     #[serde(default)]
     pub tabulate_folders: HashMap<String, String>,
@@ -829,18 +829,15 @@ pub fn build_bundle(
     tabulate_folders: &HashMap<String, String>,
     history: Vec<Value>,
     snapshots: Vec<Value>,
-) -> ProjectBundle {
+) -> Result<ProjectBundle, AppError> {
     let mut tables = tables;
     let mut graphs = graphs;
-    let mut fit_y_by_x = fit_y_by_x;
-    let mut tabulates = tabulates;
-    let mut snapshots = snapshots;
-
-    let sanitized_fit_y_by_x: Vec<Value> = fit_y_by_x
+    let mut fit_y_by_x: Vec<Value> = fit_y_by_x
         .into_iter()
         .map(strip_transient_fit_y_by_x_fields)
         .collect();
-    fit_y_by_x = sanitized_fit_y_by_x.clone();
+    let mut tabulates = tabulates;
+    let mut snapshots = snapshots;
 
     let mut used_table_paths: HashSet<String> = HashSet::new();
     let mut used_graph_paths: HashSet<String> = HashSet::new();
@@ -855,7 +852,7 @@ pub fn build_bundle(
             ".sptb",
             "data",
             &mut used_table_paths,
-        );
+        )?;
         t.name = resolved_name.clone();
         table_refs.push(TableEntryRef {
             id: t.id.clone(),
@@ -872,7 +869,7 @@ pub fn build_bundle(
             ".spgh",
             "data",
             &mut used_graph_paths,
-        );
+        )?;
         g.name = resolved_name.clone();
         graph_refs.push(GraphEntryRef {
             id: g.id.clone(),
@@ -883,7 +880,7 @@ pub fn build_bundle(
 
     let mut fit_y_by_x_refs: Vec<DocumentEntryRef> = Vec::with_capacity(fit_y_by_x.len());
     for fit in &mut fit_y_by_x {
-        let fit_id = value_required_id(fit, "fitYByX");
+        let fit_id = value_required_id(fit, "fitYByX")?;
         let fit_name = value_name_or_fallback(fit, &fit_id);
         let (resolved_name, resolved_file) = allocate_archive_name(
             &fit_name,
@@ -891,8 +888,8 @@ pub fn build_bundle(
             ".spf",
             "data",
             &mut used_data_spf_paths,
-        );
-        set_value_name(fit, &resolved_name, "fitYByX");
+        )?;
+        set_value_name(fit, &resolved_name, "fitYByX")?;
         fit_y_by_x_refs.push(DocumentEntryRef {
             id: fit_id,
             name: resolved_name,
@@ -903,7 +900,7 @@ pub fn build_bundle(
 
     let mut tabulate_refs: Vec<DocumentEntryRef> = Vec::with_capacity(tabulates.len());
     for tabulate in &mut tabulates {
-        let tabulate_id = value_required_id(tabulate, "tabulate");
+        let tabulate_id = value_required_id(tabulate, "tabulate")?;
         let tabulate_name = value_name_or_fallback(tabulate, &tabulate_id);
         let (resolved_name, resolved_file) = allocate_archive_name(
             &tabulate_name,
@@ -911,8 +908,8 @@ pub fn build_bundle(
             ".spf",
             "data",
             &mut used_data_spf_paths,
-        );
-        set_value_name(tabulate, &resolved_name, "tabulate");
+        )?;
+        set_value_name(tabulate, &resolved_name, "tabulate")?;
         tabulate_refs.push(DocumentEntryRef {
             id: tabulate_id,
             name: resolved_name,
@@ -923,7 +920,7 @@ pub fn build_bundle(
 
     let mut snapshot_refs: Vec<SnapshotEntryRef> = Vec::with_capacity(snapshots.len());
     for snapshot in &mut snapshots {
-        let snapshot_id = value_required_id(snapshot, "snapshot");
+        let snapshot_id = value_required_id(snapshot, "snapshot")?;
         let snapshot_name = value_name_or_fallback(snapshot, &snapshot_id);
         let (resolved_name, resolved_file) = allocate_archive_name(
             &snapshot_name,
@@ -931,8 +928,8 @@ pub fn build_bundle(
             ".spf",
             "snapshots",
             &mut used_snapshot_spf_paths,
-        );
-        set_value_name(snapshot, &resolved_name, "snapshot");
+        )?;
+        set_value_name(snapshot, &resolved_name, "snapshot")?;
         snapshot_refs.push(SnapshotEntryRef {
             id: snapshot_id,
             name: resolved_name,
@@ -945,7 +942,18 @@ pub fn build_bundle(
     // full tree even if the user only created `a/b/c` directly.
     let normalized_folders = normalize_folder_list(folders);
 
-    ProjectBundle {
+    let manifest_fit_y_by_x = if is_format_v4(&version) {
+        Vec::new()
+    } else {
+        fit_y_by_x.clone()
+    };
+    let manifest_tabulates = if is_format_v4(&version) {
+        Vec::new()
+    } else {
+        tabulates.clone()
+    };
+
+    Ok(ProjectBundle {
         manifest: ProjectManifest {
             name,
             version,
@@ -955,9 +963,9 @@ pub fn build_bundle(
             folders: normalized_folders,
             table_folders: Some(table_folders.clone()),
             graph_folders: Some(graph_folders.clone()),
-            fit_y_by_x: sanitized_fit_y_by_x.clone(),
+            fit_y_by_x: manifest_fit_y_by_x,
             fit_y_by_x_folders: fit_y_by_x_folders.clone(),
-            tabulates: tabulates.clone(),
+            tabulates: manifest_tabulates,
             tabulate_folders: tabulate_folders.clone(),
             fit_y_by_x_files: fit_y_by_x_refs,
             tabulate_files: tabulate_refs,
@@ -965,11 +973,11 @@ pub fn build_bundle(
         },
         tables,
         graphs,
-        fit_y_by_x: sanitized_fit_y_by_x,
+        fit_y_by_x,
         tabulates,
         history,
         snapshots,
-    }
+    })
 }
 
 fn strip_transient_fit_y_by_x_fields(value: Value) -> Value {
@@ -1281,28 +1289,19 @@ fn validate_display_basename(name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn validate_display_basename_or_panic(name: &str) {
-    if let Err(error) = validate_display_basename(name) {
-        if let AppError::FileIO(message) = error {
-            panic!("{message}");
-        }
-        panic!("Invalid document name");
-    }
-}
-
 fn allocate_archive_name(
     requested_name: &str,
     fallback_id: &str,
     extension: &str,
     root: &str,
     used_paths: &mut HashSet<String>,
-) -> (String, String) {
+) -> Result<(String, String), AppError> {
     let base = if requested_name.is_empty() {
         fallback_id.to_string()
     } else {
         requested_name.to_string()
     };
-    validate_display_basename_or_panic(&base);
+    validate_display_basename(&base)?;
 
     let mut suffix = 1usize;
     loop {
@@ -1315,7 +1314,7 @@ fn allocate_archive_name(
         let key = file.to_ascii_lowercase();
         if !used_paths.contains(&key) {
             used_paths.insert(key);
-            return (candidate, file);
+            return Ok((candidate, file));
         }
         suffix = suffix.saturating_add(1);
     }
@@ -1427,13 +1426,13 @@ fn validate_indexed_path(file: &str, root: &str, extension: &str, label: &str) -
     validate_display_basename(basename)
 }
 
-fn value_required_id(value: &Value, kind: &str) -> String {
+fn value_required_id(value: &Value, kind: &str) -> Result<String, AppError> {
     value
         .get("id")
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| panic!("{kind} document is missing required id"))
+        .ok_or_else(|| AppError::FileIO(format!("{kind} document is missing required id")))
 }
 
 fn value_name_or_fallback(value: &Value, fallback_id: &str) -> String {
@@ -1445,11 +1444,14 @@ fn value_name_or_fallback(value: &Value, fallback_id: &str) -> String {
         .unwrap_or_else(|| fallback_id.to_string())
 }
 
-fn set_value_name(value: &mut Value, name: &str, kind: &str) {
+fn set_value_name(value: &mut Value, name: &str, kind: &str) -> Result<(), AppError> {
     let Some(map) = value.as_object_mut() else {
-        panic!("{kind} document body is not a JSON object");
+        return Err(AppError::FileIO(format!(
+            "{kind} document body is not a JSON object"
+        )));
     };
     map.insert("name".to_string(), Value::String(name.to_string()));
+    Ok(())
 }
 
 /// Sanitize a user-visible name for use as an archive filename component.
@@ -1623,7 +1625,8 @@ mod tests {
             &tabulate_folders,
             vec![],
             vec![snapshot],
-        );
+        )
+        .unwrap();
 
         assert_eq!(bundle.manifest.tables[0].file, "data/data.sptb");
         assert_eq!(bundle.manifest.graphs[0].file, "data/data.spgh");
@@ -1632,6 +1635,10 @@ mod tests {
         assert_eq!(bundle.manifest.snapshot_files[0].file, "snapshots/data.spf");
         assert_eq!(bundle.manifest.table_folders.as_ref(), Some(&table_folders));
         assert_eq!(bundle.manifest.graph_folders.as_ref(), Some(&graph_folders));
+
+        let manifest_json = serde_json::to_value(&bundle.manifest).expect("serialize manifest");
+        assert!(manifest_json.get("fitYByX").is_none());
+        assert!(manifest_json.get("tabulates").is_none());
 
         for entry in bundle
             .manifest
@@ -1684,7 +1691,8 @@ mod tests {
             &HashMap::new(),
             vec![],
             vec![],
-        );
+        )
+        .unwrap();
 
         assert_eq!(bundle.manifest.tables[0].file, "data/Data.sptb");
         assert_eq!(bundle.manifest.tables[1].file, "data/data-2.sptb");
@@ -1697,45 +1705,62 @@ mod tests {
 
     #[test]
     fn build_bundle_rejects_windows_reserved_and_control_character_names() {
-        let result = std::panic::catch_unwind(|| {
-            build_bundle(
-                "Project".into(),
-                "4.0.0".into(),
-                "now".into(),
-                vec![table_doc("table-1", "CON")],
-                vec![],
-                vec![],
-                vec![],
-                vec![],
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                vec![],
-                vec![],
-            )
-        });
-        assert!(result.is_err());
+        let reserved = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table_doc("table-1", "CON")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        assert!(matches!(reserved, Err(AppError::FileIO(message)) if message.contains("reserved")));
 
-        let result = std::panic::catch_unwind(|| {
-            build_bundle(
-                "Project".into(),
-                "4.0.0".into(),
-                "now".into(),
-                vec![table_doc("table-1", "bad\u{0007}name")],
-                vec![],
-                vec![],
-                vec![],
-                vec![],
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                vec![],
-                vec![],
-            )
-        });
-        assert!(result.is_err());
+        let control = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table_doc("table-1", "bad\u{0007}name")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        assert!(matches!(control, Err(AppError::FileIO(message)) if message.contains("control character")));
+    }
+
+    #[test]
+    fn build_bundle_rejects_missing_doc_id() {
+        let missing_id = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![],
+            vec![],
+            vec![json!({"name": "fit"})],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        assert!(matches!(missing_id, Err(AppError::FileIO(message)) if message.contains("fitYByX document is missing required id")));
     }
 
     #[test]
@@ -1806,7 +1831,8 @@ mod tests {
             &folders,
             Vec::new(),
             Vec::new(),
-        );
+        )
+        .unwrap();
 
         write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
         let loaded = read_project_file(path.to_str().unwrap()).unwrap();
@@ -1827,6 +1853,11 @@ mod tests {
             "response": { "name": "height", "type": "continuous" },
             "factor": { "name": "site", "type": "nominal" }
         });
+        let mut expected_fit = fit.clone();
+        expected_fit
+            .as_object_mut()
+            .expect("fit should be an object")
+            .insert("name".to_string(), Value::String("fit-1".to_string()));
         let folders = HashMap::from([("fit-1".to_string(), "Analyses".to_string())]);
 
         let bundle = build_bundle(
@@ -1844,14 +1875,15 @@ mod tests {
             &HashMap::new(),
             Vec::new(),
             Vec::new(),
-        );
+        )
+        .unwrap();
 
         write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
         let loaded = read_project_file(path.to_str().unwrap()).unwrap();
 
-        assert_eq!(loaded.manifest.fit_y_by_x, vec![fit.clone()]);
+        assert_eq!(loaded.manifest.fit_y_by_x, vec![expected_fit.clone()]);
         assert_eq!(loaded.manifest.fit_y_by_x_folders, folders);
-        assert_eq!(loaded.fit_y_by_x, vec![fit]);
+        assert_eq!(loaded.fit_y_by_x, vec![expected_fit]);
 
         let _ = std::fs::remove_file(path);
     }
@@ -1960,7 +1992,8 @@ mod tests {
             &HashMap::new(),
             Vec::new(),
             Vec::new(),
-        );
+        )
+        .unwrap();
 
         write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
 
@@ -2075,7 +2108,8 @@ mod tests {
             &HashMap::new(),
             vec![],
             vec![],
-        );
+        )
+        .unwrap();
         write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
 
         let seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2119,7 +2153,8 @@ mod tests {
             &HashMap::new(),
             vec![],
             vec![],
-        );
+        )
+        .unwrap();
         write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
 
         let input = std::fs::File::open(&path).unwrap();
@@ -2171,7 +2206,8 @@ mod tests {
             &HashMap::new(),
             vec![],
             vec![],
-        );
+        )
+        .unwrap();
         write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
 
         let mut bytes = std::fs::read(&path).unwrap();
@@ -2206,7 +2242,8 @@ mod tests {
             &HashMap::new(),
             vec![],
             vec![],
-        );
+        )
+        .unwrap();
         write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
 
         let input = std::fs::File::open(&path).unwrap();
@@ -2259,7 +2296,9 @@ mod tests {
             &HashMap::new(),
             vec![],
             vec![],
-        );
+        )
+        .unwrap();
+
         write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
 
         let input = std::fs::File::open(&path).unwrap();
@@ -2291,6 +2330,157 @@ mod tests {
 
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(bad_manifest_path);
+    }
+
+    #[test]
+    fn read_project_file_rejects_v4_manifest_with_wrong_index_kind() {
+        let path = temp_project_path("v4-wrong-kind");
+        let manifest = json!({
+            "name": "Project",
+            "version": "4.0.0",
+            "createdAt": "now",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+            "fitYByXFiles": [
+                { "id": "fit-1", "name": "data", "file": "data/data.spf", "kind": "tabulate" }
+            ],
+            "tabulateFiles": [],
+            "snapshotFiles": []
+        });
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.finish().unwrap();
+
+        let error = match read_project_file(path.to_str().unwrap()) {
+            Ok(_) => panic!("expected wrong-kind manifest read to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("unexpected kind")));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_project_file_rejects_v4_manifest_with_body_id_mismatch() {
+        let path = temp_project_path("v4-body-id-mismatch");
+        let manifest = json!({
+            "name": "Project",
+            "version": "4.0.0",
+            "createdAt": "now",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+            "fitYByXFiles": [
+                { "id": "fit-1", "name": "data", "file": "data/data.spf", "kind": "fitYByX" }
+            ],
+            "tabulateFiles": [],
+            "snapshotFiles": []
+        });
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.start_file("data/data.spf", opts).unwrap();
+        zip.write_all(br#"{"id":"fit-2","name":"data"}"#)
+            .unwrap();
+        zip.finish().unwrap();
+
+        let error = match read_project_file(path.to_str().unwrap()) {
+            Ok(_) => panic!("expected body-id mismatch manifest read to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("Mismatched document id")));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_project_file_rejects_v4_manifest_with_duplicate_indexed_paths() {
+        let path = temp_project_path("v4-duplicate-indexed-path");
+        let manifest = json!({
+            "name": "Project",
+            "version": "4.0.0",
+            "createdAt": "now",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+            "fitYByXFiles": [
+                { "id": "fit-1", "name": "data", "file": "data/shared.spf", "kind": "fitYByX" }
+            ],
+            "tabulateFiles": [
+                { "id": "tab-1", "name": "shared", "file": "data/SHARED.spf", "kind": "tabulate" }
+            ],
+            "snapshotFiles": []
+        });
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.finish().unwrap();
+
+        let error = match read_project_file(path.to_str().unwrap()) {
+            Ok(_) => panic!("expected duplicate-path manifest read to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("Duplicate archive entry path")));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_project_file_rejects_v4_manifest_with_invalid_indexed_root_extension_or_shape() {
+        let path = temp_project_path("v4-invalid-indexed-paths");
+        let cases = vec![
+            json!({ "id": "fit-1", "name": "bad-root", "file": "snapshots/data.spf", "kind": "fitYByX" }),
+            json!({ "id": "fit-1", "name": "bad-ext", "file": "data/data.json", "kind": "fitYByX" }),
+            json!({ "id": "fit-1", "name": "bad-shape", "file": "data/folder/data.spf", "kind": "fitYByX" }),
+        ];
+
+        for (index, fit_entry) in cases.into_iter().enumerate() {
+            let manifest = json!({
+                "name": "Project",
+                "version": "4.0.0",
+                "createdAt": "now",
+                "tables": [],
+                "graphs": [],
+                "folders": [],
+                "fitYByXFiles": [fit_entry],
+                "tabulateFiles": [],
+                "snapshotFiles": []
+            });
+
+            let file = std::fs::File::create(&path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("manifest.json", opts).unwrap();
+            zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+                .unwrap();
+            zip.finish().unwrap();
+
+            let error = match read_project_file(path.to_str().unwrap()) {
+                Ok(_) => panic!("expected invalid indexed path manifest read to fail"),
+                Err(error) => error,
+            };
+            assert!(matches!(error, AppError::FileIO(message) if message.contains("Invalid fitYByX archive")), "case {} expected invalid indexed path error", index);
+        }
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
