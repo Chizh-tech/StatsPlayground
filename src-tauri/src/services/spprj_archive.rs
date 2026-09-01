@@ -2187,6 +2187,59 @@ mod tests {
     }
 
     #[test]
+    fn validate_archive_rejects_missing_expected_fit_entry() {
+        let path = temp_project_path("validate-missing-fit-entry");
+        let missing_path = temp_project_path("validate-missing-fit-entry-out");
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-08-14T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![graph_doc("graph-1", "Graph 1")],
+            vec![fit_doc("fit-1", "Fit 1")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let input = std::fs::File::open(&path).unwrap();
+        let mut input_zip = zip::ZipArchive::new(input).unwrap();
+        let output = std::fs::File::create(&missing_path).unwrap();
+        let mut output_zip = zip::ZipWriter::new(output);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for index in 0..input_zip.len() {
+            let mut entry = input_zip.by_index(index).unwrap();
+            if entry.name() == "data/Fit 1.spf" {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            output_zip.start_file(entry.name(), opts).unwrap();
+            output_zip.write_all(&bytes).unwrap();
+        }
+        output_zip.finish().unwrap();
+
+        let error = validate_archive_manifest_and_entries(&missing_path, &bundle.manifest, &[])
+            .unwrap_err();
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("missing fit entry"))
+        );
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(missing_path);
+    }
+
+    #[test]
     fn validate_archive_rejects_truncated_archive_file() {
         let path = temp_project_path("validate-truncated-archive");
         let truncated_path = temp_project_path("validate-truncated-archive-out");

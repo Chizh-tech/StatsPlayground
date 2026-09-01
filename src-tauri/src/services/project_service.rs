@@ -54,7 +54,7 @@ pub struct OpenProjectResult {
     pub tabulate_folders: std::collections::HashMap<String, String>,
 }
 
-const SPPRJ_VERSION: &str = "3.0.0";
+const SPPRJ_VERSION: &str = "4.0.0";
 
 #[cfg(any(test, feature = "perf-harness"))]
 pub(crate) fn seed_save_project(
