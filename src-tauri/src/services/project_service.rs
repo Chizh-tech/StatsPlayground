@@ -37,6 +37,8 @@ pub struct OpenProjectResult {
     #[serde(default)]
     pub fit_y_by_x: Vec<serde_json::Value>,
     #[serde(default)]
+    pub fit_models: Vec<serde_json::Value>,
+    #[serde(default)]
     pub tabulates: Vec<serde_json::Value>,
     #[serde(default)]
     pub distributions: Vec<DistributionDocV1>,
@@ -55,6 +57,8 @@ pub struct OpenProjectResult {
     pub graph_folders: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub fit_y_by_x_folders: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub fit_model_folders: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub dataset_name_migrations: Vec<DatasetNameMigration>,
     /// `tabulateId -> folder path`.
@@ -151,6 +155,8 @@ impl<'a> ProjectService<'a> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            &empty_folders,
             &empty_folders,
             &empty_folders,
             &empty_folders,
@@ -213,6 +219,7 @@ impl<'a> ProjectService<'a> {
             None => derive_folders_from_entries(&bundle.manifest.graphs, "graphs"),
         };
         let fit_y_by_x_folders = bundle.manifest.fit_y_by_x_folders.clone();
+        let fit_model_folders = bundle.manifest.fit_model_folders.clone();
         let tabulate_folders = bundle.manifest.tabulate_folders.clone();
         let distribution_folders = bundle.manifest.distribution_folders.clone();
         let mut distribution_issues = bundle
@@ -377,6 +384,7 @@ impl<'a> ProjectService<'a> {
             snapshots: bundle.snapshots,
             graph_builders,
             fit_y_by_x: bundle.fit_y_by_x,
+            fit_models: bundle.fit_models,
             tabulates: bundle.tabulates,
             distributions,
             derived_formulas,
@@ -385,6 +393,7 @@ impl<'a> ProjectService<'a> {
             table_folders,
             graph_folders,
             fit_y_by_x_folders,
+            fit_model_folders,
             dataset_name_migrations,
             tabulate_folders,
             distribution_folders,
@@ -1152,11 +1161,13 @@ mod tests {
         snapshots: Vec<serde_json::Value>,
         graph_builders: Vec<serde_json::Value>,
         fit_y_by_x: Vec<serde_json::Value>,
+        fit_models: Vec<serde_json::Value>,
         tabulates: Vec<serde_json::Value>,
         folders: Vec<String>,
         table_folders: HashMap<String, String>,
         graph_folders: HashMap<String, String>,
         fit_y_by_x_folders: HashMap<String, String>,
+        fit_model_folders: HashMap<String, String>,
         tabulate_folders: HashMap<String, String>,
     ) -> SaveProjectRequest {
         SaveProjectRequest {
@@ -1165,12 +1176,18 @@ mod tests {
             snapshots,
             graph_builders,
             fit_y_by_x,
+            fit_models,
             tabulates,
+            distributions: Vec::new(),
+            derived_formulas: Vec::new(),
+            distribution_issues: Vec::new(),
             folders,
             table_folders,
             graph_folders,
             fit_y_by_x_folders,
+            fit_model_folders,
             tabulate_folders,
+            distribution_folders: HashMap::new(),
         }
     }
 
@@ -1183,6 +1200,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -1635,6 +1654,15 @@ mod tests {
             "response": { "name": "amount", "type": "continuous" },
             "factor": { "name": "category", "type": "nominal" }
         })];
+        let fit_models = vec![serde_json::json!({
+            "id": "fit-model-1",
+            "name": "Fit Model 1",
+            "sourceDatasetId": "preserve-id",
+            "response": { "name": "amount", "type": "continuous" },
+            "terms": [{ "kind": "main", "columnNames": ["row_num"] }],
+            "centeringMethod": "none",
+            "createdAt": "2026-08-21T00:00:00Z"
+        })];
         let tabulates = vec![serde_json::json!({
             "id": "tab-1",
             "name": "Summary",
@@ -1649,6 +1677,8 @@ mod tests {
         let graph_folders = HashMap::from([("graph-1".to_string(), "Analysis".to_string())]);
         let fit_y_by_x_folders =
             HashMap::from([("fit-1".to_string(), "Analysis".to_string())]);
+        let fit_model_folders =
+            HashMap::from([("fit-model-1".to_string(), "Analysis/Yearly".to_string())]);
         let tabulate_folders =
             HashMap::from([("tab-1".to_string(), "Analysis/Yearly".to_string())]);
 
@@ -1661,11 +1691,13 @@ mod tests {
                     snapshots.clone(),
                     graph_builders.clone(),
                     fit_y_by_x.clone(),
+                    fit_models.clone(),
                     tabulates.clone(),
                     folders.clone(),
                     table_folders.clone(),
                     graph_folders.clone(),
                     fit_y_by_x_folders.clone(),
+                    fit_model_folders.clone(),
                     tabulate_folders.clone(),
                 ),
                 None,
@@ -1681,11 +1713,13 @@ mod tests {
         assert_eq!(reopened.snapshots, snapshots);
         assert_eq!(reopened.graph_builders, graph_builders);
         assert_eq!(reopened.fit_y_by_x, fit_y_by_x);
+        assert_eq!(reopened.fit_models, fit_models);
         assert_eq!(reopened.tabulates, tabulates);
         assert_eq!(reopened.folders, folders);
         assert_eq!(reopened.table_folders, table_folders);
         assert_eq!(reopened.graph_folders, graph_folders);
         assert_eq!(reopened.fit_y_by_x_folders, fit_y_by_x_folders);
+        assert_eq!(reopened.fit_model_folders, fit_model_folders);
         assert_eq!(reopened.tabulate_folders, tabulate_folders);
 
         let restored_display = reopened_state.column_display.lock().unwrap();
@@ -2100,6 +2134,12 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &folders,
+            &folders,
             &folders,
             &folders,
             &folders,

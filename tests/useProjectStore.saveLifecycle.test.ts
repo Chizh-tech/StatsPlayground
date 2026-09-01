@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ProjectInfo } from "../src/types/project";
 import type { SaveProgress, SaveProjectFolders, SaveProjectRequest } from "../src/services/projectService";
 import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
+import { createFitModelItem } from "../src/components/fitModel/fitModelConfig.ts";
 import { createProjectStore } from "../src/stores/useProjectStore.ts";
 import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
@@ -32,15 +33,32 @@ const saveFolders: SaveProjectFolders = {
   tableFolders: {},
   graphFolders: {},
   fitYByXFolders: { "fit-1": "Analyses" },
+  fitModelFolders: { "fit-model-1": "Analyses/Fit Models" },
   tabulateFolders: {},
+  distributionFolders: {},
 };
+
+const fitModelDefinition = createFitModelItem({
+  id: "fit-model-1",
+  name: "Fit Model 1",
+  sourceDatasetId: "table-1",
+  response: continuous("height"),
+  terms: [{ kind: "main", columnNames: ["age"] }],
+  centeringMethod: "none",
+  createdAt: new Date(0).toISOString(),
+  fields: [continuous("height"), continuous("age")],
+});
 
 const request: SaveProjectRequest = {
   history: [],
   snapshots: [],
   graphBuilders: [],
   fitYByX: [{ id: "fit-1", sourceDatasetId: "table-1" }],
+  fitModels: [fitModelDefinition],
   tabulates: [],
+  distributions: [],
+  derivedFormulas: [],
+  distributionIssues: [],
   ...saveFolders,
 };
 
@@ -153,6 +171,8 @@ function resetGraphBuilderStore() {
   });
   assert.deepEqual(capturedSaveRequest?.fitYByX, request.fitYByX);
   assert.deepEqual(capturedSaveRequest?.fitYByXFolders, request.fitYByXFolders);
+  assert.deepEqual(capturedSaveRequest?.fitModels, request.fitModels);
+  assert.deepEqual(capturedSaveRequest?.fitModelFolders, request.fitModelFolders);
 
   const savedGraph = capturedSaveRequest?.graphBuilders[0] as GraphBuilderItem;
   assert.equal(savedGraph.mode, "multivariate");
@@ -165,6 +185,61 @@ function resetGraphBuilderStore() {
     assert.equal(Object.hasOwn(savedGraph, legacyKey), false);
   }
   assert.equal(JSON.stringify(inputGraphs), baseline);
+}
+
+{
+  resetGraphBuilderStore();
+
+  const openedFitModel = createFitModelItem({
+    id: "fit-model-open-1",
+    name: "Opened Fit Model",
+    sourceDatasetId: "table-1",
+    response: continuous("height"),
+    terms: [{ kind: "main", columnNames: ["age"] }],
+    centeringMethod: "none",
+    createdAt: new Date(0).toISOString(),
+    fields: [continuous("height"), continuous("age")],
+  });
+  const openedFitModelFolders = { [openedFitModel.id]: "Analyses/Fit Models" };
+
+  const store = createProjectStore({
+    projectService: {
+      initProject: async () => savedProject,
+      createProject: async () => savedProject,
+      openProject: async () => ({
+        project: savedProject,
+        datasets: [],
+        history: [],
+        snapshots: [],
+        graphBuilders: [],
+        fitYByX: [],
+        fitModels: [openedFitModel],
+        tabulates: [],
+        folders: [],
+        tableFolders: {},
+        graphFolders: {},
+        fitYByXFolders: {},
+        fitModelFolders: openedFitModelFolders,
+        tabulateFolders: {},
+        distributions: [],
+        derivedFormulas: [],
+        distributionIssues: [],
+        distributionFolders: {},
+        datasetNameMigrations: [],
+      }),
+      saveProject: async () => savedProject,
+      getCurrentProject: async () => savedProject,
+    },
+  });
+
+  const opened = await store.getState().openProject(savedProject.filePath);
+  assert.deepEqual(opened.fitModels, [openedFitModel]);
+  assert.deepEqual(opened.fitModelFolders, openedFitModelFolders);
+
+  const openedModel = (opened.fitModels ?? [])[0] as Record<string, unknown>;
+  assert.equal(Object.hasOwn(openedModel, "result"), false);
+  assert.equal(Object.hasOwn(openedModel, "plotRows"), false);
+  assert.equal(Object.hasOwn(openedModel, "reportState"), false);
 }
 
 {
