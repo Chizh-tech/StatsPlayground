@@ -1487,6 +1487,48 @@ mod tests {
         Ok(())
     }
 
+    fn rewrite_named_entry_in_archive(
+        source_path: &std::path::Path,
+        destination_path: &std::path::Path,
+        target_entry: &str,
+        replacement_bytes: &[u8],
+    ) -> Result<(), AppError> {
+        let input = std::fs::File::open(source_path)?;
+        let mut input_zip = zip::ZipArchive::new(input)
+            .map_err(|e| AppError::FileIO(format!("failed to open archive for mutation: {e}")))?;
+        let output = std::fs::File::create(destination_path)?;
+        let mut output_zip = zip::ZipWriter::new(output);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for index in 0..input_zip.len() {
+            let mut entry = input_zip
+                .by_index(index)
+                .map_err(|e| AppError::FileIO(format!("failed to read archive entry: {e}")))?;
+            let mut bytes = Vec::new();
+            entry
+                .read_to_end(&mut bytes)
+                .map_err(|e| AppError::FileIO(format!("failed to copy archive entry: {e}")))?;
+            output_zip
+                .start_file(entry.name(), opts)
+                .map_err(|e| AppError::FileIO(format!("failed to create archive entry: {e}")))?;
+            if entry.name() == target_entry {
+                output_zip.write_all(replacement_bytes).map_err(|e| {
+                    AppError::FileIO(format!("failed to write replacement archive entry: {e}"))
+                })?;
+            } else {
+                output_zip
+                    .write_all(&bytes)
+                    .map_err(|e| AppError::FileIO(format!("failed to write archive entry: {e}")))?;
+            }
+        }
+
+        output_zip
+            .finish()
+            .map_err(|e| AppError::FileIO(format!("failed to finish mutated archive: {e}")))?;
+        Ok(())
+    }
+
     #[test]
     fn save_path_is_streaming() {
         let project_source = include_str!("project_service.rs");
@@ -1861,6 +1903,53 @@ mod tests {
         install_save_test_hook(None);
 
         assert!(matches!(error, AppError::FileIO(message) if message.contains("missing fit entry data/fit-1.spf")));
+        assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(std::fs::read(&destination).unwrap(), original_bytes);
+        assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());
+
+        let _ = std::fs::remove_file(&destination);
+    }
+
+    #[test]
+    fn stream_writer_validation_failure_on_indexed_body_parity_preserves_destination_bytes() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 128);
+        let destination = temp_path("validation-body-parity");
+        std::fs::write(&destination, b"destination-before-save").unwrap();
+        let original_bytes = std::fs::read(&destination).unwrap();
+        let snapshot = save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
+
+        let replacer_state = Arc::new(TestReplacerState::default());
+        let replacer: Arc<dyn ArchiveReplacer> = Arc::new(TestReplacer {
+            state: Arc::clone(&replacer_state),
+        });
+
+        install_save_test_hook(Some(Box::new(move |point, context| {
+            if point == SaveFailurePoint::Validation {
+                let temp_archive_path = context.temp_archive_path.ok_or_else(|| {
+                    AppError::FileIO(
+                        "validation hook missing temp archive path context".to_string(),
+                    )
+                })?;
+                let rewritten = PathBuf::from(format!("{}.mut", temp_archive_path.to_string_lossy()));
+                rewrite_named_entry_in_archive(
+                    &temp_archive_path,
+                    &rewritten,
+                    "data/data.spgh",
+                    br#"{"id":"graph-1","name":"wrong-name","version":"1"}"#,
+                )?;
+                std::fs::remove_file(&temp_archive_path)?;
+                std::fs::rename(&rewritten, &temp_archive_path)?;
+            }
+            Ok(())
+        })));
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, replacer);
+        let error = writer.write(&snapshot, &destination, None).unwrap_err();
+        install_save_test_hook(None);
+
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("graph name")));
         assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 0);
         assert_eq!(std::fs::read(&destination).unwrap(), original_bytes);
         assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());

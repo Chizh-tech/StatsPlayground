@@ -3,8 +3,9 @@ import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/
 
 /** Optional folder payload accepted by the save_project command.
  *  Folder maps are manifest metadata now; they are not used to route archive
- *  filenames. The backend persists them so UI folder layout stays separate
- *  from the stable `tables/<id>.sptb` and `graphs/<id>.spgh` paths. */
+ *  payload filenames. In v4, payload docs are flat and name-derived under
+ *  data/ and snapshots/ while folder maps preserve the UI tree separately.
+ *  Legacy path-shaped archives are still readable. */
 export interface SaveProjectFolders {
   /** All folder paths that exist in the project, including empty ones. */
   folders: string[];
