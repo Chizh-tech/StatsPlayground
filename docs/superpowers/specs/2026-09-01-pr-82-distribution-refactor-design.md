@@ -6,7 +6,7 @@
 
 **Source PR:** #82, `feat/distribution-analysis`
 
-**Target branch:** `dev`
+**Target branch:** `feat/distribution-analysis`
 
 ## Context
 
@@ -165,12 +165,19 @@ Distribution adopts Fit Y by X's two-output analysis layout but does not force
 all visuals through Graph Builder when doing so would change their statistical
 meaning.
 
-Standard graph layers that can consume the persisted analysis definition
-without recomputing statistics use the shared `GraphRuntime` host and current
-axis interactions. Weighted histograms, weighted box summaries, ECDF steps,
-fitted PDFs, normal quantile coordinates, and process-capability overlays use a
-focused Distribution adapter fed exclusively by backend-precomputed payloads.
-React and ECharts adapters must not re-bin, refit, or calculate statistics.
+No new generic Graph Builder element is required to complete Distribution V1.
+Reference-line behavior and compatible axis interactions may reuse current
+graph utilities, but Distribution charts remain owned by a focused adapter fed
+exclusively by backend-precomputed payloads. This includes weighted histograms,
+weighted box summaries, ECDF steps, fitted PDFs, normal quantile coordinates,
+and process-capability overlays. React and ECharts adapters must not re-bin,
+refit, or calculate statistics.
+
+Making every Distribution visual directly authorable in Graph Builder is a
+separate future feature. It would require generic contracts for weighted and
+frequency roles, backend-precomputed line and step coordinates, normal
+quantile plots, and synchronized multi-grid histogram/box-plot layouts. Those
+contracts are neither required nor introduced by this refactor.
 
 The Distribution view uses the Fit Y by X layout conventions: one outer
 scroller, bounded graph height, independent graph and report loading/error
