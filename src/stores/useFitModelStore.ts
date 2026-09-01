@@ -17,6 +17,13 @@ interface FitModelStore {
   addItem: (item: FitModelItem) => void;
   updateItem: (id: string, patch: Partial<FitModelItem>) => void;
   renameItem: (id: string, name: string) => void;
+  updateDefinition: (
+    id: string,
+    patch: {
+      terms: readonly FitModelTerm[];
+      centeringMethod: FitModelItem["centeringMethod"];
+    },
+  ) => void;
   deleteItem: (id: string) => void;
   deleteByDataset: (datasetId: string) => void;
   loadFromProject: (items: unknown[]) => void;
@@ -216,6 +223,29 @@ export const useFitModelStore = create<FitModelStore>((set, get) => ({
         }
         return sanitizeItem({ ...item, name: trimmed });
       });
+      return {
+        items,
+        counter: Math.max(state.counter, nextCounterValue(items)),
+      };
+    });
+  },
+  updateDefinition: (id, patch) => {
+    assertProjectMutable(useProjectStore.getState().readOnly);
+    set((state) => {
+      const items = state.items.map((item) => {
+        if (item.id !== id) {
+          return item;
+        }
+
+        const next: FitModelItem = {
+          ...item,
+          terms: cloneTerms(canonicalizeFitModelTerms(patch.terms)),
+          centeringMethod: patch.centeringMethod,
+        };
+
+        return sanitizeItem(next);
+      });
+
       return {
         items,
         counter: Math.max(state.counter, nextCounterValue(items)),

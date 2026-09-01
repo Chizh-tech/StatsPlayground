@@ -1,0 +1,340 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import {
+  FitModelReport,
+  buildEffectSummary,
+  fitModelTermId,
+  logWorth,
+  removeFitModelTerm,
+} from "../src/components/fitModel/index.ts";
+import type { FitModelReportState } from "../src/components/fitModel/useFitModelReport.ts";
+import type { FitModelFittedResult, FitModelItem, FitModelResult } from "../src/types/fitModel.ts";
+
+const VIEW_SOURCE_PATH = path.resolve(
+  process.cwd(),
+  "src/components/fitModel/FitModelView.tsx",
+);
+
+function createItem(overrides: Partial<FitModelItem> = {}): FitModelItem {
+  return {
+    id: "fit-model-1",
+    name: "Fit Model 1",
+    sourceDatasetId: "dataset-1",
+    response: { name: "Y", type: "continuous" },
+    terms: [
+      { kind: "main", columnNames: ["A"] },
+      { kind: "main", columnNames: ["B"] },
+      { kind: "interaction", columnNames: ["A", "B"] },
+    ],
+    centeringMethod: "mean",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createFittedResult(overrides: Partial<FitModelFittedResult> = {}): FitModelFittedResult {
+  return {
+    kind: "fitted",
+    usedRows: 12,
+    excludedRows: 1,
+    confidenceLevel: 0.95,
+    responseColumn: "Y",
+    predictorColumns: ["A", "B"],
+    terms: [
+      { termId: "main:A", kind: "main", columnNames: ["A"], label: "A" },
+      { termId: "main:B", kind: "main", columnNames: ["B"], label: "B" },
+      { termId: "interaction:A*B", kind: "interaction", columnNames: ["A", "B"], label: "A*B" },
+    ],
+    centering: {
+      method: "mean",
+      centers: [{ columnName: "A", mean: 10 }],
+    },
+    summaryOfFit: {
+      rSquared: 0.9,
+      adjustedRSquared: 0.88,
+      rootMeanSquareError: 1.2,
+      meanOfResponse: 12.3,
+      observationCount: 12,
+      modelDegreesOfFreedom: 3,
+      errorDegreesOfFreedom: 8,
+    },
+    anova: [
+      {
+        source: "Model",
+        degreesOfFreedom: 3,
+        sumOfSquares: 100,
+        meanSquare: 33.333,
+        fRatio: 11.1,
+        pValue: 0.0001,
+      },
+      {
+        source: "Error",
+        degreesOfFreedom: 8,
+        sumOfSquares: 24,
+        meanSquare: 3,
+        fRatio: null,
+        pValue: null,
+      },
+    ],
+    parameterEstimates: [
+      {
+        termId: "main:A",
+        termLabel: "A",
+        estimate: 2,
+        standardError: 0.2,
+        tRatio: 10,
+        pValue: 0.05,
+        lowerConfidenceLimit: 1,
+        upperConfidenceLimit: 3,
+      },
+      {
+        termId: "main:B",
+        termLabel: "B",
+        estimate: 3,
+        standardError: 0.3,
+        tRatio: 10,
+        pValue: 0.001,
+        lowerConfidenceLimit: 2,
+        upperConfidenceLimit: 4,
+      },
+      {
+        termId: "interaction:A*B",
+        termLabel: "A*B",
+        estimate: 4,
+        standardError: 0.4,
+        tRatio: 10,
+        pValue: null,
+        lowerConfidenceLimit: null,
+        upperConfidenceLimit: null,
+      },
+    ],
+    plotRows: [],
+    plotRowsSampled: false,
+    warnings: ["saturatedModel"],
+    ...overrides,
+  };
+}
+
+function renderReport(state: FitModelReportState): string {
+  return renderToStaticMarkup(
+    React.createElement(FitModelReport, {
+      item: createItem(),
+      state,
+      datasetMissing: false,
+      removeMessage: null,
+      onRemoveTerm: () => undefined,
+      onUndoRemove: () => undefined,
+    }),
+  );
+}
+
+function testLogWorthContracts(): void {
+  assert.equal(logWorth(0.05), -Math.log10(0.05));
+  assert.equal(logWorth(0), 300);
+  assert.equal(logWorth(1e-320), 300);
+  assert.equal(logWorth(null), null);
+}
+
+function testEffectSummarySortAndPValueMapping(): void {
+  const result = createFittedResult();
+  const effects = buildEffectSummary(result);
+
+  assert.deepEqual(effects.map((row) => row.termLabel), ["B", "A", "A*B"]);
+  assert.equal(effects[0]?.pValue, 0.001);
+  assert.equal(effects[1]?.pValue, 0.05);
+  assert.equal(effects[2]?.pValue, null);
+}
+
+function testMeanCenteringDoesNotRelabelMainEffect(): void {
+  const result = createFittedResult({
+    terms: [
+      { termId: "main:A", kind: "main", columnNames: ["A"], label: "A" },
+      { termId: "interaction:A*B", kind: "interaction", columnNames: ["A", "B"], label: "A*B" },
+    ],
+    parameterEstimates: [
+      {
+        termId: "main:A",
+        termLabel: "A (main)",
+        estimate: 1,
+        standardError: 0.1,
+        tRatio: 10,
+        pValue: 0.02,
+        lowerConfidenceLimit: null,
+        upperConfidenceLimit: null,
+      },
+      {
+        termId: "interaction:A*B",
+        termLabel: "A*B",
+        estimate: 2,
+        standardError: 0.2,
+        tRatio: 10,
+        pValue: 0.03,
+        lowerConfidenceLimit: null,
+        upperConfidenceLimit: null,
+      },
+    ],
+  });
+
+  const effects = buildEffectSummary(result);
+  const main = effects.find((row) => row.termId === "main:A");
+  assert.equal(main?.pValue, 0.02);
+}
+
+function testRemoveInteractionSucceeds(): void {
+  const terms = createItem().terms;
+  const interactionId = fitModelTermId({ kind: "interaction", columnNames: ["B", "A"] });
+  const removal = removeFitModelTerm(terms, interactionId);
+  assert.equal(removal.ok, true);
+  if (!removal.ok) return;
+  assert.equal(removal.nextTerms.some((term) => term.kind === "interaction"), false);
+  assert.equal(removal.undoSnapshot.terms.length, 3);
+}
+
+function testRemoveMainBlockedByInteraction(): void {
+  const terms = createItem().terms;
+  const mainId = fitModelTermId({ kind: "main", columnNames: ["A"] });
+  const removal = removeFitModelTerm(terms, mainId);
+  assert.equal(removal.ok, false);
+  if (removal.ok) return;
+  assert.equal(removal.reason, "requiredByInteraction");
+}
+
+function testRemoveLastMainBlocked(): void {
+  const terms = [{ kind: "main", columnNames: ["A"] }] as const;
+  const mainId = fitModelTermId({ kind: "main", columnNames: ["A"] });
+  const removal = removeFitModelTerm(terms, mainId);
+  assert.equal(removal.ok, false);
+  if (removal.ok) return;
+  assert.equal(removal.reason, "lastMainEffect");
+}
+
+function testValidMainRemovalReturnsUndoSnapshot(): void {
+  const terms = [
+    { kind: "main", columnNames: ["A"] },
+    { kind: "main", columnNames: ["B"] },
+  ] as const;
+
+  const removal = removeFitModelTerm(terms, fitModelTermId({ kind: "main", columnNames: ["A"] }));
+  assert.equal(removal.ok, true);
+  if (!removal.ok) return;
+
+  assert.deepEqual(removal.nextTerms, [{ kind: "main", columnNames: ["B"] }]);
+  assert.deepEqual(removal.undoSnapshot.terms, [
+    { kind: "main", columnNames: ["A"] },
+    { kind: "main", columnNames: ["B"] },
+  ]);
+}
+
+function testRenderFittedContracts(): void {
+  const result = createFittedResult();
+  const state: FitModelReportState = {
+    status: "success",
+    result,
+    error: null,
+    configurationKey: "cfg-1",
+  };
+
+  const html = renderReport(state);
+
+  assert.match(html, /Effect Summary/);
+  assert.match(html, /Summary of Fit/);
+  assert.match(html, /Analysis of Variance/);
+  assert.match(html, /Parameter Estimates/);
+  assert.match(html, /fitted-equation-inputs/);
+  assert.match(html, /saturatedModel|fitModel\.report\.warning\.saturatedModel/);
+  assert.match(html, /Remove/);
+  assert.match(html, /Undo/);
+  assert.match(html, /aria-expanded="true"/);
+  assert.match(html, /Actual by Predicted/);
+  assert.match(html, /Residual by Predicted/);
+}
+
+function testRenderNotComputableContract(): void {
+  const result: FitModelResult = {
+    kind: "notComputable",
+    reason: "insufficientRows",
+    usedRows: 2,
+    excludedRows: 5,
+  };
+  const state: FitModelReportState = {
+    status: "success",
+    result,
+    error: null,
+    configurationKey: "cfg-2",
+  };
+  const html = renderReport(state);
+
+  assert.match(html, /Not Computable|fitModel\.report\.notComputable/);
+  assert.match(html, /insufficientRows|fitModel\.report\.reason\.insufficientRows/);
+}
+
+function testRenderLoadingStaleAndErrorOldResultContracts(): void {
+  const loadingState: FitModelReportState = {
+    status: "loading",
+    result: null,
+    error: null,
+    configurationKey: "cfg-loading",
+  };
+  const loadingHtml = renderReport(loadingState);
+  assert.match(loadingHtml, /Loading report|fitModel\.report\.loading/);
+
+  const staleState: FitModelReportState = {
+    status: "stale",
+    result: createFittedResult(),
+    error: "backend timed out",
+    configurationKey: "cfg-stale",
+  };
+  const staleHtml = renderReport(staleState);
+  assert.match(staleHtml, /Stale result|fitModel\.report\.stale/);
+  assert.match(staleHtml, /Failed to refresh\. Showing previous result\.|fitModel\.report\.errorWithOldResult/);
+  assert.match(staleHtml, /backend timed out/);
+
+  const errorWithOldState: FitModelReportState = {
+    status: "error",
+    result: createFittedResult(),
+    error: "permission denied",
+    configurationKey: "cfg-error-old",
+  };
+  const oldHtml = renderReport(errorWithOldState);
+  assert.match(oldHtml, /Failed to refresh\. Showing previous result\.|fitModel\.report\.errorWithOldResult/);
+  assert.match(oldHtml, /permission denied/);
+}
+
+function testViewSourceContracts(): void {
+  const source = readFileSync(VIEW_SOURCE_PATH, "utf8").replace(/\r\n/g, "\n");
+
+  assert.match(
+    source,
+    /useFitModelReport\(dataset \? item : null, dataset\?\.updatedAt \?\? null\)/,
+    "FitModelView must gate report loading by dataset and dataset update signal.",
+  );
+  assert.match(
+    source,
+    /updateDefinition\(item\.id,[\s\S]*terms:[\s\S]*centeringMethod:/,
+    "FitModelView remove/undo path must update persisted model definition via store update.",
+  );
+  assert.match(
+    source,
+    /setUndoSnapshot\(null\)/,
+    "FitModelView undo must clear snapshot for one-step undo behavior.",
+  );
+}
+
+testLogWorthContracts();
+testEffectSummarySortAndPValueMapping();
+testMeanCenteringDoesNotRelabelMainEffect();
+testRemoveInteractionSucceeds();
+testRemoveMainBlockedByInteraction();
+testRemoveLastMainBlocked();
+testValidMainRemovalReturnsUndoSnapshot();
+testRenderFittedContracts();
+testRenderNotComputableContract();
+testRenderLoadingStaleAndErrorOldResultContracts();
+testViewSourceContracts();
+
+console.log("fitModel report contract passed");
