@@ -1,0 +1,225 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FitModelCenteringMethod {
+    None,
+    Mean,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FitModelTermKind {
+    Main,
+    Interaction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelTerm {
+    pub kind: FitModelTermKind,
+    pub column_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelRequest {
+    pub dataset_id: String,
+    pub generation: u64,
+    pub response_column: String,
+    pub terms: Vec<FitModelTerm>,
+    pub centering_method: FitModelCenteringMethod,
+    pub confidence_level: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FitModelNotComputableReason {
+    InsufficientRows,
+    RankDeficient,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FitModelWarningCode {
+    SaturatedModel,
+    ConstantResponse,
+    PerfectFit,
+    IllConditioned,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelPlotRow {
+    pub row_index: u64,
+    pub observed: f64,
+    pub fitted: f64,
+    pub residual: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelParameterEstimate {
+    pub term_id: String,
+    pub term_label: String,
+    pub estimate: f64,
+    pub standard_error: Option<f64>,
+    pub t_ratio: Option<f64>,
+    pub p_value: Option<f64>,
+    pub lower_confidence_limit: Option<f64>,
+    pub upper_confidence_limit: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelAnovaRow {
+    pub source: String,
+    pub degrees_of_freedom: u64,
+    pub sum_of_squares: f64,
+    pub mean_square: Option<f64>,
+    pub f_ratio: Option<f64>,
+    pub p_value: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelSummaryOfFit {
+    pub r_squared: Option<f64>,
+    pub adjusted_r_squared: Option<f64>,
+    pub root_mean_square_error: Option<f64>,
+    pub mean_of_response: f64,
+    pub observation_count: u64,
+    pub model_degrees_of_freedom: u64,
+    pub error_degrees_of_freedom: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelCenter {
+    pub column_name: String,
+    pub mean: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelResolvedTerm {
+    pub term_id: String,
+    pub kind: FitModelTermKind,
+    pub column_names: Vec<String>,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelCentering {
+    pub method: FitModelCenteringMethod,
+    pub centers: Vec<FitModelCenter>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelFittedResult {
+    pub used_rows: u64,
+    pub excluded_rows: u64,
+    pub confidence_level: f64,
+    pub response_column: String,
+    pub predictor_columns: Vec<String>,
+    pub terms: Vec<FitModelResolvedTerm>,
+    pub centering: FitModelCentering,
+    pub summary_of_fit: FitModelSummaryOfFit,
+    pub anova: Vec<FitModelAnovaRow>,
+    pub parameter_estimates: Vec<FitModelParameterEstimate>,
+    pub plot_rows: Vec<FitModelPlotRow>,
+    pub plot_rows_sampled: bool,
+    pub warnings: Vec<FitModelWarningCode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FitModelNotComputableResult {
+    pub reason: FitModelNotComputableReason,
+    pub used_rows: u64,
+    pub excluded_rows: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FitModelResult {
+    Fitted(FitModelFittedResult),
+    NotComputable(FitModelNotComputableResult),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fit_model_request_serializes_exact_camel_case_fields() {
+        let request = FitModelRequest {
+            dataset_id: "ds-1".into(),
+            generation: 3,
+            response_column: "Y".into(),
+            terms: vec![FitModelTerm {
+                kind: FitModelTermKind::Main,
+                column_names: vec!["A".into()],
+            }],
+            centering_method: FitModelCenteringMethod::Mean,
+            confidence_level: 0.95,
+        };
+
+        let value = serde_json::to_value(&request).expect("serialization should succeed");
+        assert_eq!(value["datasetId"], "ds-1");
+        assert_eq!(value["responseColumn"], "Y");
+        assert!(value.get("columnNames").is_none());
+        assert_eq!(value["terms"][0]["columnNames"], serde_json::json!(["A"]));
+        assert_eq!(value["centeringMethod"], "mean");
+        assert_eq!(value["confidenceLevel"], 0.95);
+    }
+
+    #[test]
+    fn fit_model_result_serializes_variant_kind_tags() {
+        let fitted = FitModelResult::Fitted(FitModelFittedResult {
+            used_rows: 2,
+            excluded_rows: 0,
+            confidence_level: 0.95,
+            response_column: "Y".into(),
+            predictor_columns: vec!["A".into()],
+            terms: vec![FitModelResolvedTerm {
+                term_id: "A".into(),
+                kind: FitModelTermKind::Main,
+                column_names: vec!["A".into()],
+                label: "A".into(),
+            }],
+            centering: FitModelCentering {
+                method: FitModelCenteringMethod::None,
+                centers: vec![],
+            },
+            summary_of_fit: FitModelSummaryOfFit {
+                r_squared: Some(0.9),
+                adjusted_r_squared: Some(0.8),
+                root_mean_square_error: Some(1.0),
+                mean_of_response: 1.0,
+                observation_count: 2,
+                model_degrees_of_freedom: 1,
+                error_degrees_of_freedom: 0,
+            },
+            anova: vec![],
+            parameter_estimates: vec![],
+            plot_rows: vec![],
+            plot_rows_sampled: false,
+            warnings: vec![],
+        });
+        let not_computable = FitModelResult::NotComputable(FitModelNotComputableResult {
+            reason: FitModelNotComputableReason::InsufficientRows,
+            used_rows: 1,
+            excluded_rows: 2,
+        });
+
+        let fitted_value = serde_json::to_value(&fitted).expect("serialization should succeed");
+        let not_value =
+            serde_json::to_value(&not_computable).expect("serialization should succeed");
+
+        assert_eq!(fitted_value["kind"], "fitted");
+        assert_eq!(not_value["kind"], "notComputable");
+    }
+}
