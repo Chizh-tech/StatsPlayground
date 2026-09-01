@@ -658,8 +658,9 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
 
     let manifest_bytes = read_entry_bytes(&mut zip, "manifest.json")
         .ok_or_else(|| AppError::FileIO("Project archive missing manifest.json".into()))?;
-    let manifest: ProjectManifest = serde_json::from_slice(&manifest_bytes)
+    let mut manifest: ProjectManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|e| AppError::FileIO(format!("Invalid manifest.json: {}", e)))?;
+    manifest.fit_models = strip_transient_fit_model_fields(manifest.fit_models);
 
     let mut tables = Vec::with_capacity(manifest.tables.len());
     for entry in &manifest.tables {
@@ -806,7 +807,7 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
 
     let fit_y_by_x = legacy.fit_y_by_x.unwrap_or_default();
     let fit_y_by_x_folders = legacy.fit_y_by_x_folders.unwrap_or_default();
-    let fit_models = legacy.fit_models.unwrap_or_default();
+    let fit_models = strip_transient_fit_model_fields(legacy.fit_models.unwrap_or_default());
     let fit_model_folders = legacy.fit_model_folders.unwrap_or_default();
 
     let manifest = ProjectManifest {
@@ -1755,6 +1756,134 @@ mod tests {
         assert!(!persisted.contains_key("result"));
         assert!(!persisted.contains_key("plotRows"));
         assert!(!persisted.contains_key("reportState"));
+        assert_eq!(loaded.manifest.fit_model_folders, fit_model_folders);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_zip_bundle_strips_transient_fit_model_fields_and_preserves_definition() {
+        let path = temp_project_path("fit-model-zip-read-sanitize");
+        let fit_model = json!({
+            "id": "fit-model-zip-1",
+            "name": "Zip Fit Model",
+            "sourceDatasetId": "table-zip-1",
+            "response": { "name": "height", "type": "continuous" },
+            "terms": [{ "kind": "main", "columnNames": ["age"] }],
+            "centeringMethod": "none",
+            "createdAt": "2026-09-01T00:00:00.000Z",
+            "result": { "kind": "fitted" },
+            "plotRows": [{ "rowIndex": 1 }],
+            "reportState": { "anova": true }
+        });
+        let fit_model_folders =
+            HashMap::from([("fit-model-zip-1".to_string(), "Analyses/Fit Models".to_string())]);
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let manifest = json!({
+            "name": "Compat Project",
+            "version": "3.0.0",
+            "createdAt": "2026-09-01T00:00:00.000Z",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+            "fitModels": [fit_model],
+            "fitModelFolders": fit_model_folders,
+        });
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(&manifest_bytes).unwrap();
+        zip.finish().unwrap();
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+        let persisted = loaded.fit_models[0].as_object().expect("fit model object");
+        let persisted_manifest = loaded.manifest.fit_models[0]
+            .as_object()
+            .expect("fit model object in manifest");
+
+        assert_eq!(persisted.get("id"), Some(&json!("fit-model-zip-1")));
+        assert_eq!(persisted.get("name"), Some(&json!("Zip Fit Model")));
+        assert_eq!(
+            persisted.get("sourceDatasetId"),
+            Some(&json!("table-zip-1"))
+        );
+        assert_eq!(persisted.get("centeringMethod"), Some(&json!("none")));
+        assert_eq!(
+            persisted.get("response"),
+            Some(&json!({ "name": "height", "type": "continuous" }))
+        );
+        assert_eq!(
+            persisted.get("terms"),
+            Some(&json!([{ "kind": "main", "columnNames": ["age"] }]))
+        );
+        assert!(!persisted.contains_key("result"));
+        assert!(!persisted.contains_key("plotRows"));
+        assert!(!persisted.contains_key("reportState"));
+        assert!(!persisted_manifest.contains_key("result"));
+        assert!(!persisted_manifest.contains_key("plotRows"));
+        assert!(!persisted_manifest.contains_key("reportState"));
+        assert_eq!(loaded.manifest.fit_model_folders, fit_model_folders);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_legacy_json_strips_transient_fit_model_fields_and_preserves_definition() {
+        let path = temp_project_path("fit-model-legacy-read-sanitize");
+        let fit_model = json!({
+            "id": "fit-model-legacy-1",
+            "name": "Legacy Fit Model",
+            "sourceDatasetId": "table-legacy-1",
+            "response": { "name": "weight", "type": "continuous" },
+            "terms": [{ "kind": "main", "columnNames": ["height"] }],
+            "centeringMethod": "mean",
+            "createdAt": "2026-09-01T00:00:00.000Z",
+            "result": { "kind": "fitted" },
+            "plotRows": [{ "rowIndex": 2 }],
+            "reportState": { "diagnostics": true }
+        });
+        let fit_model_folders =
+            HashMap::from([("fit-model-legacy-1".to_string(), "Analyses/Fit Models".to_string())]);
+        let legacy = json!({
+            "name": "Legacy Project",
+            "version": "0.1.0",
+            "createdAt": "2026-09-01T00:00:00.000Z",
+            "datasets": [],
+            "fitModels": [fit_model],
+            "fitModelFolders": fit_model_folders,
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+        let persisted = loaded.fit_models[0].as_object().expect("fit model object");
+        let persisted_manifest = loaded.manifest.fit_models[0]
+            .as_object()
+            .expect("fit model object in manifest");
+
+        assert_eq!(persisted.get("id"), Some(&json!("fit-model-legacy-1")));
+        assert_eq!(persisted.get("name"), Some(&json!("Legacy Fit Model")));
+        assert_eq!(
+            persisted.get("sourceDatasetId"),
+            Some(&json!("table-legacy-1"))
+        );
+        assert_eq!(persisted.get("centeringMethod"), Some(&json!("mean")));
+        assert_eq!(
+            persisted.get("response"),
+            Some(&json!({ "name": "weight", "type": "continuous" }))
+        );
+        assert_eq!(
+            persisted.get("terms"),
+            Some(&json!([{ "kind": "main", "columnNames": ["height"] }]))
+        );
+        assert!(!persisted.contains_key("result"));
+        assert!(!persisted.contains_key("plotRows"));
+        assert!(!persisted.contains_key("reportState"));
+        assert!(!persisted_manifest.contains_key("result"));
+        assert!(!persisted_manifest.contains_key("plotRows"));
+        assert!(!persisted_manifest.contains_key("reportState"));
         assert_eq!(loaded.manifest.fit_model_folders, fit_model_folders);
 
         let _ = std::fs::remove_file(path);
