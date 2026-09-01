@@ -1,4 +1,5 @@
-use nalgebra::{DMatrix, DVector};
+use nalgebra::linalg::SVD;
+use nalgebra::{DMatrix, DVector, Dyn};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor, StudentsT};
 
 use crate::engine::fit_model::ModelMatrixSpec;
@@ -31,6 +32,55 @@ pub struct FitModelData {
     pub response_values: Vec<f64>,
     pub row_indexes: Vec<u64>,
     pub excluded_rows: u64,
+}
+
+#[derive(Debug, Clone)]
+struct FitGeometry {
+    rank_tolerance: f64,
+    rank: usize,
+    sigma_max: f64,
+    sigma_min: f64,
+    singular_values: DVector<f64>,
+    v_t: DMatrix<f64>,
+}
+
+impl FitGeometry {
+    fn condition_number(&self) -> f64 {
+        if self.sigma_min > 0.0 {
+            self.sigma_max / self.sigma_min
+        } else {
+            f64::INFINITY
+        }
+    }
+}
+
+fn fit_geometry_from_svd(
+    svd: &SVD<f64, Dyn, Dyn>,
+    n: usize,
+    p: usize,
+) -> Result<FitGeometry, FitModelEngineError> {
+    let singular_values = svd.singular_values.clone();
+    let sigma_max = singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let sigma_min = singular_values.iter().copied().fold(f64::INFINITY, f64::min);
+    let rank_tolerance = (n.max(p) as f64) * f64::EPSILON * sigma_max;
+    let rank = singular_values
+        .iter()
+        .filter(|value| **value > rank_tolerance)
+        .count();
+    let v_t = svd.v_t.clone().ok_or_else(|| {
+        FitModelEngineError::NumericalFailure(
+            "SVD did not provide V^T for fit geometry".to_string(),
+        )
+    })?;
+
+    Ok(FitGeometry {
+        rank_tolerance,
+        rank,
+        sigma_max,
+        sigma_min,
+        singular_values,
+        v_t,
+    })
 }
 
 pub fn fit_linear_model(
@@ -67,19 +117,9 @@ pub fn fit_linear_model(
         ));
     }
 
-    let svd_for_rank = input.design_matrix.clone().svd(false, false);
-    let sigma_max = svd_for_rank
-        .singular_values
-        .iter()
-        .copied()
-        .fold(0.0_f64, f64::max);
-    let rank_tolerance = (n.max(p) as f64) * f64::EPSILON * sigma_max;
-    let rank = svd_for_rank
-        .singular_values
-        .iter()
-        .filter(|value| **value > rank_tolerance)
-        .count();
-    if rank < p {
+    let svd = input.design_matrix.clone().svd(true, true);
+    let geometry = fit_geometry_from_svd(&svd, n, p)?;
+    if geometry.rank < p {
         return Ok(not_computable(
             FitModelNotComputableReason::RankDeficient,
             n as u64,
@@ -88,7 +128,7 @@ pub fn fit_linear_model(
     }
 
     let response = DVector::from_vec(input.response_values.clone());
-    let coefficients = solve_coefficients(&input.design_matrix, &response, rank_tolerance)?;
+    let coefficients = solve_coefficients(&response, &svd, geometry.rank_tolerance)?;
     if coefficients.iter().any(|value| !value.is_finite()) {
         return Err(FitModelEngineError::NumericalFailure(
             "coefficient solve produced non-finite value".to_string(),
@@ -119,16 +159,7 @@ pub fn fit_linear_model(
     let df_error = n.saturating_sub(p);
     let df_total = n.saturating_sub(1);
 
-    let sigma_min = svd_for_rank
-        .singular_values
-        .iter()
-        .copied()
-        .fold(f64::INFINITY, f64::min);
-    let condition_number = if sigma_min > 0.0 {
-        sigma_max / sigma_min
-    } else {
-        f64::INFINITY
-    };
+    let condition_number = geometry.condition_number();
 
     let constant_response = sst == 0.0;
     let perfect_fit = sse == 0.0 || (sst > 0.0 && sse <= PERFECT_FIT_RELATIVE_TOLERANCE * sst);
@@ -188,8 +219,8 @@ pub fn fit_linear_model(
     let parameter_estimates = parameter_estimates(
         &input,
         &coefficients,
+        &geometry,
         mse,
-        rank_tolerance,
         df_error as u64,
         confidence_level,
         allow_parameter_inference,
@@ -276,21 +307,11 @@ pub fn fit_linear_model(
     }))
 }
 
-fn solve_coefficients(
-    design: &DMatrix<f64>,
-    response: &DVector<f64>,
-    rank_tolerance: f64,
-) -> Result<DVector<f64>, FitModelEngineError> {
-    let svd = design.clone().svd(true, true);
-    svd.solve(response, rank_tolerance)
-        .map_err(|_| FitModelEngineError::SolveFailure)
-}
-
 fn parameter_estimates(
     input: &FitModelData,
     coefficients: &DVector<f64>,
+    geometry: &FitGeometry,
     mse: Option<f64>,
-    rank_tolerance: f64,
     df_error: u64,
     confidence_level: f64,
     allow_inference: bool,
@@ -307,7 +328,7 @@ fn parameter_estimates(
     }
 
     let covariance = if allow_inference {
-        covariance_matrix(&input.design_matrix, mse, rank_tolerance)?
+        covariance_matrix(geometry, mse)?
     } else {
         None
     };
@@ -380,32 +401,50 @@ fn parameter_estimates(
     Ok(estimates)
 }
 
-fn covariance_matrix(
-    design: &DMatrix<f64>,
-    mse: Option<f64>,
+fn solve_coefficients(
+    response: &DVector<f64>,
+    svd: &SVD<f64, Dyn, Dyn>,
     rank_tolerance: f64,
+) -> Result<DVector<f64>, FitModelEngineError> {
+    let u = svd.u.as_ref().ok_or(FitModelEngineError::SolveFailure)?;
+    let v_t = svd.v_t.as_ref().ok_or(FitModelEngineError::SolveFailure)?;
+
+    if svd.singular_values.len() != v_t.nrows() || u.ncols() != svd.singular_values.len() {
+        return Err(FitModelEngineError::SolveFailure);
+    }
+
+    let mut scaled = DVector::zeros(svd.singular_values.len());
+    for index in 0..svd.singular_values.len() {
+        let sigma = svd.singular_values[index];
+        if sigma <= rank_tolerance {
+            return Err(FitModelEngineError::SolveFailure);
+        }
+        let projection = u.column(index).dot(response);
+        scaled[index] = projection / sigma;
+    }
+
+    Ok(v_t.transpose() * scaled)
+}
+
+fn covariance_matrix(
+    geometry: &FitGeometry,
+    mse: Option<f64>,
 ) -> Result<Option<DMatrix<f64>>, FitModelEngineError> {
     let mse_value = match mse {
         Some(value) if value.is_finite() && value >= 0.0 => value,
         _ => return Ok(None),
     };
 
-    let svd = design.clone().svd(false, true);
-    let Some(v_t) = svd.v_t else {
-        return Err(FitModelEngineError::NumericalFailure(
-            "SVD did not provide V^T for covariance".to_string(),
-        ));
-    };
-
-    if svd.singular_values.len() != design.ncols() {
+    if geometry.singular_values.len() != geometry.v_t.nrows() {
         return Err(FitModelEngineError::NumericalFailure(
             "SVD singular value count does not match design columns".to_string(),
         ));
     }
 
-    let mut inverse_diag = DMatrix::zeros(design.ncols(), design.ncols());
-    for (index, sigma) in svd.singular_values.iter().copied().enumerate() {
-        if sigma <= rank_tolerance {
+    let p = geometry.singular_values.len();
+    let mut inverse_diag = DMatrix::zeros(p, p);
+    for (index, sigma) in geometry.singular_values.iter().copied().enumerate() {
+        if sigma <= geometry.rank_tolerance {
             return Err(FitModelEngineError::NumericalFailure(
                 "singular value fell below rank tolerance in covariance".to_string(),
             ));
@@ -413,8 +452,8 @@ fn covariance_matrix(
         inverse_diag[(index, index)] = 1.0 / square(sigma);
     }
 
-    let v = v_t.transpose();
-    let xtx_inverse = &v * inverse_diag * v_t;
+    let v = geometry.v_t.transpose();
+    let xtx_inverse = &v * inverse_diag * &geometry.v_t;
 
     let covariance = xtx_inverse * mse_value;
     if covariance.iter().any(|value| !value.is_finite()) {
@@ -648,7 +687,7 @@ fn normalize_sse_roundoff_to_zero(value: f64, n: usize, response_energy: f64) ->
 mod tests {
     use std::collections::BTreeMap;
 
-    use nalgebra::{DMatrix, DVector};
+    use nalgebra::DMatrix;
     use statrs::distribution::{ContinuousCDF, StudentsT};
 
     use crate::engine::fit_model::ols::{fit_linear_model, FitModelData};
@@ -1414,7 +1453,7 @@ mod tests {
     }
 
     #[test]
-    fn ill_conditioned_noisy_full_rank_matches_direct_svd_and_inference_policy() {
+    fn ill_conditioned_noisy_full_rank_matches_python_oracle_and_inference_policy() {
         let n = 20_usize;
         let x1 = (0..n).map(|index| 1.0 + index as f64).collect::<Vec<_>>();
         let x2 = x1
@@ -1444,28 +1483,10 @@ mod tests {
             ],
             FitModelCenteringMethod::None,
             BTreeMap::from([(String::from("X1"), x1), (String::from("X2"), x2)]),
-            y.clone(),
+            y,
             (1..=(n as u64)).collect(),
             0,
         );
-
-        let response = DVector::from_vec(y);
-        let svd_for_rank = input.design_matrix.clone().svd(false, false);
-        let sigma_max = svd_for_rank
-            .singular_values
-            .iter()
-            .copied()
-            .fold(0.0_f64, f64::max);
-        let rank_tolerance =
-            (input.design_matrix.nrows().max(input.design_matrix.ncols()) as f64)
-                * f64::EPSILON
-                * sigma_max;
-        let expected = input
-            .design_matrix
-            .clone()
-            .svd(true, true)
-            .solve(&response, rank_tolerance)
-            .expect("direct SVD solve should succeed");
 
         let result = fit_linear_model(input, 0.95).expect("fit should succeed");
         let FitModelResult::Fitted(fitted) = result else {
@@ -1476,21 +1497,82 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning == &FitModelWarningCode::IllConditioned));
+        assert!(
+            !fitted
+                .warnings
+                .iter()
+                .any(|warning| warning == &FitModelWarningCode::PerfectFit)
+        );
         assert!(fitted.summary_of_fit.error_degrees_of_freedom > 0);
 
+        assert_close(fitted.parameter_estimates[0].estimate, 4.999873736631717);
+        assert_close(fitted.parameter_estimates[1].estimate, -65.0933797030966);
+        assert_close(fitted.parameter_estimates[2].estimate, 66.0933917188732);
+
+        assert_close(fitted.anova[1].sum_of_squares, 1.5037593904106566e-06);
+        assert_close(fitted.anova[0].sum_of_squares, 665.0159995376738);
+        assert_close(fitted.anova[2].sum_of_squares, 665.0160010414331);
+        assert_close(
+            fitted.anova[0].sum_of_squares + fitted.anova[1].sum_of_squares,
+            fitted.anova[2].sum_of_squares,
+        );
+        assert_close(fitted.anova[0].mean_square.expect("ms_model"), 332.5079997688369);
+        assert_close(fitted.anova[0].f_ratio.expect("f_ratio"), 3759002957.5985346);
+        assert_close(fitted.anova[0].p_value.expect("model p"), 3.2504472024673718e-74);
+        assert_close(
+            fitted.anova[1].mean_square.expect("ms_error"),
+            8.845643473003862e-08,
+        );
+
+        assert_close(
+            fitted.summary_of_fit.root_mean_square_error.expect("rmse"),
+            0.0002974162650731103,
+        );
+        assert_close(
+            fitted.summary_of_fit.r_squared.expect("r_squared"),
+            0.9999999977387621,
+        );
+        assert_close(
+            fitted
+                .summary_of_fit
+                .adjusted_r_squared
+                .expect("adjusted_r_squared"),
+            0.9999999974727342,
+        );
+
+        let expected_se = [
+            2.2124384364694233e-04,
+            2.2446535943080770e+05,
+            2.2446535938367335e+05,
+        ];
+        let expected_t = [
+            2.2598928197118300e+04,
+            -2.8999298541279770e-04,
+            2.9444806940522760e-04,
+        ];
+        let expected_p = [
+            5.243907010356369e-65,
+            9.997719949170468e-01,
+            9.997684921366126e-01,
+        ];
+        let expected_ci = [
+            (4.9994069529238910e+00, 5.0003405203395435e+00),
+            (-4.7364560539076576e+05, 4.7351541863135950e+05),
+            (-4.7351441851989900e+05, 4.7364660530333675e+05),
+        ];
+
         for (index, parameter) in fitted.parameter_estimates.iter().enumerate() {
-            assert_close(parameter.estimate, expected[index]);
-            for value in [
-                parameter.standard_error,
-                parameter.t_ratio,
-                parameter.p_value,
-                parameter.lower_confidence_limit,
-                parameter.upper_confidence_limit,
-            ] {
-                if let Some(numeric) = value {
-                    assert!(numeric.is_finite());
-                }
-            }
+            assert_close(parameter.standard_error.expect("standard_error"), expected_se[index]);
+            assert_close(parameter.t_ratio.expect("t_ratio"), expected_t[index]);
+            assert_close(parameter.p_value.expect("p_value"), expected_p[index]);
+            assert_close(
+                parameter.lower_confidence_limit.expect("lower_confidence_limit"),
+                expected_ci[index].0,
+            );
+            assert_close(
+                parameter.upper_confidence_limit.expect("upper_confidence_limit"),
+                expected_ci[index].1,
+            );
         }
     }
 
