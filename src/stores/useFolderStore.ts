@@ -109,8 +109,8 @@ interface FolderStore {
     tableFolders: Record<string, string>;
     graphFolders: Record<string, string>;
     tabulateFolders: Record<string, string>;
-    fitYByXFolders: Record<string, string>;
-    distributionFolders: Record<string, string>;
+    fitYByXFolders?: Record<string, string>;
+    distributionFolders?: Record<string, string>;
   }) => void;
 
   /** 关闭项目时重置。 */
@@ -190,7 +190,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
   distributionFolders: {},
   collapsed: loadCollapsed(),
 
-  loadFromProject: ({ folders, tableFolders, graphFolders, tabulateFolders, fitYByXFolders, distributionFolders }) => {
+  loadFromProject: ({ folders, tableFolders, graphFolders, tabulateFolders, fitYByXFolders = {}, distributionFolders = {} }) => {
     // Normalize incoming paths and rebuild assignment maps with the
     // normalized forms so subsequent lookups always agree.
     const allFolders = new Set<string>();

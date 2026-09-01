@@ -97,7 +97,7 @@ fn is_sampling_strata_role(role: &str) -> bool {
 
 pub(crate) struct ArchiveKeysetReadPlan {
     select_sql: String,
-    pub columns: Vec<(String, String)>,
+    pub columns: Vec<(String, String, String)>,
 }
 
 pub(crate) struct ArchiveBatchRow {
@@ -239,12 +239,14 @@ impl DuckDbEngine {
 
             CREATE TABLE IF NOT EXISTS _meta_columns (
                 dataset_id  TEXT,
+                column_id   TEXT NOT NULL DEFAULT (CAST(uuid() AS VARCHAR)),
                 col_index   INTEGER,
                 col_name    TEXT,
                 col_type    TEXT,
                 role        TEXT DEFAULT 'continuous',
                 missing_count BIGINT DEFAULT 0,
-                PRIMARY KEY (dataset_id, col_index)
+                PRIMARY KEY (dataset_id, col_index),
+                UNIQUE (column_id)
             );
 
             CREATE TABLE IF NOT EXISTS _history_change_sets (
@@ -7217,7 +7219,18 @@ impl DuckDbEngine {
         dataset_id: &str,
     ) -> Result<ArchiveKeysetReadPlan, AppError> {
         self.get_dataset_meta(dataset_id)?;
-        let columns = self.get_user_columns(dataset_id)?;
+        let mut statement = self.conn.prepare(
+            "SELECT column_id, col_name, col_type FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
+        )?;
+        let columns: Vec<(String, String, String)> = statement
+            .query_map(params![dataset_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         let table_name = Self::quote_identifier(&Self::internal_table_name(dataset_id));
 
         let select_projection = if columns.is_empty() {
@@ -7227,7 +7240,7 @@ impl DuckDbEngine {
                 ", {}",
                 columns
                     .iter()
-                    .map(|(name, column_type)| archive_export_expression(name, column_type))
+                    .map(|(_, name, column_type)| archive_export_expression(name, column_type))
                     .collect::<Vec<_>>()
                     .join(", ")
             )

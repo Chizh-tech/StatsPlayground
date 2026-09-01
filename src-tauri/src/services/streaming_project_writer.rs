@@ -516,7 +516,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             let column_write_modes = plan
                 .columns
                 .iter()
-                .map(|(_, column_type)| archive_cell_write_mode(column_type))
+                .map(|(_, _, column_type)| archive_cell_write_mode(column_type))
                 .collect::<Vec<_>>();
 
             let columns = table_columns_from_plan(&dataset.id, &plan, &snapshot.column_display);
@@ -804,9 +804,10 @@ fn table_columns_from_plan(
     plan.columns
         .iter()
         .enumerate()
-        .map(|(index, (name, column_type))| {
+        .map(|(index, (column_id, name, column_type))| {
             let props = display.and_then(|items| items.iter().find(|item| item.col_index == index));
             TableColumn {
+                column_id: Some(column_id.clone()),
                 name: name.clone(),
                 col_type: column_type.clone(),
                 width: props.and_then(|item| item.width),
@@ -1272,11 +1273,15 @@ mod tests {
                 })],
                 fit_y_by_x: vec![serde_json::json!({"id": "fit-1"})],
                 tabulates: vec![serde_json::json!({"id": "tab-1"})],
+                distributions: Vec::new(),
+                derived_formulas: Vec::new(),
+                distribution_issues: Vec::new(),
                 folders: vec!["Bench".to_string(), "Bench/Sub".to_string()],
                 table_folders: HashMap::new(),
                 graph_folders: HashMap::new(),
                 fit_y_by_x_folders: HashMap::new(),
                 tabulate_folders: HashMap::new(),
+                distribution_folders: HashMap::new(),
             },
         }
     }

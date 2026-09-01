@@ -348,6 +348,8 @@ pub struct TableDoc {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TableColumn {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_id: Option<String>,
     pub name: String,
     pub col_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1319,6 +1321,44 @@ mod tests {
         }
     }
 
+    fn build_bundle(
+        name: String,
+        version: String,
+        created_at: String,
+        tables: Vec<TableDoc>,
+        graphs: Vec<GraphDoc>,
+        fit_y_by_x: Vec<Value>,
+        tabulates: Vec<Value>,
+        folders: Vec<String>,
+        table_folders: &HashMap<String, String>,
+        graph_folders: &HashMap<String, String>,
+        fit_y_by_x_folders: &HashMap<String, String>,
+        tabulate_folders: &HashMap<String, String>,
+        history: Vec<Value>,
+        snapshots: Vec<Value>,
+    ) -> ProjectBundle {
+        super::build_bundle(
+            name,
+            version,
+            created_at,
+            tables,
+            graphs,
+            fit_y_by_x,
+            tabulates,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            folders,
+            table_folders,
+            graph_folders,
+            fit_y_by_x_folders,
+            tabulate_folders,
+            &HashMap::new(),
+            history,
+            snapshots,
+        )
+    }
+
     #[test]
     fn build_bundle_uses_stable_id_paths_and_explicit_folder_maps() {
         let table = table_doc("table-id", "Sales");
@@ -1364,6 +1404,10 @@ mod tests {
             fit_y_by_x_folders: HashMap::new(),
             tabulates: vec![],
             tabulate_folders: HashMap::new(),
+            distributions: vec![],
+            derived_formulas: vec![],
+            distribution_issues: vec![],
+            distribution_folders: HashMap::new(),
         };
 
         let json = serde_json::to_vec(&manifest).expect("serialize manifest");

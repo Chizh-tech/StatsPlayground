@@ -602,10 +602,14 @@ export function Workspace() {
 
   const handleOpenDistribution = async () => {
     if (!activeDatasetId || readOnly) return;
-    setDistributionDialog({
-      datasetId: activeDatasetId,
-      columns: await getDistributionColumns(activeDatasetId),
-    });
+    try {
+      setDistributionDialog({
+        datasetId: activeDatasetId,
+        columns: await getDistributionColumns(activeDatasetId),
+      });
+    } catch (error) {
+      alert(t("alert.openDistributionFailed") + String(error));
+    }
   };
 
   const handleEditDistributionInputs = async (item: DistributionDocV1) => {

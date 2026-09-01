@@ -55,6 +55,30 @@ mod tests {
                 CommandClass::ReadOnly,
             ),
             (
+                "commands::distribution_commands::bootstrap_distribution_workspace",
+                CommandClass::ReadOnly,
+            ),
+            (
+                "commands::distribution_commands::list_distribution_capabilities",
+                CommandClass::ReadOnly,
+            ),
+            (
+                "commands::distribution_commands::validate_black_box_case",
+                CommandClass::ReadOnly,
+            ),
+            (
+                "commands::distribution_commands::start_distribution_run",
+                CommandClass::ReadOnly,
+            ),
+            (
+                "commands::distribution_commands::execute_distribution_run",
+                CommandClass::ReadOnly,
+            ),
+            (
+                "commands::distribution_commands::cancel_distribution_run",
+                CommandClass::ReadOnly,
+            ),
+            (
                 "commands::data_commands::execute_sql_query",
                 CommandClass::ReadOnly,
             ),
@@ -202,6 +226,10 @@ mod tests {
             ("commands::project_commands::export_graph", CommandClass::ReadOnly),
             ("commands::project_commands::import_graph", CommandClass::ReadOnly),
             ("commands::table_commands::get_columns", CommandClass::ReadOnly),
+            (
+                "commands::table_commands::get_distribution_columns",
+                CommandClass::ReadOnly,
+            ),
             ("commands::table_commands::sort_table", CommandClass::Mutation),
             ("commands::table_commands::subset_table", CommandClass::Mutation),
             (

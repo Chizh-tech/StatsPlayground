@@ -79,7 +79,8 @@
     "exportGraphFailed": "Xuất biểu đồ thất bại: ",
     "importGraphFailed": "Nhập biểu đồ thất bại: ",
     "exportFolderFailed": "Xuất thư mục thất bại: ",
-    "openProjectFailed": "Mở dự án thất bại: ",
+    "openProjectFailed": "Mở dự án thất bại: {{msg}}",
+    "openDistributionFailed": "Mở Distribution thất bại: ",
     "invalidName": {
       "empty": "Tên không được để trống.",
       "invalidChars": "Tên chứa ký tự không hợp lệ: / \\ : * ? \" < > |",
@@ -179,6 +180,41 @@
     "zoomOut": "Thu nhỏ bảng",
     "zoomReset": "Đặt lại về 100%",
     "zoomTooltip": "Thu phóng bảng"
+  },
+  "distribution": {
+    "title": "Phân phối",
+    "recall": "Gọi lại",
+    "searchColumns": "Tìm cột",
+    "sourceDataset": "Bảng dữ liệu nguồn",
+    "openSource": "Mở dữ liệu nguồn",
+    "editInputs": "Sửa đầu vào",
+    "progress": "Tiến độ",
+    "renameLabel": "Đổi tên {{name}}",
+    "roleLabel": "Vai trò {{role}}",
+    "roleEmpty": "Kéo thả hoặc gán cột",
+    "assignToRole": "Gán {{column}} vào {{role}}",
+    "removeFromRole": "Xóa {{column}} khỏi {{role}}",
+    "confidenceLevel": "Mức tin cậy",
+    "frequencyShort": "Tần số",
+    "histogramsOnly": "Chỉ biểu đồ tần suất",
+    "invalidConfig": "Hãy gán ít nhất một cột Y hợp lệ.",
+    "runDisabledHint": "Phương pháp thống kê không khả dụng trong trạng thái hệ thống hiện tại.",
+    "saving": "Đang lưu...",
+    "run": "Chạy",
+    "roles": {
+      "y": "Y",
+      "weight": "Trọng số",
+      "frequency": "Tần số",
+      "by": "Phân nhóm"
+    },
+    "specification": {
+      "useOverride": "Dùng giới hạn kỹ thuật riêng cho phân tích",
+      "lsl": "Giới hạn kỹ thuật dưới",
+      "target": "Mục tiêu",
+      "usl": "Giới hạn kỹ thuật trên",
+      "allYHint": "Thiết lập ở cấp phân tích này áp dụng cho mọi cột Y.",
+      "overrideSource": "Chỉ lưu cùng phân tích này; thuộc tính cột của bảng không thay đổi."
+    }
   },
   "fitYByX": {
     "title": "Khớp Y theo X",

@@ -552,11 +552,15 @@ impl<'a> ProjectService<'a> {
         let table_name = format!("dataset_{}", dataset_id.replace('-', "_"));
 
         let mut col_stmt = db.conn().prepare(
-            "SELECT col_name, col_type FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
+            "SELECT column_id, col_name, col_type FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
         )?;
-        let base_columns: Vec<(String, String)> = col_stmt
+        let base_columns: Vec<(String, String, String)> = col_stmt
             .query_map(duckdb::params![dataset_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -564,9 +568,10 @@ impl<'a> ProjectService<'a> {
         let columns: Vec<TableColumn> = base_columns
             .iter()
             .enumerate()
-            .map(|(i, (name, col_type))| {
+            .map(|(i, (column_id, name, col_type))| {
                 let dp = ds_display.and_then(|v| v.iter().find(|p| p.col_index == i));
                 TableColumn {
+                    column_id: Some(column_id.clone()),
                     name: name.clone(),
                     col_type: col_type.clone(),
                     width: dp.and_then(|p| p.width),
@@ -618,7 +623,7 @@ impl<'a> ProjectService<'a> {
             id: dataset_id.to_string(),
             name: meta.name,
             source_type: meta.source_type,
-            version: "2".to_string(),
+            version: "3".to_string(),
             columns,
             rows,
         })
@@ -636,7 +641,7 @@ impl<'a> ProjectService<'a> {
         doc: &TableDoc,
         progress_cb: Option<&dyn Fn(usize, usize)>,
     ) -> Result<String, AppError> {
-        if doc.version != "1" && doc.version != "2" {
+        if doc.version != "1" && doc.version != "2" && doc.version != "3" {
             return Err(AppError::InvalidParam(format!(
                 "unsupported table document version: {}",
                 doc.version
@@ -678,6 +683,14 @@ impl<'a> ProjectService<'a> {
         db.conn().execute_batch("BEGIN TRANSACTION")?;
         let restore_result = (|| -> Result<(), AppError> {
             db.create_empty_table(&doc.id, &doc.name, &col_names, &col_types)?;
+            for (index, column) in doc.columns.iter().enumerate() {
+                if let Some(column_id) = &column.column_id {
+                    db.conn().execute(
+                        "UPDATE _meta_columns SET column_id = $1 WHERE dataset_id = $2 AND col_index = $3",
+                        duckdb::params![column_id, &doc.id, index as i32],
+                    )?;
+                }
+            }
             let canonical_columns = db.get_user_columns(&doc.id)?;
 
             if !doc.rows.is_empty() {
@@ -694,7 +707,7 @@ impl<'a> ProjectService<'a> {
                                 .checked_sub(1)
                                 .map(|column_index| canonical_columns[column_index].1.as_str());
                             let decode_v2_tag = index > 0
-                                && doc.version == "2"
+                                && (doc.version == "2" || doc.version == "3")
                                 && !is_archive_scalar_type(&canonical_columns[index - 1].1);
                             json_to_duckdb_param(value, decode_v2_tag, column_type)
                         })
@@ -1166,11 +1179,15 @@ mod tests {
             graph_builders,
             fit_y_by_x,
             tabulates,
+            distributions: Vec::new(),
+            derived_formulas: Vec::new(),
+            distribution_issues: Vec::new(),
             folders,
             table_folders,
             graph_folders,
             fit_y_by_x_folders,
             tabulate_folders,
+            distribution_folders: HashMap::new(),
         }
     }
 
@@ -1376,6 +1393,7 @@ mod tests {
             source_type: "manual".into(),
             version: "2".into(),
             columns: vec![TableColumn {
+                column_id: None,
                 name: "value".into(),
                 col_type: "BIGINT".into(),
                 width: None,
@@ -1427,6 +1445,42 @@ mod tests {
     }
 
     #[test]
+    fn restore_accepts_v3_table_docs_with_tagged_cells() {
+        let state = AppState::new().unwrap();
+        let doc = TableDoc {
+            id: "v3-table".into(),
+            name: "V3 Table".into(),
+            source_type: "manual".into(),
+            version: "3".into(),
+            columns: vec![TableColumn {
+                column_id: None,
+                name: "order_date".into(),
+                col_type: "DATE".into(),
+                width: None,
+                format: None,
+                extras: None,
+            }],
+            rows: vec![vec![
+                serde_json::json!(1),
+                serde_json::json!({ "$duckdbValue": "2025-05-10" }),
+            ]],
+        };
+
+        ProjectService::new(&state).restore_table_doc(&doc).unwrap();
+
+        let db = state.db.lock().unwrap();
+        let restored: String = db
+            .conn()
+            .query_row(
+                "SELECT CAST(order_date AS VARCHAR) FROM dataset_v3_table WHERE _row_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(restored, "2025-05-10");
+    }
+
+    #[test]
     fn restore_rejects_non_positive_and_duplicate_row_ids() {
         for rows in [
             vec![vec![serde_json::json!(0), serde_json::json!(10)]],
@@ -1442,6 +1496,7 @@ mod tests {
                 source_type: "manual".into(),
                 version: "2".into(),
                 columns: vec![TableColumn {
+                    column_id: None,
                     name: "value".into(),
                     col_type: "BIGINT".into(),
                     width: None,
@@ -1493,6 +1548,7 @@ mod tests {
             source_type: "manual".into(),
             version: "1".into(),
             columns: vec![TableColumn {
+                column_id: None,
                 name: "payload".into(),
                 col_type: "STRUCT(\"$duckdbValue\" VARCHAR)".into(),
                 width: None,
@@ -1525,6 +1581,7 @@ mod tests {
         let service = ProjectService::new(&state);
         let mut doc = table_doc("malformed-id", "Malformed");
         doc.columns.push(TableColumn {
+            column_id: None,
             name: "value".into(),
             col_type: "INTEGER".into(),
             width: None,
@@ -1544,7 +1601,7 @@ mod tests {
         let state = AppState::new().unwrap();
         let service = ProjectService::new(&state);
         let mut doc = table_doc("future-id", "Future");
-        doc.version = "3".into();
+        doc.version = "4".into();
 
         assert!(matches!(
             service.restore_table_doc(&doc),
@@ -2083,6 +2140,7 @@ mod tests {
         let valid = table_doc("valid-id", "Valid");
         let mut malformed = table_doc("bad-id", "Bad");
         malformed.columns.push(TableColumn {
+            column_id: None,
             name: "value".into(),
             col_type: "INTEGER".into(),
             width: None,
@@ -2100,6 +2158,10 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            vec![],
+            vec![],
+            &folders,
             &folders,
             &folders,
             &folders,

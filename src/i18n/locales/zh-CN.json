@@ -79,7 +79,8 @@
     "exportGraphFailed": "导出图形失败: ",
     "importGraphFailed": "导入图形失败: ",
     "exportFolderFailed": "导出文件夹失败: ",
-    "openProjectFailed": "打开项目失败: ",
+    "openProjectFailed": "打开项目失败: {{msg}}",
+    "openDistributionFailed": "打开 Distribution 失败: ",
     "invalidName": {
       "empty": "名称不能为空。",
       "invalidChars": "名称包含非法字符: / \\ : * ? \" < > |",
@@ -180,6 +181,41 @@
     "zoomOut": "缩小表格",
     "zoomReset": "重置为 100%",
     "zoomTooltip": "表格缩放"
+  },
+  "distribution": {
+    "title": "分布",
+    "recall": "重新调用",
+    "searchColumns": "搜索列",
+    "sourceDataset": "源数据表",
+    "openSource": "打开源数据",
+    "editInputs": "编辑输入",
+    "progress": "进度",
+    "renameLabel": "重命名 {{name}}",
+    "roleLabel": "{{role}} 角色",
+    "roleEmpty": "拖放或分配列",
+    "assignToRole": "将 {{column}} 分配到 {{role}}",
+    "removeFromRole": "从 {{role}} 移除 {{column}}",
+    "confidenceLevel": "置信水平",
+    "frequencyShort": "频数",
+    "histogramsOnly": "仅直方图",
+    "invalidConfig": "请至少分配一个有效的 Y 列。",
+    "runDisabledHint": "当前系统状态下统计方法不可用。",
+    "saving": "正在保存...",
+    "run": "运行",
+    "roles": {
+      "y": "Y",
+      "weight": "权重",
+      "frequency": "频数",
+      "by": "分组"
+    },
+    "specification": {
+      "useOverride": "使用分析规格限覆盖",
+      "lsl": "规格下限",
+      "target": "目标值",
+      "usl": "规格上限",
+      "allYHint": "此分析级覆盖适用于所有 Y 列。",
+      "overrideSource": "仅随此分析保存，不会更改数据表列属性。"
+    }
   },
   "fitYByX": {
     "title": "拟合 Y by X",
