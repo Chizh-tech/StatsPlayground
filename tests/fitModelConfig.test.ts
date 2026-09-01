@@ -5,6 +5,7 @@ import {
   canonicalInteraction,
   createFitModelItem,
   fitModelParameterCount,
+  FitModelValidationError,
   validateFitModelDefinition,
 } from "../src/components/fitModel/fitModelConfig.ts";
 
@@ -84,6 +85,22 @@ assert.deepEqual(
 assert.deepEqual(
   validateFitModelDefinition({
     response,
+    terms: [
+      { kind: "main", columnNames: ["Temperature"] },
+      { kind: "main", columnNames: ["Pressure"] },
+      { kind: "interaction", columnNames: ["Temperature", "Pressure"] },
+      { kind: "interaction", columnNames: ["Pressure", "Temperature"] },
+    ],
+  }),
+  {
+    ok: false,
+    reason: "duplicateTerm",
+    termKey: "interaction:Pressure*Temperature",
+  },
+);
+assert.deepEqual(
+  validateFitModelDefinition({
+    response,
     terms: [{ kind: "main", columnNames: ["Temperature", "Pressure"] }],
   }),
   { ok: false, reason: "invalidTermArity", termKind: "main" },
@@ -95,8 +112,21 @@ assert.deepEqual(
   }),
   { ok: false, reason: "sameColumnInteraction", columnName: "Temperature" },
 );
+assert.deepEqual(
+  validateFitModelDefinition({
+    response,
+    terms: [
+      {
+        kind: "quadratic",
+        columnNames: ["Temperature"],
+      } as unknown as { kind: "main" | "interaction"; columnNames: string[] },
+    ],
+  }),
+  { ok: false, reason: "invalidTermKind", termKind: "quadratic" },
+);
 
 const item = createFitModelItem({
+  fields: [response, temperature, pressure],
   id: "fit-model-1",
   name: "Fit Model 1",
   sourceDatasetId: "dataset-1",
@@ -106,5 +136,22 @@ const item = createFitModelItem({
   createdAt: "2026-09-01T00:00:00.000Z",
 });
 assert.equal(item.centeringMethod, "mean");
+assert.equal(Object.hasOwn(item, "fields"), false);
+
+assert.throws(
+  () =>
+    createFitModelItem({
+      fields: [response, temperature, batch],
+      id: "fit-model-2",
+      name: "Fit Model 2",
+      sourceDatasetId: "dataset-1",
+      response,
+      terms: [{ kind: "main", columnNames: ["Batch"] }],
+      centeringMethod: "none",
+      createdAt: "2026-09-01T00:00:00.000Z",
+    }),
+  (error: unknown) =>
+    error instanceof FitModelValidationError && error.result.reason === "nonContinuousPredictor",
+);
 
 console.log("fitModelConfig contract tests passed");

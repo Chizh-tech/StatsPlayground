@@ -4,6 +4,7 @@ import type { FitModelItem, FitModelTerm } from "@/types/fitModel";
 export type FitModelValidationReason =
   | "missingResponse"
   | "missingTerms"
+  | "invalidTermKind"
   | "invalidTermArity"
   | "sameColumnInteraction"
   | "responseInModel"
@@ -19,7 +20,7 @@ export type FitModelValidationResult =
       reason: FitModelValidationReason;
       columnName?: string;
       termKey?: string;
-      termKind?: FitModelTerm["kind"];
+      termKind?: string;
     };
 
 export class FitModelValidationError extends Error {
@@ -103,6 +104,10 @@ export function validateFitModelDefinition(input: {
   const interactions: Array<[string, string]> = [];
 
   for (const term of normalized) {
+    if (term.kind !== "main" && term.kind !== "interaction") {
+      return { ok: false, reason: "invalidTermKind", termKind: String(term.kind) };
+    }
+
     if (term.kind === "main") {
       if (term.columnNames.length !== 1) {
         return { ok: false, reason: "invalidTermArity", termKind: term.kind };
@@ -209,10 +214,11 @@ export function fitModelParameterCount(terms: readonly FitModelTerm[]): number {
   return 1 + terms.length;
 }
 
-export function createFitModelItem(input: Omit<FitModelItem, never>): FitModelItem {
+export function createFitModelItem(input: Omit<FitModelItem, never> & { fields: readonly FieldRef[] }): FitModelItem {
   const validation = validateFitModelDefinition({
     response: input.response,
     terms: input.terms,
+    fields: input.fields,
   });
   if (!validation.ok) {
     throw new FitModelValidationError(validation);
