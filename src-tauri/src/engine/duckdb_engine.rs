@@ -33,6 +33,20 @@ pub struct GraphProjectionStats {
     pub projected_column_types: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FitModelDataRow {
+    pub row_index: u64,
+    pub response: f64,
+    pub predictors: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FitModelDataSet {
+    pub predictor_names: Vec<String>,
+    pub used_rows: Vec<FitModelDataRow>,
+    pub excluded_rows: u64,
+}
+
 struct GraphQueryPlan {
     source_sql: String,
     source_values: Vec<Value>,
@@ -7096,6 +7110,146 @@ impl DuckDbEngine {
             .map_err(AppError::from)
     }
 
+    pub fn read_fit_model_rows(
+        &self,
+        dataset_id: &str,
+        generation: u64,
+        response_column: &str,
+        predictor_columns: &[String],
+    ) -> Result<FitModelDataSet, AppError> {
+        self.get_dataset_meta(dataset_id)?;
+
+        let current_generation = self.get_dataset_generation(dataset_id)?;
+        if current_generation != generation {
+            return Err(AppError::InvalidParam(format!(
+                "stale dataset generation: expected {current_generation}, received {generation}"
+            )));
+        }
+
+        if predictor_columns.is_empty() {
+            return Err(AppError::InvalidParam(
+                "fit model requires at least one predictor column".into(),
+            ));
+        }
+
+        let user_columns = self.get_user_columns(dataset_id)?;
+        let column_types = user_columns
+            .iter()
+            .map(|(name, column_type)| (name.as_str(), column_type.as_str()))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let response_type = column_types
+            .get(response_column)
+            .copied()
+            .ok_or_else(|| {
+                AppError::InvalidParam(format!("unknown response column: {response_column}"))
+            })?;
+        if !is_numeric_type(response_type) {
+            return Err(AppError::InvalidParam(format!(
+                "response column must be numeric: {response_column}"
+            )));
+        }
+        let response_role = self.fit_model_column_role(dataset_id, response_column)?;
+        if !response_role.eq_ignore_ascii_case("continuous") {
+            return Err(AppError::InvalidParam(format!(
+                "response column must be continuous: {response_column}"
+            )));
+        }
+
+        let mut predictor_names = Vec::new();
+        for predictor in predictor_columns {
+            let predictor_type = column_types.get(predictor.as_str()).copied().ok_or_else(|| {
+                AppError::InvalidParam(format!("unknown predictor column: {predictor}"))
+            })?;
+            if predictor == response_column {
+                return Err(AppError::InvalidParam(
+                    "response and predictor columns must be distinct".into(),
+                ));
+            }
+            if !is_numeric_type(predictor_type) {
+                return Err(AppError::InvalidParam(format!(
+                    "predictor column must be numeric: {predictor}"
+                )));
+            }
+            let predictor_role = self.fit_model_column_role(dataset_id, predictor)?;
+            if !predictor_role.eq_ignore_ascii_case("continuous") {
+                return Err(AppError::InvalidParam(format!(
+                    "predictor column must be continuous: {predictor}"
+                )));
+            }
+            if !predictor_names.contains(predictor) {
+                predictor_names.push(predictor.clone());
+            }
+        }
+
+        if predictor_names.is_empty() {
+            return Err(AppError::InvalidParam(
+                "fit model requires at least one predictor column".into(),
+            ));
+        }
+
+        let table_name = Self::quote_identifier(&Self::internal_table_name(dataset_id));
+        let response_identifier = Self::quote_identifier(response_column);
+        let predictor_projection = predictor_names
+            .iter()
+            .map(|column| Self::quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query_sql = format!(
+            "SELECT \"_row_id\", {response_identifier}, {predictor_projection} FROM {table_name}"
+        );
+
+        let mut stmt = self.conn.prepare(&query_sql)?;
+        let mut query_rows = stmt.query([])?;
+        let mut source_rows = 0_u64;
+        let mut used_rows = Vec::new();
+
+        while let Some(row) = query_rows.next()? {
+            source_rows += 1;
+
+            let row_index_value = row.get::<_, Value>(0)?;
+            let Some(row_index) = fit_model_row_index(row_index_value) else {
+                continue;
+            };
+
+            let Some(response) = fit_y_by_x_numeric_value(row.get::<_, Value>(1)?)
+                .filter(|value| value.is_finite())
+            else {
+                continue;
+            };
+
+            let mut predictors = Vec::with_capacity(predictor_names.len());
+            let mut valid_row = true;
+            for offset in 0..predictor_names.len() {
+                let Some(value) = fit_y_by_x_numeric_value(row.get::<_, Value>(offset + 2)?)
+                    .filter(|numeric| numeric.is_finite())
+                else {
+                    valid_row = false;
+                    break;
+                };
+                predictors.push(value);
+            }
+            if !valid_row {
+                continue;
+            }
+
+            used_rows.push(FitModelDataRow {
+                row_index,
+                response,
+                predictors,
+            });
+        }
+
+        let excluded_rows = source_rows
+            .checked_sub(used_rows.len() as u64)
+            .ok_or_else(|| AppError::Stats("fit model row accounting underflowed".into()))?;
+        Ok(FitModelDataSet {
+            predictor_names,
+            used_rows,
+            excluded_rows,
+        })
+    }
+
     pub fn read_fit_y_by_x_rows(
         &self,
         dataset_id: &str,
@@ -7200,6 +7354,19 @@ impl DuckDbEngine {
         dataset_id: &str,
         column_name: &str,
     ) -> Result<String, AppError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT role FROM _meta_columns WHERE dataset_id = $1 AND col_name = $2")?;
+        let mut rows = stmt.query(params![dataset_id, column_name])?;
+        let Some(row) = rows.next()? else {
+            return Err(AppError::InvalidParam(format!(
+                "unknown column role metadata: {column_name}"
+            )));
+        };
+        row.get(0).map_err(AppError::from)
+    }
+
+    fn fit_model_column_role(&self, dataset_id: &str, column_name: &str) -> Result<String, AppError> {
         let mut stmt = self
             .conn
             .prepare("SELECT role FROM _meta_columns WHERE dataset_id = $1 AND col_name = $2")?;
@@ -7520,6 +7687,20 @@ fn fit_y_by_x_numeric_value(value: Value) -> Option<f64> {
         Value::Float(inner) => Some(inner as f64),
         Value::Double(inner) => Some(inner),
         Value::Decimal(inner) => fit_y_by_x_decimal_value(inner),
+        _ => None,
+    }
+}
+
+fn fit_model_row_index(value: Value) -> Option<u64> {
+    match value {
+        Value::TinyInt(inner) if inner > 0 => Some(inner as u64),
+        Value::SmallInt(inner) if inner > 0 => Some(inner as u64),
+        Value::Int(inner) if inner > 0 => Some(inner as u64),
+        Value::BigInt(inner) if inner > 0 => Some(inner as u64),
+        Value::UTinyInt(inner) if inner > 0 => Some(inner as u64),
+        Value::USmallInt(inner) if inner > 0 => Some(inner as u64),
+        Value::UInt(inner) if inner > 0 => Some(inner as u64),
+        Value::UBigInt(inner) if inner > 0 => Some(inner as u64),
         _ => None,
     }
 }
@@ -7914,6 +8095,7 @@ fn dedupe_sqlite_table_name(base: &str, used: &mut std::collections::HashSet<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::fit_model::{FitModelTerm, FitModelTermKind};
     use crate::models::fit_y_by_x::{FitYByXPersonality, FitYByXRow};
     use crate::models::graph_data::{
         GraphDataRequest, GraphElementRequest, GraphFieldBinding, GraphSampling, GraphViewport,
@@ -7988,6 +8170,303 @@ mod tests {
                 params![row_count, dataset_id],
             )
             .expect("fit y by x fixture row count");
+    }
+
+    fn seed_fit_model_dataset(
+        engine: &DuckDbEngine,
+        dataset_id: &str,
+        column_names: &[&str],
+        column_types: &[&str],
+        insert_sql: &str,
+        row_count: i64,
+    ) {
+        engine
+            .create_empty_table(
+                dataset_id,
+                dataset_id,
+                &column_names
+                    .iter()
+                    .map(|name| (*name).to_string())
+                    .collect::<Vec<_>>(),
+                &column_types
+                    .iter()
+                    .map(|column_type| (*column_type).to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .expect("fit model fixture metadata");
+        engine
+            .conn()
+            .execute_batch(insert_sql)
+            .expect("fit model fixture rows");
+        engine
+            .conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
+                params![row_count, dataset_id],
+            )
+            .expect("fit model fixture row count");
+    }
+
+    #[test]
+    fn read_fit_model_rows_filters_non_finite_and_preserves_row_indexes() {
+        let engine = DuckDbEngine::new_in_memory().expect("engine");
+        seed_fit_model_dataset(
+            &engine,
+            "fit-model-rows",
+            &["Y", "A", "B", "C"],
+            &["DOUBLE", "DOUBLE", "DOUBLE", "VARCHAR"],
+            r#"
+            INSERT INTO "dataset_fit_model_rows" (_row_id, Y, A, B, C) VALUES
+                (1, 10.0, 1.0, 2.0, 'ok'),
+                (2, 20.0, 2.0, 3.0, 'ok'),
+                (3, NULL, 3.0, 4.0, 'missing-response'),
+                (4, 40.0, NULL, 5.0, 'missing-predictor'),
+                (5, 50.0, CAST('NaN' AS DOUBLE), 6.0, 'nan-predictor'),
+                (6, 60.0, 6.0, CAST('inf' AS DOUBLE), 'infinite-predictor');
+            "#,
+            6,
+        );
+
+        let result = engine
+            .read_fit_model_rows(
+                "fit-model-rows",
+                0,
+                "Y",
+                &["A".to_string(), "B".to_string(), "A".to_string()],
+            )
+            .expect("reader should succeed");
+
+        assert_eq!(result.predictor_names, vec!["A", "B"]);
+        assert_eq!(result.used_rows.len(), 2);
+        assert_eq!(result.excluded_rows, 4);
+        assert_eq!(result.used_rows[0].row_index, 1);
+        assert_eq!(result.used_rows[1].row_index, 2);
+    }
+
+    #[test]
+    fn read_fit_model_rows_rejects_stale_generation_before_query() {
+        let engine = DuckDbEngine::new_in_memory().expect("engine");
+        seed_fit_model_dataset(
+            &engine,
+            "fit-model-stale-generation",
+            &["Y", "A"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_model_stale_generation" (_row_id, Y, A) VALUES
+                (1, 1.0, 2.0);
+            "#,
+            1,
+        );
+        engine
+            .conn()
+            .execute(
+                "UPDATE _meta_datasets SET generation = 1 WHERE id = $1",
+                params!["fit-model-stale-generation"],
+            )
+            .expect("set generation");
+
+        let error = engine
+            .read_fit_model_rows("fit-model-stale-generation", 0, "Y", &["A".to_string()])
+            .expect_err("stale generation must fail");
+        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("generation")));
+    }
+
+    #[test]
+    fn read_fit_model_rows_rejects_missing_dataset() {
+        let engine = DuckDbEngine::new_in_memory().expect("engine");
+
+        let error = engine
+            .read_fit_model_rows("missing-dataset", 0, "Y", &["A".to_string()])
+            .expect_err("unknown dataset must fail");
+        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("unknown dataset")));
+    }
+
+    #[test]
+    fn read_fit_model_rows_rejects_unknown_column() {
+        let engine = DuckDbEngine::new_in_memory().expect("engine");
+        seed_fit_model_dataset(
+            &engine,
+            "fit-model-unknown-column",
+            &["Y", "A"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_model_unknown_column" (_row_id, Y, A) VALUES
+                (1, 1.0, 2.0);
+            "#,
+            1,
+        );
+
+        let error = engine
+            .read_fit_model_rows(
+                "fit-model-unknown-column",
+                0,
+                "Y",
+                &["A".to_string(), "missing".to_string()],
+            )
+            .expect_err("unknown predictor must fail");
+        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("unknown predictor")));
+    }
+
+    #[test]
+    fn read_fit_model_rows_rejects_unknown_response_column() {
+        let engine = DuckDbEngine::new_in_memory().expect("engine");
+        seed_fit_model_dataset(
+            &engine,
+            "fit-model-unknown-response",
+            &["Y", "A"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_model_unknown_response" (_row_id, Y, A) VALUES
+                (1, 1.0, 2.0);
+            "#,
+            1,
+        );
+
+        let error = engine
+            .read_fit_model_rows(
+                "fit-model-unknown-response",
+                0,
+                "missing_response",
+                &["A".to_string()],
+            )
+            .expect_err("unknown response must fail");
+        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("unknown response")));
+    }
+
+    #[test]
+    fn read_fit_model_rows_rejects_duplicate_response_and_predictor_column() {
+        let engine = DuckDbEngine::new_in_memory().expect("engine");
+        seed_fit_model_dataset(
+            &engine,
+            "fit-model-duplicate-response",
+            &["Y", "A"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_model_duplicate_response" (_row_id, Y, A) VALUES
+                (1, 1.0, 2.0);
+            "#,
+            1,
+        );
+
+        let error = engine
+            .read_fit_model_rows(
+                "fit-model-duplicate-response",
+                0,
+                "Y",
+                &["Y".to_string(), "A".to_string()],
+            )
+            .expect_err("response reuse must fail");
+        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("response") && message.contains("predictor")));
+    }
+
+    #[test]
+    fn read_fit_model_rows_rejects_non_continuous_modeling_columns() {
+        let engine = DuckDbEngine::new_in_memory().expect("engine");
+        seed_fit_model_dataset(
+            &engine,
+            "fit-model-non-continuous",
+            &["Y", "A"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_model_non_continuous" (_row_id, Y, A) VALUES
+                (1, 1.0, 2.0);
+            "#,
+            1,
+        );
+        engine
+            .conn()
+            .execute(
+                "UPDATE _meta_columns SET role = $1 WHERE dataset_id = $2 AND col_name = $3",
+                params!["nominal", "fit-model-non-continuous", "A"],
+            )
+            .expect("set role");
+
+        let error = engine
+            .read_fit_model_rows("fit-model-non-continuous", 0, "Y", &["A".to_string()])
+            .expect_err("non-continuous predictor must fail");
+        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("continuous")));
+    }
+
+    #[test]
+    fn read_fit_model_rows_rejects_non_continuous_response_column() {
+        let engine = DuckDbEngine::new_in_memory().expect("engine");
+        seed_fit_model_dataset(
+            &engine,
+            "fit-model-non-continuous-response",
+            &["Y", "A"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_model_non_continuous_response" (_row_id, Y, A) VALUES
+                (1, 1.0, 2.0);
+            "#,
+            1,
+        );
+        engine
+            .conn()
+            .execute(
+                "UPDATE _meta_columns SET role = $1 WHERE dataset_id = $2 AND col_name = $3",
+                params!["nominal", "fit-model-non-continuous-response", "Y"],
+            )
+            .expect("set role");
+
+        let error = engine
+            .read_fit_model_rows(
+                "fit-model-non-continuous-response",
+                0,
+                "Y",
+                &["A".to_string()],
+            )
+            .expect_err("non-continuous response must fail");
+        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("response") && message.contains("continuous")));
+    }
+
+    #[test]
+    fn fit_model_reader_selector_executes() {
+        let engine = DuckDbEngine::new_in_memory().expect("engine");
+        seed_fit_model_dataset(
+            &engine,
+            "fit-model-selector-smoke",
+            &["Y", "A"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_model_selector_smoke" (_row_id, Y, A) VALUES
+                (1, 1.0, 2.0);
+            "#,
+            1,
+        );
+
+        let result = engine
+            .read_fit_model_rows("fit-model-selector-smoke", 0, "Y", &["A".to_string()])
+            .expect("selector smoke read should succeed");
+        assert_eq!(result.used_rows.len(), 1);
+    }
+
+    #[test]
+    fn read_fit_model_rows_term_projection_dedup_happens_after_term_resolution() {
+        let terms = vec![
+            FitModelTerm {
+                kind: FitModelTermKind::Main,
+                column_names: vec!["A".into()],
+            },
+            FitModelTerm {
+                kind: FitModelTermKind::Main,
+                column_names: vec!["B".into()],
+            },
+            FitModelTerm {
+                kind: FitModelTermKind::Interaction,
+                column_names: vec!["A".into(), "B".into()],
+            },
+        ];
+        let resolved = crate::engine::fit_model::resolve_terms(&terms).expect("terms");
+        let mut names = Vec::new();
+        for term in &resolved {
+            for name in term.column_names() {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+        }
+        assert_eq!(names, vec!["A", "B"]);
     }
 
     #[test]
