@@ -997,45 +997,46 @@ fn strip_transient_fit_y_by_x_fields(value: Value) -> Value {
 /// us a much safer path than a direct in-place overwrite on Windows.
 pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), AppError> {
     let tmp_path = format!("{}.tmp", path);
-    {
+    let write_result = (|| -> Result<(), AppError> {
         let file = std::fs::File::create(&tmp_path)?;
         let mut zip = zip::ZipWriter::new(file);
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
         let dir_opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
+        let write_v4_flat = is_format_v4(&bundle.manifest.version);
 
         write_zip_json_entry_pretty(&mut zip, "manifest.json", &bundle.manifest, opts)?;
 
-        // Emit explicit directory entries for every folder so extraction
-        // produces the full tree (including empty folders the user created).
-        // Also include implicit ancestors of any table/graph file path.
-        let mut all_dirs: HashSet<String> = HashSet::new();
-        for f in &bundle.manifest.folders {
-            for anc in folder_ancestors(f) {
-                all_dirs.insert(anc);
-            }
-        }
-        for t in &bundle.manifest.tables {
-            if let Some(parent) = parent_folder(&t.file) {
-                for anc in folder_ancestors(&parent) {
+        if !write_v4_flat {
+            // Older bundles keep explicit directories so extraction preserves
+            // the legacy logical tree. v4 intentionally writes a flat payload layout.
+            let mut all_dirs: HashSet<String> = HashSet::new();
+            for f in &bundle.manifest.folders {
+                for anc in folder_ancestors(f) {
                     all_dirs.insert(anc);
                 }
             }
-        }
-        for g in &bundle.manifest.graphs {
-            if let Some(parent) = parent_folder(&g.file) {
-                for anc in folder_ancestors(&parent) {
-                    all_dirs.insert(anc);
+            for t in &bundle.manifest.tables {
+                if let Some(parent) = parent_folder(&t.file) {
+                    for anc in folder_ancestors(&parent) {
+                        all_dirs.insert(anc);
+                    }
                 }
             }
-        }
-        // Sort so the archive's central directory has a stable order.
-        let mut dirs_sorted: Vec<String> = all_dirs.into_iter().collect();
-        dirs_sorted.sort();
-        for d in &dirs_sorted {
-            zip.add_directory(format!("{}/", d), dir_opts)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
+            for g in &bundle.manifest.graphs {
+                if let Some(parent) = parent_folder(&g.file) {
+                    for anc in folder_ancestors(&parent) {
+                        all_dirs.insert(anc);
+                    }
+                }
+            }
+            let mut dirs_sorted: Vec<String> = all_dirs.into_iter().collect();
+            dirs_sorted.sort();
+            for d in &dirs_sorted {
+                zip.add_directory(format!("{}/", d), dir_opts)
+                    .map_err(|e| AppError::FileIO(e.to_string()))?;
+            }
         }
 
         // Map each TableDoc / GraphDoc by id so we can pair them with the
@@ -1076,29 +1077,54 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
             .collect();
 
         for entry in &bundle.manifest.tables {
-            if let Some(doc) = table_by_id.get(entry.id.as_str()) {
-                write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
-            }
+            let doc = table_by_id.get(entry.id.as_str()).ok_or_else(|| {
+                AppError::FileIO(format!(
+                    "missing table payload for manifest reference {}",
+                    entry.id
+                ))
+            })?;
+            write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
         }
         for entry in &bundle.manifest.graphs {
-            if let Some(doc) = graph_by_id.get(entry.id.as_str()) {
-                write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
-            }
+            let doc = graph_by_id.get(entry.id.as_str()).ok_or_else(|| {
+                AppError::FileIO(format!(
+                    "missing graph payload for manifest reference {}",
+                    entry.id
+                ))
+            })?;
+            write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
         }
         for entry in &bundle.manifest.fit_y_by_x_files {
-            if let Some(doc) = fit_by_id.get(entry.id.as_str()) {
-                write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
-            }
+            let doc = fit_by_id.get(entry.id.as_str()).ok_or_else(|| {
+                AppError::FileIO(format!(
+                    "missing fit payload for manifest reference {}",
+                    entry.id
+                ))
+            })?;
+            let synced = indexed_payload_with_manifest_name(doc, &entry.id, &entry.name, "fit")?;
+            write_zip_json_entry(&mut zip, &entry.file, &synced, opts)?;
         }
         for entry in &bundle.manifest.tabulate_files {
-            if let Some(doc) = tabulate_by_id.get(entry.id.as_str()) {
-                write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
-            }
+            let doc = tabulate_by_id.get(entry.id.as_str()).ok_or_else(|| {
+                AppError::FileIO(format!(
+                    "missing tabulate payload for manifest reference {}",
+                    entry.id
+                ))
+            })?;
+            let synced =
+                indexed_payload_with_manifest_name(doc, &entry.id, &entry.name, "tabulate")?;
+            write_zip_json_entry(&mut zip, &entry.file, &synced, opts)?;
         }
         for entry in &bundle.manifest.snapshot_files {
-            if let Some(doc) = snapshot_by_id.get(entry.id.as_str()) {
-                write_zip_json_entry(&mut zip, &entry.file, doc, opts)?;
-            }
+            let doc = snapshot_by_id.get(entry.id.as_str()).ok_or_else(|| {
+                AppError::FileIO(format!(
+                    "missing snapshot payload for manifest reference {}",
+                    entry.id
+                ))
+            })?;
+            let synced =
+                indexed_payload_with_manifest_name(doc, &entry.id, &entry.name, "snapshot")?;
+            write_zip_json_entry(&mut zip, &entry.file, &synced, opts)?;
         }
         if !bundle.history.is_empty() {
             write_zip_json_entry(&mut zip, ".history.json", &bundle.history, opts)?;
@@ -1107,9 +1133,32 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
             write_zip_json_entry(&mut zip, ".snapshots.json", &bundle.snapshots, opts)?;
         }
         zip.finish().map_err(|e| AppError::FileIO(e.to_string()))?;
+        Ok(())
+    })();
+
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(error);
     }
 
     if let Err(error) = run_before_destination_mutation_hook(path, &tmp_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(error);
+    }
+
+    let mut expected_extra_entries = Vec::new();
+    if !bundle.history.is_empty() {
+        expected_extra_entries.push(".history.json");
+    }
+    if bundle.manifest.snapshot_files.is_empty() && !bundle.snapshots.is_empty() {
+        expected_extra_entries.push(".snapshots.json");
+    }
+
+    if let Err(error) = validate_archive_manifest_and_entries(
+        Path::new(&tmp_path),
+        &bundle.manifest,
+        &expected_extra_entries,
+    ) {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(error);
     }
@@ -1119,6 +1168,21 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
     }
     std::fs::rename(&tmp_path, path)?;
     Ok(())
+}
+
+fn indexed_payload_with_manifest_name(
+    value: &Value,
+    id: &str,
+    name: &str,
+    kind: &str,
+) -> Result<Value, AppError> {
+    let mut object = value.as_object().cloned().ok_or_else(|| {
+        AppError::FileIO(format!(
+            "{kind} payload for manifest reference {id} must be a JSON object"
+        ))
+    })?;
+    object.insert("name".to_string(), Value::String(name.to_string()));
+    Ok(Value::Object(object))
 }
 
 fn write_zip_entry<W: Write + Seek>(
@@ -2383,6 +2447,201 @@ mod tests {
 
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(bad_manifest_path);
+    }
+
+    #[test]
+    fn write_project_archive_v4_matches_flat_streaming_contract_without_logical_folders() {
+        let path = temp_project_path("write-v4-flat");
+        let table = table_doc("table-1", "data");
+        let graph = graph_doc("graph-1", "data");
+        let fit = fit_doc("fit-1", "data");
+        let tabulate = tabulate_doc("tab-1", "data");
+        let snapshot = snapshot_doc("snap-1", "data");
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-09-01T00:00:00Z".to_string(),
+            vec![table],
+            vec![graph],
+            vec![fit],
+            vec![tabulate],
+            vec![
+                "Root".to_string(),
+                "Root/Nested".to_string(),
+                "Root/Nested/Leaf".to_string(),
+            ],
+            &HashMap::from([("table-1".to_string(), "Root/Nested".to_string())]),
+            &HashMap::from([("graph-1".to_string(), "Root/Nested/Leaf".to_string())]),
+            &HashMap::from([("fit-1".to_string(), "Root/Nested/Leaf".to_string())]),
+            &HashMap::from([("tab-1".to_string(), "Root".to_string())]),
+            vec![json!({"event": "save"})],
+            vec![snapshot],
+        )
+        .unwrap();
+
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let file = std::fs::File::open(&path).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let mut entries = HashSet::new();
+        for index in 0..zip.len() {
+            let entry = zip.by_index(index).unwrap();
+            entries.insert(entry.name().to_string());
+        }
+
+        let expected = HashSet::from([
+            "manifest.json".to_string(),
+            "data/data.sptb".to_string(),
+            "data/data.spgh".to_string(),
+            "data/data.spf".to_string(),
+            "data/data-2.spf".to_string(),
+            "snapshots/data.spf".to_string(),
+            ".history.json".to_string(),
+        ]);
+        assert_eq!(entries, expected);
+        assert!(!entries.contains(".snapshots.json"));
+        assert!(entries.iter().all(|entry| !entry.starts_with("tables/")));
+        assert!(entries.iter().all(|entry| !entry.starts_with("graphs/")));
+        assert!(entries.iter().all(|entry| !entry.ends_with('/')));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn write_project_archive_v4_rejects_missing_indexed_payload_and_preserves_destination() {
+        let path = temp_project_path("write-v4-missing-fit-payload");
+        std::fs::write(&path, b"original-bytes").unwrap();
+        let original_bytes = std::fs::read(&path).unwrap();
+
+        let mut bundle = build_bundle(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-09-01T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "data")],
+            vec![graph_doc("graph-1", "data")],
+            vec![fit_doc("fit-1", "data")],
+            vec![tabulate_doc("tab-1", "data")],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        bundle.fit_y_by_x.clear();
+        let error = write_project_archive(&bundle, path.to_str().unwrap()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            AppError::FileIO(message)
+            if message.contains("missing fit payload for manifest reference fit-1")
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
+        assert!(!std::path::PathBuf::from(format!("{}.tmp", path.to_string_lossy())).exists());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn write_project_archive_validates_completed_temp_archive_before_replace() {
+        let path = temp_project_path("write-v4-validation-before-replace");
+        std::fs::write(&path, b"destination-before-save").unwrap();
+        let original_bytes = std::fs::read(&path).unwrap();
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-09-01T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        install_test_before_destination_mutation_hook(Some(Box::new(move |_dest, tmp_path| {
+            let mut bytes = std::fs::read(tmp_path)?;
+            bytes.truncate(bytes.len().saturating_sub(24));
+            std::fs::write(tmp_path, bytes)?;
+            Ok(())
+        })));
+
+        let error = write_project_archive(&bundle, path.to_str().unwrap()).unwrap_err();
+        install_test_before_destination_mutation_hook(None);
+
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("Invalid project archive during validation")));
+        assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
+        assert!(!std::path::PathBuf::from(format!("{}.tmp", path.to_string_lossy())).exists());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn write_project_archive_v4_syncs_indexed_body_name_to_manifest_name() {
+        let path = temp_project_path("write-v4-body-name-sync");
+        let mut bundle = build_bundle(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-09-01T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "data")],
+            vec![graph_doc("graph-1", "data")],
+            vec![fit_doc("fit-1", "data")],
+            vec![tabulate_doc("tab-1", "data")],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![snapshot_doc("snap-1", "data")],
+        )
+        .unwrap();
+
+        bundle.fit_y_by_x[0]["name"] = Value::String("stale-fit-name".to_string());
+        bundle.tabulates[0]["name"] = Value::String("stale-tab-name".to_string());
+        bundle.snapshots[0]["name"] = Value::String("stale-snapshot-name".to_string());
+
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+
+        let file = std::fs::File::open(&path).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        for fit_ref in &bundle.manifest.fit_y_by_x_files {
+            let mut entry = zip.by_name(&fit_ref.file).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value.get("name").and_then(Value::as_str), Some(fit_ref.name.as_str()));
+        }
+        for tab_ref in &bundle.manifest.tabulate_files {
+            let mut entry = zip.by_name(&tab_ref.file).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value.get("name").and_then(Value::as_str), Some(tab_ref.name.as_str()));
+        }
+        for snap_ref in &bundle.manifest.snapshot_files {
+            let mut entry = zip.by_name(&snap_ref.file).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                value.get("name").and_then(Value::as_str),
+                Some(snap_ref.name.as_str())
+            );
+        }
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -381,6 +381,9 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 snapshot,
                 &bundle.manifest,
                 &bundle.graphs,
+                &bundle.fit_y_by_x,
+                &bundle.tabulates,
+                &bundle.snapshots,
                 &temp_path,
                 temp_file,
                 total_rows,
@@ -430,6 +433,9 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         snapshot: &SaveSnapshot,
         manifest: &ProjectManifest,
         graph_docs: &[GraphDoc],
+        fit_docs: &[serde_json::Value],
+        tabulate_docs: &[serde_json::Value],
+        snapshot_docs: &[serde_json::Value],
         temp_path: &Path,
         temp_file: std::fs::File,
         total_rows: usize,
@@ -451,9 +457,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             .iter()
             .map(|doc| (doc.id.as_str(), doc))
             .collect();
-        let fit_by_id: HashMap<&str, &serde_json::Value> = snapshot
-            .request
-            .fit_y_by_x
+        let fit_by_id: HashMap<&str, &serde_json::Value> = fit_docs
             .iter()
             .filter_map(|value| {
                 value
@@ -462,9 +466,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                     .map(|id| (id, value))
             })
             .collect();
-        let tabulate_by_id: HashMap<&str, &serde_json::Value> = snapshot
-            .request
-            .tabulates
+        let tabulate_by_id: HashMap<&str, &serde_json::Value> = tabulate_docs
             .iter()
             .filter_map(|value| {
                 value
@@ -473,9 +475,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                     .map(|id| (id, value))
             })
             .collect();
-        let snapshot_by_id: HashMap<&str, &serde_json::Value> = snapshot
-            .request
-            .snapshots
+        let snapshot_by_id: HashMap<&str, &serde_json::Value> = snapshot_docs
             .iter()
             .filter_map(|value| {
                 value
@@ -1548,6 +1548,68 @@ mod tests {
         assert!(entries.iter().all(|entry| !entry.starts_with("tables/")));
         assert!(entries.iter().all(|entry| !entry.starts_with("graphs/")));
         assert!(entries.iter().all(|entry| !entry.ends_with('/')));
+
+        let _ = std::fs::remove_file(destination);
+    }
+
+    #[test]
+    fn stream_writer_serializes_manifest_normalized_body_names_for_indexed_docs() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_named_dataset(&state, "table_1", "data");
+        let destination = temp_path("v4-body-name-sync");
+        let snapshot = save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::new(&state, &guard);
+        writer.write(&snapshot, &destination, None).unwrap();
+
+        let file = std::fs::File::open(&destination).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let mut manifest_entry = zip.by_name("manifest.json").unwrap();
+        let mut manifest_bytes = Vec::new();
+        manifest_entry.read_to_end(&mut manifest_bytes).unwrap();
+        drop(manifest_entry);
+        let manifest: crate::services::spprj_archive::ProjectManifest =
+            serde_json::from_slice(&manifest_bytes).unwrap();
+
+        for fit_ref in &manifest.fit_y_by_x_files {
+            let mut entry = zip.by_name(&fit_ref.file).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value.get("id").and_then(serde_json::Value::as_str), Some(fit_ref.id.as_str()));
+            assert_eq!(value.get("name").and_then(serde_json::Value::as_str), Some(fit_ref.name.as_str()));
+        }
+
+        for tabulate_ref in &manifest.tabulate_files {
+            let mut entry = zip.by_name(&tabulate_ref.file).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                value.get("id").and_then(serde_json::Value::as_str),
+                Some(tabulate_ref.id.as_str())
+            );
+            assert_eq!(
+                value.get("name").and_then(serde_json::Value::as_str),
+                Some(tabulate_ref.name.as_str())
+            );
+        }
+
+        for snapshot_ref in &manifest.snapshot_files {
+            let mut entry = zip.by_name(&snapshot_ref.file).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                value.get("id").and_then(serde_json::Value::as_str),
+                Some(snapshot_ref.id.as_str())
+            );
+            assert_eq!(
+                value.get("name").and_then(serde_json::Value::as_str),
+                Some(snapshot_ref.name.as_str())
+            );
+        }
 
         let _ = std::fs::remove_file(destination);
     }
