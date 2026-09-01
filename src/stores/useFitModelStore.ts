@@ -5,6 +5,7 @@ import {
   FitModelValidationError,
   validateFitModelDefinition,
 } from "@/components/fitModel/fitModelConfig";
+import type { FieldRef } from "@/graphCore";
 import { useProjectStore } from "@/stores/useProjectStore";
 import type { FitModelItem, FitModelTerm } from "@/types/fitModel";
 import { assertProjectMutable } from "@/utils/saveReadOnly";
@@ -39,10 +40,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function cloneResponse(value: { name: string; type: "continuous" | "ordinal" | "nominal" }): {
-  name: string;
-  type: "continuous" | "ordinal" | "nominal";
-} {
+function cloneResponse(value: FieldRef): FieldRef {
   return { name: value.name, type: value.type };
 }
 
