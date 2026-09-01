@@ -254,7 +254,7 @@ pub fn fit_linear_model(
         ill_conditioned,
     );
 
-    Ok(FitModelResult::Fitted(crate::models::fit_model::FitModelFittedResult {
+    Ok(FitModelResult::Fitted(Box::new(crate::models::fit_model::FitModelFittedResult {
         used_rows: n as u64,
         excluded_rows: input.excluded_rows,
         confidence_level,
@@ -304,7 +304,7 @@ pub fn fit_linear_model(
         plot_rows,
         plot_rows_sampled: sampled,
         warnings,
-    }))
+    })))
 }
 
 fn parameter_estimates(
@@ -509,7 +509,7 @@ fn deterministic_rank_grid(logical_n: u64, max_points: usize) -> Vec<u64> {
     }
 
     let mut ranks = std::collections::BTreeSet::new();
-    let center = (logical_n + 1) / 2;
+    let center = logical_n.div_ceil(2);
     ranks.insert(1_u64);
     ranks.insert(center);
     ranks.insert(logical_n);
@@ -525,7 +525,7 @@ fn deterministic_rank_grid(logical_n: u64, max_points: usize) -> Vec<u64> {
         ranks.insert(rank.clamp(1, logical_n));
     }
 
-    let mut sorted = ranks.into_iter().collect::<Vec<_>>();
+    let sorted = ranks.into_iter().collect::<Vec<_>>();
     if sorted.len() > max_points {
         let mut selected = Vec::with_capacity(max_points);
         for index in 0..max_points {
@@ -691,7 +691,8 @@ mod tests {
     use statrs::distribution::{ContinuousCDF, StudentsT};
 
     use crate::engine::fit_model::ols::{fit_linear_model, FitModelData};
-    use crate::engine::fit_model::{resolve_terms, ModelMatrixSpec};
+    use crate::engine::fit_model::ModelMatrixSpec;
+    use crate::engine::fit_model::terms::resolve_terms;
     use crate::models::fit_model::{
         FitModelCenteringMethod, FitModelNotComputableReason, FitModelResult, FitModelTerm,
         FitModelTermKind, FitModelWarningCode,

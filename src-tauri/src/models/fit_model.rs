@@ -145,7 +145,7 @@ pub struct FitModelNotComputableResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FitModelResult {
-    Fitted(FitModelFittedResult),
+    Fitted(Box<FitModelFittedResult>),
     NotComputable(FitModelNotComputableResult),
 }
 
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn fit_model_result_serializes_variant_kind_tags() {
-        let fitted = FitModelResult::Fitted(FitModelFittedResult {
+        let fitted = FitModelResult::Fitted(Box::new(FitModelFittedResult {
             used_rows: 2,
             excluded_rows: 0,
             confidence_level: 0.95,
@@ -208,7 +208,7 @@ mod tests {
             plot_rows: vec![],
             plot_rows_sampled: false,
             warnings: vec![],
-        });
+        }));
         let not_computable = FitModelResult::NotComputable(FitModelNotComputableResult {
             reason: FitModelNotComputableReason::InsufficientRows,
             used_rows: 1,

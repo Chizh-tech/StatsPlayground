@@ -7700,7 +7700,7 @@ fn fit_model_row_index(value: Value) -> Option<u64> {
         Value::UTinyInt(inner) if inner > 0 => Some(inner as u64),
         Value::USmallInt(inner) if inner > 0 => Some(inner as u64),
         Value::UInt(inner) if inner > 0 => Some(inner as u64),
-        Value::UBigInt(inner) if inner > 0 => Some(inner as u64),
+        Value::UBigInt(inner) if inner > 0 => Some(inner),
         _ => None,
     }
 }
@@ -8457,7 +8457,7 @@ mod tests {
                 column_names: vec!["A".into(), "B".into()],
             },
         ];
-        let resolved = crate::engine::fit_model::resolve_terms(&terms).expect("terms");
+        let resolved = crate::engine::fit_model::terms::resolve_terms(&terms).expect("terms");
         let mut names = Vec::new();
         for term in &resolved {
             for name in term.column_names() {

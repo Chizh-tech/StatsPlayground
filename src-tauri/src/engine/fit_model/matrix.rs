@@ -268,7 +268,7 @@ fn read_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::fit_model::resolve_terms;
+    use crate::engine::fit_model::terms::resolve_terms;
     use crate::models::fit_model::FitModelTerm;
 
     fn resolved_terms(terms: &[(&str, &[&str])]) -> Vec<ResolvedTerm> {
