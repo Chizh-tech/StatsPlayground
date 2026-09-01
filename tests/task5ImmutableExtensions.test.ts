@@ -54,6 +54,31 @@ requireIncludes(
   "className=\"ds-fixed-ext\"",
   "Workspace rename controls must render an immutable extension suffix element.",
 );
+assert.equal(
+  workspaceSource.includes("renameKindForId"),
+  false,
+  "Workspace must not derive immutable suffix kind via ID lookup/fallback.",
+);
+requireIncludes(
+  workspaceSource,
+  "projectFileExtension(\"table\")",
+  "Table rename suffix must use statically known table kind.",
+);
+requireIncludes(
+  workspaceSource,
+  "projectFileExtension(\"graph\")",
+  "Graph rename suffix must use statically known graph kind.",
+);
+requireIncludes(
+  workspaceSource,
+  "projectFileExtension(\"fitYByX\")",
+  "Fit Y by X rename suffix must use statically known fitYByX kind.",
+);
+requireIncludes(
+  workspaceSource,
+  "projectFileExtension(\"tabulate\")",
+  "Tabulate rename suffix must use statically known tabulate kind.",
+);
 requireIncludes(
   workspaceSource,
   "result.documentNameMigrations.length > 0",

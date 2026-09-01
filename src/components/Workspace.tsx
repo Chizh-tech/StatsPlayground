@@ -278,13 +278,6 @@ export function Workspace() {
     return `${basename}${projectFileExtension(kind)}`;
   }, []);
 
-  const renameKindForId = useCallback((id: string): ProjectDocumentKind => {
-    if (graphBuilders.some((item) => item.id === id)) return "graph";
-    if (fitYByXItems.some((item) => item.id === id)) return "fitYByX";
-    if (tabulates.some((item) => item.id === id)) return "tabulate";
-    return "table";
-  }, [fitYByXItems, graphBuilders, tabulates]);
-
   const invalidProjectNameMessage = useCallback((code: ProjectBasenameValidationError): string => {
     if (code === "controlChars") {
       return t("alert.invalidName.controlChars", {
@@ -1584,7 +1577,7 @@ export function Workspace() {
                 onClick={(e) => e.stopPropagation()}
                 autoFocus
               />
-              <span className="ds-fixed-ext">{projectFileExtension(renameKindForId(ds.id))}</span>
+              <span className="ds-fixed-ext">{projectFileExtension("table")}</span>
             </span>
           ) : (
             <span className="ds-name">{withProjectExtension(ds.name, "table")}</span>
@@ -1636,7 +1629,7 @@ export function Workspace() {
                 onClick={(e) => e.stopPropagation()}
                 autoFocus
               />
-              <span className="ds-fixed-ext">{projectFileExtension(renameKindForId(gb.id))}</span>
+              <span className="ds-fixed-ext">{projectFileExtension("graph")}</span>
             </span>
           ) : (
             <span className="ds-name">{withProjectExtension(gb.name, "graph")}</span>
@@ -1690,7 +1683,7 @@ export function Workspace() {
                 onClick={(event) => event.stopPropagation()}
                 autoFocus
               />
-              <span className="ds-fixed-ext">{projectFileExtension(renameKindForId(item.id))}</span>
+              <span className="ds-fixed-ext">{projectFileExtension("fitYByX")}</span>
             </span>
           ) : (
             <span className="ds-name">{withProjectExtension(item.name, "fitYByX")}</span>
@@ -1744,7 +1737,7 @@ export function Workspace() {
                 onClick={(e) => e.stopPropagation()}
                 autoFocus
               />
-              <span className="ds-fixed-ext">{projectFileExtension(renameKindForId(item.id))}</span>
+              <span className="ds-fixed-ext">{projectFileExtension("tabulate")}</span>
             </span>
           ) : (
             <span className="ds-name">{withProjectExtension(item.name, "tabulate")}</span>
