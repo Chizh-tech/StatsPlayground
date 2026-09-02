@@ -8,4 +8,5 @@ export {
   validateFolderOrFileName,
 } from "./useFolderStore";
 export { useFitYByXStore } from "./useFitYByXStore";
+export { useDistributionStore } from "./useDistributionStore";
 export { useTabulateStore } from "./useTabulateStore";
