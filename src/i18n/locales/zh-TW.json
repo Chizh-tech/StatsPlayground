@@ -304,7 +304,9 @@
       },
       "term": {
         "Intercept": "截距",
-        "Slope": "斜率"
+        "Slope": "斜率",
+        "Linear": "一次項",
+        "Quadratic": "二次項"
       },
       "effectSize": {
         "etaSquared": "Eta 平方",

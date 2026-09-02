@@ -518,6 +518,8 @@ function testLocaleParityForKnownReportLabels(): void {
     "fitYByX.report.source.Total Error",
     "fitYByX.report.term.Intercept",
     "fitYByX.report.term.Slope",
+    "fitYByX.report.term.Linear",
+    "fitYByX.report.term.Quadratic",
     "fitYByX.report.section.effectSummary",
     "fitYByX.report.section.predictionProfiler",
     "fitYByX.report.section.actualByPredicted",
@@ -626,6 +628,68 @@ function testKnownBivariateLabelsLocalizeOutsideEnglishAndUnknownLabelsPassThrou
   assert.equal(model.sections[4]?.rows[1]?.values[0], "Mystery Source");
   assert.equal(model.sections[5]?.rows[0]?.values[0], "截距");
   assert.equal(model.sections[5]?.rows[1]?.values[0], "斜率");
+
+  const quadraticLabel = createFitYByXReportViewModel({
+    item: createItem({
+      personality: "bivariate",
+      response: { name: "直径", type: "continuous" },
+      factor: { name: "温度", type: "continuous" },
+    }),
+    state: makeSuccessState(makeBivariateResult({
+      constructModelEffects: "responseSurface",
+      parameterEstimates: [
+        {
+          term: "Intercept",
+          estimate: 1.2,
+          standardError: 0.1,
+          tRatio: 12,
+          pValue: 0.01,
+          lowerConfidenceLimit: 1.0,
+          upperConfidenceLimit: 1.4,
+        },
+        {
+          term: "Linear",
+          estimate: 0.3,
+          standardError: 0.05,
+          tRatio: 6,
+          pValue: 0.02,
+          lowerConfidenceLimit: 0.2,
+          upperConfidenceLimit: 0.4,
+        },
+        {
+          term: "Quadratic",
+          estimate: -0.01,
+          standardError: 0.005,
+          tRatio: -2,
+          pValue: 0.04,
+          lowerConfidenceLimit: -0.02,
+          upperConfidenceLimit: 0,
+        },
+      ],
+      effectSummary: [
+        {
+          term: "Linear",
+          estimate: 0.3,
+          standardError: 0.05,
+          tRatio: 6,
+          pValue: 0.02,
+          isSignificant: true,
+        },
+        {
+          term: "Quadratic",
+          estimate: -0.01,
+          standardError: 0.005,
+          tRatio: -2,
+          pValue: 0.04,
+          isSignificant: true,
+        },
+      ],
+    })),
+    t: zhCN,
+    datasetMissing: false,
+  });
+  assert.equal(quadraticLabel.sections[1]?.rows[0]?.values[0], "一次项");
+  assert.equal(quadraticLabel.sections[1]?.rows[1]?.values[0], "二次项");
 
   const rendered = model.sections.flatMap((section) => section.rows).flatMap((row) => row.values);
   assert.equal(rendered.includes("Model"), false);

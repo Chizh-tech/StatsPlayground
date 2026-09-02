@@ -304,7 +304,9 @@
       },
       "term": {
         "Intercept": "Hệ số chặn",
-        "Slope": "Hệ số góc"
+        "Slope": "Hệ số góc",
+        "Linear": "Hệ số bậc nhất",
+        "Quadratic": "Hệ số bậc hai"
       },
       "effectSize": {
         "etaSquared": "Eta bình phương",

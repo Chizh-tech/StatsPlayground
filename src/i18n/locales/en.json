@@ -305,7 +305,9 @@
       },
       "term": {
         "Intercept": "Intercept",
-        "Slope": "Slope"
+        "Slope": "Slope",
+        "Linear": "Linear",
+        "Quadratic": "Quadratic"
       },
       "effectSize": {
         "etaSquared": "Eta Squared",
