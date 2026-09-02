@@ -1,4 +1,6 @@
 import type { GraphDataFrame } from "./graphData";
+import type { FieldRef } from "../graphCore/types";
+import type { EmbeddedGraphConfig } from "./graphBuilder";
 
 export type FilterExprV1 =
   | { kind: "and"; exprs: FilterExprV1[] }
@@ -127,6 +129,30 @@ export interface SpecLimitsOverride {
   lsl: number | null;
   target: number | null;
   usl: number | null;
+}
+
+export interface DistributionAnalysisConfig {
+  confidenceLevel: number;
+  specLimits: Record<string, SpecLimitsOverride>;
+  fitDistributions: DistributionFitKind[];
+}
+
+export interface DistributionItem {
+  id: string;
+  name: string;
+  sourceDatasetId: string;
+  responses: FieldRef[];
+  weight: FieldRef | null;
+  frequency: FieldRef | null;
+  by: FieldRef[];
+  analysis: DistributionAnalysisConfig;
+  graphs: {
+    overview: EmbeddedGraphConfig;
+    boxPlot: EmbeddedGraphConfig;
+    ecdf: EmbeddedGraphConfig;
+    normalQuantile: EmbeddedGraphConfig;
+  };
+  createdAt: string;
 }
 
 export interface DistributionRequest {
