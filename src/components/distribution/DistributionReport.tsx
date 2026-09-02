@@ -6,6 +6,8 @@ import type {
   DistributionReportBlock,
 } from "@/types/distribution";
 
+import "../reportTable.css";
+
 import { ContinuousFitComparisonReport, ContinuousFitReport } from "./ContinuousFitReport";
 import { ProcessCapabilityReport } from "./ProcessCapabilityReport";
 
@@ -79,7 +81,7 @@ function GroupSection({
                 <section className="distribution-report-block distribution-table-pair">
                   <div>
                     <h3>{t("distribution.report.quantiles")}</h3>
-                    <table className="distribution-quantile-table">
+                    <table className="sp-fit-y-by-x-report-table distribution-quantile-table">
                       <thead>
                         <tr>
                           <th>{t("distribution.report.probability")}</th>
@@ -177,7 +179,7 @@ function SummaryDataTables({
 function SummaryTable({ title, rows }: { title: string; rows: Array<[string, number | string | null]> }) {
   const { t } = useTranslation();
   return (
-    <table className="distribution-summary-table">
+    <table className="sp-fit-y-by-x-report-table distribution-summary-table">
       <caption>{title}</caption>
       <tbody>
         {rows.map(([label, value]) => (

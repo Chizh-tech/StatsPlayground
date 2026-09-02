@@ -38,7 +38,7 @@ export function ProcessCapabilityReport({ data }: { data: ProcessCapabilityDataV
   return (
     <div className="distribution-capability-report">
       <div className="distribution-capability-summary">
-        <table>
+        <table className="sp-fit-y-by-x-report-table">
           <caption>{t("distribution.capability.specification")}</caption>
           <tbody>
             {specificationRows.map(([label, value]) => (
@@ -49,7 +49,7 @@ export function ProcessCapabilityReport({ data }: { data: ProcessCapabilityDataV
             ))}
           </tbody>
         </table>
-        <table>
+        <table className="sp-fit-y-by-x-report-table">
           <caption>{t("distribution.capability.processSummary")}</caption>
           <tbody>
             {summaryRows.map(([label, value]) => (
@@ -100,7 +100,7 @@ function IndexTable({
     maximumFractionDigits: 2,
   }).format(intervals.confidenceLevel);
   return (
-    <table>
+    <table className="sp-fit-y-by-x-report-table">
       <caption>{title}</caption>
       <thead>
         <tr>
@@ -143,7 +143,7 @@ function NonconformanceTable({ data }: { data: ProcessCapabilityDataV1["nonconfo
     ["total", data.observed.total, data.expectedWithin.total, data.expectedOverall.total],
   ] as const;
   return (
-    <table className="distribution-nonconformance-table">
+    <table className="sp-fit-y-by-x-report-table distribution-nonconformance-table">
       <caption>{t("distribution.capability.nonconformance")}</caption>
       <thead>
         <tr>

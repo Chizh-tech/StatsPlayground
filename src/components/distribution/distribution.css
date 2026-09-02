@@ -206,19 +206,17 @@
 }
 
 .distribution-quantile-table {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color, #c4c9d3);
-  border-collapse: collapse;
   font-variant-numeric: tabular-nums;
 }
 
-.distribution-quantile-table th,
-.distribution-quantile-table td {
-  padding: 4px 8px;
-  border: 1px solid var(--border-color, #c4c9d3);
-  text-align: right;
+.distribution-report-block .sp-fit-y-by-x-report-table th:last-child,
+.distribution-report-block .sp-fit-y-by-x-report-table td:last-child {
+  border-right: 1px solid var(--border-main);
+}
+
+.distribution-report-block .sp-fit-y-by-x-report-table tbody tr:last-child th,
+.distribution-report-block .sp-fit-y-by-x-report-table tbody tr:last-child td {
+  border-bottom: 1px solid var(--border-main);
 }
 
 .distribution-quantile-table th,
@@ -452,8 +450,10 @@
 
 .distribution-summary-tables {
   display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  grid-template-columns: repeat(2, max-content);
   gap: 18px;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .distribution-table-pair {
@@ -471,11 +471,6 @@
 }
 
 .distribution-summary-table {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color, #c4c9d3);
-  border-collapse: collapse;
   font-variant-numeric: tabular-nums;
 }
 
@@ -485,16 +480,8 @@
   font-weight: 600;
 }
 
-.distribution-summary-table th,
-.distribution-summary-table td {
-  padding: 4px 8px;
-  border: 1px solid var(--border-color, #c4c9d3);
-}
-
 .distribution-summary-table th {
   text-align: left;
-  color: var(--text-secondary);
-  font-weight: 500;
 }
 
 .distribution-summary-table td {
@@ -503,18 +490,13 @@
 
 .distribution-fit-tables {
   display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  grid-template-columns: repeat(2, max-content);
   gap: 18px;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .distribution-fit-table {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  border-width: 1px;
-  border-style: solid;
-  border-color: var(--border-main, #c4c9d3);
-  border-collapse: collapse;
   font-variant-numeric: tabular-nums;
 }
 
@@ -522,14 +504,6 @@
   padding: 6px 8px;
   text-align: left;
   font-weight: 650;
-}
-
-.distribution-fit-table th,
-.distribution-fit-table td {
-  padding: 5px 8px;
-  border-width: 1px;
-  border-style: solid;
-  border-color: var(--border-main, #c4c9d3);
 }
 
 .distribution-fit-table th {
@@ -571,9 +545,11 @@
 .distribution-capability-summary,
 .distribution-capability-indices {
   display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  grid-template-columns: repeat(2, max-content);
   gap: 18px;
   margin-top: 10px;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .distribution-capability-report,
@@ -584,11 +560,6 @@
 }
 
 .distribution-capability-report table {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color, #c4c9d3);
-  border-collapse: collapse;
   font-variant-numeric: tabular-nums;
 }
 
@@ -601,8 +572,6 @@
 
 .distribution-capability-report th,
 .distribution-capability-report td {
-  padding: 5px 8px;
-  border: 1px solid var(--border-color, #c4c9d3);
   text-align: right;
 }
 
