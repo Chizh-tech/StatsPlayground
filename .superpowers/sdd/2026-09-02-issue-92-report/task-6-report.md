@@ -5,7 +5,7 @@
 
 ## Commit
 - `d4c4c82` — `feat(report): add markdown editor and preview`
-- Pending cleanup commit to remove accidentally staged Playwright `.cache` artifacts and add an ignore rule.
+- `e4feb5d` — `chore(test): ignore playwright cache artifacts`
 
 ## Files
 - `package.json`
