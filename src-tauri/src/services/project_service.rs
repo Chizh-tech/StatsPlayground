@@ -1259,6 +1259,9 @@ mod tests {
             graph_folders,
             fit_y_by_x_folders,
             tabulate_folders,
+            workflows: Vec::new(),
+            logical_folders: Vec::new(),
+            workflow_runs: Vec::new(),
         }
     }
 
@@ -2242,6 +2245,11 @@ mod tests {
             fit_y_by_x_files: vec![],
             tabulate_files: vec![],
             snapshot_files: vec![],
+            workflow_files: vec![],
+            logical_folders: vec![],
+            workflow_runs: vec![],
+            lineage_graph: crate::services::workflow_domain::ProjectLineageGraph::default(),
+            relationships: vec![],
         };
 
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&file_path).unwrap());
@@ -2448,6 +2456,11 @@ mod tests {
             fit_y_by_x_files: vec![],
             tabulate_files: vec![],
             snapshot_files: vec![],
+            workflow_files: vec![],
+            logical_folders: vec![],
+            workflow_runs: vec![],
+            lineage_graph: crate::services::workflow_domain::ProjectLineageGraph::default(),
+            relationships: vec![],
         };
 
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&file_path).unwrap());
@@ -2560,6 +2573,11 @@ mod tests {
             fit_y_by_x_files: vec![],
             tabulate_files: vec![],
             snapshot_files: vec![],
+            workflow_files: vec![],
+            logical_folders: vec![],
+            workflow_runs: vec![],
+            lineage_graph: crate::services::workflow_domain::ProjectLineageGraph::default(),
+            relationships: vec![],
         };
 
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&file_path).unwrap());

@@ -187,8 +187,10 @@ The `.spprj` manifest gains additive, default-empty fields:
 
 - `lineageGraph`
 - `workflows`
-- `folders`
+- `logicalFolders`
 - `workflowRuns`
+
+The existing `folders: string[]` field remains unchanged because it is already part of the archive contract for legacy UI paths. `logicalFolders` carries the stable-ID hierarchy used by Workflow runs; replacing the existing field with structured objects would break compatibility.
 
 Workflow definitions are separately versioned documents indexed by the manifest. New fields use Serde defaults so existing archives load with empty lineage, Workflow, folder, and run collections.
 
