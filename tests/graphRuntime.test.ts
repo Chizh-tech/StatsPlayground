@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
 import { createEmbeddedGraphItem, normalizeGraphBuilderItem } from "../src/components/graphBuilder/graphBuilderMode.ts";
-import { buildGraphRuntimeModel } from "../src/components/graphBuilder/graphRuntimeModel.ts";
+import { buildEffectiveStyles, buildGraphRuntimeModel } from "../src/components/graphBuilder/graphRuntimeModel.ts";
 import { deriveGraphRequestParts } from "../src/components/graphBuilder/useGraphDataPipeline.ts";
 import type { DatasetMeta } from "../src/types/data.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
@@ -104,6 +104,49 @@ assert.deepEqual(
 const transposedRuntimeModel = buildGraphRuntimeModel(transposedInteractiveItem, metadata);
 assert.equal(transposedRuntimeModel.spec.transpose, true);
 assert.deepEqual(transposedRuntimeModel.spec.encoding, buildGraphRuntimeModel(interactiveItem, metadata).spec.encoding);
+
+const colorOnlyItem: GraphBuilderItem = {
+  ...interactiveItem,
+  modeStates: {
+    ...interactiveItem.modeStates,
+    twoD: {
+      ...interactiveItem.modeStates.twoD,
+      encoding: {
+        x: { name: "site", type: "nominal" },
+        y: { name: "height", type: "continuous" },
+        color: { name: "batch", type: "ordinal" },
+      },
+    },
+  },
+};
+assert.deepEqual(
+  buildGraphRuntimeModel(colorOnlyItem, metadata).spec.encoding.color,
+  { name: "batch", type: "ordinal" },
+  "runtime model must preserve color-only grouping for the renderer",
+);
+
+const stableRuntimeStyles = buildEffectiveStyles(
+  ["Beta", "Alpha"],
+  { Build: { Alpha: 0, Beta: 1 } },
+  "Build",
+  {},
+  [],
+  false,
+);
+assert.equal(stableRuntimeStyles.Alpha.point?.color, "#3b56c6");
+assert.equal(stableRuntimeStyles.Beta.point?.color, "#bf6e2e");
+
+const reconciledRuntimeStyles = buildEffectiveStyles(
+  ["Beta", "Alpha"],
+  undefined,
+  "Build",
+  {},
+  [],
+  false,
+  ["Alpha", "Beta"],
+);
+assert.equal(reconciledRuntimeStyles.Alpha.point?.color, "#3b56c6");
+assert.equal(reconciledRuntimeStyles.Beta.point?.color, "#bf6e2e");
 
 const fitYByXItem = createFitYByXItem({
   id: "fit-1",

@@ -50,7 +50,7 @@ export function resolveThemeGroupKeySets(
   legendGroupKeys: string[];
 } {
   return {
-    slotCandidateKeys: resolveStableGroupKeys(discoveredValues, dictionaryValues, valueOrder),
+    slotCandidateKeys: resolveStableGroupKeys(discoveredValues, dictionaryValues, undefined),
     legendGroupKeys: resolveStableGroupKeys(discoveredValues, [], valueOrder),
   };
 }

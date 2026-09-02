@@ -134,6 +134,20 @@ assert.deepEqual(partialOverride.EV2.line, autoOnly.EV2.line);
 assert.deepEqual(partialOverride.EV2.fill, autoOnly.EV2.fill);
 assert.deepEqual(partialOverride.EV2.gradient, autoOnly.EV2.gradient);
 
+const widthOnlyOverride = buildEffectiveGroupStyles(
+  ["EV", "EV1", "EV2"],
+  remountSlots,
+  "Build",
+  { EV2: { line: { lineWidth: 5 } } },
+  [],
+  true,
+);
+assert.deepEqual(
+  widthOnlyOverride.EV2.line,
+  { ...autoOnly.EV2.line, lineWidth: 5 },
+  "partial mark overrides must retain the slot-aware automatic color",
+);
+
 assert.deepEqual(
   normalizeGroupThemeSlots({
     Build: {

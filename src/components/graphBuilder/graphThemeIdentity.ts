@@ -285,10 +285,10 @@ export function buildEffectiveGroupStyles(
 
     const user = userStyles[groupKey];
     out[groupKey] = {
-      line: user?.line ?? automatic.line,
-      fill: user?.fill ?? automatic.fill,
-      point: user?.point ?? automatic.point,
-      gradient: user?.gradient ?? automatic.gradient,
+      line: { ...automatic.line, ...user?.line },
+      fill: { ...automatic.fill, ...user?.fill },
+      point: { ...automatic.point, ...user?.point },
+      gradient: { ...automatic.gradient, ...user?.gradient },
     };
   }
 

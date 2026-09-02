@@ -36,4 +36,17 @@ assert.deepEqual(
   "no frame-backed discovery should not produce persistent or legend group keys",
 );
 
+assert.deepEqual(
+  resolveThemeGroupKeySets(
+    ["West", "Central", "East"],
+    ["East", "West", "Central"],
+    ["West", "East", "Central"],
+  ),
+  {
+    slotCandidateKeys: ["Central", "East", "West"],
+    legendGroupKeys: ["West", "East", "Central"],
+  },
+  "Value Order may reorder the legend but must not reassign initial theme slots",
+);
+
 console.log("graph group order regressions passed");
