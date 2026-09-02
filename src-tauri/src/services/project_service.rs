@@ -35,6 +35,8 @@ pub struct OpenProjectResult {
     #[serde(default)]
     pub fit_y_by_x: Vec<serde_json::Value>,
     #[serde(default)]
+    pub reports: Vec<serde_json::Value>,
+    #[serde(default)]
     pub tabulates: Vec<serde_json::Value>,
     /// All folder paths that exist in the project (including empty ones).
     #[serde(default)]
@@ -47,6 +49,8 @@ pub struct OpenProjectResult {
     pub graph_folders: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub fit_y_by_x_folders: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub report_folders: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub document_name_migrations: Vec<DocumentNameMigration>,
     #[serde(default)]
@@ -137,6 +141,8 @@ impl<'a> ProjectService<'a> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            &empty_folders,
             &empty_folders,
             &empty_folders,
             &empty_folders,
@@ -278,11 +284,13 @@ impl<'a> ProjectService<'a> {
             snapshots: bundle.snapshots,
             graph_builders,
             fit_y_by_x: bundle.fit_y_by_x,
+            reports: bundle.reports,
             tabulates: bundle.tabulates,
             folders,
             table_folders,
             graph_folders,
             fit_y_by_x_folders,
+            report_folders: bundle.manifest.report_folders,
             document_name_migrations,
             dataset_name_migrations,
             requires_migration,
@@ -1240,11 +1248,13 @@ mod tests {
         snapshots: Vec<serde_json::Value>,
         graph_builders: Vec<serde_json::Value>,
         fit_y_by_x: Vec<serde_json::Value>,
+        reports: Vec<serde_json::Value>,
         tabulates: Vec<serde_json::Value>,
         folders: Vec<String>,
         table_folders: HashMap<String, String>,
         graph_folders: HashMap<String, String>,
         fit_y_by_x_folders: HashMap<String, String>,
+        report_folders: HashMap<String, String>,
         tabulate_folders: HashMap<String, String>,
     ) -> SaveProjectRequest {
         SaveProjectRequest {
@@ -1253,11 +1263,13 @@ mod tests {
             snapshots,
             graph_builders,
             fit_y_by_x,
+            reports,
             tabulates,
             folders,
             table_folders,
             graph_folders,
             fit_y_by_x_folders,
+            report_folders,
             tabulate_folders,
         }
     }
@@ -1271,6 +1283,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -1733,6 +1747,12 @@ mod tests {
             "response": { "name": "amount", "type": "continuous" },
             "factor": { "name": "category", "type": "nominal" }
         })];
+        let reports = vec![serde_json::json!({
+            "schemaVersion": 1,
+            "id": "report-1",
+            "name": "Report 1",
+            "markdown": "# Report body"
+        })];
         let tabulates = vec![serde_json::json!({
             "id": "tab-1",
             "name": "Summary",
@@ -1746,6 +1766,7 @@ mod tests {
             HashMap::from([("preserve-id".to_string(), "Analysis/Yearly".to_string())]);
         let graph_folders = HashMap::from([("graph-1".to_string(), "Analysis".to_string())]);
         let fit_y_by_x_folders = HashMap::from([("fit-1".to_string(), "Analysis".to_string())]);
+        let report_folders = HashMap::from([("report-1".to_string(), "Analysis".to_string())]);
         let tabulate_folders =
             HashMap::from([("tab-1".to_string(), "Analysis/Yearly".to_string())]);
 
@@ -1758,11 +1779,13 @@ mod tests {
                     snapshots.clone(),
                     graph_builders.clone(),
                     fit_y_by_x.clone(),
+                    reports.clone(),
                     tabulates.clone(),
                     folders.clone(),
                     table_folders.clone(),
                     graph_folders.clone(),
                     fit_y_by_x_folders.clone(),
+                    report_folders.clone(),
                     tabulate_folders.clone(),
                 ),
                 None,
@@ -1795,11 +1818,21 @@ mod tests {
                 "factor": { "name": "category", "type": "nominal" }
             })]
         );
+        assert_eq!(
+            reopened.reports,
+            vec![serde_json::json!({
+                "schemaVersion": 1,
+                "id": "report-1",
+                "name": "Report 1",
+                "markdown": "# Report body"
+            })]
+        );
         assert_eq!(reopened.tabulates, tabulates);
         assert_eq!(reopened.folders, folders);
         assert_eq!(reopened.table_folders, table_folders);
         assert_eq!(reopened.graph_folders, graph_folders);
         assert_eq!(reopened.fit_y_by_x_folders, fit_y_by_x_folders);
+        assert_eq!(reopened.report_folders, report_folders);
         assert_eq!(reopened.tabulate_folders, tabulate_folders);
 
         let restored_display = reopened_state.column_display.lock().unwrap();
@@ -2234,11 +2267,13 @@ mod tests {
                 serde_json::json!({"id": "f3", "name": "A/B"}),
             ],
             fit_y_by_x_folders: HashMap::new(),
+            report_folders: HashMap::new(),
             tabulates: vec![
                 serde_json::json!({"id": "tb1", "name": "model"}),
                 serde_json::json!({"id": "tb2", "name": "A/B"}),
             ],
             tabulate_folders: HashMap::new(),
+            report_files: vec![],
             fit_y_by_x_files: vec![],
             tabulate_files: vec![],
             snapshot_files: vec![],
@@ -2443,8 +2478,10 @@ mod tests {
             graph_folders: Some(HashMap::new()),
             fit_y_by_x: vec![],
             fit_y_by_x_folders: HashMap::new(),
+            report_folders: HashMap::new(),
             tabulates: vec![],
             tabulate_folders: HashMap::new(),
+            report_files: vec![],
             fit_y_by_x_files: vec![],
             tabulate_files: vec![],
             snapshot_files: vec![],
@@ -2507,6 +2544,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &folders,
             &folders,
             &folders,
             &folders,
@@ -2555,8 +2594,10 @@ mod tests {
             graph_folders: Some(HashMap::new()),
             fit_y_by_x: vec![],
             fit_y_by_x_folders: HashMap::new(),
+            report_folders: HashMap::new(),
             tabulates: vec![],
             tabulate_folders: HashMap::new(),
+            report_files: vec![],
             fit_y_by_x_files: vec![],
             tabulate_files: vec![],
             snapshot_files: vec![],

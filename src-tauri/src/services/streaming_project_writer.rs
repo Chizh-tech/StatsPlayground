@@ -351,11 +351,13 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             placeholder_tables,
             graph_docs,
             snapshot.request.fit_y_by_x.clone(),
+            snapshot.request.reports.clone(),
             snapshot.request.tabulates.clone(),
             snapshot.request.folders.clone(),
             &snapshot.request.table_folders,
             &snapshot.request.graph_folders,
             &snapshot.request.fit_y_by_x_folders,
+            &snapshot.request.report_folders,
             &snapshot.request.tabulate_folders,
             snapshot.request.history.clone(),
             snapshot.request.snapshots.clone(),
@@ -381,6 +383,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 &bundle.manifest,
                 &bundle.graphs,
                 &bundle.fit_y_by_x,
+                &bundle.reports,
                 &bundle.tabulates,
                 &bundle.snapshots,
                 &temp_path,
@@ -433,6 +436,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         manifest: &ProjectManifest,
         graph_docs: &[GraphDoc],
         fit_docs: &[serde_json::Value],
+        report_docs: &[serde_json::Value],
         tabulate_docs: &[serde_json::Value],
         snapshot_docs: &[serde_json::Value],
         temp_path: &Path,
@@ -457,6 +461,15 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             .map(|doc| (doc.id.as_str(), doc))
             .collect();
         let fit_by_id: HashMap<&str, &serde_json::Value> = fit_docs
+            .iter()
+            .filter_map(|value| {
+                value
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|id| (id, value))
+            })
+            .collect();
+        let report_by_id: HashMap<&str, &serde_json::Value> = report_docs
             .iter()
             .filter_map(|value| {
                 value
@@ -696,6 +709,19 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
             serde_json::to_writer(&mut zip, fit_doc)
                 .map_err(|e| AppError::FileIO(format!("failed to serialize fit doc: {e}")))?;
+        }
+
+        for report_ref in &manifest.report_files {
+            let report_doc = report_by_id.get(report_ref.id.as_str()).ok_or_else(|| {
+                AppError::FileIO(format!(
+                    "missing report payload for manifest reference {}",
+                    report_ref.id
+                ))
+            })?;
+            zip.start_file(&report_ref.file, file_opts)
+                .map_err(|e| AppError::FileIO(e.to_string()))?;
+            serde_json::to_writer(&mut zip, report_doc)
+                .map_err(|e| AppError::FileIO(format!("failed to serialize report doc: {e}")))?;
         }
 
         for tabulate_ref in &manifest.tabulate_files {
@@ -1285,11 +1311,13 @@ mod tests {
                     "graphType": "line",
                 })],
                 fit_y_by_x: vec![serde_json::json!({"id": "fit-1"})],
+                reports: Vec::new(),
                 tabulates: vec![serde_json::json!({"id": "tab-1"})],
                 folders: vec!["Bench".to_string(), "Bench/Sub".to_string()],
                 table_folders: HashMap::new(),
                 graph_folders: HashMap::new(),
                 fit_y_by_x_folders: HashMap::new(),
+                report_folders: HashMap::new(),
                 tabulate_folders: HashMap::new(),
             },
         }
@@ -1332,6 +1360,7 @@ mod tests {
                         "tableFolders": {},
                         "graphFolders": {},
                         "fitYByXFolders": {},
+                        "reportFolders": {},
                         "tabulateFolders": {}
                     }
                 })],
@@ -1347,6 +1376,7 @@ mod tests {
                     "response": { "name": "y", "type": "continuous" },
                     "factor": { "name": "x", "type": "continuous" }
                 })],
+                reports: Vec::new(),
                 tabulates: vec![serde_json::json!({
                     "id": "tab-1",
                     "name": "data",
@@ -1369,6 +1399,7 @@ mod tests {
                     "fit-1".to_string(),
                     "Root/Nested/Leaf".to_string(),
                 )]),
+                report_folders: HashMap::new(),
                 tabulate_folders: HashMap::from([("tab-1".to_string(), "Root".to_string())]),
             },
         }
