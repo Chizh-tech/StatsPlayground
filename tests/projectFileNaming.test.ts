@@ -13,6 +13,7 @@ assert.equal(projectFileExtension("table"), ".sptb");
 assert.equal(projectFileExtension("graph"), ".spgh");
 assert.equal(projectFileExtension("fitYByX"), ".spf");
 assert.equal(projectFileExtension("tabulate"), ".spf");
+assert.equal(projectFileExtension("report"), ".sprp");
 assert.equal(projectFileExtension("snapshot"), ".json");
 assert.equal(
   formatSnapshotTimestamp(new Date(2026, 8, 1, 13, 34, 5)),
@@ -36,6 +37,10 @@ assert.equal(
 // Fit Y by X and Tabulate share the same .spf namespace.
 const spfNamespace = ["report", "report-2"];
 assert.equal(allocateProjectBasename("report", ".spf", spfNamespace), "report-3");
+
+// Report documents occupy their own .sprp namespace.
+assert.equal(allocateProjectBasename("report", ".sprp", ["report"]), "report-2");
+assert.equal(allocateProjectBasename("summary.sprp", ".sprp", []), "summary");
 
 // Case-insensitive collision and deterministic -N progression.
 assert.equal(allocateProjectBasename("DATA", ".sptb", ["data"]), "DATA-2");
@@ -66,6 +71,11 @@ assert.deepEqual(normalizeProjectBasenameInput("table.spgh", ".sptb"), {
   basename: "table.spgh",
   strippedExtension: false,
   wrongExtension: ".spgh",
+});
+assert.deepEqual(normalizeProjectBasenameInput("summary.sprp", ".sprp"), {
+  basename: "summary",
+  strippedExtension: true,
+  wrongExtension: null,
 });
 assert.deepEqual(normalizeProjectBasenameInput(".sptb", ".sptb"), {
   basename: "",
