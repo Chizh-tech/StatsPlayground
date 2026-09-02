@@ -18,6 +18,7 @@ use crate::services::save_coordinator::SaveGuard;
 use crate::services::spprj_archive::{
     self, GraphDoc, ProjectManifest, TableColumn, TableColumnFormat, TableDoc,
 };
+use crate::services::workflow_domain;
 use crate::state::AppState;
 
 const STREAM_VERSION: &str = "4.0.0";
@@ -344,7 +345,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             })
             .collect::<Vec<_>>();
 
-        let bundle = spprj_archive::build_bundle(
+        let bundle = spprj_archive::build_bundle_with_workflows(
             snapshot.destination_name.clone(),
             STREAM_VERSION.to_string(),
             snapshot.current_project.created_at.clone(),
@@ -361,6 +362,9 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             &snapshot.request.tabulate_folders,
             snapshot.request.history.clone(),
             snapshot.request.snapshots.clone(),
+            snapshot.request.workflows.clone(),
+            snapshot.request.logical_folders.clone(),
+            snapshot.request.workflow_runs.clone(),
         )?;
 
         thread::scope(|scope| {
@@ -386,6 +390,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 &bundle.distributions,
                 &bundle.tabulates,
                 &bundle.snapshots,
+                &bundle.workflows,
                 &temp_path,
                 temp_file,
                 total_rows,
@@ -439,6 +444,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         distribution_docs: &[serde_json::Value],
         tabulate_docs: &[serde_json::Value],
         snapshot_docs: &[serde_json::Value],
+        workflow_docs: &[workflow_domain::WorkflowDefinition],
         temp_path: &Path,
         temp_file: std::fs::File,
         total_rows: usize,
@@ -495,6 +501,10 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                     .and_then(serde_json::Value::as_str)
                     .map(|id| (id, value))
             })
+            .collect();
+        let workflow_by_id: HashMap<&str, &workflow_domain::WorkflowDefinition> = workflow_docs
+            .iter()
+            .map(|workflow| (workflow.id.as_str(), workflow))
             .collect();
         let mut rows_written = 0usize;
 
@@ -755,6 +765,25 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
             serde_json::to_writer(&mut zip, snapshot_doc)
                 .map_err(|e| AppError::FileIO(format!("failed to serialize snapshot doc: {e}")))?;
+        }
+
+        for workflow_ref in &manifest.workflow_files {
+            let workflow_doc = workflow_by_id
+                .get(workflow_ref.id.as_str())
+                .ok_or_else(|| {
+                    AppError::FileIO(format!(
+                        "missing workflow payload for manifest reference {}",
+                        workflow_ref.id
+                    ))
+                })?;
+            let mut synced = (*workflow_doc).clone();
+            synced.name = workflow_ref.name.clone();
+            synced.revision = workflow_ref.revision;
+            zip.start_file(&workflow_ref.file, file_opts)
+                .map_err(|e| AppError::FileIO(e.to_string()))?;
+            serde_json::to_writer(&mut zip, &synced).map_err(|e| {
+                AppError::FileIO(format!("failed to serialize workflow doc: {e}"))
+            })?;
         }
 
         if !snapshot.request.history.is_empty() {
@@ -1111,6 +1140,7 @@ mod tests {
     use crate::models::project::ProjectInfo;
     use crate::models::save::{SavePhase, SaveProgress, SaveProjectRequest, SaveSnapshot};
     use crate::services::spprj_archive;
+    use crate::services::workflow_domain;
     use crate::state::AppState;
 
     use super::{
@@ -1322,6 +1352,9 @@ mod tests {
                 fit_y_by_x_folders: HashMap::new(),
                 distribution_folders: HashMap::new(),
                 tabulate_folders: HashMap::new(),
+                workflows: vec![],
+                logical_folders: vec![],
+                workflow_runs: vec![],
             },
         }
     }
@@ -1330,6 +1363,11 @@ mod tests {
         destination_path: &std::path::Path,
         datasets: Vec<crate::models::table::DatasetMeta>,
     ) -> SaveSnapshot {
+        let source_dataset_id = datasets
+            .first()
+            .expect("named-document fixture requires a dataset")
+            .id
+            .clone();
         let dataset_generations = datasets
             .iter()
             .map(|dataset| (dataset.id.clone(), 0_u64))
@@ -1374,7 +1412,7 @@ mod tests {
                 fit_y_by_x: vec![serde_json::json!({
                     "id": "fit-1",
                     "name": "data",
-                    "sourceDatasetId": "table_1",
+                    "sourceDatasetId": source_dataset_id,
                     "response": { "name": "y", "type": "continuous" },
                     "factor": { "name": "x", "type": "continuous" }
                 })],
@@ -1400,7 +1438,7 @@ mod tests {
                 tabulates: vec![serde_json::json!({
                     "id": "tab-1",
                     "name": "data",
-                    "sourceDatasetId": "table_1",
+                    "sourceDatasetId": source_dataset_id,
                     "rowFields": [],
                     "columnFields": [],
                     "statistics": []
@@ -1410,7 +1448,7 @@ mod tests {
                     "Root/Nested".to_string(),
                     "Root/Nested/Leaf".to_string(),
                 ],
-                table_folders: HashMap::from([("table_1".to_string(), "Root/Nested".to_string())]),
+                table_folders: HashMap::from([(source_dataset_id, "Root/Nested".to_string())]),
                 graph_folders: HashMap::from([(
                     "graph-1".to_string(),
                     "Root/Nested/Leaf".to_string(),
@@ -1424,8 +1462,141 @@ mod tests {
                     "Root/Nested".to_string(),
                 )]),
                 tabulate_folders: HashMap::from([("tab-1".to_string(), "Root".to_string())]),
+                workflows: vec![],
+                logical_folders: vec![],
+                workflow_runs: vec![],
             },
         }
+    }
+
+    fn workflow_doc(id: &str, name: &str, revision: u64) -> workflow_domain::WorkflowDefinition {
+        workflow_domain::WorkflowDefinition {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            format_version: "1".to_string(),
+            revision,
+            input_slots: vec![workflow_domain::InputSlot {
+                id: "workflow-input-1".to_string(),
+                name: "Input".to_string(),
+                output_port: workflow_domain::WorkflowPort {
+                    id: "workflow-input-1-output".to_string(),
+                    name: "output".to_string(),
+                    payload_kind: workflow_domain::PortPayloadKind::Table,
+                },
+                schema_contract: workflow_domain::SchemaContract {
+                    schema_fingerprint: "schema-1".to_string(),
+                    columns: vec![],
+                },
+                source_document_ref: None,
+            }],
+            operations: vec![workflow_domain::WorkflowOperationNode {
+                id: "workflow-operation-1".to_string(),
+                kind: workflow_domain::OperationKind::GraphGeneration,
+                schema_version: "1".to_string(),
+                configuration: Some(serde_json::json!({ "sourceDatasetId": "workflow-input-1" })),
+                input_ports: vec![workflow_domain::WorkflowPort {
+                    id: "graph-input".to_string(),
+                    name: "input".to_string(),
+                    payload_kind: workflow_domain::PortPayloadKind::Table,
+                }],
+                output_ports: vec![workflow_domain::WorkflowPort {
+                    id: "graph-output".to_string(),
+                    name: "output".to_string(),
+                    payload_kind: workflow_domain::PortPayloadKind::Graph,
+                }],
+            }],
+            edges: vec![
+                workflow_domain::WorkflowEdge {
+                    id: "workflow-edge-1".to_string(),
+                    kind: workflow_domain::WorkflowEdgeKind::Consumes,
+                    source: workflow_domain::WorkflowEndpoint {
+                        node_id: "workflow-input-1".to_string(),
+                        port_id: "workflow-input-1-output".to_string(),
+                    },
+                    target: workflow_domain::WorkflowEndpoint {
+                        node_id: "workflow-operation-1".to_string(),
+                        port_id: "graph-input".to_string(),
+                    },
+                },
+                workflow_domain::WorkflowEdge {
+                    id: "workflow-edge-2".to_string(),
+                    kind: workflow_domain::WorkflowEdgeKind::Produces,
+                    source: workflow_domain::WorkflowEndpoint {
+                        node_id: "workflow-operation-1".to_string(),
+                        port_id: "graph-output".to_string(),
+                    },
+                    target: workflow_domain::WorkflowEndpoint {
+                        node_id: "workflow-output-1".to_string(),
+                        port_id: "workflow-output-1-input".to_string(),
+                    },
+                },
+            ],
+            output_declarations: vec![workflow_domain::OutputDeclaration {
+                id: "workflow-output-1".to_string(),
+                name: "Output".to_string(),
+                input_port: workflow_domain::WorkflowPort {
+                    id: "workflow-output-1-input".to_string(),
+                    name: "input".to_string(),
+                    payload_kind: workflow_domain::PortPayloadKind::Graph,
+                },
+                output_port: workflow_domain::WorkflowPort {
+                    id: "workflow-output-1-output".to_string(),
+                    name: "output".to_string(),
+                    payload_kind: workflow_domain::PortPayloadKind::Graph,
+                },
+                source_endpoint: workflow_domain::WorkflowEndpoint {
+                    node_id: "workflow-operation-1".to_string(),
+                    port_id: "graph-output".to_string(),
+                },
+                artifact_kind: workflow_domain::ArtifactKind::Graph,
+            }],
+            layout: None,
+        }
+    }
+
+    #[test]
+    fn stream_writer_emits_indexed_workflow_json_entries() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_named_dataset(&state, "table_1", "data");
+        let destination = temp_path("workflow-indexed-save");
+        let mut snapshot = save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
+        snapshot.request.workflows = vec![workflow_doc("workflow-1", "Workflow 1", 2)];
+        snapshot.request.logical_folders = vec![workflow_domain::LogicalFolder {
+            id: "folder-run".to_string(),
+            name: "Run 1".to_string(),
+            kind: workflow_domain::LogicalFolderKind::WorkflowRun,
+            parent_folder_id: None,
+        }];
+        snapshot.request.workflow_runs = vec![workflow_domain::WorkflowRun {
+            id: "run-1".to_string(),
+            workflow_id: "workflow-1".to_string(),
+            workflow_revision: 2,
+            status: workflow_domain::WorkflowRunStatus::Pending,
+            started_at: Some("2026-09-02T00:00:00Z".to_string()),
+            completed_at: None,
+            input_bindings: vec![workflow_domain::WorkflowInputBinding {
+                slot_id: "workflow-input-1".to_string(),
+                table_document_id: "table_1".to_string(),
+            }],
+            schema_validation_report: None,
+            node_results: vec![],
+            output_bindings: vec![],
+            errors: vec![],
+            parent_folder_id: Some("folder-run".to_string()),
+        }];
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::new(&state, &guard);
+        writer.write(&snapshot, &destination, None).unwrap();
+
+        let reopened = spprj_archive::read_project_file(destination.to_str().unwrap()).unwrap();
+        assert_eq!(reopened.manifest.workflow_files.len(), 1);
+        assert_eq!(reopened.manifest.workflow_files[0].file, "workflows/workflow-1.json");
+        assert_eq!(reopened.workflows.len(), 1);
+        assert_eq!(reopened.workflows[0].revision, 2);
+
+        let _ = std::fs::remove_file(destination);
     }
 
     fn seed_named_dataset(
@@ -2060,7 +2231,10 @@ mod tests {
         let error = writer.write(&snapshot, &destination, None).unwrap_err();
         install_save_test_hook(None);
 
-        assert!(matches!(error, AppError::FileIO(message) if message.contains("graph name")));
+        assert!(
+            matches!(&error, AppError::FileIO(message) if message.contains("graph name")),
+            "unexpected validation error: {error:?}"
+        );
         assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 0);
         assert_eq!(std::fs::read(&destination).unwrap(), original_bytes);
         assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());

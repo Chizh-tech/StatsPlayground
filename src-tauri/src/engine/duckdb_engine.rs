@@ -1917,7 +1917,7 @@ impl DuckDbEngine {
                 "histogram" => want_histogram = true,
                 "heatmap" => want_heatmap = true,
                 "boxplot" => want_boxplot = true,
-                "summary" | "points" | "line" => want_summary = true,
+                "summary" | "points" | "line" | "normalcurve" => want_summary = true,
                 _ => {}
             }
         }
@@ -8009,6 +8009,61 @@ mod tests {
         assert_eq!(page.total_rows, 10_000);
         assert_eq!(page.rows.len(), 500);
         assert_eq!(page.columns.len(), 21);
+    }
+
+    #[test]
+    fn normal_curve_requests_summary_statistics() {
+        let db = DuckDbEngine::new_in_memory().unwrap();
+        db.create_empty_table(
+            "normal-curve-id",
+            "Normal Curve",
+            &["measurement".into()],
+            &["DOUBLE".into()],
+        )
+        .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO \"dataset_normal_curve_id\" (_row_id, measurement)
+                 VALUES (1, 1.0), (2, 2.0), (3, 3.0), (4, 4.0)",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "UPDATE _meta_datasets SET row_count = $1 WHERE id = $2",
+                params![4i64, "normal-curve-id"],
+            )
+            .unwrap();
+
+        let request = GraphDataRequest {
+            request_id: "req-normal-curve".into(),
+            dataset_id: "normal-curve-id".into(),
+            generation: 0,
+            fields: vec![GraphFieldBinding {
+                role: "y".into(),
+                column: "measurement".into(),
+            }],
+            filters: Vec::new(),
+            elements: vec![GraphElementRequest {
+                kind: "normalCurve".into(),
+                summary_stat: "none".into(),
+                correlation_method: None,
+            }],
+            sampling: GraphSampling::Full,
+            raw_point_budget: crate::models::graph_data::GRAPH_SCATTER_RENDER_BUDGET,
+            viewport: GraphViewport {
+                width: 1280,
+                height: 720,
+            },
+        };
+
+        let packets = db.collect_graph_aggregate_packets(&request).unwrap();
+        let [GraphAggregatePacket::Summary(summary)] = packets.as_slice() else {
+            panic!("normal curve must request exactly one summary packet");
+        };
+        assert_eq!(summary.summaries.len(), 1);
+        assert_eq!(summary.summaries[0].count, 4);
+        assert!((summary.summaries[0].mean - 2.5).abs() < f64::EPSILON);
     }
 
     fn benchmark_window_request(start: usize, count: usize) -> TableWindowRequest {

@@ -787,6 +787,7 @@
       "bar": "Cột",
       "correlationMatrix": "Ma trận tương quan",
       "histogram": "Histogram",
+      "normalCurve": "Đường cong phân phối chuẩn",
       "boxplot": "Boxplot",
       "smoother": "Làm mịn",
       "fitline": "Đường khớp",

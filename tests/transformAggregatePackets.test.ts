@@ -2181,3 +2181,261 @@ for (const element of [
   assert.match(tooltipText, /Unavailable\s*[:=]\s*Zero variance/i);
   assert.doesNotMatch(tooltipText, /graph\.correlation\./i);
 }
+
+{
+  const spec: GraphSpec = {
+    encoding: { x: { name: "measurement", type: "continuous" } },
+    elements: [
+      { kind: "histogram", enabled: true, options: { histStyle: "bar" } },
+      { kind: "normalCurve", enabled: true },
+    ],
+  };
+  const frame = baseFrame([
+    {
+      kind: "histogram",
+      yColumn: "measurement",
+      binCount: 8,
+      minValue: -4,
+      maxValue: 4,
+      missingCount: 0,
+      binWidth: 1,
+      totalCount: 100,
+      bins: Array.from({ length: 8 }, (_, index) => ({
+        binStart: index - 4,
+        binEnd: index - 3,
+        count: [0, 2, 14, 34, 34, 14, 2, 0][index],
+      })),
+    },
+    {
+      kind: "summary",
+      yColumn: "measurement",
+      summaries: [{
+        count: 100,
+        mean: 0,
+        median: 0,
+        stddev: 1,
+        min: -4,
+        max: 4,
+      }],
+    },
+  ]);
+
+  const option = buildGraph(spec, baseData(["measurement"], []), theme, undefined, frame)
+    .panels[0].option as Record<string, unknown>;
+  const series = panelSeries(option);
+  assert.ok(series.some((entry) => entry.type === "bar"), "histogram bars should remain visible");
+  const normal = series.find((entry) => String(entry.id ?? "").startsWith("__normal_curve_"));
+  assert.ok(normal, "Normal layer should emit an independent series");
+  assert.equal(normal.type, "line");
+  assert.equal(normal.smooth, true);
+  const points = normal.data as Array<[number, number]>;
+  assert.equal(points.length, 201);
+  assert.ok(points[100][1] > points[0][1], "the fitted density must peak above its left tail");
+  assert.ok(points[100][1] > points[200][1], "the fitted density must peak above its right tail");
+}
+
+{
+  const spec: GraphSpec = {
+    encoding: { x: { name: "measurement", type: "continuous" } },
+    elements: [{ kind: "normalCurve", enabled: true }],
+  };
+  const frame = baseFrame([{
+    kind: "summary",
+    yColumn: "measurement",
+    summaries: [{
+      count: 40,
+      mean: 10,
+      median: 10,
+      stddev: 2,
+      min: 2,
+      max: 18,
+    }],
+  }]);
+
+  const option = buildGraph(spec, baseData(["measurement"], []), theme, undefined, frame)
+    .panels[0].option as Record<string, unknown>;
+  const series = panelSeries(option);
+  assert.equal(series.some((entry) => entry.type === "bar"), false);
+  assert.ok(
+    series.some((entry) => String(entry.id ?? "").startsWith("__normal_curve_")),
+    "Normal layer must render without a Histogram layer",
+  );
+}
+
+{
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "category", type: "nominal" },
+      y: { name: "measurement", type: "continuous" },
+    },
+    elements: [{ kind: "normalCurve", enabled: true }],
+  };
+  const frame: GraphDataFrame = {
+    ...baseFrame([{
+      kind: "summary",
+      xColumn: "category",
+      yColumn: "measurement",
+      summaries: [
+        { category: "A", count: 50, mean: 0, median: 0, stddev: 1, min: -4, max: 4 },
+        { category: "B", count: 12, mean: 3, median: 3, stddev: 0, min: 3, max: 3 },
+      ],
+    }]),
+    dictionaries: { x: ["A", "B"] },
+  };
+
+  const option = buildGraph(
+    spec,
+    frameBackedAggregateData(["category", "measurement"], 62),
+    theme,
+    undefined,
+    frame,
+  ).panels[0].option as Record<string, unknown>;
+  const normalSeries = panelSeries(option).filter((entry) =>
+    String(entry.id ?? "").startsWith("__normal_cat_")
+  );
+  assert.equal(normalSeries.length, 1, "zero-variance categories must be skipped");
+  assert.equal(normalSeries[0].type, "custom");
+  assert.equal(normalSeries[0].clip, true);
+  const yAxis = option.yAxis as Record<string, unknown>;
+  assert.ok(Number(yAxis.min) <= -4);
+  assert.ok(Number(yAxis.max) >= 4);
+  const renderItem = normalSeries[0].renderItem as (params: unknown, api: unknown) => {
+    type: string;
+    shape: { points: number[][] };
+  };
+  const shape = renderItem(
+    { dataIndex: 0, seriesId: "__normal_cat___default__" },
+    {
+      coord: ([, value]: [string, number]) => [50, 100 - value * 10],
+      size: () => [100, 100],
+    },
+  );
+  assert.equal(shape.type, "polyline");
+  const middle = shape.shape.points[Math.floor(shape.shape.points.length / 2)];
+  assert.ok(middle[0] > shape.shape.points[0][0]);
+  assert.ok(middle[0] > shape.shape.points.at(-1)![0]);
+}
+
+{
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "category", type: "nominal" },
+      y: { name: "measurement", type: "continuous" },
+    },
+    elements: [
+      { kind: "histogram", enabled: true },
+      { kind: "normalCurve", enabled: true },
+    ],
+  };
+  const frame: GraphDataFrame = {
+    ...baseFrame([
+      {
+        kind: "histogram",
+        xColumn: "category",
+        yColumn: "measurement",
+        binCount: 20,
+        minValue: -4,
+        maxValue: 4,
+        missingCount: 0,
+        binWidth: 0.4,
+        totalCount: 100,
+        bins: [{ category: "A", binStart: -0.2, binEnd: 0.2, count: 40 }],
+      },
+      {
+        kind: "summary",
+        xColumn: "category",
+        yColumn: "measurement",
+        summaries: [{ category: "A", count: 100, mean: 0, median: 0, stddev: 1, min: -4, max: 4 }],
+      },
+    ]),
+    dictionaries: { x: ["A"] },
+    extents: { y: { min: -4, max: 4 } },
+  };
+  const option = buildGraph(
+    spec,
+    frameBackedAggregateData(["category", "measurement"], 100),
+    theme,
+    undefined,
+    frame,
+  ).panels[0].option as Record<string, unknown>;
+  const normal = panelSeries(option).find((entry) => String(entry.id ?? "").startsWith("__normal_cat_"))!;
+  const shape = (normal.renderItem as (params: unknown, api: unknown) => { shape: { points: number[][] } })(
+    { dataIndex: 0, seriesId: "__normal_cat___default__" },
+    {
+      coord: ([, value]: [string, number]) => [50, 100 - value * 10],
+      size: () => [100, 100],
+    },
+  );
+  const peakX = Math.max(...shape.shape.points.map((point) => point[0]));
+  assert.ok(peakX > 30 && peakX < 45, `count-scaled peak should occupy about 40% of the slot, got ${peakX}`);
+}
+
+{
+  const transposed = transposeOption({
+    xAxis: { type: "category" },
+    yAxis: { type: "value" },
+    series: [{
+      id: "__normal_cat___default__",
+      type: "custom",
+      data: [["A", 0]],
+    }],
+  });
+  const normal = (transposed.series as Array<Record<string, unknown>>)[0];
+  assert.equal(normal.id, "__normal_cat___default____t");
+  assert.deepEqual(normal.data, [[0, "A"]]);
+}
+
+{
+  const spec: GraphSpec = {
+    encoding: {
+      x: { name: "category", type: "nominal" },
+      y: { name: "measurement", type: "continuous" },
+      groupX: { name: "side", type: "nominal" },
+      groupY: { name: "zone", type: "nominal" },
+    },
+    elements: [{ kind: "normalCurve", enabled: true }],
+  };
+  const summaries = [
+    ["L", "Top", 0],
+    ["R", "Top", 1],
+    ["L", "Bottom", 2],
+    ["R", "Bottom", 3],
+  ].map(([facetX, facetY, mean]) => ({
+    category: "A",
+    facetX: String(facetX),
+    facetY: String(facetY),
+    count: 20,
+    mean: Number(mean),
+    median: Number(mean),
+    stddev: 1,
+    min: Number(mean) - 4,
+    max: Number(mean) + 4,
+  }));
+  const frame = baseFrame([{
+    kind: "summary",
+    xColumn: "category",
+    yColumn: "measurement",
+    summaries,
+  }]);
+
+  const built = buildGraph(
+    spec,
+    frameBackedAggregateData(["category", "measurement", "side", "zone"], 80),
+    theme,
+    undefined,
+    frame,
+  );
+  assert.equal(built.cols, 2);
+  assert.equal(built.rows, 2);
+  assert.deepEqual(
+    built.panels.map((panel) => [panel.groupXValue, panel.groupYValue]),
+    [["L", "Top"], ["R", "Top"], ["L", "Bottom"], ["R", "Bottom"]],
+  );
+  for (const panel of built.panels) {
+    assert.ok(
+      panelSeries(panel.option as Record<string, unknown>)
+        .some((entry) => String(entry.id ?? "").startsWith("__normal_cat_")),
+      "each Summary-only facet should render its Normal curve",
+    );
+  }
+}

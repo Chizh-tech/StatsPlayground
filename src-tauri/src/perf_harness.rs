@@ -671,6 +671,9 @@ fn execute_save(options: Options) -> Result<PerformanceReport, AppError> {
                         fit_y_by_x_folders: std::collections::HashMap::new(),
                         distribution_folders: std::collections::HashMap::new(),
                         tabulate_folders,
+                        workflows: Vec::new(),
+                        logical_folders: Vec::new(),
+                        workflow_runs: Vec::new(),
                     },
                     None,
                 )

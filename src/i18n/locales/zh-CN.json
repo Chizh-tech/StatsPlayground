@@ -793,6 +793,7 @@
       "bar": "柱状",
       "correlationMatrix": "相关矩阵",
       "histogram": "直方图",
+      "normalCurve": "正态分布曲线",
       "boxplot": "箱线图",
       "smoother": "平滑",
       "fitline": "拟合线",

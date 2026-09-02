@@ -781,6 +781,7 @@
       "bar": "長條",
       "correlationMatrix": "相關矩陣",
       "histogram": "直方圖",
+      "normalCurve": "常態分佈曲線",
       "boxplot": "盒鬚圖",
       "smoother": "平滑",
       "fitline": "擬合線",

@@ -12,7 +12,7 @@ Object.defineProperty(globalThis, "localStorage", {
   },
 });
 
-const { build3DOption } = await import("../src/graphCore/threeD.ts");
+const { build3DOption, build3DPanels } = await import("../src/graphCore/threeD.ts");
 const { collectFrame3DPoints } = await import("../src/graphCore/threeDFrame.ts");
 const { buildGraph } = await import("../src/graphCore/transform.ts");
 
@@ -279,6 +279,140 @@ const frameResult = build3DOption(spec, frame3dData, theme, frame3d);
 assert.ok(frameResult.option);
 const frameSeries = frameResult.option.series as Array<Record<string, unknown>>;
 assert.equal(frameSeries.some((item) => item.type === "scatter3D"), true);
+
+const facetedSpec: GraphSpec = {
+  ...spec,
+  encoding: {
+    ...spec.encoding,
+    groupX: { name: "Column", type: "nominal" },
+    groupY: { name: "Row", type: "nominal" },
+  },
+};
+const facetedFrame: GraphDataFrame = {
+  ...frame3d,
+  requestId: "req-3d-facets",
+  sourceRows: 4,
+  processedRows: 4,
+  dictionaries: {
+    facetX: ["Left", "Right"],
+    facetY: ["Top", "Bottom"],
+  },
+  rawChunks: [{
+    chunkIndex: 0,
+    rowOffset: 0,
+    rowCount: 4,
+    xValues: new Float64Array([1, 2, 3, 4]),
+    yValues: new Float64Array([11, 12, 13, 14]),
+    zValues: new Float64Array([21, 22, 23, 24]),
+    facetXCodes: new Uint32Array([0, 1, 0, 1]),
+    facetYCodes: new Uint32Array([0, 0, 1, 1]),
+    rowIds: new BigInt64Array([1n, 2n, 3n, 4n]),
+    validity: {
+      x: new Uint8Array([0b00001111]),
+      y: new Uint8Array([0b00001111]),
+      z: new Uint8Array([0b00001111]),
+      facetX: new Uint8Array([0b00001111]),
+      facetY: new Uint8Array([0b00001111]),
+    },
+  }],
+};
+const facetedResult = build3DPanels(facetedSpec, frame3dData, theme, facetedFrame);
+assert.equal(facetedResult.cols, 2);
+assert.equal(facetedResult.rows, 2);
+assert.deepEqual(
+  facetedResult.panels.map((panel) => panel.title),
+  [
+    "Column=Left | Row=Top",
+    "Column=Right | Row=Top",
+    "Column=Left | Row=Bottom",
+    "Column=Right | Row=Bottom",
+  ],
+);
+assert.deepEqual(
+  facetedResult.panels.map((panel) => {
+    const scatter = (panel.option?.series as Array<Record<string, unknown>>)
+      .find((item) => item.type === "scatter3D");
+    return scatter?.data;
+  }),
+  [
+    [[1, 11, 21]],
+    [[2, 12, 22]],
+    [[3, 13, 23]],
+    [[4, 14, 24]],
+  ],
+);
+assert.ok(facetedResult.panels.every((panel) => {
+  const option = panel.option as Record<string, any>;
+  return option.xAxis3D.min === 1
+    && option.xAxis3D.max === 4
+    && option.yAxis3D.min === 11
+    && option.yAxis3D.max === 14
+    && option.zAxis3D.min === 21
+    && option.zAxis3D.max === 24;
+}));
+
+const dictionaryStableFrame: GraphDataFrame = {
+  ...facetedFrame,
+  dictionaries: {
+    facetX: ["Unused", "Right", "Left"],
+    facetY: ["Top", "Bottom"],
+  },
+  rawChunks: facetedFrame.rawChunks.map((chunk) => ({
+    ...chunk,
+    facetXCodes: new Uint32Array([2, 1, 2, 1]),
+  })),
+};
+const dictionaryStableResult = build3DPanels(
+  facetedSpec,
+  frame3dData,
+  theme,
+  dictionaryStableFrame,
+);
+assert.equal(dictionaryStableResult.cols, 3);
+assert.deepEqual(
+  dictionaryStableResult.panels.slice(0, 3).map((panel) => panel.groupXValue),
+  ["Unused", "Right", "Left"],
+);
+
+const rowFacetedData: GraphData = {
+  columns: ["x", "y", "z", "Column", "Row"],
+  rows: [
+    [1, 11, 21, "Left", "Top"],
+    [2, 12, 22, "Right", "Top"],
+    ["bad", 13, 23, "Invalid", "Bottom"],
+  ],
+};
+const rowFacetedResult = build3DPanels(facetedSpec, rowFacetedData, theme);
+assert.equal(rowFacetedResult.cols, 2);
+assert.equal(rowFacetedResult.rows, 1);
+assert.deepEqual(
+  rowFacetedResult.panels.map((panel) => panel.title),
+  ["Column=Left | Row=Top", "Column=Right | Row=Top"],
+);
+
+const hiddenOutlierSpec: GraphSpec = {
+  ...facetedSpec,
+  encoding: {
+    ...facetedSpec.encoding,
+    overlay: { name: "Group", type: "nominal" },
+  },
+  hiddenGroups: ["Outlier"],
+};
+const hiddenOutlierData: GraphData = {
+  columns: ["x", "y", "z", "Column", "Row", "Group"],
+  rows: [
+    [1, 11, 21, "Left", "Top", "Visible"],
+    [2, 12, 22, "Right", "Top", "Visible"],
+    [999, 999, 999, "Right", "Top", "Outlier"],
+  ],
+};
+const hiddenOutlierResult = build3DPanels(hiddenOutlierSpec, hiddenOutlierData, theme);
+assert.ok(hiddenOutlierResult.panels.every((panel) => {
+  const option = panel.option as Record<string, any>;
+  return option.xAxis3D.max === 2
+    && option.yAxis3D.max === 12
+    && option.zAxis3D.max === 22;
+}));
 
 const crossByteFrame: GraphDataFrame = {
   requestId: "req-3d-cross-byte",

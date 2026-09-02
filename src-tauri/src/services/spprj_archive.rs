@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::AppError;
+use crate::services::workflow_domain;
 
 #[cfg(test)]
 type BeforeDestinationMutationHook = Box<dyn Fn(&str, &str) -> Result<(), AppError>>;
@@ -165,6 +166,50 @@ pub struct ProjectManifest {
     pub tabulate_files: Vec<DocumentEntryRef>,
     #[serde(default)]
     pub snapshot_files: Vec<SnapshotEntryRef>,
+    #[serde(default)]
+    pub workflow_files: Vec<WorkflowEntryRef>,
+    #[serde(default)]
+    pub logical_folders: Vec<workflow_domain::LogicalFolder>,
+    #[serde(default)]
+    pub workflow_runs: Vec<workflow_domain::WorkflowRun>,
+    #[serde(
+        default,
+        skip_serializing_if = "workflow_domain::project_lineage_graph_is_default"
+    )]
+    pub lineage_graph: workflow_domain::ProjectLineageGraph,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relationships: Vec<ProjectRelationship>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectDocumentKind {
+    Table,
+    Graph,
+    FitYByX,
+    Tabulate,
+    Snapshot,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectRelationshipKind {
+    DataSource,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDocumentRef {
+    pub kind: ProjectDocumentKind,
+    pub id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRelationship {
+    pub kind: ProjectRelationshipKind,
+    pub source: ProjectDocumentRef,
+    pub target: ProjectDocumentRef,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -189,6 +234,15 @@ pub struct DocumentEntryRef {
 pub struct SnapshotEntryRef {
     pub id: String,
     pub name: String,
+    pub file: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowEntryRef {
+    pub id: String,
+    pub name: String,
+    pub revision: u64,
     pub file: String,
 }
 
@@ -296,6 +350,7 @@ pub struct ProjectBundle {
     pub tabulates: Vec<Value>,
     pub history: Vec<Value>,
     pub snapshots: Vec<Value>,
+    pub workflows: Vec<workflow_domain::WorkflowDefinition>,
 }
 
 // ----------------------------------------------------------------------------
@@ -564,6 +619,39 @@ pub fn validate_archive_manifest_and_entries(
             }
         }
     }
+    for entry in &expected_manifest.workflow_files {
+        let mut workflow_entry = zip.by_name(&entry.file).map_err(|e| {
+            AppError::FileIO(format!(
+                "Archive missing workflow entry {}: {e}",
+                entry.file
+            ))
+        })?;
+        let workflow: workflow_domain::WorkflowDefinition =
+            serde_json::from_reader(&mut workflow_entry).map_err(|e| {
+                AppError::FileIO(format!(
+                    "Archive workflow entry {} is not valid JSON: {e}",
+                    entry.file
+                ))
+            })?;
+        if workflow.id != entry.id {
+            return Err(AppError::FileIO(format!(
+                "Archive workflow id mismatch in {}: manifest={}, body={}",
+                entry.file, entry.id, workflow.id
+            )));
+        }
+        if workflow.revision != entry.revision {
+            return Err(AppError::FileIO(format!(
+                "Archive workflow revision mismatch in {}: manifest={}, body={}",
+                entry.file, entry.revision, workflow.revision
+            )));
+        }
+        if strict_v4_name_checks && workflow.name != entry.name {
+            return Err(AppError::FileIO(format!(
+                "Archive workflow name mismatch in {}: manifest={}, body={}",
+                entry.file, entry.name, workflow.name
+            )));
+        }
+    }
     for entry in expected_extra_entries {
         let mut extra_entry = zip
             .by_name(entry)
@@ -768,6 +856,17 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
             .map(|b| serde_json::from_slice::<Vec<Value>>(&b).unwrap_or_default())
             .unwrap_or_default()
     };
+    let workflows = if !manifest.workflow_files.is_empty() {
+        read_indexed_workflows(&mut zip, &manifest.workflow_files, strict_v4_name_checks)?
+    } else {
+        Vec::new()
+    };
+
+    validate_workflow_collections(
+        &workflows,
+        &manifest.logical_folders,
+        &manifest.workflow_runs,
+    )?;
 
     Ok(ProjectBundle {
         manifest,
@@ -778,6 +877,7 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         tabulates,
         history,
         snapshots,
+        workflows,
     })
 }
 
@@ -854,6 +954,40 @@ fn read_indexed_snapshots<R: Read + Seek>(
             }
         }
         out.push(value);
+    }
+    Ok(out)
+}
+
+fn read_indexed_workflows<R: Read + Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    refs: &[WorkflowEntryRef],
+    strict_v4_name_checks: bool,
+) -> Result<Vec<workflow_domain::WorkflowDefinition>, AppError> {
+    let mut out = Vec::with_capacity(refs.len());
+    for entry in refs {
+        let bytes = read_entry_bytes(zip, &entry.file)
+            .ok_or_else(|| AppError::FileIO(format!("Missing workflow entry: {}", entry.file)))?;
+        let workflow: workflow_domain::WorkflowDefinition = serde_json::from_slice(&bytes)
+            .map_err(|e| AppError::FileIO(format!("Invalid workflow file {}: {}", entry.file, e)))?;
+        if workflow.id != entry.id {
+            return Err(AppError::FileIO(format!(
+                "Mismatched workflow id in {}: manifest={}, body={}",
+                entry.file, entry.id, workflow.id
+            )));
+        }
+        if workflow.revision != entry.revision {
+            return Err(AppError::FileIO(format!(
+                "Mismatched workflow revision in {}: manifest={}, body={}",
+                entry.file, entry.revision, workflow.revision
+            )));
+        }
+        if strict_v4_name_checks && workflow.name != entry.name {
+            return Err(AppError::FileIO(format!(
+                "Mismatched workflow name in {}: manifest={}, body={}",
+                entry.file, entry.name, workflow.name
+            )));
+        }
+        out.push(workflow);
     }
     Ok(out)
 }
@@ -936,6 +1070,11 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         fit_y_by_x_files: Vec::new(),
         tabulate_files: Vec::new(),
         snapshot_files: Vec::new(),
+        workflow_files: Vec::new(),
+        logical_folders: Vec::new(),
+        workflow_runs: Vec::new(),
+        lineage_graph: workflow_domain::ProjectLineageGraph::default(),
+        relationships: Vec::new(),
     };
 
     Ok(ProjectBundle {
@@ -947,6 +1086,7 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         tabulates: Vec::new(),
         history: legacy.history.unwrap_or_default(),
         snapshots: legacy.snapshots.unwrap_or_default(),
+        workflows: Vec::new(),
     })
 }
 
@@ -1010,6 +1150,50 @@ pub fn build_bundle(
     history: Vec<Value>,
     snapshots: Vec<Value>,
 ) -> Result<ProjectBundle, AppError> {
+    build_bundle_with_workflows(
+        name,
+        version,
+        created_at,
+        tables,
+        graphs,
+        fit_y_by_x,
+        distributions,
+        tabulates,
+        folders,
+        table_folders,
+        graph_folders,
+        fit_y_by_x_folders,
+        distribution_folders,
+        tabulate_folders,
+        history,
+        snapshots,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+pub fn build_bundle_with_workflows(
+    name: String,
+    version: String,
+    created_at: String,
+    tables: Vec<TableDoc>,
+    graphs: Vec<GraphDoc>,
+    fit_y_by_x: Vec<Value>,
+    distributions: Vec<Value>,
+    tabulates: Vec<Value>,
+    folders: Vec<String>,
+    table_folders: &HashMap<String, String>,
+    graph_folders: &HashMap<String, String>,
+    fit_y_by_x_folders: &HashMap<String, String>,
+    distribution_folders: &HashMap<String, String>,
+    tabulate_folders: &HashMap<String, String>,
+    history: Vec<Value>,
+    snapshots: Vec<Value>,
+    workflows: Vec<workflow_domain::WorkflowDefinition>,
+    logical_folders: Vec<workflow_domain::LogicalFolder>,
+    workflow_runs: Vec<workflow_domain::WorkflowRun>,
+) -> Result<ProjectBundle, AppError> {
     let mut tables = tables;
     let mut graphs = graphs;
     let mut fit_y_by_x: Vec<Value> = fit_y_by_x
@@ -1022,6 +1206,9 @@ pub fn build_bundle(
         .collect();
     let mut tabulates = tabulates;
     let mut snapshots = snapshots;
+    let workflows = workflows;
+    let logical_folders = logical_folders;
+    let workflow_runs = workflow_runs;
 
     {
         let mut table_ids = HashSet::new();
@@ -1057,6 +1244,8 @@ pub fn build_bundle(
             ensure_unique_bundle_id(&mut snapshot_ids, &id, "snapshot")?;
         }
     }
+
+    validate_workflow_collections(&workflows, &logical_folders, &workflow_runs)?;
 
     let mut used_table_paths: HashSet<String> = HashSet::new();
     let mut used_graph_paths: HashSet<String> = HashSet::new();
@@ -1162,6 +1351,16 @@ pub fn build_bundle(
         });
     }
 
+    let workflow_refs = workflows
+        .iter()
+        .map(|workflow| WorkflowEntryRef {
+            id: workflow.id.clone(),
+            name: workflow.name.clone(),
+            revision: workflow.revision,
+            file: format!("workflows/{}.json", workflow.id),
+        })
+        .collect::<Vec<_>>();
+
     // Collapse `folders` to a sorted, deduplicated, normalized list. Includes
     // any implicit ancestor folders for completeness so an extractor sees the
     // full tree even if the user only created `a/b/c` directly.
@@ -1176,6 +1375,35 @@ pub fn build_bundle(
         Vec::new()
     } else {
         tabulates.clone()
+    };
+    let known_documents = collect_known_document_refs(
+        &table_refs,
+        &graph_refs,
+        &fit_y_by_x_refs,
+        &tabulate_refs,
+        &snapshot_refs,
+    );
+    let lineage_graph = if is_format_v4(&version) {
+        let lineage_graph = build_project_lineage_graph(
+            &table_refs,
+            &graph_refs,
+            &graphs,
+            &fit_y_by_x_refs,
+            &fit_y_by_x,
+            &tabulate_refs,
+            &tabulates,
+            &snapshot_refs,
+            &known_documents,
+        )?;
+        workflow_domain::validate_lineage_graph(&lineage_graph, &known_documents)?;
+        lineage_graph
+    } else {
+        workflow_domain::ProjectLineageGraph::default()
+    };
+    let relationships = if is_format_v4(&version) {
+        build_data_source_relationships(&lineage_graph)?
+    } else {
+        Vec::new()
     };
 
     Ok(ProjectBundle {
@@ -1197,6 +1425,11 @@ pub fn build_bundle(
             distribution_folders: distribution_folders.clone(),
             tabulate_files: tabulate_refs,
             snapshot_files: snapshot_refs,
+            workflow_files: workflow_refs,
+            logical_folders,
+            workflow_runs,
+            lineage_graph,
+            relationships,
         },
         tables,
         graphs,
@@ -1205,7 +1438,443 @@ pub fn build_bundle(
         tabulates,
         history,
         snapshots,
+        workflows,
     })
+}
+
+fn collect_known_document_refs(
+    table_refs: &[TableEntryRef],
+    graph_refs: &[GraphEntryRef],
+    fit_refs: &[DocumentEntryRef],
+    tabulate_refs: &[DocumentEntryRef],
+    snapshot_refs: &[SnapshotEntryRef],
+) -> HashSet<ProjectDocumentRef> {
+    let mut known_documents = HashSet::new();
+
+    for entry in table_refs {
+        known_documents.insert(ProjectDocumentRef {
+            kind: ProjectDocumentKind::Table,
+            id: entry.id.clone(),
+        });
+    }
+    for entry in graph_refs {
+        known_documents.insert(ProjectDocumentRef {
+            kind: ProjectDocumentKind::Graph,
+            id: entry.id.clone(),
+        });
+    }
+    for entry in fit_refs {
+        known_documents.insert(ProjectDocumentRef {
+            kind: ProjectDocumentKind::FitYByX,
+            id: entry.id.clone(),
+        });
+    }
+    for entry in tabulate_refs {
+        known_documents.insert(ProjectDocumentRef {
+            kind: ProjectDocumentKind::Tabulate,
+            id: entry.id.clone(),
+        });
+    }
+    for entry in snapshot_refs {
+        known_documents.insert(ProjectDocumentRef {
+            kind: ProjectDocumentKind::Snapshot,
+            id: entry.id.clone(),
+        });
+    }
+
+    known_documents
+}
+
+fn build_project_lineage_graph(
+    table_refs: &[TableEntryRef],
+    graph_refs: &[GraphEntryRef],
+    graphs: &[GraphDoc],
+    fit_refs: &[DocumentEntryRef],
+    fit_y_by_x: &[Value],
+    tabulate_refs: &[DocumentEntryRef],
+    tabulates: &[Value],
+    snapshot_refs: &[SnapshotEntryRef],
+    known_documents: &HashSet<ProjectDocumentRef>,
+) -> Result<workflow_domain::ProjectLineageGraph, AppError> {
+    let mut lineage_graph = workflow_domain::ProjectLineageGraph::default();
+
+    let mut artifact_nodes = table_refs
+        .iter()
+        .map(|entry| build_artifact_node(ProjectDocumentKind::Table, &entry.id, &entry.name))
+        .chain(
+            graph_refs
+                .iter()
+                .map(|entry| build_artifact_node(ProjectDocumentKind::Graph, &entry.id, &entry.name)),
+        )
+        .chain(
+            fit_refs
+                .iter()
+                .map(|entry| build_artifact_node(ProjectDocumentKind::FitYByX, &entry.id, &entry.name)),
+        )
+        .chain(tabulate_refs.iter().map(|entry| {
+            build_artifact_node(ProjectDocumentKind::Tabulate, &entry.id, &entry.name)
+        }))
+        .chain(snapshot_refs.iter().map(|entry| {
+            build_artifact_node(ProjectDocumentKind::Snapshot, &entry.id, &entry.name)
+        }))
+        .collect::<Vec<_>>();
+    artifact_nodes.sort_by(|left, right| left.id.cmp(&right.id));
+    lineage_graph.nodes.extend(
+        artifact_nodes
+            .into_iter()
+            .map(workflow_domain::LineageNode::Artifact),
+    );
+
+    let mut operation_nodes = Vec::new();
+    let mut edges = Vec::new();
+
+    for graph_doc in graphs {
+        if let Some(source_id) = non_blank_string(graph_doc.body.get("sourceDatasetId")) {
+            ensure_known_source_table(source_id, known_documents)?;
+            let target_ref = ProjectDocumentRef {
+                kind: ProjectDocumentKind::Graph,
+                id: graph_doc.id.clone(),
+            };
+            let (operation_node, consume_edge, produce_edge) =
+                build_project_lineage_operation(source_id, &target_ref)?;
+            operation_nodes.push(operation_node);
+            edges.push(consume_edge);
+            edges.push(produce_edge);
+        }
+    }
+
+    for fit_ref in fit_refs {
+        let fit_value = fit_y_by_x
+            .iter()
+            .find(|value| value.get("id").and_then(Value::as_str) == Some(fit_ref.id.as_str()))
+            .ok_or_else(|| {
+                AppError::FileIO(format!(
+                    "missing fit payload for manifest reference {}",
+                    fit_ref.id
+                ))
+            })?;
+        if let Some(source_id) = non_blank_string(fit_value.get("sourceDatasetId")) {
+            ensure_known_source_table(source_id, known_documents)?;
+            let target_ref = ProjectDocumentRef {
+                kind: ProjectDocumentKind::FitYByX,
+                id: fit_ref.id.clone(),
+            };
+            let (operation_node, consume_edge, produce_edge) =
+                build_project_lineage_operation(source_id, &target_ref)?;
+            operation_nodes.push(operation_node);
+            edges.push(consume_edge);
+            edges.push(produce_edge);
+        }
+    }
+
+    for tabulate_ref in tabulate_refs {
+        let tabulate_value = tabulates
+            .iter()
+            .find(|value| value.get("id").and_then(Value::as_str) == Some(tabulate_ref.id.as_str()))
+            .ok_or_else(|| {
+                AppError::FileIO(format!(
+                    "missing tabulate payload for manifest reference {}",
+                    tabulate_ref.id
+                ))
+            })?;
+        if let Some(source_id) = non_blank_string(tabulate_value.get("sourceDatasetId")) {
+            ensure_known_source_table(source_id, known_documents)?;
+            let target_ref = ProjectDocumentRef {
+                kind: ProjectDocumentKind::Tabulate,
+                id: tabulate_ref.id.clone(),
+            };
+            let (operation_node, consume_edge, produce_edge) =
+                build_project_lineage_operation(source_id, &target_ref)?;
+            operation_nodes.push(operation_node);
+            edges.push(consume_edge);
+            edges.push(produce_edge);
+        }
+    }
+
+    operation_nodes.sort_by(|left, right| left.id.cmp(&right.id));
+    lineage_graph.nodes.extend(
+        operation_nodes
+            .into_iter()
+            .map(workflow_domain::LineageNode::Operation),
+    );
+    edges.sort_by(|left, right| left.id.cmp(&right.id));
+    lineage_graph.edges = edges;
+
+    Ok(lineage_graph)
+}
+
+fn build_artifact_node(
+    kind: ProjectDocumentKind,
+    id: &str,
+    name: &str,
+) -> workflow_domain::ArtifactNode {
+    let node_id = artifact_node_id(&kind, id);
+    let payload_kind = port_payload_kind(&kind);
+
+    workflow_domain::ArtifactNode {
+        id: node_id.clone(),
+        document_ref: ProjectDocumentRef {
+            kind: kind.clone(),
+            id: id.to_string(),
+        },
+        name: name.to_string(),
+        parent_folder_id: None,
+        artifact_kind: artifact_kind(&kind),
+        input_port: workflow_domain::LineagePort {
+            id: format!("{node_id}-input"),
+            name: "input".to_string(),
+            payload_kind: payload_kind.clone(),
+        },
+        output_port: workflow_domain::LineagePort {
+            id: format!("{node_id}-output"),
+            name: "output".to_string(),
+            payload_kind,
+        },
+        materialized_by_workflow_run_id: None,
+    }
+}
+
+fn ensure_known_source_table(
+    source_id: &str,
+    known_documents: &HashSet<ProjectDocumentRef>,
+) -> Result<(), AppError> {
+    let source_ref = ProjectDocumentRef {
+        kind: ProjectDocumentKind::Table,
+        id: source_id.to_string(),
+    };
+    if known_documents.contains(&source_ref) {
+        return Ok(());
+    }
+
+    Err(AppError::InvalidParam(format!(
+        "lineage graph references unknown source table id: {source_id}"
+    )))
+}
+
+fn build_project_lineage_operation(
+    source_id: &str,
+    target_ref: &ProjectDocumentRef,
+) -> Result<
+    (
+        workflow_domain::OperationNode,
+        workflow_domain::LineageEdge,
+        workflow_domain::LineageEdge,
+    ),
+    AppError,
+> {
+    let target_kind_key = document_kind_key(&target_ref.kind);
+    let operation_id = format!("operation-{target_kind_key}-{}", target_ref.id);
+    let source_artifact_id = artifact_node_id(&ProjectDocumentKind::Table, source_id);
+    let target_artifact_id = artifact_node_id(&target_ref.kind, &target_ref.id);
+    let operation_input_port_id = format!("{operation_id}-input");
+    let operation_output_port_id = format!("{operation_id}-output");
+
+    let operation_node = workflow_domain::OperationNode {
+        id: operation_id.clone(),
+        kind: operation_kind(&target_ref.kind)?,
+        schema_version: "1".to_string(),
+        configuration: None,
+        document_ref: Some(target_ref.clone()),
+        input_ports: vec![workflow_domain::LineagePort {
+            id: operation_input_port_id.clone(),
+            name: "source".to_string(),
+            payload_kind: workflow_domain::PortPayloadKind::Table,
+        }],
+        output_ports: vec![workflow_domain::LineagePort {
+            id: operation_output_port_id.clone(),
+            name: "result".to_string(),
+            payload_kind: port_payload_kind(&target_ref.kind),
+        }],
+    };
+
+    let consume_edge = workflow_domain::LineageEdge {
+        id: format!(
+            "consumes-table-{source_id}-to-{target_kind_key}-{}",
+            target_ref.id
+        ),
+        kind: workflow_domain::LineageEdgeKind::Consumes,
+        source: workflow_domain::LineageEndpoint {
+            node_id: source_artifact_id.clone(),
+            port_id: format!("{source_artifact_id}-output"),
+        },
+        target: workflow_domain::LineageEndpoint {
+            node_id: operation_id.clone(),
+            port_id: operation_input_port_id,
+        },
+    };
+    let produce_edge = workflow_domain::LineageEdge {
+        id: format!(
+            "produces-{target_kind_key}-{}-to-{target_kind_key}-{}",
+            target_ref.id, target_ref.id
+        ),
+        kind: workflow_domain::LineageEdgeKind::Produces,
+        source: workflow_domain::LineageEndpoint {
+            node_id: operation_id,
+            port_id: operation_output_port_id,
+        },
+        target: workflow_domain::LineageEndpoint {
+            node_id: target_artifact_id.clone(),
+            port_id: format!("{target_artifact_id}-input"),
+        },
+    };
+
+    Ok((operation_node, consume_edge, produce_edge))
+}
+
+fn build_data_source_relationships(
+    lineage_graph: &workflow_domain::ProjectLineageGraph,
+) -> Result<Vec<ProjectRelationship>, AppError> {
+    let mut artifacts_by_node_id: HashMap<&str, ProjectDocumentRef> = HashMap::new();
+    let mut consumes_by_operation_id: HashMap<&str, Vec<ProjectDocumentRef>> = HashMap::new();
+    let mut produces_by_operation_id: HashMap<&str, Vec<ProjectDocumentRef>> = HashMap::new();
+
+    for node in &lineage_graph.nodes {
+        if let workflow_domain::LineageNode::Artifact(artifact) = node {
+            artifacts_by_node_id.insert(artifact.id.as_str(), artifact.document_ref.clone());
+        }
+    }
+
+    for edge in &lineage_graph.edges {
+        match edge.kind {
+            workflow_domain::LineageEdgeKind::Consumes => {
+                let source = artifacts_by_node_id
+                    .get(edge.source.node_id.as_str())
+                    .ok_or_else(|| {
+                        AppError::InvalidParam(format!(
+                            "lineage graph consumes edge references unknown artifact {}",
+                            edge.source.node_id
+                        ))
+                    })?
+                    .clone();
+                consumes_by_operation_id
+                    .entry(edge.target.node_id.as_str())
+                    .or_default()
+                    .push(source);
+            }
+            workflow_domain::LineageEdgeKind::Produces => {
+                let target = artifacts_by_node_id
+                    .get(edge.target.node_id.as_str())
+                    .ok_or_else(|| {
+                        AppError::InvalidParam(format!(
+                            "lineage graph produces edge references unknown artifact {}",
+                            edge.target.node_id
+                        ))
+                    })?
+                    .clone();
+                produces_by_operation_id
+                    .entry(edge.source.node_id.as_str())
+                    .or_default()
+                    .push(target);
+            }
+        }
+    }
+
+    let mut relationships = Vec::new();
+    for (operation_id, sources) in &consumes_by_operation_id {
+        let Some(targets) = produces_by_operation_id.get(operation_id) else {
+            continue;
+        };
+        for source in sources {
+            if source.kind != ProjectDocumentKind::Table {
+                continue;
+            }
+            for target in targets {
+                if matches!(
+                    target.kind,
+                    ProjectDocumentKind::Graph
+                        | ProjectDocumentKind::FitYByX
+                        | ProjectDocumentKind::Tabulate
+                ) {
+                    relationships.push(ProjectRelationship {
+                        kind: ProjectRelationshipKind::DataSource,
+                        source: source.clone(),
+                        target: target.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    relationships.sort_by(|left, right| relationship_sort_key(left).cmp(&relationship_sort_key(right)));
+    relationships.dedup_by(|left, right| relationship_sort_key(left) == relationship_sort_key(right));
+    Ok(relationships)
+}
+
+fn relationship_sort_key(relationship: &ProjectRelationship) -> (String, String, String, String) {
+    (
+        relationship.source.id.to_ascii_lowercase(),
+        document_kind_key(&relationship.source.kind).to_string(),
+        document_kind_key(&relationship.target.kind).to_string(),
+        relationship.target.id.to_ascii_lowercase(),
+    )
+}
+
+fn artifact_node_id(kind: &ProjectDocumentKind, id: &str) -> String {
+    format!("artifact-{}-{id}", document_kind_key(kind))
+}
+
+fn document_kind_key(kind: &ProjectDocumentKind) -> &'static str {
+    match kind {
+        ProjectDocumentKind::Table => "table",
+        ProjectDocumentKind::Graph => "graph",
+        ProjectDocumentKind::FitYByX => "fitYByX",
+        ProjectDocumentKind::Tabulate => "tabulate",
+        ProjectDocumentKind::Snapshot => "snapshot",
+    }
+}
+
+fn artifact_kind(kind: &ProjectDocumentKind) -> workflow_domain::ArtifactKind {
+    match kind {
+        ProjectDocumentKind::Table => workflow_domain::ArtifactKind::Table,
+        ProjectDocumentKind::Graph => workflow_domain::ArtifactKind::Graph,
+        ProjectDocumentKind::FitYByX => workflow_domain::ArtifactKind::FitYByX,
+        ProjectDocumentKind::Tabulate => workflow_domain::ArtifactKind::Tabulate,
+        ProjectDocumentKind::Snapshot => workflow_domain::ArtifactKind::Snapshot,
+    }
+}
+
+fn port_payload_kind(kind: &ProjectDocumentKind) -> workflow_domain::PortPayloadKind {
+    match kind {
+        ProjectDocumentKind::Table => workflow_domain::PortPayloadKind::Table,
+        ProjectDocumentKind::Graph => workflow_domain::PortPayloadKind::Graph,
+        ProjectDocumentKind::FitYByX => workflow_domain::PortPayloadKind::FitYByX,
+        ProjectDocumentKind::Tabulate => workflow_domain::PortPayloadKind::Tabulate,
+        ProjectDocumentKind::Snapshot => workflow_domain::PortPayloadKind::Snapshot,
+    }
+}
+
+fn operation_kind(kind: &ProjectDocumentKind) -> Result<workflow_domain::OperationKind, AppError> {
+    match kind {
+        ProjectDocumentKind::Graph => Ok(workflow_domain::OperationKind::GraphGeneration),
+        ProjectDocumentKind::FitYByX => Ok(workflow_domain::OperationKind::FitYByX),
+        ProjectDocumentKind::Tabulate => Ok(workflow_domain::OperationKind::Tabulate),
+        other => Err(AppError::InvalidParam(format!(
+            "unsupported lineage operation target kind: {:?}",
+            other
+        ))),
+    }
+}
+
+fn non_blank_string(value: Option<&Value>) -> Option<&str> {
+    value.and_then(Value::as_str).filter(|value| !value.trim().is_empty())
+}
+
+fn data_source_relationship(
+    source_id: &str,
+    target_kind: ProjectDocumentKind,
+    target_id: &str,
+) -> ProjectRelationship {
+    ProjectRelationship {
+        kind: ProjectRelationshipKind::DataSource,
+        source: ProjectDocumentRef {
+            kind: ProjectDocumentKind::Table,
+            id: source_id.to_string(),
+        },
+        target: ProjectDocumentRef {
+            kind: target_kind,
+            id: target_id.to_string(),
+        },
+    }
 }
 
 fn strip_transient_fit_y_by_x_fields(value: Value) -> Value {
@@ -1327,6 +1996,11 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
                     .map(|id| (id, value))
             })
             .collect();
+        let workflow_by_id: HashMap<&str, &workflow_domain::WorkflowDefinition> = bundle
+            .workflows
+            .iter()
+            .map(|workflow| (workflow.id.as_str(), workflow))
+            .collect();
 
         for entry in &bundle.manifest.tables {
             let doc = table_by_id.get(entry.id.as_str()).ok_or_else(|| {
@@ -1393,6 +2067,16 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
                 indexed_payload_with_manifest_name(doc, &entry.id, &entry.name, "snapshot")?;
             write_zip_json_entry(&mut zip, &entry.file, &synced, opts)?;
         }
+        for entry in &bundle.manifest.workflow_files {
+            let workflow = workflow_by_id.get(entry.id.as_str()).ok_or_else(|| {
+                AppError::FileIO(format!(
+                    "missing workflow payload for manifest reference {}",
+                    entry.id
+                ))
+            })?;
+            let synced = workflow_with_manifest_fields(workflow, &entry.name, entry.revision);
+            write_zip_json_entry(&mut zip, &entry.file, &synced, opts)?;
+        }
         if !bundle.history.is_empty() {
             write_zip_json_entry(&mut zip, ".history.json", &bundle.history, opts)?;
         }
@@ -1450,6 +2134,17 @@ fn indexed_payload_with_manifest_name(
     })?;
     object.insert("name".to_string(), Value::String(name.to_string()));
     Ok(Value::Object(object))
+}
+
+fn workflow_with_manifest_fields(
+    workflow: &workflow_domain::WorkflowDefinition,
+    name: &str,
+    revision: u64,
+) -> workflow_domain::WorkflowDefinition {
+    let mut synced = workflow.clone();
+    synced.name = name.to_string();
+    synced.revision = revision;
+    synced
 }
 
 fn write_zip_entry<W: Write + Seek>(
@@ -1731,7 +2426,83 @@ fn validate_manifest_stable_ids(manifest: &ProjectManifest) -> Result<(), AppErr
         ensure_unique_manifest_id(&mut snapshot_ids, &entry.id, "snapshot")?;
     }
 
+    let mut workflow_ids = HashSet::new();
+    for entry in &manifest.workflow_files {
+        ensure_unique_manifest_id(&mut workflow_ids, &entry.id, "workflow")?;
+    }
+
     Ok(())
+}
+
+fn validate_manifest_relationships(manifest: &ProjectManifest) -> Result<(), AppError> {
+    let mut seen = HashSet::new();
+
+    for relationship in &manifest.relationships {
+        if relationship.source.kind != ProjectDocumentKind::Table {
+            return Err(AppError::FileIO(format!(
+                "Project dataSource relationship has invalid source kind: {:?}",
+                relationship.source.kind
+            )));
+        }
+        if !matches!(
+            relationship.target.kind,
+            ProjectDocumentKind::Graph
+                | ProjectDocumentKind::FitYByX
+                | ProjectDocumentKind::Tabulate
+        ) {
+            return Err(AppError::FileIO(format!(
+                "Project dataSource relationship has invalid target kind: {:?}",
+                relationship.target.kind
+            )));
+        }
+        if !manifest_contains_document(manifest, &relationship.source) {
+            return Err(AppError::FileIO(format!(
+                "Project relationship references unknown source {:?} id: {}",
+                relationship.source.kind, relationship.source.id
+            )));
+        }
+        if !manifest_contains_document(manifest, &relationship.target) {
+            return Err(AppError::FileIO(format!(
+                "Project relationship references unknown target {:?} id: {}",
+                relationship.target.kind, relationship.target.id
+            )));
+        }
+        let key = (
+            relationship.kind.clone(),
+            relationship.source.kind.clone(),
+            relationship.source.id.to_ascii_lowercase(),
+            relationship.target.kind.clone(),
+            relationship.target.id.to_ascii_lowercase(),
+        );
+        if !seen.insert(key) {
+            return Err(AppError::FileIO(format!(
+                "Duplicate project relationship from {} to {}",
+                relationship.source.id, relationship.target.id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn manifest_contains_document(manifest: &ProjectManifest, document: &ProjectDocumentRef) -> bool {
+    let contains_id = |id: &str| id.eq_ignore_ascii_case(&document.id);
+
+    match document.kind {
+        ProjectDocumentKind::Table => manifest.tables.iter().any(|entry| contains_id(&entry.id)),
+        ProjectDocumentKind::Graph => manifest.graphs.iter().any(|entry| contains_id(&entry.id)),
+        ProjectDocumentKind::FitYByX => manifest
+            .fit_y_by_x_files
+            .iter()
+            .any(|entry| contains_id(&entry.id)),
+        ProjectDocumentKind::Tabulate => manifest
+            .tabulate_files
+            .iter()
+            .any(|entry| contains_id(&entry.id)),
+        ProjectDocumentKind::Snapshot => manifest
+            .snapshot_files
+            .iter()
+            .any(|entry| contains_id(&entry.id)),
+    }
 }
 
 fn ensure_unique_bundle_id(
@@ -1785,11 +2556,21 @@ fn validate_bundle_payload_stable_ids(bundle: &ProjectBundle) -> Result<(), AppE
         ensure_unique_bundle_id(&mut snapshot_ids, &id, "snapshot")?;
     }
 
+    let mut workflow_ids = HashSet::new();
+    for workflow in &bundle.workflows {
+        ensure_unique_bundle_id(&mut workflow_ids, &workflow.id, "workflow")?;
+    }
+
     Ok(())
 }
 
 fn validate_bundle_before_write(bundle: &ProjectBundle) -> Result<(), AppError> {
     validate_bundle_payload_stable_ids(bundle)?;
+    validate_workflow_collections(
+        &bundle.workflows,
+        &bundle.manifest.logical_folders,
+        &bundle.manifest.workflow_runs,
+    )?;
     validate_manifest_entry_refs(&bundle.manifest)?;
     Ok(())
 }
@@ -1800,6 +2581,17 @@ fn validate_manifest_entry_refs(manifest: &ProjectManifest) -> Result<(), AppErr
 
     if strict_v4_name_checks {
         validate_manifest_stable_ids(manifest)?;
+        validate_manifest_relationships(manifest)?;
+        let known_documents = collect_known_document_refs(
+            &manifest.tables,
+            &manifest.graphs,
+            &manifest.fit_y_by_x_files,
+            &manifest.tabulate_files,
+            &manifest.snapshot_files,
+        );
+        workflow_domain::validate_lineage_graph(&manifest.lineage_graph, &known_documents)?;
+        validate_workflow_manifest_refs(manifest)?;
+        validate_manifest_relationship_projection(manifest)?;
         for entry in &manifest.tables {
             validate_indexed_path(&entry.file, "data", ".sptb", "table")?;
             validate_display_basename(&entry.name)?;
@@ -1908,6 +2700,50 @@ fn validate_manifest_entry_refs(manifest: &ProjectManifest) -> Result<(), AppErr
         ensure_unique_file(&mut seen_files, &entry.file)?;
     }
 
+    for entry in &manifest.workflow_files {
+        validate_indexed_path(&entry.file, "workflows", ".json", "workflow")?;
+        validate_display_basename(&entry.id)?;
+        validate_manifest_id_matches_file_basename(&entry.file, &entry.id, ".json", "workflow")?;
+        ensure_unique_file(&mut seen_files, &entry.file)?;
+    }
+
+    Ok(())
+}
+
+fn validate_workflow_collections(
+    workflows: &[workflow_domain::WorkflowDefinition],
+    logical_folders: &[workflow_domain::LogicalFolder],
+    workflow_runs: &[workflow_domain::WorkflowRun],
+) -> Result<(), AppError> {
+    workflow_domain::validate_workflow_definitions(workflows)?;
+    workflow_domain::validate_logical_folders(logical_folders)?;
+    workflow_domain::validate_workflow_runs(workflow_runs, workflows, logical_folders)?;
+    Ok(())
+}
+
+fn validate_workflow_manifest_refs(manifest: &ProjectManifest) -> Result<(), AppError> {
+    workflow_domain::validate_logical_folders(&manifest.logical_folders)?;
+    let workflow_refs = manifest
+        .workflow_files
+        .iter()
+        .map(|entry| workflow_domain::WorkflowDefinition {
+            id: entry.id.clone(),
+            name: entry.name.clone(),
+            description: None,
+            format_version: String::new(),
+            revision: entry.revision,
+            input_slots: vec![],
+            operations: vec![],
+            edges: vec![],
+            output_declarations: vec![],
+            layout: None,
+        })
+        .collect::<Vec<_>>();
+    workflow_domain::validate_workflow_runs(
+        &manifest.workflow_runs,
+        &workflow_refs,
+        &manifest.logical_folders,
+    )?;
     Ok(())
 }
 
@@ -1999,6 +2835,32 @@ fn validate_manifest_name_matches_file_basename(
     Ok(())
 }
 
+fn validate_manifest_id_matches_file_basename(
+    file: &str,
+    manifest_id: &str,
+    extension: &str,
+    label: &str,
+) -> Result<(), AppError> {
+    let leaf = file
+        .rsplit('/')
+        .next()
+        .ok_or_else(|| AppError::FileIO(format!("Invalid {label} archive path: {}", file)))?;
+    if !leaf.ends_with(extension) || leaf.len() <= extension.len() {
+        return Err(AppError::FileIO(format!(
+            "Invalid {label} archive extension in {}",
+            file
+        )));
+    }
+    let basename = &leaf[..leaf.len() - extension.len()];
+    if basename != manifest_id {
+        return Err(AppError::FileIO(format!(
+            "Mismatched {label} id and archive basename in {}: manifest={}, basename={}",
+            file, manifest_id, basename
+        )));
+    }
+    Ok(())
+}
+
 fn value_required_id(value: &Value, kind: &str) -> Result<String, AppError> {
     value
         .get("id")
@@ -2029,6 +2891,16 @@ fn value_required_name<'a>(value: &'a Value, file: &str, kind: &str) -> Result<&
             ))
         })
 }
+
+        fn validate_manifest_relationship_projection(manifest: &ProjectManifest) -> Result<(), AppError> {
+            let expected_relationships = build_data_source_relationships(&manifest.lineage_graph)?;
+            if manifest.relationships != expected_relationships {
+                return Err(AppError::FileIO(
+                    "Project relationships differ from lineage graph projection".to_string(),
+                ));
+            }
+            Ok(())
+        }
 
 fn set_value_name(value: &mut Value, name: &str, kind: &str) -> Result<(), AppError> {
     let Some(map) = value.as_object_mut() else {
@@ -2119,6 +2991,7 @@ fn folder_ancestors(folder: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::workflow_domain;
     use std::io::{Read, Write};
 
     #[allow(clippy::too_many_arguments)]
@@ -2178,6 +3051,15 @@ mod tests {
         }
     }
 
+    fn graph_doc_with_source(id: &str, name: &str, source_dataset_id: &str) -> GraphDoc {
+        let mut graph = graph_doc(id, name);
+        graph.body.insert(
+            "sourceDatasetId".to_string(),
+            Value::String(source_dataset_id.to_string()),
+        );
+        graph
+    }
+
     fn fit_doc(id: &str, name: &str) -> Value {
         json!({
             "id": id,
@@ -2207,6 +3089,12 @@ mod tests {
         })
     }
 
+    fn fit_doc_with_source(id: &str, name: &str, source_dataset_id: &str) -> Value {
+        let mut fit = fit_doc(id, name);
+        fit["sourceDatasetId"] = Value::String(source_dataset_id.to_string());
+        fit
+    }
+
     fn tabulate_doc(id: &str, name: &str) -> Value {
         json!({
             "id": id,
@@ -2216,6 +3104,12 @@ mod tests {
             "columnFields": [],
             "statistics": []
         })
+    }
+
+    fn tabulate_doc_with_source(id: &str, name: &str, source_dataset_id: &str) -> Value {
+        let mut tabulate = tabulate_doc(id, name);
+        tabulate["sourceDatasetId"] = Value::String(source_dataset_id.to_string());
+        tabulate
     }
 
     fn snapshot_doc(id: &str, name: &str) -> Value {
@@ -2239,14 +3133,351 @@ mod tests {
         })
     }
 
+    fn workflow_doc(id: &str, name: &str, revision: u64) -> workflow_domain::WorkflowDefinition {
+        workflow_domain::WorkflowDefinition {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: Some("Saved workflow".to_string()),
+            format_version: "1".to_string(),
+            revision,
+            input_slots: vec![workflow_domain::InputSlot {
+                id: "workflow-input-1".to_string(),
+                name: "Input".to_string(),
+                output_port: workflow_domain::WorkflowPort {
+                    id: "workflow-input-1-output".to_string(),
+                    name: "output".to_string(),
+                    payload_kind: workflow_domain::PortPayloadKind::Table,
+                },
+                schema_contract: workflow_domain::SchemaContract {
+                    schema_fingerprint: "schema-1".to_string(),
+                    columns: vec![workflow_domain::SchemaColumnRequirement {
+                        name: "x".to_string(),
+                        canonical_duckdb_type: "DOUBLE".to_string(),
+                        required: true,
+                        required_by_operation_ids: vec!["workflow-operation-1".to_string()],
+                    }],
+                },
+                source_document_ref: None,
+            }],
+            operations: vec![workflow_domain::WorkflowOperationNode {
+                id: "workflow-operation-1".to_string(),
+                kind: workflow_domain::OperationKind::GraphGeneration,
+                schema_version: "1".to_string(),
+                configuration: Some(json!({ "sourceDatasetId": "workflow-input-1" })),
+                input_ports: vec![workflow_domain::WorkflowPort {
+                    id: "graph-input".to_string(),
+                    name: "input".to_string(),
+                    payload_kind: workflow_domain::PortPayloadKind::Table,
+                }],
+                output_ports: vec![workflow_domain::WorkflowPort {
+                    id: "graph-output".to_string(),
+                    name: "output".to_string(),
+                    payload_kind: workflow_domain::PortPayloadKind::Graph,
+                }],
+            }],
+            edges: vec![
+                workflow_domain::WorkflowEdge {
+                    id: "workflow-edge-1".to_string(),
+                    kind: workflow_domain::WorkflowEdgeKind::Consumes,
+                    source: workflow_domain::WorkflowEndpoint {
+                        node_id: "workflow-input-1".to_string(),
+                        port_id: "workflow-input-1-output".to_string(),
+                    },
+                    target: workflow_domain::WorkflowEndpoint {
+                        node_id: "workflow-operation-1".to_string(),
+                        port_id: "graph-input".to_string(),
+                    },
+                },
+                workflow_domain::WorkflowEdge {
+                    id: "workflow-edge-2".to_string(),
+                    kind: workflow_domain::WorkflowEdgeKind::Produces,
+                    source: workflow_domain::WorkflowEndpoint {
+                        node_id: "workflow-operation-1".to_string(),
+                        port_id: "graph-output".to_string(),
+                    },
+                    target: workflow_domain::WorkflowEndpoint {
+                        node_id: "workflow-output-1".to_string(),
+                        port_id: "workflow-output-1-input".to_string(),
+                    },
+                },
+            ],
+            output_declarations: vec![workflow_domain::OutputDeclaration {
+                id: "workflow-output-1".to_string(),
+                name: "Graph Output".to_string(),
+                input_port: workflow_domain::WorkflowPort {
+                    id: "workflow-output-1-input".to_string(),
+                    name: "input".to_string(),
+                    payload_kind: workflow_domain::PortPayloadKind::Graph,
+                },
+                output_port: workflow_domain::WorkflowPort {
+                    id: "workflow-output-1-output".to_string(),
+                    name: "output".to_string(),
+                    payload_kind: workflow_domain::PortPayloadKind::Graph,
+                },
+                source_endpoint: workflow_domain::WorkflowEndpoint {
+                    node_id: "workflow-operation-1".to_string(),
+                    port_id: "graph-output".to_string(),
+                },
+                artifact_kind: workflow_domain::ArtifactKind::Graph,
+            }],
+            layout: None,
+        }
+    }
+
+    fn logical_folder(id: &str, name: &str, parent_folder_id: Option<&str>) -> workflow_domain::LogicalFolder {
+        workflow_domain::LogicalFolder {
+            id: id.to_string(),
+            name: name.to_string(),
+            kind: workflow_domain::LogicalFolderKind::WorkflowRun,
+            parent_folder_id: parent_folder_id.map(str::to_string),
+        }
+    }
+
+    fn workflow_run(id: &str, workflow_id: &str, workflow_revision: u64, parent_folder_id: Option<&str>) -> workflow_domain::WorkflowRun {
+        workflow_domain::WorkflowRun {
+            id: id.to_string(),
+            workflow_id: workflow_id.to_string(),
+            workflow_revision,
+            status: workflow_domain::WorkflowRunStatus::Pending,
+            started_at: Some("2026-09-02T00:00:00Z".to_string()),
+            completed_at: None,
+            input_bindings: vec![workflow_domain::WorkflowInputBinding {
+                slot_id: "workflow-input-1".to_string(),
+                table_document_id: "table-1".to_string(),
+            }],
+            schema_validation_report: None,
+            node_results: vec![],
+            output_bindings: vec![],
+            errors: vec![],
+            parent_folder_id: parent_folder_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn workflow_manifest_fields_default_cleanly_when_absent() {
+        let path = temp_project_path("workflow-defaults");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let manifest = json!({
+            "name": "Compat Project",
+            "version": "4.0.0",
+            "createdAt": "2026-09-02T00:00:00Z",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+            "fitYByXFiles": [],
+            "tabulateFiles": [],
+            "snapshotFiles": []
+        });
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.finish().unwrap();
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert!(loaded.manifest.workflow_files.is_empty());
+        assert!(loaded.manifest.logical_folders.is_empty());
+        assert!(loaded.manifest.workflow_runs.is_empty());
+        assert!(loaded.workflows.is_empty());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn workflow_round_trip_persists_indexed_workflow_files_and_run_metadata() {
+        let path = temp_project_path("workflow-round-trip");
+        let workflow = workflow_doc("workflow-1", "Workflow 1", 3);
+        let logical_folders = vec![
+            logical_folder("folder-workflow", "Workflow 1", None),
+            logical_folder("folder-run", "Run 1", Some("folder-workflow")),
+        ];
+        let workflow_runs = vec![workflow_run("run-1", "workflow-1", 3, Some("folder-run"))];
+
+        let bundle = build_bundle_with_workflows(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-09-02T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+            vec![workflow.clone()],
+            logical_folders.clone(),
+            workflow_runs.clone(),
+        )
+        .unwrap();
+
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(loaded.workflows, vec![workflow]);
+        assert_eq!(loaded.manifest.logical_folders, logical_folders);
+        assert_eq!(loaded.manifest.workflow_runs, workflow_runs);
+        assert_eq!(loaded.manifest.workflow_files.len(), 1);
+        assert_eq!(loaded.manifest.workflow_files[0].id, "workflow-1");
+        assert_eq!(loaded.manifest.workflow_files[0].revision, 3);
+        assert_eq!(loaded.manifest.workflow_files[0].file, "workflows/workflow-1.json");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_project_file_rejects_missing_indexed_workflow_entry() {
+        let path = temp_project_path("workflow-missing-entry");
+        let manifest = json!({
+            "name": "Project",
+            "version": "4.0.0",
+            "createdAt": "now",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+            "fitYByXFiles": [],
+            "tabulateFiles": [],
+            "snapshotFiles": [],
+            "workflowFiles": [
+                { "id": "workflow-1", "name": "Workflow 1", "revision": 2, "file": "workflows/workflow-1.json" }
+            ],
+            "logicalFolders": [],
+            "workflowRuns": []
+        });
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.finish().unwrap();
+
+        let error = match read_project_file(path.to_str().unwrap()) {
+            Ok(_) => panic!("expected missing workflow entry read to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("Missing workflow entry")));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_project_file_rejects_workflow_body_revision_mismatch() {
+        let path = temp_project_path("workflow-revision-mismatch");
+        let manifest = json!({
+            "name": "Project",
+            "version": "4.0.0",
+            "createdAt": "now",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+            "fitYByXFiles": [],
+            "tabulateFiles": [],
+            "snapshotFiles": [],
+            "workflowFiles": [
+                { "id": "workflow-1", "name": "Workflow 1", "revision": 2, "file": "workflows/workflow-1.json" }
+            ],
+            "logicalFolders": [],
+            "workflowRuns": []
+        });
+        let workflow = workflow_doc("workflow-1", "Workflow 1", 5);
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(serde_json::to_vec_pretty(&manifest).unwrap().as_slice())
+            .unwrap();
+        zip.start_file("workflows/workflow-1.json", opts).unwrap();
+        serde_json::to_writer(&mut zip, &workflow).unwrap();
+        zip.finish().unwrap();
+
+        let error = match read_project_file(path.to_str().unwrap()) {
+            Ok(_) => panic!("expected workflow revision mismatch read to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, AppError::FileIO(message) if message.contains("Mismatched workflow revision")));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn build_bundle_rejects_duplicate_workflow_ids_and_invalid_workflow_folder_refs() {
+        let duplicate_workflow_error = match build_bundle_with_workflows(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-09-02T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+            vec![
+                workflow_doc("workflow-1", "Workflow 1", 1),
+                workflow_doc("workflow-1", "Workflow 1 duplicate", 2),
+            ],
+            vec![],
+            vec![],
+        ) {
+            Ok(_) => panic!("expected duplicate workflow ids to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(duplicate_workflow_error, AppError::InvalidParam(message) if message.contains("duplicate workflow")));
+
+        let invalid_run_folder_error = match build_bundle_with_workflows(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-09-02T00:00:00Z".to_string(),
+            vec![table_doc("table-1", "Table 1")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+            vec![workflow_doc("workflow-1", "Workflow 1", 1)],
+            vec![logical_folder("folder-workflow", "Workflow 1", None)],
+            vec![workflow_run("run-1", "workflow-1", 1, Some("missing-folder"))],
+        ) {
+            Ok(_) => panic!("expected invalid workflow folder refs to fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(invalid_run_folder_error, AppError::InvalidParam(message) if message.contains("missing parent folder") || message.contains("missing workflow") || message.contains("folder")));
+    }
+
     #[test]
     fn build_bundle_allocates_v4_flat_named_paths_and_indexes_docs() {
-        let table = table_doc("table-id", "data");
+        let table = table_doc("table-1", "data");
         let graph = graph_doc("graph-id", "data");
         let fit = fit_doc("fit-1", "data");
         let tabulate = tabulate_doc("tab-1", "data");
         let snapshot = snapshot_doc("snap-1", "data");
-        let table_folders = HashMap::from([(String::from("table-id"), String::from("Raw/2026"))]);
+        let table_folders = HashMap::from([(String::from("table-1"), String::from("Raw/2026"))]);
         let graph_folders = HashMap::from([(String::from("graph-id"), String::from("Reports"))]);
         let fit_folders = HashMap::from([(String::from("fit-1"), String::from("Analyses/Fit"))]);
         let tabulate_folders =
@@ -2323,6 +3554,212 @@ mod tests {
             assert!(!entry.contains("/Reports/"));
             assert!(!entry.contains("/Analyses/"));
         }
+    }
+
+    #[test]
+    fn build_bundle_indexes_v4_data_source_relationships() {
+        let mut graph = graph_doc("graph-1", "Graph");
+        graph
+            .body
+            .insert("sourceDatasetId".into(), json!("table-1"));
+
+        let bundle = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table_doc("table-1", "Table")],
+            vec![graph],
+            vec![fit_doc("fit-1", "Fit")],
+            vec![tabulate_doc("tab-1", "Tabulate")],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        let manifest = serde_json::to_value(&bundle.manifest).expect("serialize manifest");
+        assert_eq!(
+            manifest.get("relationships"),
+            Some(&json!([
+                {
+                    "kind": "dataSource",
+                    "source": { "kind": "table", "id": "table-1" },
+                    "target": { "kind": "fitYByX", "id": "fit-1" }
+                },
+                {
+                    "kind": "dataSource",
+                    "source": { "kind": "table", "id": "table-1" },
+                    "target": { "kind": "graph", "id": "graph-1" }
+                },
+                {
+                    "kind": "dataSource",
+                    "source": { "kind": "table", "id": "table-1" },
+                    "target": { "kind": "tabulate", "id": "tab-1" }
+                }
+            ]))
+        );
+
+        let path = temp_project_path("relationships-round-trip");
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.manifest.relationships, bundle.manifest.relationships);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn validate_v4_manifest_rejects_relationships_that_diverge_from_lineage_graph_projection() {
+        let bundle = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table_doc("table-1", "Table")],
+            vec![
+                graph_doc_with_source("graph-a", "Graph A", "table-1"),
+                graph_doc_with_source("graph-b", "Graph B", "table-1"),
+                graph_doc("graph-c", "Graph C"),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(bundle.manifest.relationships.len(), 2);
+
+        let mut stale_manifest = bundle.manifest.clone();
+        stale_manifest.relationships[1] = data_source_relationship(
+            "table-1",
+            ProjectDocumentKind::Graph,
+            "graph-c",
+        );
+        assert!(validate_manifest_entry_refs(&stale_manifest).is_err());
+
+        let mut missing_manifest = bundle.manifest.clone();
+        missing_manifest.relationships.pop();
+        assert!(validate_manifest_entry_refs(&missing_manifest).is_err());
+
+        let mut extra_manifest = bundle.manifest.clone();
+        extra_manifest.relationships.push(data_source_relationship(
+            "table-1",
+            ProjectDocumentKind::Graph,
+            "graph-c",
+        ));
+        assert!(validate_manifest_entry_refs(&extra_manifest).is_err());
+    }
+
+    #[test]
+    fn validate_v4_relationships_rejects_unknown_source() {
+        let mut graph = graph_doc("graph-1", "Graph");
+        graph
+            .body
+            .insert("sourceDatasetId".into(), json!("missing-table"));
+
+        let bundle = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table_doc("table-1", "Table")],
+            vec![graph],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+
+        let result = match bundle {
+            Err(error) => Err(error),
+            Ok(bundle) => validate_manifest_entry_refs(&bundle.manifest),
+        };
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_bundle_ignores_blank_data_source_ids() {
+        let mut graph = graph_doc("graph-1", "Graph");
+        graph
+            .body
+            .insert("sourceDatasetId".into(), json!("   "));
+
+        let bundle = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![],
+            vec![graph],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        assert!(bundle.manifest.relationships.is_empty());
+    }
+
+    #[test]
+    fn validate_v4_relationships_rejects_invalid_endpoint_kinds_and_duplicates() {
+        let mut bundle = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table_doc("table-1", "Table")],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![snapshot_doc("snap-1", "Snapshot")],
+        )
+        .unwrap();
+        bundle.manifest.relationships = vec![data_source_relationship(
+            "table-1",
+            ProjectDocumentKind::Snapshot,
+            "snap-1",
+        )];
+
+        let invalid_kind = validate_manifest_entry_refs(&bundle.manifest);
+        assert!(
+            matches!(invalid_kind, Err(AppError::FileIO(message)) if message.contains("invalid target kind"))
+        );
+
+        bundle.manifest.relationships = vec![
+            data_source_relationship("table-1", ProjectDocumentKind::Graph, "graph-1"),
+            data_source_relationship("TABLE-1", ProjectDocumentKind::Graph, "GRAPH-1"),
+        ];
+        bundle.manifest.graphs = vec![GraphEntryRef {
+            id: "graph-1".into(),
+            name: "Graph".into(),
+            file: "data/Graph.spgh".into(),
+        }];
+
+        let duplicate = validate_manifest_entry_refs(&bundle.manifest);
+        assert!(
+            matches!(duplicate, Err(AppError::FileIO(message)) if message.contains("Duplicate project relationship"))
+        );
     }
 
     #[test]
@@ -2478,6 +3915,11 @@ mod tests {
             fit_y_by_x_files: vec![],
             tabulate_files: vec![],
             snapshot_files: vec![],
+            workflow_files: vec![],
+            logical_folders: vec![],
+            workflow_runs: vec![],
+            lineage_graph: workflow_domain::ProjectLineageGraph::default(),
+            relationships: vec![],
         };
 
         let json = serde_json::to_vec(&manifest).expect("serialize manifest");
@@ -3076,6 +4518,128 @@ mod tests {
 
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    #[test]
+    fn build_bundle_v4_bootstraps_lineage_graph_and_relationship_projection() {
+        let table = table_doc("table-1", "Source Table");
+        let graph = graph_doc_with_source("graph-1", "Graph 1", "table-1");
+        let fit = fit_doc_with_source("fit-1", "Fit 1", "table-1");
+        let tabulate = tabulate_doc_with_source("tab-1", "Tabulate 1", "table-1");
+
+        let bundle = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table],
+            vec![graph],
+            vec![fit],
+            vec![tabulate],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        let lineage_graph = &bundle.manifest.lineage_graph;
+        assert_eq!(lineage_graph.id, "project-lineage");
+        assert_eq!(lineage_graph.nodes.len(), 7);
+        assert_eq!(lineage_graph.edges.len(), 6);
+
+        let expected_node_ids = vec![
+            "artifact-fitYByX-fit-1",
+            "artifact-graph-graph-1",
+            "artifact-table-table-1",
+            "artifact-tabulate-tab-1",
+            "operation-fitYByX-fit-1",
+            "operation-graph-graph-1",
+            "operation-tabulate-tab-1",
+        ];
+        let actual_node_ids = lineage_graph
+            .nodes
+            .iter()
+            .map(|node| match node {
+                workflow_domain::LineageNode::Artifact(node) => node.id.clone(),
+                workflow_domain::LineageNode::Operation(node) => node.id.clone(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_node_ids, expected_node_ids);
+
+        let expected_edge_ids = vec![
+            "consumes-table-table-1-to-fitYByX-fit-1",
+            "consumes-table-table-1-to-graph-graph-1",
+            "consumes-table-table-1-to-tabulate-tab-1",
+            "produces-fitYByX-fit-1-to-fitYByX-fit-1",
+            "produces-graph-graph-1-to-graph-graph-1",
+            "produces-tabulate-tab-1-to-tabulate-tab-1",
+        ];
+        let actual_edge_ids = lineage_graph
+            .edges
+            .iter()
+            .map(|edge| edge.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(actual_edge_ids, expected_edge_ids);
+
+        let expected_relationships = vec![
+            data_source_relationship("table-1", ProjectDocumentKind::FitYByX, "fit-1"),
+            data_source_relationship("table-1", ProjectDocumentKind::Graph, "graph-1"),
+            data_source_relationship("table-1", ProjectDocumentKind::Tabulate, "tab-1"),
+        ];
+        assert_eq!(bundle.manifest.relationships, expected_relationships);
+    }
+
+    #[test]
+    fn build_bundle_v4_rejects_dangling_lineage_source_document_refs() {
+        let error = match build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table_doc("table-1", "Source Table")],
+            vec![graph_doc_with_source("graph-1", "Graph 1", "missing-table")],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        ) {
+            Ok(_) => panic!("expected dangling lineage source to fail"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, AppError::InvalidParam(message) if message.contains("unknown") && message.contains("missing-table")));
+    }
+
+    #[test]
+    fn build_bundle_v4_ignores_blank_lineage_sources() {
+        let bundle = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![table_doc("table-1", "Source Table")],
+            vec![graph_doc_with_source("graph-1", "Graph 1", "  ")],
+            vec![],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(bundle.manifest.lineage_graph.nodes.len(), 2);
+        assert!(bundle.manifest.lineage_graph.edges.is_empty());
+        assert!(bundle.manifest.relationships.is_empty());
     }
 
     #[test]

@@ -649,6 +649,16 @@ export function canExecuteGraphRequest(
 
   const hasX = fields.some((field) => field.role === "x");
   const hasY = fields.some((field) => field.role === "y");
+  const activeState = item.mode === "3d" ? item.modeStates.threeD : item.modeStates.twoD;
+  const hasNormalCurve = elements.some((element) => element.kind === "normalCurve");
+  if (hasNormalCurve) {
+    const continuousField = activeState.encoding.y?.type === "continuous"
+      ? activeState.encoding.y
+      : activeState.encoding.x?.type === "continuous"
+        ? activeState.encoding.x
+        : undefined;
+    if (continuousField && fields.some((field) => field.column === continuousField.name)) return true;
+  }
   const multiXCount = fields.filter((field) => /^multiX\d+$/.test(field.role)).length;
   return (hasX && hasY) || multiXCount >= 2;
 }
@@ -742,8 +752,16 @@ export function deriveFields(item: GraphBuilderItem): GraphFieldBinding[] {
     fields.push({ role, column });
   };
 
-  addField("x", encoding.x?.name);
-  addField("y", encoding.y?.name);
+  const normalCurveXOnly =
+    enabledKinds.has("normalcurve") &&
+    encoding.x?.type === "continuous" &&
+    !encoding.y;
+  if (normalCurveXOnly) {
+    addField("y", encoding.x?.name);
+  } else {
+    addField("x", encoding.x?.name);
+    addField("y", encoding.y?.name);
+  }
   const has3DElement = enabledKinds.has("surface") || enabledKinds.has("contour3d") || enabledKinds.has("scatter3d");
   if (activeMode === "3d" && has3DElement) {
     addField("z", item.modeStates.threeD.encoding.z?.name);
