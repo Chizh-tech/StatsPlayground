@@ -9,6 +9,7 @@ import type {
 export interface DistributionReportDependencies {
   getDatasetGeneration: (datasetId: string) => Promise<number>;
   compute: (request: DistributionRequest) => Promise<DistributionReportResponse>;
+  getCurrentItem?: () => DistributionItem | null | undefined;
 }
 
 export type DistributionReportState =
@@ -37,7 +38,6 @@ export type DistributionReportState =
 export const DISTRIBUTION_IDLE_REPORT_STATE: DistributionReportState = { status: "idle" };
 
 interface DistributionReportControllerOptions extends DistributionReportDependencies {
-  getCurrentItem?: () => DistributionItem | null | undefined;
   onStateChange?: (state: DistributionReportState) => void;
 }
 
@@ -252,6 +252,7 @@ export function useDistributionReport(
   const [state, setState] = useState<DistributionReportState>(DISTRIBUTION_IDLE_REPORT_STATE);
   const getDatasetGeneration = dependencies?.getDatasetGeneration;
   const compute = dependencies?.compute;
+  const getCurrentItem = dependencies?.getCurrentItem;
   const fingerprint = item == null ? null : distributionRequestFingerprint(item);
 
   useEffect(() => {
@@ -265,7 +266,11 @@ export function useDistributionReport(
       try {
         const resolved = await resolveDependencies({ getDatasetGeneration, compute });
         if (!mounted) return;
-        controller = createDistributionReportController({ ...resolved, onStateChange: setState });
+        controller = createDistributionReportController({
+          ...resolved,
+          getCurrentItem,
+          onStateChange: setState,
+        });
         await controller.load(item);
       } catch (error) {
         if (!mounted) return;
@@ -282,7 +287,7 @@ export function useDistributionReport(
       mounted = false;
       controller?.dispose();
     };
-  }, [compute, fingerprint, generationSignal, getDatasetGeneration, item]);
+  }, [compute, fingerprint, generationSignal, getCurrentItem, getDatasetGeneration, item]);
 
   return state;
 }
