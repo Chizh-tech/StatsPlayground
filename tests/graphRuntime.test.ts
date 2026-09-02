@@ -186,6 +186,16 @@ assert.equal(
   false,
   "GraphRuntime must not import or reference useGraphBuilderStore",
 );
+assert.equal(
+  graphRuntimeSource.includes("externalDataState?: ExternalGraphDataState"),
+  true,
+  "GraphRuntime must expose the shared external frame contract",
+);
+assert.equal(
+  graphRuntimeSource.includes("selectGraphRuntimeDataState(internalDataState, externalDataState)"),
+  true,
+  "GraphRuntime must select external state only after calling its internal pipeline hook",
+);
 
 const fitYByXViewSource = readFileSync(
   resolve(process.cwd(), "src/components/fitYByX/FitYByXView.tsx"),
