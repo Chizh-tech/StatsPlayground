@@ -420,72 +420,72 @@ fn median(sorted_values: &[f64]) -> f64 {
     } else {
         normalize_signed_zero((sorted_values[length / 2 - 1] + sorted_values[length / 2]) / 2.0)
     }
+}
 
-    #[derive(Debug, Clone)]
-    struct OlsSolved {
-        coefficients: Vec<f64>,
-        predicted: Vec<f64>,
-        residuals: Vec<f64>,
-        xtx_inverse_diagonal: Vec<f64>,
-    }
+#[derive(Debug, Clone)]
+struct OlsSolved {
+    coefficients: Vec<f64>,
+    predicted: Vec<f64>,
+    residuals: Vec<f64>,
+    xtx_inverse_diagonal: Vec<f64>,
+}
 
-    fn design_matrix(rows: &[(f64, f64)], polynomial_degree: usize) -> Vec<Vec<f64>> {
-        rows.iter()
-            .map(|(x, _)| {
-                let mut row = Vec::with_capacity(polynomial_degree + 1);
-                row.push(1.0);
-                for degree in 1..=polynomial_degree {
-                    row.push(x.powi(degree as i32));
-                }
-                row
-            })
-            .collect()
-    }
-
-    fn solve_ols(design: &[Vec<f64>], response: &[f64]) -> Option<OlsSolved> {
-        if design.is_empty() || response.is_empty() || design.len() != response.len() {
-            return None;
-        }
-        let row_count = design.len();
-        let column_count = design[0].len();
-        if column_count == 0 || design.iter().any(|row| row.len() != column_count) {
-            return None;
-        }
-
-        let flattened = design.iter().flatten().copied().collect::<Vec<_>>();
-        let x = DMatrix::from_row_slice(row_count, column_count, &flattened);
-        let y = DVector::from_row_slice(response);
-        let xtx = x.transpose() * &x;
-        let xtx_inverse = xtx.try_inverse()?;
-        let beta = &xtx_inverse * x.transpose() * &y;
-        let fitted = x * &beta;
-        let residual = y - &fitted;
-        let xtx_inverse_diagonal = (0..column_count)
-            .map(|index| normalize_signed_zero(xtx_inverse[(index, index)]))
-            .collect::<Vec<_>>();
-
-        Some(OlsSolved {
-            coefficients: beta.iter().map(|value| normalize_signed_zero(*value)).collect(),
-            predicted: fitted
-                .iter()
-                .map(|value| normalize_signed_zero(*value))
-                .collect(),
-            residuals: residual
-                .iter()
-                .map(|value| normalize_signed_zero(*value))
-                .collect(),
-            xtx_inverse_diagonal,
+fn design_matrix(rows: &[(f64, f64)], polynomial_degree: usize) -> Vec<Vec<f64>> {
+    rows.iter()
+        .map(|(x, _)| {
+            let mut row = Vec::with_capacity(polynomial_degree + 1);
+            row.push(1.0);
+            for degree in 1..=polynomial_degree {
+                row.push(x.powi(degree as i32));
+            }
+            row
         })
+        .collect()
+}
+
+fn solve_ols(design: &[Vec<f64>], response: &[f64]) -> Option<OlsSolved> {
+    if design.is_empty() || response.is_empty() || design.len() != response.len() {
+        return None;
+    }
+    let row_count = design.len();
+    let column_count = design[0].len();
+    if column_count == 0 || design.iter().any(|row| row.len() != column_count) {
+        return None;
     }
 
-    fn predict_polynomial(coefficients: &[f64], x: f64, polynomial_degree: usize) -> f64 {
-        coefficients
+    let flattened = design.iter().flatten().copied().collect::<Vec<_>>();
+    let x = DMatrix::from_row_slice(row_count, column_count, &flattened);
+    let y = DVector::from_row_slice(response);
+    let xtx = x.transpose() * &x;
+    let xtx_inverse = xtx.try_inverse()?;
+    let beta = &xtx_inverse * x.transpose() * &y;
+    let fitted = x * &beta;
+    let residual = y - &fitted;
+    let xtx_inverse_diagonal = (0..column_count)
+        .map(|index| normalize_signed_zero(xtx_inverse[(index, index)]))
+        .collect::<Vec<_>>();
+
+    Some(OlsSolved {
+        coefficients: beta.iter().map(|value| normalize_signed_zero(*value)).collect(),
+        predicted: fitted
             .iter()
-            .enumerate()
-            .take(polynomial_degree + 1)
-            .map(|(degree, coefficient)| coefficient * x.powi(degree as i32))
-            .sum()
-    }
+            .map(|value| normalize_signed_zero(*value))
+            .collect(),
+        residuals: residual
+            .iter()
+            .map(|value| normalize_signed_zero(*value))
+            .collect(),
+        xtx_inverse_diagonal,
+    })
+}
+
+fn predict_polynomial(coefficients: &[f64], x: f64, polynomial_degree: usize) -> f64 {
+    coefficients
+        .iter()
+        .enumerate()
+        .take(polynomial_degree + 1)
+        .map(|(degree, coefficient)| coefficient * x.powi(degree as i32))
+        .sum()
 }
 
 fn parameter_estimates(
@@ -608,10 +608,10 @@ fn lack_of_fit(
         if rows_at_x.len() <= 1 {
             continue;
         }
-        let mean_fitted = mean(rows_at_x.iter().map(|(_, fitted)| *fitted));
+        let mean_actual = mean(rows_at_x.iter().map(|(actual, _)| *actual));
         pure_error_ss += rows_at_x
             .iter()
-            .map(|(actual, _)| square(*actual - mean_fitted))
+            .map(|(actual, _)| square(*actual - mean_actual))
             .sum::<f64>();
     }
     pure_error_ss = normalize_small_zero(pure_error_ss);

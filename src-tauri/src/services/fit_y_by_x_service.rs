@@ -116,6 +116,13 @@ mod tests {
 
     use super::FitYByXService;
 
+    fn assert_close(actual: f64, expected: f64, tolerance: f64) {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "actual={actual}, expected={expected}, tolerance={tolerance}"
+        );
+    }
+
     fn seed_dataset(
         state: &AppState,
         dataset_id: &str,
@@ -266,8 +273,8 @@ mod tests {
         assert_eq!(bivariate.used_rows, 3);
         assert_eq!(bivariate.excluded_rows, 2);
         assert_eq!(bivariate.summary_of_fit.observation_count, 3);
-        assert_eq!(bivariate.intercept, 1.0);
-        assert_eq!(bivariate.slope, 2.0);
+        assert_close(bivariate.intercept, 1.0, 1e-9);
+        assert_close(bivariate.slope, 2.0, 1e-9);
         Ok(())
     }
 
