@@ -1,13 +1,17 @@
 import { useTranslation } from "react-i18next";
 
 import type {
+  FitYByXActualByPredictedPoint,
   FitYByXAnovaRow,
   FitYByXBivariateResult,
+  FitYByXEffectSummaryRow,
   FitYByXEstimateRow,
   FitYByXItem,
   FitYByXNotComputableReason,
   FitYByXNotComputableResult,
   FitYByXOnewayGroupSummary,
+  FitYByXPredictionProfilerPoint,
+  FitYByXResidualByPredictedPoint,
   FitYByXOnewayResult,
   FitYByXSummaryOfFit,
 } from "@/types/fitYByX";
@@ -96,6 +100,13 @@ function formatCount(value: number | null | undefined, undefinedValue = DEFAULT_
   return typeof value === "number" && Number.isFinite(value)
     ? String(value)
     : undefinedValue;
+}
+
+function formatBooleanValue(value: boolean | null | undefined, t: Translate, undefinedValue: string): string {
+  if (value == null) {
+    return undefinedValue;
+  }
+  return value ? t("fitYByX.report.boolean.yes") : t("fitYByX.report.boolean.no");
 }
 
 function createLabeledValueSection(
@@ -313,6 +324,112 @@ function createParameterEstimatesSection(
   };
 }
 
+function createEffectSummarySection(
+  rows: FitYByXEffectSummaryRow[],
+  t: Translate,
+  undefinedValue: string,
+): FitYByXReportSectionModel {
+  return {
+    key: "effectSummary",
+    title: t("fitYByX.report.section.effectSummary"),
+    open: true,
+    columns: [
+      t("fitYByX.report.column.term"),
+      t("fitYByX.report.column.estimate"),
+      t("fitYByX.report.column.standardError"),
+      t("fitYByX.report.column.tRatio"),
+      t("fitYByX.report.column.pValue"),
+      t("fitYByX.report.column.significant"),
+    ],
+    rows: rows.map((row) => ({
+      key: `effect:${row.term}`,
+      values: [
+        translateStableReportLabel("term", row.term, t),
+        formatFitYByXReportValue(row.estimate, undefinedValue),
+        formatFitYByXReportValue(row.standardError, undefinedValue),
+        formatFitYByXReportValue(row.tRatio, undefinedValue),
+        formatFitYByXReportPValue(row.pValue, undefinedValue),
+        formatBooleanValue(row.isSignificant, t, undefinedValue),
+      ],
+      numericColumns: [1, 2, 3, 4],
+    })),
+  };
+}
+
+function createPredictionProfilerSection(
+  rows: FitYByXPredictionProfilerPoint[],
+  t: Translate,
+  undefinedValue: string,
+): FitYByXReportSectionModel {
+  return {
+    key: "predictionProfiler",
+    title: t("fitYByX.report.section.predictionProfiler"),
+    open: true,
+    columns: [
+      t("fitYByX.report.column.level"),
+      t("fitYByX.report.column.factorValue"),
+      t("fitYByX.report.column.predictedResponse"),
+    ],
+    rows: rows.map((row) => ({
+      key: `profiler:${row.label}:${row.factorValue}`,
+      values: [
+        t(`fitYByX.report.profiler.${row.label}`),
+        formatFitYByXReportValue(row.factorValue, undefinedValue),
+        formatFitYByXReportValue(row.predictedResponse, undefinedValue),
+      ],
+      numericColumns: [1, 2],
+    })),
+  };
+}
+
+function createActualByPredictedSection(
+  rows: FitYByXActualByPredictedPoint[],
+  t: Translate,
+  undefinedValue: string,
+): FitYByXReportSectionModel {
+  return {
+    key: "actualByPredicted",
+    title: t("fitYByX.report.section.actualByPredicted"),
+    open: true,
+    columns: [
+      t("fitYByX.report.column.predicted"),
+      t("fitYByX.report.column.actual"),
+    ],
+    rows: rows.map((row, index) => ({
+      key: `abp:${index}`,
+      values: [
+        formatFitYByXReportValue(row.predicted, undefinedValue),
+        formatFitYByXReportValue(row.actual, undefinedValue),
+      ],
+      numericColumns: [0, 1],
+    })),
+  };
+}
+
+function createResidualByPredictedSection(
+  rows: FitYByXResidualByPredictedPoint[],
+  t: Translate,
+  undefinedValue: string,
+): FitYByXReportSectionModel {
+  return {
+    key: "residualByPredicted",
+    title: t("fitYByX.report.section.residualByPredicted"),
+    open: true,
+    columns: [
+      t("fitYByX.report.column.predicted"),
+      t("fitYByX.report.column.residual"),
+    ],
+    rows: rows.map((row, index) => ({
+      key: `rbp:${index}`,
+      values: [
+        formatFitYByXReportValue(row.predicted, undefinedValue),
+        formatFitYByXReportValue(row.residual, undefinedValue),
+      ],
+      numericColumns: [0, 1],
+    })),
+  };
+}
+
 function createGroupSummarySection(
   rows: FitYByXOnewayGroupSummary[],
   t: Translate,
@@ -420,6 +537,8 @@ function createBivariateSections(
 ): FitYByXReportSectionModel[] {
   return [
     createSummaryOfFitSection(item, result, result.summaryOfFit, t, undefinedValue),
+    createEffectSummarySection(result.effectSummary, t, undefinedValue),
+    createPredictionProfilerSection(result.predictionProfiler, t, undefinedValue),
     createLackOfFitSection(result, t, undefinedValue),
     createAnovaSection(
       "analysisOfVariance",
@@ -429,6 +548,8 @@ function createBivariateSections(
       undefinedValue,
     ),
     createParameterEstimatesSection(result.parameterEstimates, t, undefinedValue),
+    createActualByPredictedSection(result.actualByPredicted, t, undefinedValue),
+    createResidualByPredictedSection(result.residualByPredicted, t, undefinedValue),
   ];
 }
 

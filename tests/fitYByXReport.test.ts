@@ -207,6 +207,37 @@ function makeBivariateResult(overrides: Partial<FitYByXBivariateResult> = {}): F
         upperConfidenceLimit: null,
       },
     ],
+    effectSummary: [
+      {
+        term: "Slope",
+        estimate: 0.0000123456789,
+        standardError: 0,
+        tRatio: null,
+        pValue: null,
+        isSignificant: null,
+      },
+      {
+        term: "Intercept",
+        estimate: 1.23456789,
+        standardError: 0.0123456789,
+        tRatio: 100.123456,
+        pValue: 0.00008,
+        isSignificant: true,
+      },
+    ],
+    predictionProfiler: [
+      { label: "Low", factorValue: 10, predictedResponse: 1.23469135 },
+      { label: "Center", factorValue: 20, predictedResponse: 1.2348148 },
+      { label: "High", factorValue: 30, predictedResponse: 1.23493826 },
+    ],
+    actualByPredicted: [
+      { predicted: 1.23469135, actual: 1.236 },
+      { predicted: 1.2348148, actual: 1.2347 },
+    ],
+    residualByPredicted: [
+      { predicted: 1.23469135, residual: 0.00130865 },
+      { predicted: 1.2348148, residual: -0.0001148 },
+    ],
     ...overrides,
   };
 }
@@ -297,7 +328,16 @@ function testBivariateViewModelSectionsAndFormatting(): void {
   assert.equal(model.summary.excludedRows, "3");
   assert.deepEqual(
     model.sections.map((section) => section.key),
-    ["summaryOfFit", "lackOfFit", "analysisOfVariance", "parameterEstimates"],
+    [
+      "summaryOfFit",
+      "effectSummary",
+      "predictionProfiler",
+      "lackOfFit",
+      "analysisOfVariance",
+      "parameterEstimates",
+      "actualByPredicted",
+      "residualByPredicted",
+    ],
   );
   assert.equal(model.sections.every((section) => section.open), true);
   assert.equal(model.sections[0]?.rows[0]?.numericColumns, undefined);
@@ -307,11 +347,16 @@ function testBivariateViewModelSectionsAndFormatting(): void {
     "fitYByX.report.summaryOfFit.equationTemplate|factor=temperature,intercept=1.23457,response=diameter,slope=0.0000123457",
   ]);
   assert.equal(model.sections[0]?.rows[1]?.values[1], "0.998878");
-  assert.equal(model.sections[1]?.rows[0]?.values.at(-1), "<0.0001");
-  assert.equal(model.sections[2]?.rows[1]?.values.at(-1), "—");
-  assert.equal(model.sections[3]?.rows[0]?.values.at(-1), "1.35791");
-  assert.equal(model.sections[3]?.rows[1]?.values[2], "0");
-  assert.equal(model.sections[3]?.rows[1]?.values[4], "—");
+  assert.equal(model.sections[1]?.rows[0]?.values.at(-1), "—");
+  assert.equal(model.sections[1]?.rows[1]?.values.at(-1), "fitYByX.report.boolean.yes");
+  assert.equal(model.sections[2]?.rows[1]?.values[0], "fitYByX.report.profiler.Center");
+  assert.equal(model.sections[3]?.rows[0]?.values.at(-1), "<0.0001");
+  assert.equal(model.sections[4]?.rows[1]?.values.at(-1), "—");
+  assert.equal(model.sections[5]?.rows[0]?.values.at(-1), "1.35791");
+  assert.equal(model.sections[5]?.rows[1]?.values[2], "0");
+  assert.equal(model.sections[5]?.rows[1]?.values[4], "—");
+  assert.equal(model.sections[6]?.rows[0]?.values[0], "1.23469");
+  assert.equal(model.sections[7]?.rows[1]?.values[1], "-0.0001148");
 }
 
 function testBivariateEquationRowFormatsPositiveAndNegativeSlopes(): void {
@@ -363,10 +408,19 @@ function testBivariateNotIdentifiableKeepsLocalizedLackOfFitSection(): void {
 
   assert.deepEqual(
     model.sections.map((section) => section.key),
-    ["summaryOfFit", "lackOfFit", "analysisOfVariance", "parameterEstimates"],
+    [
+      "summaryOfFit",
+      "effectSummary",
+      "predictionProfiler",
+      "lackOfFit",
+      "analysisOfVariance",
+      "parameterEstimates",
+      "actualByPredicted",
+      "residualByPredicted",
+    ],
   );
-  assert.equal(model.sections[1]?.rows.length, 1);
-  assert.equal(model.sections[1]?.rows[0]?.values[0], "fitYByX.report.lackOfFit.notIdentifiable");
+  assert.equal(model.sections[3]?.rows.length, 1);
+  assert.equal(model.sections[3]?.rows[0]?.values[0], "fitYByX.report.lackOfFit.notIdentifiable");
 }
 
 function testOnewayViewModelSectionsAndFormatting(): void {
@@ -402,6 +456,15 @@ function testLocaleParityForKnownReportLabels(): void {
     "fitYByX.report.source.Total Error",
     "fitYByX.report.term.Intercept",
     "fitYByX.report.term.Slope",
+    "fitYByX.report.section.effectSummary",
+    "fitYByX.report.section.predictionProfiler",
+    "fitYByX.report.section.actualByPredicted",
+    "fitYByX.report.section.residualByPredicted",
+    "fitYByX.report.boolean.yes",
+    "fitYByX.report.boolean.no",
+    "fitYByX.report.profiler.Low",
+    "fitYByX.report.profiler.Center",
+    "fitYByX.report.profiler.High",
   ];
 
   for (const locale of ["en", "vi", "zh-CN", "zh-TW"]) {
@@ -494,13 +557,13 @@ function testKnownBivariateLabelsLocalizeOutsideEnglishAndUnknownLabelsPassThrou
 
   assert.equal(model.sections[0]?.rows[0]?.values[0], "拟合方程");
   assert.equal(model.sections[0]?.rows[0]?.values[1], "直径 = 1.23457 + 0.0000123457 * 温度");
-  assert.equal(model.sections[1]?.rows[0]?.values[0], "失拟");
-  assert.equal(model.sections[1]?.rows[1]?.values[0], "纯误差");
-  assert.equal(model.sections[1]?.rows[2]?.values[0], "总误差");
-  assert.equal(model.sections[2]?.rows[0]?.values[0], "模型");
-  assert.equal(model.sections[2]?.rows[1]?.values[0], "Mystery Source");
-  assert.equal(model.sections[3]?.rows[0]?.values[0], "截距");
-  assert.equal(model.sections[3]?.rows[1]?.values[0], "斜率");
+  assert.equal(model.sections[3]?.rows[0]?.values[0], "失拟");
+  assert.equal(model.sections[3]?.rows[1]?.values[0], "纯误差");
+  assert.equal(model.sections[3]?.rows[2]?.values[0], "总误差");
+  assert.equal(model.sections[4]?.rows[0]?.values[0], "模型");
+  assert.equal(model.sections[4]?.rows[1]?.values[0], "Mystery Source");
+  assert.equal(model.sections[5]?.rows[0]?.values[0], "截距");
+  assert.equal(model.sections[5]?.rows[1]?.values[0], "斜率");
 
   const rendered = model.sections.flatMap((section) => section.rows).flatMap((row) => row.values);
   assert.equal(rendered.includes("Model"), false);

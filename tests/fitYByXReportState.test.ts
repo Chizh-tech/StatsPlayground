@@ -103,6 +103,10 @@ function makeBivariateResult(overrides: Partial<FitYByXBivariateResult> = {}): F
     },
     anova: [],
     parameterEstimates: [],
+    effectSummary: [],
+    actualByPredicted: [],
+    residualByPredicted: [],
+    predictionProfiler: [],
     ...overrides,
   };
 }

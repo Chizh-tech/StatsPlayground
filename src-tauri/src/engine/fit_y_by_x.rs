@@ -3,9 +3,11 @@ use std::collections::BTreeMap;
 use statrs::distribution::{ContinuousCDF, FisherSnedecor, StudentsT};
 
 use crate::models::fit_y_by_x::{
-    AnovaRow, BivariateResult, EstimateRow, FitYByXNotComputableReason, FitYByXPersonality,
-    FitYByXResult, FitYByXRow, LackOfFitAvailable, LackOfFitResult, NotComputableResult,
-    OnewayEffectSizes, OnewayGroupSummary, OnewayResult, SummaryOfFit,
+    ActualByPredictedPoint, AnovaRow, BivariateResult, EffectSummaryRow, EstimateRow,
+    FitYByXNotComputableReason, FitYByXPersonality, FitYByXResult, FitYByXRow,
+    LackOfFitAvailable, LackOfFitResult, NotComputableResult, OnewayEffectSizes,
+    OnewayGroupSummary, OnewayResult, PredictionProfilerPoint, ResidualByPredictedPoint,
+    SummaryOfFit,
 };
 
 pub fn calculate_oneway(
@@ -245,6 +247,10 @@ pub fn calculate_bivariate(
         residual_df,
         confidence_level,
     );
+    let effect_summary = effect_summary_from_estimates(&parameter_estimates);
+    let (actual_by_predicted, residual_by_predicted) =
+        regression_diagnostic_points(&rows, intercept, slope);
+    let prediction_profiler = prediction_profiler(&rows, intercept, slope);
     let lack_of_fit = lack_of_fit(&rows, ss_error, residual_df);
 
     FitYByXResult::Bivariate(BivariateResult {
@@ -288,7 +294,116 @@ pub fn calculate_bivariate(
             },
         ],
         parameter_estimates,
+        effect_summary,
+        actual_by_predicted,
+        residual_by_predicted,
+        prediction_profiler,
     })
+}
+
+fn effect_summary_from_estimates(rows: &[EstimateRow]) -> Vec<EffectSummaryRow> {
+    rows.iter()
+        .map(|row| EffectSummaryRow {
+            term: row.term.clone(),
+            estimate: row.estimate,
+            standard_error: row.standard_error,
+            t_ratio: row.t_ratio,
+            p_value: row.p_value,
+            is_significant: row.p_value.map(|value| value < 0.05),
+        })
+        .collect()
+}
+
+fn regression_diagnostic_points(
+    rows: &[(f64, f64)],
+    intercept: f64,
+    slope: f64,
+) -> (Vec<ActualByPredictedPoint>, Vec<ResidualByPredictedPoint>) {
+    let mut actual_by_predicted = Vec::with_capacity(rows.len());
+    let mut residual_by_predicted = Vec::with_capacity(rows.len());
+    for &(x, y) in rows {
+        let predicted = normalize_signed_zero(intercept + slope * x);
+        let residual = normalize_signed_zero(y - predicted);
+        actual_by_predicted.push(ActualByPredictedPoint {
+            predicted,
+            actual: normalize_signed_zero(y),
+        });
+        residual_by_predicted.push(ResidualByPredictedPoint {
+            predicted,
+            residual,
+        });
+    }
+
+    (
+        sort_actual_by_predicted(actual_by_predicted),
+        sort_residual_by_predicted(residual_by_predicted),
+    )
+}
+
+fn sort_actual_by_predicted(
+    mut rows: Vec<ActualByPredictedPoint>,
+) -> Vec<ActualByPredictedPoint> {
+    rows.sort_by(|left, right| {
+        left.predicted
+            .total_cmp(&right.predicted)
+            .then_with(|| left.actual.total_cmp(&right.actual))
+    });
+    rows
+}
+
+fn sort_residual_by_predicted(
+    mut rows: Vec<ResidualByPredictedPoint>,
+) -> Vec<ResidualByPredictedPoint> {
+    rows.sort_by(|left, right| {
+        left.predicted
+            .total_cmp(&right.predicted)
+            .then_with(|| left.residual.total_cmp(&right.residual))
+    });
+    rows
+}
+
+fn prediction_profiler(
+    rows: &[(f64, f64)],
+    intercept: f64,
+    slope: f64,
+) -> Vec<PredictionProfilerPoint> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let mut x_values = rows.iter().map(|(x, _)| *x).collect::<Vec<_>>();
+    x_values.sort_by(f64::total_cmp);
+    let min = x_values[0];
+    let max = x_values[x_values.len() - 1];
+    let center = median(&x_values);
+
+    let mut unique_points: Vec<(&str, f64)> = Vec::new();
+    for candidate in [("Low", min), ("Center", center), ("High", max)] {
+        if unique_points.iter().any(|(_, value)| {
+            normalize_small_zero(*value - candidate.1) == 0.0
+        }) {
+            continue;
+        }
+        unique_points.push(candidate);
+    }
+
+    unique_points
+        .into_iter()
+        .map(|(label, factor_value)| PredictionProfilerPoint {
+            label: label.into(),
+            factor_value: normalize_signed_zero(factor_value),
+            predicted_response: normalize_signed_zero(intercept + slope * factor_value),
+        })
+        .collect()
+}
+
+fn median(sorted_values: &[f64]) -> f64 {
+    let length = sorted_values.len();
+    if length % 2 == 1 {
+        sorted_values[length / 2]
+    } else {
+        normalize_signed_zero((sorted_values[length / 2 - 1] + sorted_values[length / 2]) / 2.0)
+    }
 }
 
 fn parameter_estimates(

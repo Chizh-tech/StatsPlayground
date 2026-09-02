@@ -71,6 +71,31 @@ export interface FitYByXSummaryOfFit {
   observationCount: number;
 }
 
+export interface FitYByXEffectSummaryRow {
+  term: string;
+  estimate: number;
+  standardError: number | null;
+  tRatio: number | null;
+  pValue: number | null;
+  isSignificant: boolean | null;
+}
+
+export interface FitYByXActualByPredictedPoint {
+  predicted: number;
+  actual: number;
+}
+
+export interface FitYByXResidualByPredictedPoint {
+  predicted: number;
+  residual: number;
+}
+
+export interface FitYByXPredictionProfilerPoint {
+  label: string;
+  factorValue: number;
+  predictedResponse: number;
+}
+
 export interface FitYByXLackOfFitAvailable {
   state: "available";
   rows: FitYByXAnovaRow[];
@@ -95,6 +120,10 @@ export interface FitYByXBivariateResult {
   lackOfFit: FitYByXLackOfFitResult;
   anova: FitYByXAnovaRow[];
   parameterEstimates: FitYByXEstimateRow[];
+  effectSummary: FitYByXEffectSummaryRow[];
+  actualByPredicted: FitYByXActualByPredictedPoint[];
+  residualByPredicted: FitYByXResidualByPredictedPoint[];
+  predictionProfiler: FitYByXPredictionProfilerPoint[];
 }
 
 export interface FitYByXNotComputableResult {

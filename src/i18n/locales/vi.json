@@ -236,9 +236,13 @@
       "section": {
         "status": "Trạng thái",
         "summaryOfFit": "Tóm tắt mô hình",
+        "effectSummary": "Tóm tắt ảnh hưởng",
+        "predictionProfiler": "Biểu đồ hồ sơ dự đoán",
         "lackOfFit": "Thiếu phù hợp",
         "analysisOfVariance": "Phân tích phương sai",
         "parameterEstimates": "Ước lượng tham số",
+        "actualByPredicted": "Thực tế theo dự đoán",
+        "residualByPredicted": "Phần dư theo dự đoán",
         "groupSummary": "Tóm tắt nhóm",
         "effectSize": "Kích thước ảnh hưởng"
       },
@@ -257,6 +261,13 @@
         "tRatio": "Tỷ số t",
         "lowerConfidenceLimit": "Cận dưới 95%",
         "upperConfidenceLimit": "Cận trên 95%",
+        "significant": "Có ý nghĩa",
+        "level": "Mức",
+        "factorValue": "Giá trị yếu tố",
+        "predictedResponse": "Đáp ứng dự đoán",
+        "predicted": "Dự đoán",
+        "actual": "Thực tế",
+        "residual": "Phần dư",
         "group": "Nhóm",
         "count": "Số lượng",
         "mean": "Trung bình",
@@ -288,6 +299,15 @@
       "effectSize": {
         "etaSquared": "Eta bình phương",
         "omegaSquared": "Omega bình phương"
+      },
+      "boolean": {
+        "yes": "Có",
+        "no": "Không"
+      },
+      "profiler": {
+        "Low": "Thấp",
+        "Center": "Trung bình",
+        "High": "Cao"
       },
       "lackOfFit": {
         "notIdentifiable": "Không thể xác định Thiếu phù hợp vì không có giá trị X lặp lại."

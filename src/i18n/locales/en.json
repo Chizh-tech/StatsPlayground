@@ -237,9 +237,13 @@
       "section": {
         "status": "Status",
         "summaryOfFit": "Summary of Fit",
+        "effectSummary": "Effect Summary",
+        "predictionProfiler": "Prediction Profiler",
         "lackOfFit": "Lack of Fit",
         "analysisOfVariance": "Analysis of Variance",
         "parameterEstimates": "Parameter Estimates",
+        "actualByPredicted": "Actual by Predicted",
+        "residualByPredicted": "Residual by Predicted",
         "groupSummary": "Group Summary",
         "effectSize": "Effect Size"
       },
@@ -258,6 +262,13 @@
         "tRatio": "t Ratio",
         "lowerConfidenceLimit": "Lower 95%",
         "upperConfidenceLimit": "Upper 95%",
+        "significant": "Significant",
+        "level": "Level",
+        "factorValue": "Factor Value",
+        "predictedResponse": "Predicted Response",
+        "predicted": "Predicted",
+        "actual": "Actual",
+        "residual": "Residual",
         "group": "Group",
         "count": "Count",
         "mean": "Mean",
@@ -289,6 +300,15 @@
       "effectSize": {
         "etaSquared": "Eta Squared",
         "omegaSquared": "Omega Squared"
+      },
+      "boolean": {
+        "yes": "Yes",
+        "no": "No"
+      },
+      "profiler": {
+        "Low": "Low",
+        "Center": "Center",
+        "High": "High"
       },
       "lackOfFit": {
         "notIdentifiable": "Lack of Fit is not identifiable because replicated X values are unavailable."

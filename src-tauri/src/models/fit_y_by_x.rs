@@ -125,6 +125,39 @@ pub struct SummaryOfFit {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct EffectSummaryRow {
+    pub term: String,
+    pub estimate: f64,
+    pub standard_error: Option<f64>,
+    pub t_ratio: Option<f64>,
+    pub p_value: Option<f64>,
+    pub is_significant: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActualByPredictedPoint {
+    pub predicted: f64,
+    pub actual: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResidualByPredictedPoint {
+    pub predicted: f64,
+    pub residual: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PredictionProfilerPoint {
+    pub label: String,
+    pub factor_value: f64,
+    pub predicted_response: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct LackOfFitAvailable {
     pub rows: Vec<AnovaRow>,
 }
@@ -165,6 +198,10 @@ pub struct BivariateResult {
     pub lack_of_fit: LackOfFitResult,
     pub anova: Vec<AnovaRow>,
     pub parameter_estimates: Vec<EstimateRow>,
+    pub effect_summary: Vec<EffectSummaryRow>,
+    pub actual_by_predicted: Vec<ActualByPredictedPoint>,
+    pub residual_by_predicted: Vec<ResidualByPredictedPoint>,
+    pub prediction_profiler: Vec<PredictionProfilerPoint>,
 }
 
 #[cfg(test)]

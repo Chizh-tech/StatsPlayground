@@ -236,9 +236,13 @@
       "section": {
         "status": "狀態",
         "summaryOfFit": "配適摘要",
+        "effectSummary": "效果摘要",
+        "predictionProfiler": "預測剖析器",
         "lackOfFit": "缺乏配適",
         "analysisOfVariance": "變異數分析",
         "parameterEstimates": "參數估計",
+        "actualByPredicted": "實際值-預測值",
+        "residualByPredicted": "殘差-預測值",
         "groupSummary": "分組摘要",
         "effectSize": "效果量"
       },
@@ -257,6 +261,13 @@
         "tRatio": "t 比",
         "lowerConfidenceLimit": "95% 下限",
         "upperConfidenceLimit": "95% 上限",
+        "significant": "顯著",
+        "level": "層級",
+        "factorValue": "因子值",
+        "predictedResponse": "預測反應",
+        "predicted": "預測值",
+        "actual": "實際值",
+        "residual": "殘差",
         "group": "群組",
         "count": "數量",
         "mean": "平均值",
@@ -288,6 +299,15 @@
       "effectSize": {
         "etaSquared": "Eta 平方",
         "omegaSquared": "Omega 平方"
+      },
+      "boolean": {
+        "yes": "是",
+        "no": "否"
+      },
+      "profiler": {
+        "Low": "低位",
+        "Center": "中位",
+        "High": "高位"
       },
       "lackOfFit": {
         "notIdentifiable": "由於沒有重複的 X 值，因此無法識別缺乏配適。"
