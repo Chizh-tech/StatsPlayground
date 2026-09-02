@@ -4,7 +4,8 @@
 - Complete
 
 ## Commit
-- Pending
+- `d4c4c82` — `feat(report): add markdown editor and preview`
+- Pending cleanup commit to remove accidentally staged Playwright `.cache` artifacts and add an ignore rule.
 
 ## Files
 - `package.json`
@@ -124,3 +125,4 @@ Result:
 ## Concerns
 - This issue worktree was missing Playwright component-test setup, so Task 6 needed a small CT harness addition (`playwright-ct.config.ts`, `playwright/`, and a test harness component) to satisfy the required UI RED/GREEN cycle.
 - `npx vite build` still reports large-chunk and `dataService` dynamic-import warnings that predate this task; they were not changed here.
+- I initially committed generated `playwright/.cache` artifacts by staging the whole `playwright/` directory. I corrected that by ignoring `playwright/.cache/`, removing those files from version control, and re-running the required checks before the final cleanup commit.

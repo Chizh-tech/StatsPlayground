@@ -2,6 +2,7 @@
 node_modules/
 dist/
 *.local
+playwright/.cache/
 
 # ----- Rust / Cargo -----
 src-tauri/target/
