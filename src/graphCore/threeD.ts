@@ -408,11 +408,15 @@ export function build3DOption(
   // 分组：当绑定了 Overlay（图例）列时，按其值把数据切成多组，
   // 每组各自成一张 surface / 一簇 scatter3D，颜色取该组「渐变」标记的
   // 颜色（主题自动为每个图例分配不同色，用户可切换，跟点/线/面一致）。
-  const overlay = spec.encoding.overlay;
+  const grouping = spec.encoding.overlay ?? spec.encoding.color;
   const styles = spec.styles ?? {};
-  const colorOf = (key: string): string => {
+  const gradientColorOf = (key: string): string => {
     const s = styles[key];
     return s?.gradient?.color || s?.fill?.color || s?.point?.color || "#4a6cf7";
+  };
+  const lineColorOf = (key: string): string => {
+    const s = styles[key];
+    return s?.line?.color || s?.gradient?.color || s?.point?.color || s?.fill?.color || "#4a6cf7";
   };
 
   const series: Record<string, unknown>[] = [];
@@ -437,7 +441,13 @@ export function build3DOption(
   const framePoints = frame ? collectFrame3DPoints(frame) : [];
   const useFramePoints = framePoints.length > 0;
 
-  const addLayers = (gdata: GraphData | null, gpoints: readonly Typed3DPoint[] | null, name: string, color: string) => {
+  const addLayers = (
+    gdata: GraphData | null,
+    gpoints: readonly Typed3DPoint[] | null,
+    name: string,
+    gradientColor: string,
+    lineColor: string,
+  ) => {
     const indices: number[] = [];
     const buildGrid = (stat: SurfaceStat, smoothness: number): SurfaceGrid | null => (
       gpoints
@@ -454,7 +464,7 @@ export function build3DOption(
           data: surfaceGrid.verts,
           dataShape: surfaceGrid.dataShape,
           shading: "lambert",
-          itemStyle: { color },
+          itemStyle: { color: gradientColor },
           wireframe: { show: false },
         });
         hasSurfaceSeries = true;
@@ -478,7 +488,7 @@ export function build3DOption(
             coordinateSystem: "cartesian3D",
             name: `${name}__contour_${contour.level}_${contourIndex}`,
             data: contour.points.map(([x, y, z]) => [x, y, z + zOffset]),
-            lineStyle: { color, width: 2, opacity: 0.9 },
+            lineStyle: { color: lineColor, width: 2, opacity: 0.9 },
             silent: true,
           });
         }
@@ -498,7 +508,7 @@ export function build3DOption(
             name,
             data: sc.pts,
             symbolSize: 6,
-            itemStyle: { color, opacity: 0.9 },
+            itemStyle: { color: gradientColor, opacity: 0.9 },
           });
           indices.push(series.length - 1);
           if (sc.zmin < pmin) pmin = sc.zmin;
@@ -559,7 +569,7 @@ export function build3DOption(
               name: `${name}__err_${i}`,
               data: errSegs[i],
               lineStyle: {
-                color,
+                color: lineColor,
                 width: intStyle === "band" ? 8 : 2,
                 opacity: intStyle === "band" ? 0.28 : 0.9,
               },
@@ -572,16 +582,16 @@ export function build3DOption(
             name,
             data: pts,
             symbolSize: 8,
-            itemStyle: { color, opacity: 1, borderWidth: 0.5, borderColor: "rgba(0,0,0,0.3)" },
+            itemStyle: { color: gradientColor, opacity: 1, borderWidth: 0.5, borderColor: "rgba(0,0,0,0.3)" },
           });
         }
       }
     }
-    if (indices.length) groupSeries.push({ name, color, indices });
+    if (indices.length) groupSeries.push({ name, color: gradientColor, indices });
   };
 
   let grouped = false;
-  if (overlay && useFramePoints) {
+  if (grouping && useFramePoints) {
     const seen = new Set<string>();
     const groups: string[] = [];
     for (const point of framePoints) {
@@ -594,10 +604,16 @@ export function build3DOption(
     const hidden = new Set(spec.hiddenGroups ?? []);
     for (const gkey of groups) {
       if (hidden.has(gkey)) continue;
-      addLayers(null, framePoints.filter((point) => String(point.group ?? "") === gkey), gkey, colorOf(gkey));
+      addLayers(
+        null,
+        framePoints.filter((point) => String(point.group ?? "") === gkey),
+        gkey,
+        gradientColorOf(gkey),
+        lineColorOf(gkey),
+      );
     }
-  } else if (overlay) {
-    const gi = data.columns.indexOf(overlay.name);
+  } else if (grouping) {
+    const gi = data.columns.indexOf(grouping.name);
     if (gi >= 0) {
       // 首次出现顺序去重分组。
       const seen = new Set<string>();
@@ -615,12 +631,24 @@ export function build3DOption(
       for (const gkey of groups) {
         if (hidden.has(gkey)) continue;
         const rows = data.rows.filter((r) => String(r[gi]) === gkey);
-        addLayers({ columns: data.columns, rows }, null, gkey, colorOf(gkey));
+        addLayers(
+          { columns: data.columns, rows },
+          null,
+          gkey,
+          gradientColorOf(gkey),
+          lineColorOf(gkey),
+        );
       }
     }
   }
   if (!grouped) {
-    addLayers(useFramePoints ? null : data, useFramePoints ? framePoints : null, zf?.name ?? "series", colorOf(DEFAULT_GROUP_KEY));
+    addLayers(
+      useFramePoints ? null : data,
+      useFramePoints ? framePoints : null,
+      zf?.name ?? "series",
+      gradientColorOf(DEFAULT_GROUP_KEY),
+      lineColorOf(DEFAULT_GROUP_KEY),
+    );
   }
 
   if (series.length === 0) {

@@ -17,6 +17,8 @@ import {
   deriveValueOrders,
   type GraphRuntimeMetadata,
 } from "./graphRuntimeModel";
+import { resolveStableGroupKeys } from "./graphGroupOrder";
+import { resolveGroupThemeFieldName } from "./graphThemeIdentity";
 import { useGraphDataPipeline, type GraphDataPipelineResult, type GraphLoadProgress } from "./useGraphDataPipeline";
 
 export interface GraphRuntimeProps {
@@ -189,19 +191,33 @@ export function GraphRuntime({
     () => getRawPointNotice(frame?.rawPointDisposition),
     [frame?.rawPointDisposition],
   );
+  const groupingFieldName = resolveGroupThemeFieldName(model.effectiveEncoding);
   const groupKeys = useMemo(
-    () => deriveGraphGroupKeys(model.effectiveEncoding.overlay, frame),
-    [frame, model.effectiveEncoding.overlay],
+    () => deriveGraphGroupKeys(
+      model.effectiveEncoding.overlay ?? model.effectiveEncoding.color,
+      frame,
+    ),
+    [frame, model.effectiveEncoding.color, model.effectiveEncoding.overlay],
+  );
+  const slotCandidateKeys = useMemo(
+    () => resolveStableGroupKeys(
+      groupKeys,
+      frame?.dictionaries.group ?? [],
+      undefined,
+    ),
+    [frame?.dictionaries.group, groupKeys],
   );
   const effectiveStyles = useMemo(
     () => buildEffectiveStyles(
       groupKeys,
+      item.groupThemeSlots,
+      groupingFieldName,
       model.spec.styles ?? {},
       customPalettes,
-      !!model.effectiveEncoding.overlay,
       model.spec.elements.some((element) => element.kind === "boxplot" && element.enabled !== false),
+      slotCandidateKeys,
     ),
-    [customPalettes, groupKeys, model.effectiveEncoding.overlay, model.spec.elements, model.spec.styles],
+    [customPalettes, groupKeys, groupingFieldName, item.groupThemeSlots, model.spec.elements, model.spec.styles, slotCandidateKeys],
   );
   const runtimeSpec = useMemo(
     () => ({ ...model.spec, datasetName: dataset.name, styles: effectiveStyles }),
