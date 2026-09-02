@@ -3,6 +3,8 @@ node_modules/
 dist/
 *.local
 playwright/.cache/
+playwright-report/
+test-results/
 
 # ----- Rust / Cargo -----
 src-tauri/target/
