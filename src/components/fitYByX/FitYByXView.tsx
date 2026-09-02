@@ -107,12 +107,20 @@ export function FitYByXView({ item, dataset }: FitYByXViewProps) {
             <span className="sp-fit-y-by-x-summary-value">{t(`fitYByX.personality.${item.personality}`)}</span>
           </div>
           {item.personality === "bivariate" ? (
-            <div className="sp-fit-y-by-x-summary-row">
-              <span className="sp-fit-y-by-x-summary-label">{t("fitYByX.constructModelEffects", { defaultValue: "Construct model effects" })}</span>
-              <span className="sp-fit-y-by-x-summary-value">
-                {t(`fitYByX.constructModelEffectsOptions.${item.constructModelEffects ?? "fullFactorial"}`)}
-              </span>
-            </div>
+            <>
+              <div className="sp-fit-y-by-x-summary-row">
+                <span className="sp-fit-y-by-x-summary-label">{t("fitYByX.constructModelEffects", { defaultValue: "Construct model effects" })}</span>
+                <span className="sp-fit-y-by-x-summary-value">
+                  {t(`fitYByX.constructModelEffectsOptions.${item.constructModelEffects ?? "fullFactorial"}`)}
+                </span>
+              </div>
+              {item.constructModelEffects === "factorialToDegree" ? (
+                <div className="sp-fit-y-by-x-summary-row">
+                  <span className="sp-fit-y-by-x-summary-label">{t("fitYByX.factorialDegree", { defaultValue: "Factorial degree" })}</span>
+                  <span className="sp-fit-y-by-x-summary-value">{item.factorialDegree ?? 2}</span>
+                </div>
+              ) : null}
+            </>
           ) : null}
         </div>
       </section>
