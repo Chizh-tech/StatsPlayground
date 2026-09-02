@@ -196,10 +196,13 @@
     "editor": "编辑",
     "preview": "预览",
     "insert": "插入",
+    "insertTooltip": "插入项目文档",
     "markdownEditorLabel": "Markdown 编辑器",
     "editorPlaceholder": "在此编写 Markdown...",
     "previewEmpty": "输入时会实时更新预览。",
     "embedPlaceholder": "{{kind}}: {{name}}",
+    "embedUnavailable": "不可用：{{kind}} {{id}}",
+    "embedError": "渲染 {{kind}} {{name}} 失败：{{message}}",
     "group": {
       "table": "数据表",
       "graph": "图形",

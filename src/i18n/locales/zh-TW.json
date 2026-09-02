@@ -195,10 +195,13 @@
     "editor": "編輯",
     "preview": "預覽",
     "insert": "插入",
+    "insertTooltip": "插入專案文件",
     "markdownEditorLabel": "Markdown 編輯器",
     "editorPlaceholder": "在此撰寫 Markdown...",
     "previewEmpty": "輸入時會即時更新預覽。",
     "embedPlaceholder": "{{kind}}: {{name}}",
+    "embedUnavailable": "無法使用：{{kind}} {{id}}",
+    "embedError": "無法渲染 {{kind}} {{name}}：{{message}}",
     "group": {
       "table": "資料表",
       "graph": "圖形",

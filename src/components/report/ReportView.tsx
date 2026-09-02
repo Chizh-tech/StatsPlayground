@@ -8,6 +8,7 @@ import {
   ReportMarkdown,
   type ReportLinkOption,
 } from "./ReportMarkdown";
+import type { ReportEmbedRuntime } from "./ReportEmbed";
 import "./report.css";
 
 const NARROW_VIEW_QUERY = "(max-width: 900px)";
@@ -22,6 +23,7 @@ interface ReportViewProps {
   tabulateOptions: readonly ReportLinkOption[];
   onMarkdownChange: (markdown: string) => void;
   readOnly?: boolean;
+  embedRuntime?: ReportEmbedRuntime;
 }
 
 interface PendingSelection {
@@ -39,6 +41,7 @@ export function ReportView({
   tabulateOptions,
   onMarkdownChange,
   readOnly = false,
+  embedRuntime,
 }: ReportViewProps) {
   const { t } = useTranslation();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -231,10 +234,7 @@ export function ReportView({
           <div className="sp-report-preview">
             <ReportMarkdown
               markdown={item.markdown}
-              tableOptions={tableOptions}
-              graphOptions={graphOptions}
-              fitYByXOptions={fitYByXOptions}
-              tabulateOptions={tabulateOptions}
+              embedRuntime={embedRuntime}
             />
           </div>
         </section>

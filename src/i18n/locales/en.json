@@ -196,10 +196,13 @@
     "editor": "Editor",
     "preview": "Preview",
     "insert": "Insert",
+    "insertTooltip": "Insert project document",
     "markdownEditorLabel": "Markdown editor",
     "editorPlaceholder": "Write Markdown here...",
     "previewEmpty": "Preview updates as you type.",
     "embedPlaceholder": "{{kind}}: {{name}}",
+    "embedUnavailable": "Unavailable: {{kind}} {{id}}",
+    "embedError": "Failed to render {{kind}} {{name}}: {{message}}",
     "group": {
       "table": "Tables",
       "graph": "Graphs",

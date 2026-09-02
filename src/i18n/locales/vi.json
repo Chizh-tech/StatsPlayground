@@ -195,10 +195,13 @@
     "editor": "Soạn thảo",
     "preview": "Xem trước",
     "insert": "Chèn",
+    "insertTooltip": "Chèn tài liệu dự án",
     "markdownEditorLabel": "Trình soạn thảo Markdown",
     "editorPlaceholder": "Viết Markdown ở đây...",
     "previewEmpty": "Bản xem trước cập nhật khi bạn gõ.",
     "embedPlaceholder": "{{kind}}: {{name}}",
+    "embedUnavailable": "Không khả dụng: {{kind}} {{id}}",
+    "embedError": "Không thể hiển thị {{kind}} {{name}}: {{message}}",
     "group": {
       "table": "Bảng",
       "graph": "Biểu đồ",

@@ -8,6 +8,8 @@ import type { ReportEmbedKind } from "@/types/report";
 import { parseReportMarkdown } from "@/utils/reportParser";
 import { formatReportEmbed } from "@/utils/reportParser";
 
+import { ReportEmbed, type ReportEmbedRuntime } from "./ReportEmbed";
+
 export interface InsertReportEmbedResult {
   markdown: string;
   selectionStart: number;
@@ -21,10 +23,7 @@ export interface ReportLinkOption {
 
 export interface ReportMarkdownProps {
   markdown: string;
-  tableOptions: readonly ReportLinkOption[];
-  graphOptions: readonly ReportLinkOption[];
-  fitYByXOptions: readonly ReportLinkOption[];
-  tabulateOptions: readonly ReportLinkOption[];
+  embedRuntime?: ReportEmbedRuntime;
 }
 
 const EMBED_ICON_CLASS: Record<ReportEmbedKind, string> = {
@@ -99,18 +98,9 @@ export function insertReportEmbed(
 
 export function ReportMarkdown({
   markdown,
-  tableOptions,
-  graphOptions,
-  fitYByXOptions,
-  tabulateOptions,
+  embedRuntime,
 }: ReportMarkdownProps) {
   const { t } = useTranslation();
-  const optionMaps = useMemo(() => ({
-    table: new Map(tableOptions.map((option) => [option.id, option.name])),
-    graph: new Map(graphOptions.map((option) => [option.id, option.name])),
-    fitYByX: new Map(fitYByXOptions.map((option) => [option.id, option.name])),
-    tabulate: new Map(tabulateOptions.map((option) => [option.id, option.name])),
-  }), [fitYByXOptions, graphOptions, tableOptions, tabulateOptions]);
 
   const tokens = useMemo(() => parseReportMarkdown(markdown), [markdown]);
 
@@ -128,28 +118,13 @@ export function ReportMarkdown({
             </ReactMarkdown>
           );
         }
-        const documentName = optionMaps[token.dependency.kind].get(token.dependency.documentId);
-        const kindLabel = t(`report.group.${token.dependency.kind}`, {
-          defaultValue:
-            token.dependency.kind === "fitYByX"
-              ? "Fit Y by X"
-              : token.dependency.kind === "tabulate"
-                ? "Tabulate"
-                : token.dependency.kind === "graph"
-                  ? "Graphs"
-                  : "Tables",
-        });
         return (
-          <div key={`embed:${index}`} className="sp-report-embed-placeholder" data-kind={token.dependency.kind}>
-            <i className={EMBED_ICON_CLASS[token.dependency.kind]} aria-hidden="true" />
-            <span>
-              {t("report.embedPlaceholder", {
-                defaultValue: "{{kind}}: {{name}}",
-                kind: kindLabel,
-                name: documentName ?? token.dependency.documentId,
-              })}
-            </span>
-          </div>
+          <Fragment key={`embed:${index}`}>
+            <div className="sp-report-embed-token-icon" data-kind={token.dependency.kind}>
+              <i className={EMBED_ICON_CLASS[token.dependency.kind]} aria-hidden="true" />
+            </div>
+            <ReportEmbed dependency={token.dependency} runtime={embedRuntime} />
+          </Fragment>
         );
       })}
     </div>

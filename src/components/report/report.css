@@ -210,6 +210,70 @@
   color: var(--accent);
 }
 
+.sp-report-embed-token-icon {
+  display: none;
+}
+
+.sp-report-embed-card,
+.sp-report-embed-unavailable,
+.sp-report-embed-error {
+  margin: 0 0 14px;
+  border: 1px solid var(--border-main);
+  border-radius: 8px;
+  background: var(--bg-main);
+}
+
+.sp-report-embed-loading,
+.sp-report-embed-unavailable,
+.sp-report-embed-error {
+  padding: 12px 14px;
+}
+
+.sp-report-embed-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-main);
+  background: var(--bg-header);
+}
+
+.sp-report-embed-title {
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.sp-report-embed-meta {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.sp-report-embed-table-wrap {
+  overflow: auto;
+}
+
+.sp-report-embed-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sp-report-embed-table th,
+.sp-report-embed-table td {
+  border: 1px solid var(--border-main);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.sp-report-embed-table th {
+  background: var(--bg-header);
+}
+
+.sp-report-embed-graph-shell {
+  min-height: 280px;
+  height: 280px;
+}
+
 @media (max-width: 900px) {
   .sp-report-panes {
     grid-template-columns: minmax(0, 1fr);
