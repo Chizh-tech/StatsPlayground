@@ -51,11 +51,18 @@ impl<'a> FitYByXService<'a> {
             .ok_or_else(|| AppError::Stats("fit y by x row accounting underflowed".into()))?;
 
         match request.personality {
-            FitYByXPersonality::Oneway => Ok(calculate_oneway(
-                row_data.rows,
-                excluded_rows,
-                request.confidence_level,
-            )),
+            FitYByXPersonality::Oneway => {
+                if request.construct_model_effects.is_some() || request.factorial_degree.is_some() {
+                    return Err(AppError::InvalidParam(
+                        "construct model effects are only supported for bivariate fit y by x".into(),
+                    ));
+                }
+                Ok(calculate_oneway(
+                    row_data.rows,
+                    excluded_rows,
+                    request.confidence_level,
+                ))
+            }
             FitYByXPersonality::Bivariate => Ok(calculate_bivariate(
                 into_bivariate_rows(row_data.rows)?,
                 excluded_rows,
@@ -71,6 +78,13 @@ fn resolve_bivariate_model_config(request: &FitYByXRequest) -> Result<BivariateM
         .construct_model_effects
         .clone()
         .unwrap_or(FitYByXConstructModelEffects::FullFactorial);
+    if !matches!(construct_model_effects, FitYByXConstructModelEffects::FactorialToDegree)
+        && request.factorial_degree.is_some()
+    {
+        return Err(AppError::InvalidParam(
+            "factorial degree is only valid when construct model effects is factorialToDegree".into(),
+        ));
+    }
     let factorial_degree = match construct_model_effects {
         FitYByXConstructModelEffects::FactorialToDegree => {
             let degree = request.factorial_degree.unwrap_or(2);
@@ -503,6 +517,76 @@ mod tests {
                 matches!(error, AppError::InvalidParam(message) if message.contains("confidence"))
             );
         }
+    }
+
+    #[test]
+    fn rejects_model_effect_fields_for_oneway_requests() {
+        let state = AppState::new().expect("test state");
+        seed_dataset(
+            &state,
+            "fit-oneway-invalid-model-fields",
+            &["height", "site"],
+            &["DOUBLE", "VARCHAR"],
+            r#"
+            INSERT INTO "dataset_fit_oneway_invalid_model_fields" (_row_id, height, site) VALUES
+                (1, 60.0, 'A'),
+                (2, 62.0, 'B');
+            "#,
+            2,
+        );
+
+        let error = FitYByXService::new(&state)
+            .run(FitYByXRequest {
+                dataset_id: "fit-oneway-invalid-model-fields".into(),
+                generation: 0,
+                response_column: "height".into(),
+                factor_column: "site".into(),
+                personality: FitYByXPersonality::Oneway,
+                construct_model_effects: Some(FitYByXConstructModelEffects::FullFactorial),
+                factorial_degree: Some(2),
+                confidence_level: 0.95,
+            })
+            .expect_err("oneway should reject construct model effects");
+
+        assert!(
+            matches!(error, AppError::InvalidParam(message) if message.contains("only supported for bivariate"))
+        );
+    }
+
+    #[test]
+    fn rejects_factorial_degree_when_effects_not_factorial_to_degree() {
+        let state = AppState::new().expect("test state");
+        seed_dataset(
+            &state,
+            "fit-bivariate-invalid-factorial-degree-combo",
+            &["response", "factor"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_bivariate_invalid_factorial_degree_combo" (_row_id, response, factor) VALUES
+                (1, 3.0, 1.0),
+                (2, 5.0, 2.0),
+                (3, 7.0, 3.0),
+                (4, 9.0, 4.0);
+            "#,
+            4,
+        );
+
+        let error = FitYByXService::new(&state)
+            .run(FitYByXRequest {
+                dataset_id: "fit-bivariate-invalid-factorial-degree-combo".into(),
+                generation: 0,
+                response_column: "response".into(),
+                factor_column: "factor".into(),
+                personality: FitYByXPersonality::Bivariate,
+                construct_model_effects: Some(FitYByXConstructModelEffects::FullFactorial),
+                factorial_degree: Some(2),
+                confidence_level: 0.95,
+            })
+            .expect_err("fullFactorial should reject factorialDegree payload");
+
+        assert!(
+            matches!(error, AppError::InvalidParam(message) if message.contains("only valid when construct model effects is factorialToDegree"))
+        );
     }
 
     #[test]
