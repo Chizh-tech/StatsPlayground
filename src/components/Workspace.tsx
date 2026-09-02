@@ -755,6 +755,7 @@ export function Workspace() {
     }
     const report = useReportStore.getState().items.find((it) => it.id === id);
     if (report) {
+      flushPendingReportHistory();
       const resolved = resolveProjectBasename(trimmed, "report", report.name);
       if (resolved.error !== null) {
         alert(resolved.error);
@@ -821,6 +822,7 @@ export function Workspace() {
 
   const handleDeleteReport = (id: string) => {
     const item = useReportStore.getState().items.find((entry) => entry.id === id);
+    flushPendingReportHistory();
     deleteReport(id);
     if (activeReportId === id) setActiveReportId(null);
     markDirty();

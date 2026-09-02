@@ -29,6 +29,15 @@ function assertSourceIncludes(source: string, needle: string, message: string): 
   assert.equal(source.includes(needle), true, message);
 }
 
+function assertSourceOrder(source: string, needles: string[], message: string): void {
+  let offset = 0;
+  for (const needle of needles) {
+    const index = source.indexOf(needle, offset);
+    assert.notEqual(index, -1, `${message}: missing or out of order: ${needle}`);
+    offset = index + needle.length;
+  }
+}
+
 const workspaceSource = readSource("../src/components/Workspace.tsx");
 
 function sourceBetween(start: string, end: string): string {
@@ -62,6 +71,16 @@ assertSourceIncludes(workspaceSource, "fsSetReportFolder", "Drop handling must a
 assertSourceIncludes(workspaceSource, "history.newReport", "Creation must record report history");
 assertSourceIncludes(workspaceSource, "history.renameReport", "Rename must record report history");
 assertSourceIncludes(workspaceSource, "history.deleteReport", "Delete must record report history");
+const renameReportSource = sourceBetween("const report = useReportStore.getState().items.find", "const oldName = datasets.find");
+assertSourceOrder(renameReportSource, ["flushPendingReportHistory();", "renameReport(id, basename);", "history.renameReport"], "Report rename history order");
+const deleteReportSource = sourceBetween("const handleDeleteReport", "const handleDeleteDataset");
+assertSourceOrder(deleteReportSource, ["flushPendingReportHistory();", "deleteReport(id);", "history.deleteReport"], "Report delete history order");
+const flushReportHistorySource = sourceBetween("const flushPendingReportHistory", "const scheduleReportHistory");
+assertSourceOrder(
+  flushReportHistorySource,
+  ["pendingReportHistoryRef.current = null;", "window.clearTimeout(reportHistoryTimerRef.current);", "reportHistoryTimerRef.current = null;", "recordAction("],
+  "Flushing report history must cancel the delayed duplicate before recording",
+);
 assertSourceIncludes(
   sourceBetween("const handleCloseProject", "const handleOpenAnother"),
   "flushPendingReportHistory();",

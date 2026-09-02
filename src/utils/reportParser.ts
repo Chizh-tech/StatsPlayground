@@ -12,6 +12,7 @@ function isFenceLine(line: string): FenceState | null {
   if (!match) return null;
   const markerText = match[1];
   const marker = markerText[0] as FenceState["marker"];
+  if (marker === "`" && match[2].includes("`")) return null;
   return { marker, length: markerText.length };
 }
 

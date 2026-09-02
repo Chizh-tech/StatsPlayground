@@ -71,6 +71,16 @@ assert.deepEqual(extractReportDependencies(source), [
 assert.deepEqual(
   extractReportDependencies(
     [
+      "```bad`info",
+      '{{sp-embed kind="graph" id="visible-after-invalid-fence"}}',
+    ].join("\n"),
+  ),
+  [{ kind: "graph", documentId: "visible-after-invalid-fence" }],
+);
+
+assert.deepEqual(
+  extractReportDependencies(
+    [
       "alpha",
       '{{sp-embed kind="graph" id="graph-1"}}',
       '{{sp-embed kind="table" id="table-1"}}',

@@ -113,7 +113,14 @@ export function ReportMarkdown({
       {tokens.map((token, index) => {
         if (token.type === "markdown") {
           return (
-            <ReactMarkdown key={`markdown:${index}`} remarkPlugins={[remarkGfm]} skipHtml>
+            <ReactMarkdown
+              key={`markdown:${index}`}
+              remarkPlugins={[remarkGfm]}
+              skipHtml
+              components={{
+                img: ({ alt }) => <span className="sp-report-blocked-image">{alt ?? ""}</span>,
+              }}
+            >
               {token.markdown}
             </ReactMarkdown>
           );

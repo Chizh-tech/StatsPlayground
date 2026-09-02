@@ -2,9 +2,15 @@ import { expect, test } from "@playwright/experimental-ct-react";
 
 import { ReportEmbedRecoveryHarness, ReportViewHarness } from "./reportViewHarness";
 
-test("renders markdown editor, GFM preview, and safe HTML handling", async ({ mount }) => {
+test("renders markdown editor, GFM preview, and safe HTML handling", async ({ mount, page }) => {
+  const remoteImageRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url() === "https://example.invalid/pixel.png") {
+      remoteImageRequests.push(request.url());
+    }
+  });
   const component = await mount(
-    <ReportViewHarness initialMarkdown={`# Summary\n\n| Metric | Value |\n| --- | --- |\n| Mean | 7 |\n\n<img src=x onerror="window.__reportXss = true" />`} />,
+    <ReportViewHarness initialMarkdown={`# Summary\n\n| Metric | Value |\n| --- | --- |\n| Mean | 7 |\n\n![Remote chart](https://example.invalid/pixel.png)\n\n<img src=x onerror="window.__reportXss = true" />`} />,
   );
 
   await expect(component.getByRole("textbox", { name: "Markdown editor" })).toBeVisible();
@@ -12,6 +18,8 @@ test("renders markdown editor, GFM preview, and safe HTML handling", async ({ mo
   await expect(component.locator(".sp-report-preview table")).toContainText("Metric");
   await expect(component.locator(".sp-report-preview table")).toContainText("Mean");
   await expect(component.locator(".sp-report-preview img")).toHaveCount(0);
+  await expect(component.locator(".sp-report-preview")).toContainText("Remote chart");
+  expect(remoteImageRequests).toEqual([]);
 });
 
 test("inserts canonical embeds from grouped menu choices", async ({ mount }) => {
