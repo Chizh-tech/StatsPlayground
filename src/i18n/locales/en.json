@@ -214,6 +214,13 @@
     "graph": "Graph",
     "graphHint": "Embedded runtime",
     "personalityLabel": "Personality",
+    "constructModelEffects": "Construct model effects",
+    "factorialDegree": "Factorial degree",
+    "constructModelEffectsOptions": {
+      "fullFactorial": "Full factorial",
+      "factorialToDegree": "Factorial to degree",
+      "responseSurface": "Response surface"
+    },
     "missingResponse": "Choose a continuous response",
     "missingFactor": "Choose a continuous, nominal, or ordinal X",
     "duplicateRole": "Response and factor must use different columns",
@@ -275,6 +282,8 @@
         "standardDeviation": "Std Dev"
       },
       "summaryOfFit": {
+        "constructModelEffects": "Construct model effects",
+        "factorialDegree": "Factorial degree",
         "fittedEquation": "Fitted Equation",
         "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
         "rSquared": "R Square",

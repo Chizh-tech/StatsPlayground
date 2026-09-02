@@ -1,10 +1,12 @@
 import { create } from "zustand";
 
 import {
+  DEFAULT_CONSTRUCT_MODEL_EFFECTS,
   createDefaultFitYByXGraphConfig,
   createFitYByXItem,
   FitYByXRoleValidationError,
   deriveFitYByXPersonality,
+  normalizeConstructModelEffects,
 } from "@/components/fitYByX/fitYByXConfig";
 import { createEmbeddedGraphItem } from "@/components/graphBuilder/graphBuilderMode";
 import { normalizeGroupThemeSlots } from "@/components/graphBuilder/graphThemeIdentity";
@@ -88,21 +90,31 @@ function isUsableFitYByXGraph(item: FitYByXItem, graph: EmbeddedGraphConfig): bo
 
 function normalizeLoadedItem(item: FitYByXItem): FitYByXItem {
   const personality = deriveFitYByXPersonality(item.factor);
+  const modelConfig = normalizeConstructModelEffects({
+    personality,
+    constructModelEffects: item.constructModelEffects,
+    factorialDegree: item.factorialDegree,
+  });
   const base = createFitYByXItem({
     id: item.id,
     name: item.name,
     sourceDatasetId: item.sourceDatasetId,
     response: item.response,
     factor: item.factor,
+    constructModelEffects: modelConfig.constructModelEffects ?? DEFAULT_CONSTRUCT_MODEL_EFFECTS,
+    factorialDegree: modelConfig.factorialDegree,
     createdAt: item.createdAt,
   });
 
   const normalizedBase: FitYByXItem = {
     ...base,
     personality,
+    ...modelConfig,
     graph: createDefaultFitYByXGraphConfig({
       response: item.response,
       factor: item.factor,
+      constructModelEffects: modelConfig.constructModelEffects,
+      factorialDegree: modelConfig.factorialDegree,
     }),
   };
 

@@ -213,6 +213,13 @@
     "graph": "圖形",
     "graphHint": "嵌入式執行視圖",
     "personalityLabel": "分析類型",
+    "constructModelEffects": "建構模型效應",
+    "factorialDegree": "因子階數",
+    "constructModelEffectsOptions": {
+      "fullFactorial": "全因子",
+      "factorialToDegree": "按階數因子",
+      "responseSurface": "反應曲面"
+    },
     "missingResponse": "選擇一個連續反應",
     "missingFactor": "選擇一個連續、名義或有序 X",
     "duplicateRole": "反應和因子必須使用不同欄位",
@@ -274,6 +281,8 @@
         "standardDeviation": "標準差"
       },
       "summaryOfFit": {
+        "constructModelEffects": "建構模型效應",
+        "factorialDegree": "因子階數",
         "fittedEquation": "配適方程式",
         "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
         "rSquared": "R 平方",

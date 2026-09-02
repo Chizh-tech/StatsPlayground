@@ -32,6 +32,8 @@ export {
   clearFitYByXField,
   createFitYByXDialogState,
   filterFitYByXFields,
+  setConstructModelEffects,
+  setFactorialDegree,
   type FitYByXDialogState,
   type FitYByXFieldInfo,
 } from "./fitYByXDialogState";

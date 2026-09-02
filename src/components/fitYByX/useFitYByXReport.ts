@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { FitYByXItem, FitYByXRequest, FitYByXResult } from "@/types/fitYByX";
+import { normalizeConstructModelEffects } from "./fitYByXModel";
 
 const FIT_Y_BY_X_CONFIDENCE_LEVEL = 0.95;
 
@@ -67,12 +68,19 @@ export interface FitYByXReportController {
 }
 
 export function createFitYByXRequest(item: FitYByXItem, generation: number): FitYByXRequest {
+  const model = normalizeConstructModelEffects({
+    personality: item.personality,
+    constructModelEffects: item.constructModelEffects,
+    factorialDegree: item.factorialDegree,
+  });
   return {
     datasetId: item.sourceDatasetId,
     generation,
     responseColumn: item.response.name,
     factorColumn: item.factor.name,
     personality: item.personality,
+    ...(model.constructModelEffects ? { constructModelEffects: model.constructModelEffects } : {}),
+    ...(model.factorialDegree !== undefined ? { factorialDegree: model.factorialDegree } : {}),
     confidenceLevel: FIT_Y_BY_X_CONFIDENCE_LEVEL,
   };
 }

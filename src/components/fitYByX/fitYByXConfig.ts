@@ -1,8 +1,28 @@
 import type { FieldRef } from "@/graphCore";
 
-import { createDefaultGraph2DState, createDefaultGraph3DState, createDefaultMultivariateGraphState } from "@/components/graphBuilder/graphBuilderMode";
+import {
+  createDefaultGraph2DState,
+  createDefaultGraph3DState,
+  createDefaultMultivariateGraphState,
+} from "../graphBuilder/graphBuilderMode";
 import type { EmbeddedGraphConfig } from "@/types/graphBuilder";
-import type { FitYByXItem, FitYByXPersonality } from "@/types/fitYByX";
+import type {
+  FitYByXConstructModelEffects,
+  FitYByXItem,
+} from "@/types/fitYByX";
+import {
+  DEFAULT_CONSTRUCT_MODEL_EFFECTS,
+  DEFAULT_FACTORIAL_DEGREE,
+  deriveFitYByXPersonality,
+  normalizeConstructModelEffects,
+  normalizeFactorialDegree,
+} from "./fitYByXModel";
+export {
+  DEFAULT_CONSTRUCT_MODEL_EFFECTS,
+  DEFAULT_FACTORIAL_DEGREE,
+  deriveFitYByXPersonality,
+  normalizeConstructModelEffects,
+} from "./fitYByXModel";
 export {
   canAssignFitYByXRole,
   type FitYByXRole,
@@ -33,10 +53,6 @@ function clone<T>(value: T): T {
     return next as T;
   }
   return value;
-}
-
-export function deriveFitYByXPersonality(factor: FieldRef): FitYByXPersonality {
-  return factor.type === "continuous" ? "bivariate" : "oneway";
 }
 
 function createOnewayFitYByXGraphConfig(input: {
@@ -72,8 +88,11 @@ function createOnewayFitYByXGraphConfig(input: {
 function createBivariateFitYByXGraphConfig(input: {
   response: FieldRef;
   factor: FieldRef;
+  constructModelEffects?: FitYByXConstructModelEffects;
+  factorialDegree?: number;
 }): EmbeddedGraphConfig {
   const twoD = createDefaultGraph2DState();
+  const degree = resolvePolynomialDegree(input.constructModelEffects, input.factorialDegree);
 
   return {
     mode: "2d",
@@ -88,7 +107,7 @@ function createBivariateFitYByXGraphConfig(input: {
         multiY: [],
         elements: [
           { kind: "points", enabled: true },
-          { kind: "fitline", enabled: true, options: { fitType: "polynomial", degree: 1, showFitCI: true } },
+          { kind: "fitline", enabled: true, options: { fitType: "polynomial", degree, showFitCI: true } },
         ],
       },
       threeD: createDefaultGraph3DState(),
@@ -102,10 +121,27 @@ function createBivariateFitYByXGraphConfig(input: {
 export function createDefaultFitYByXGraphConfig(input: {
   response: FieldRef;
   factor: FieldRef;
+  constructModelEffects?: FitYByXConstructModelEffects;
+  factorialDegree?: number;
 }): EmbeddedGraphConfig {
   return deriveFitYByXPersonality(input.factor) === "bivariate"
     ? createBivariateFitYByXGraphConfig(input)
     : createOnewayFitYByXGraphConfig(input);
+}
+
+function resolvePolynomialDegree(
+  constructModelEffects: FitYByXConstructModelEffects | undefined,
+  factorialDegree: number | undefined,
+): number {
+  switch (constructModelEffects ?? DEFAULT_CONSTRUCT_MODEL_EFFECTS) {
+    case "responseSurface":
+      return 2;
+    case "factorialToDegree":
+      return normalizeFactorialDegree(factorialDegree);
+    case "fullFactorial":
+    default:
+      return 1;
+  }
 }
 
 export function createFitYByXItem(input: {
@@ -114,6 +150,8 @@ export function createFitYByXItem(input: {
   sourceDatasetId: string;
   response: FieldRef;
   factor: FieldRef;
+  constructModelEffects?: FitYByXConstructModelEffects;
+  factorialDegree?: number;
   createdAt: string;
 }): FitYByXItem {
   const validation = validateFitYByXRoles({ response: input.response, factor: input.factor });
@@ -122,6 +160,11 @@ export function createFitYByXItem(input: {
   }
 
   const personality = deriveFitYByXPersonality(input.factor);
+  const normalizedModel = normalizeConstructModelEffects({
+    personality,
+    constructModelEffects: input.constructModelEffects,
+    factorialDegree: input.factorialDegree,
+  });
 
   return {
     id: input.id,
@@ -130,9 +173,12 @@ export function createFitYByXItem(input: {
     response: clone(input.response),
     factor: clone(input.factor),
     personality,
+    ...normalizedModel,
     graph: createDefaultFitYByXGraphConfig({
       response: input.response,
       factor: input.factor,
+      constructModelEffects: normalizedModel.constructModelEffects,
+      factorialDegree: normalizedModel.factorialDegree,
     }),
     createdAt: input.createdAt,
   };

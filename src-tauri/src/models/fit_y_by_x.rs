@@ -7,6 +7,14 @@ pub enum FitYByXPersonality {
     Bivariate,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FitYByXConstructModelEffects {
+    FullFactorial,
+    FactorialToDegree,
+    ResponseSurface,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FitYByXRequest {
@@ -15,6 +23,8 @@ pub struct FitYByXRequest {
     pub response_column: String,
     pub factor_column: String,
     pub personality: FitYByXPersonality,
+    pub construct_model_effects: Option<FitYByXConstructModelEffects>,
+    pub factorial_degree: Option<u8>,
     pub confidence_level: f64,
 }
 
@@ -192,6 +202,8 @@ pub struct BivariateResult {
     pub used_rows: u64,
     pub excluded_rows: u64,
     pub confidence_level: f64,
+    pub construct_model_effects: FitYByXConstructModelEffects,
+    pub factorial_degree: Option<u8>,
     pub intercept: f64,
     pub slope: f64,
     pub summary_of_fit: SummaryOfFit,

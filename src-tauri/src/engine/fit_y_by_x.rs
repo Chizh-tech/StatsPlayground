@@ -1,14 +1,24 @@
 use std::collections::BTreeMap;
 
+use nalgebra::{DMatrix, DVector};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor, StudentsT};
 
 use crate::models::fit_y_by_x::{
     ActualByPredictedPoint, AnovaRow, BivariateResult, EffectSummaryRow, EstimateRow,
-    FitYByXNotComputableReason, FitYByXPersonality, FitYByXResult, FitYByXRow,
+    FitYByXConstructModelEffects, FitYByXNotComputableReason, FitYByXPersonality, FitYByXResult,
+    FitYByXRow,
     LackOfFitAvailable, LackOfFitResult, NotComputableResult, OnewayEffectSizes,
     OnewayGroupSummary, OnewayResult, PredictionProfilerPoint, ResidualByPredictedPoint,
     SummaryOfFit,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BivariateModelConfig {
+    pub construct_model_effects: FitYByXConstructModelEffects,
+    pub factorial_degree: Option<u8>,
+    pub polynomial_degree: usize,
+}
+
 
 pub fn calculate_oneway(
     rows: Vec<FitYByXRow>,
@@ -159,9 +169,11 @@ pub fn calculate_bivariate(
     rows: Vec<(f64, f64)>,
     excluded_rows: u64,
     confidence_level: f64,
+    model: BivariateModelConfig,
 ) -> FitYByXResult {
     let used_rows = rows.len() as u64;
-    if used_rows < 3 {
+    let parameter_count = model.polynomial_degree + 1;
+    if used_rows < parameter_count as u64 + 1 {
         return not_computable(
             FitYByXPersonality::Bivariate,
             FitYByXNotComputableReason::InsufficientValidRows,
@@ -171,25 +183,21 @@ pub fn calculate_bivariate(
         );
     }
 
-    let mean_x = mean(rows.iter().map(|(x, _)| *x));
     let mean_y = mean(rows.iter().map(|(_, y)| *y));
-    let mut sxx = 0.0_f64;
-    let mut syy = 0.0_f64;
-    let mut sxy = 0.0_f64;
+    let response = rows.iter().map(|(_, y)| *y).collect::<Vec<_>>();
+    let design = design_matrix(&rows, model.polynomial_degree);
+    let solved = solve_ols(&design, &response);
+    let Some(solved) = solved else {
+        return not_computable(
+            FitYByXPersonality::Bivariate,
+            FitYByXNotComputableReason::ConstantFactor,
+            used_rows,
+            excluded_rows,
+            confidence_level,
+        );
+    };
 
-    for &(x, y) in &rows {
-        let centered_x = x - mean_x;
-        let centered_y = y - mean_y;
-        sxx += centered_x * centered_x;
-        syy += centered_y * centered_y;
-        sxy += centered_x * centered_y;
-    }
-
-    sxx = normalize_small_zero(sxx);
-    syy = normalize_small_zero(syy);
-    sxy = normalize_small_zero(sxy);
-
-    if sxx == 0.0 {
+    if solved.coefficients.len() < 2 {
         return not_computable(
             FitYByXPersonality::Bivariate,
             FitYByXNotComputableReason::ConstantFactor,
@@ -199,7 +207,7 @@ pub fn calculate_bivariate(
         );
     }
 
-    let residual_df = used_rows.saturating_sub(2);
+    let residual_df = used_rows.saturating_sub(parameter_count as u64);
     if residual_df == 0 {
         return not_computable(
             FitYByXPersonality::Bivariate,
@@ -210,27 +218,32 @@ pub fn calculate_bivariate(
         );
     }
 
-    let slope = normalize_signed_zero(sxy / sxx);
-    let intercept = normalize_signed_zero(mean_y - slope * mean_x);
-    let ss_model = normalize_small_zero(slope * sxy);
-    let ss_total = normalize_signed_zero(syy);
-    let ss_error = normalize_small_zero((ss_total - ss_model).max(0.0));
-    let ms_model = Some(ss_model);
+    let intercept = normalize_signed_zero(solved.coefficients[0]);
+    let slope = normalize_signed_zero(solved.coefficients[1]);
+    let ss_total = normalize_small_zero(
+        rows.iter()
+            .map(|(_, y)| square(y - mean_y))
+            .sum::<f64>(),
+    );
+    let ss_error = normalize_small_zero(solved.residuals.iter().map(|value| square(*value)).sum());
+    let ss_model = normalize_small_zero((ss_total - ss_error).max(0.0));
+    let model_df = parameter_count as u64 - 1;
+    let ms_model = safe_divide(ss_model, model_df as f64);
     let ms_error = safe_divide(ss_error, residual_df as f64);
-    let f_ratio = match ms_error {
-        Some(denominator) if denominator > 0.0 => {
-            Some(normalize_signed_zero(ss_model / denominator))
+    let f_ratio = match (ms_model, ms_error) {
+        (Some(numerator), Some(denominator)) if denominator > 0.0 => {
+            Some(normalize_signed_zero(numerator / denominator))
         }
         _ => None,
     };
-    let model_p_value = f_ratio.and_then(|f| upper_tail_f(f, 1, residual_df));
+    let model_p_value = f_ratio.and_then(|f| upper_tail_f(f, model_df, residual_df));
 
     let root_mean_square_error = ms_error.map(|value| normalize_signed_zero(value.sqrt()));
     let r_squared = ratio_or_none(ss_model, ss_total).map(|value| value.clamp(0.0, 1.0));
     let adjusted_r_squared = r_squared.and_then(|value| {
-        if used_rows > 2 {
+        if used_rows > parameter_count as u64 {
             Some(normalize_signed_zero(
-                1.0 - (1.0 - value) * ((used_rows - 1) as f64) / (residual_df as f64),
+                1.0 - (1.0 - value) * ((used_rows - 1) as f64) / ((used_rows - parameter_count as u64) as f64),
             ))
         } else {
             None
@@ -238,25 +251,25 @@ pub fn calculate_bivariate(
     });
 
     let parameter_estimates = parameter_estimates(
-        &rows,
-        intercept,
-        slope,
-        mean_x,
-        sxx,
+        &solved.coefficients,
+        &solved.xtx_inverse_diagonal,
+        model.polynomial_degree,
         root_mean_square_error,
         residual_df,
         confidence_level,
     );
     let effect_summary = effect_summary_from_estimates(&parameter_estimates);
     let (actual_by_predicted, residual_by_predicted) =
-        regression_diagnostic_points(&rows, intercept, slope);
-    let prediction_profiler = prediction_profiler(&rows, intercept, slope);
-    let lack_of_fit = lack_of_fit(&rows, ss_error, residual_df);
+        regression_diagnostic_points(&rows, &solved.predicted);
+    let prediction_profiler = prediction_profiler(&rows, &solved.coefficients, model.polynomial_degree);
+    let lack_of_fit = lack_of_fit(&rows, &solved.predicted, ss_error, residual_df, parameter_count);
 
     FitYByXResult::Bivariate(BivariateResult {
         used_rows,
         excluded_rows,
         confidence_level,
+        construct_model_effects: model.construct_model_effects,
+        factorial_degree: model.factorial_degree,
         intercept,
         slope,
         summary_of_fit: SummaryOfFit {
@@ -270,7 +283,7 @@ pub fn calculate_bivariate(
         anova: vec![
             AnovaRow {
                 source: "Model".into(),
-                degrees_of_freedom: 1,
+                degrees_of_freedom: model_df,
                 sum_of_squares: ss_model,
                 mean_square: ms_model,
                 f_ratio,
@@ -316,17 +329,16 @@ fn effect_summary_from_estimates(rows: &[EstimateRow]) -> Vec<EffectSummaryRow> 
 
 fn regression_diagnostic_points(
     rows: &[(f64, f64)],
-    intercept: f64,
-    slope: f64,
+    predicted: &[f64],
 ) -> (Vec<ActualByPredictedPoint>, Vec<ResidualByPredictedPoint>) {
     let mut actual_by_predicted = Vec::with_capacity(rows.len());
     let mut residual_by_predicted = Vec::with_capacity(rows.len());
-    for &(x, y) in rows {
-        let predicted = normalize_signed_zero(intercept + slope * x);
-        let residual = normalize_signed_zero(y - predicted);
+    for ((_, y), predicted_value) in rows.iter().zip(predicted.iter()) {
+        let predicted = normalize_signed_zero(*predicted_value);
+        let residual = normalize_signed_zero(*y - predicted);
         actual_by_predicted.push(ActualByPredictedPoint {
             predicted,
-            actual: normalize_signed_zero(y),
+            actual: normalize_signed_zero(*y),
         });
         residual_by_predicted.push(ResidualByPredictedPoint {
             predicted,
@@ -364,8 +376,8 @@ fn sort_residual_by_predicted(
 
 fn prediction_profiler(
     rows: &[(f64, f64)],
-    intercept: f64,
-    slope: f64,
+    coefficients: &[f64],
+    polynomial_degree: usize,
 ) -> Vec<PredictionProfilerPoint> {
     if rows.is_empty() {
         return Vec::new();
@@ -392,7 +404,11 @@ fn prediction_profiler(
         .map(|(label, factor_value)| PredictionProfilerPoint {
             label: label.into(),
             factor_value: normalize_signed_zero(factor_value),
-            predicted_response: normalize_signed_zero(intercept + slope * factor_value),
+            predicted_response: normalize_signed_zero(predict_polynomial(
+                coefficients,
+                factor_value,
+                polynomial_degree,
+            )),
         })
         .collect()
 }
@@ -404,41 +420,121 @@ fn median(sorted_values: &[f64]) -> f64 {
     } else {
         normalize_signed_zero((sorted_values[length / 2 - 1] + sorted_values[length / 2]) / 2.0)
     }
+
+    #[derive(Debug, Clone)]
+    struct OlsSolved {
+        coefficients: Vec<f64>,
+        predicted: Vec<f64>,
+        residuals: Vec<f64>,
+        xtx_inverse_diagonal: Vec<f64>,
+    }
+
+    fn design_matrix(rows: &[(f64, f64)], polynomial_degree: usize) -> Vec<Vec<f64>> {
+        rows.iter()
+            .map(|(x, _)| {
+                let mut row = Vec::with_capacity(polynomial_degree + 1);
+                row.push(1.0);
+                for degree in 1..=polynomial_degree {
+                    row.push(x.powi(degree as i32));
+                }
+                row
+            })
+            .collect()
+    }
+
+    fn solve_ols(design: &[Vec<f64>], response: &[f64]) -> Option<OlsSolved> {
+        if design.is_empty() || response.is_empty() || design.len() != response.len() {
+            return None;
+        }
+        let row_count = design.len();
+        let column_count = design[0].len();
+        if column_count == 0 || design.iter().any(|row| row.len() != column_count) {
+            return None;
+        }
+
+        let flattened = design.iter().flatten().copied().collect::<Vec<_>>();
+        let x = DMatrix::from_row_slice(row_count, column_count, &flattened);
+        let y = DVector::from_row_slice(response);
+        let xtx = x.transpose() * &x;
+        let xtx_inverse = xtx.try_inverse()?;
+        let beta = &xtx_inverse * x.transpose() * &y;
+        let fitted = x * &beta;
+        let residual = y - &fitted;
+        let xtx_inverse_diagonal = (0..column_count)
+            .map(|index| normalize_signed_zero(xtx_inverse[(index, index)]))
+            .collect::<Vec<_>>();
+
+        Some(OlsSolved {
+            coefficients: beta.iter().map(|value| normalize_signed_zero(*value)).collect(),
+            predicted: fitted
+                .iter()
+                .map(|value| normalize_signed_zero(*value))
+                .collect(),
+            residuals: residual
+                .iter()
+                .map(|value| normalize_signed_zero(*value))
+                .collect(),
+            xtx_inverse_diagonal,
+        })
+    }
+
+    fn predict_polynomial(coefficients: &[f64], x: f64, polynomial_degree: usize) -> f64 {
+        coefficients
+            .iter()
+            .enumerate()
+            .take(polynomial_degree + 1)
+            .map(|(degree, coefficient)| coefficient * x.powi(degree as i32))
+            .sum()
+    }
 }
 
 fn parameter_estimates(
-    rows: &[(f64, f64)],
-    intercept: f64,
-    slope: f64,
-    mean_x: f64,
-    sxx: f64,
+    coefficients: &[f64],
+    xtx_inverse_diagonal: &[f64],
+    polynomial_degree: usize,
     root_mean_square_error: Option<f64>,
     residual_df: u64,
     confidence_level: f64,
 ) -> Vec<EstimateRow> {
-    let maybe_scale = root_mean_square_error.filter(|value| value.is_finite() && *value >= 0.0);
+    let maybe_scale = root_mean_square_error
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(square);
     let maybe_t_critical = t_critical(residual_df, confidence_level);
-    let intercept_standard_error = maybe_scale.map(|rmse| {
-        normalize_signed_zero(rmse * (1.0 / (rows.len() as f64) + square(mean_x) / sxx).sqrt())
-    });
-    let slope_standard_error = maybe_scale.map(|rmse| normalize_signed_zero(rmse / sxx.sqrt()));
+    coefficients
+        .iter()
+        .enumerate()
+        .map(|(index, estimate)| {
+            let standard_error = match (maybe_scale, xtx_inverse_diagonal.get(index).copied()) {
+                (Some(mse), Some(variance_scale)) if variance_scale >= 0.0 => {
+                    Some(normalize_signed_zero((mse * variance_scale).sqrt()))
+                }
+                _ => None,
+            };
+            estimate_row(
+                coefficient_term_name(index, polynomial_degree),
+                *estimate,
+                standard_error,
+                residual_df,
+                maybe_t_critical,
+            )
+        })
+        .collect()
+}
 
-    vec![
-        estimate_row(
-            "Intercept",
-            intercept,
-            intercept_standard_error,
-            residual_df,
-            maybe_t_critical,
-        ),
-        estimate_row(
-            "Slope",
-            slope,
-            slope_standard_error,
-            residual_df,
-            maybe_t_critical,
-        ),
-    ]
+fn coefficient_term_name(index: usize, polynomial_degree: usize) -> &'static str {
+    if index == 0 {
+        return "Intercept";
+    }
+    if polynomial_degree == 1 && index == 1 {
+        return "Slope";
+    }
+    if index == 1 {
+        return "Linear";
+    }
+    if index == 2 {
+        return "Quadratic";
+    }
+    "Term"
 }
 
 fn estimate_row(
@@ -478,29 +574,45 @@ fn estimate_row(
     }
 }
 
-fn lack_of_fit(rows: &[(f64, f64)], ss_error: f64, residual_df: u64) -> LackOfFitResult {
-    let mut groups: Vec<(f64, Vec<f64>)> = Vec::new();
-    let mut sorted = rows.to_vec();
+fn lack_of_fit(
+    rows: &[(f64, f64)],
+    predicted: &[f64],
+    ss_error: f64,
+    residual_df: u64,
+    parameter_count: usize,
+) -> LackOfFitResult {
+    let mut groups: Vec<(f64, Vec<(f64, f64)>)> = Vec::new();
+    let mut sorted = rows
+        .iter()
+        .zip(predicted.iter())
+        .map(|((x, y), fitted)| (*x, *y, *fitted))
+        .collect::<Vec<_>>();
     sorted.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
 
-    for (x, y) in sorted {
+    for (x, y, fitted) in sorted {
         match groups.last_mut() {
-            Some((current_x, ys)) if current_x.total_cmp(&x).is_eq() => ys.push(y),
-            _ => groups.push((x, vec![y])),
+            Some((current_x, ys)) if current_x.total_cmp(&x).is_eq() => ys.push((y, fitted)),
+            _ => groups.push((x, vec![(y, fitted)])),
         }
     }
 
     let unique_x = groups.len() as u64;
     let pure_error_df = rows.len() as u64 - unique_x;
-    let lack_of_fit_df = unique_x.saturating_sub(2);
+    let lack_of_fit_df = unique_x.saturating_sub(parameter_count as u64);
     if pure_error_df == 0 || lack_of_fit_df == 0 || residual_df == 0 {
         return LackOfFitResult::NotIdentifiable;
     }
 
     let mut pure_error_ss = 0.0_f64;
-    for (_, ys) in &groups {
-        let mean_y = mean(ys.iter().copied());
-        pure_error_ss += centered_sum_of_squares(ys.iter().copied(), mean_y);
+    for (_, rows_at_x) in &groups {
+        if rows_at_x.len() <= 1 {
+            continue;
+        }
+        let mean_fitted = mean(rows_at_x.iter().map(|(_, fitted)| *fitted));
+        pure_error_ss += rows_at_x
+            .iter()
+            .map(|(actual, _)| square(*actual - mean_fitted))
+            .sum::<f64>();
     }
     pure_error_ss = normalize_small_zero(pure_error_ss);
     let lack_of_fit_ss = normalize_small_zero((ss_error - pure_error_ss).max(0.0));

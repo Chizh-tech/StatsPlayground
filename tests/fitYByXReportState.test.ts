@@ -89,6 +89,8 @@ function makeBivariateResult(overrides: Partial<FitYByXBivariateResult> = {}): F
     usedRows: 4,
     excludedRows: 1,
     confidenceLevel: 0.95,
+    constructModelEffects: "fullFactorial",
+    factorialDegree: null,
     intercept: 1,
     slope: 2,
     summaryOfFit: {
@@ -259,6 +261,7 @@ async function testLaterRequestWinsWhenEarlierCompletionArrivesLast(): Promise<v
     responseColumn: "response",
     factorColumn: "factor",
     personality: "bivariate",
+    constructModelEffects: "fullFactorial",
     confidenceLevel: 0.95,
   });
   expectLoading(states.at(-1)!, firstRequest);
@@ -277,6 +280,7 @@ async function testLaterRequestWinsWhenEarlierCompletionArrivesLast(): Promise<v
     responseColumn: "response",
     factorColumn: "factor",
     personality: "bivariate",
+    constructModelEffects: "fullFactorial",
     confidenceLevel: 0.95,
   });
   expectLoading(states.at(-1)!, secondRequest);

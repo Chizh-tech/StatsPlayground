@@ -3,6 +3,10 @@ import type { FieldRef } from "@/graphCore";
 import type { EmbeddedGraphConfig } from "./graphBuilder";
 
 export type FitYByXPersonality = "oneway" | "bivariate";
+export type FitYByXConstructModelEffects =
+  | "fullFactorial"
+  | "factorialToDegree"
+  | "responseSurface";
 export type FitYByXNotComputableReason =
   | "insufficientValidRows"
   | "insufficientGroups"
@@ -16,6 +20,8 @@ export interface FitYByXRequest {
   responseColumn: string;
   factorColumn: string;
   personality: FitYByXPersonality;
+  constructModelEffects?: FitYByXConstructModelEffects;
+  factorialDegree?: number;
   confidenceLevel: number;
 }
 
@@ -114,6 +120,8 @@ export interface FitYByXBivariateResult {
   usedRows: number;
   excludedRows: number;
   confidenceLevel: number;
+  constructModelEffects: FitYByXConstructModelEffects;
+  factorialDegree: number | null;
   intercept: number;
   slope: number;
   summaryOfFit: FitYByXSummaryOfFit;
@@ -147,6 +155,8 @@ export interface FitYByXItem {
   response: FieldRef;
   factor: FieldRef;
   personality: FitYByXPersonality;
+  constructModelEffects?: FitYByXConstructModelEffects;
+  factorialDegree?: number;
   graph: EmbeddedGraphConfig;
   createdAt: string;
 }

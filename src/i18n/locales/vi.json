@@ -213,6 +213,13 @@
     "graph": "Biểu đồ",
     "graphHint": "Biểu đồ nhúng",
     "personalityLabel": "Kiểu phân tích",
+    "constructModelEffects": "Hiệu ứng xây dựng mô hình",
+    "factorialDegree": "Bậc giai thừa",
+    "constructModelEffectsOptions": {
+      "fullFactorial": "Toàn giai thừa",
+      "factorialToDegree": "Giai thừa theo bậc",
+      "responseSurface": "Bề mặt đáp ứng"
+    },
     "missingResponse": "Chọn một đáp ứng liên tục",
     "missingFactor": "Chọn một X liên tục, danh nghĩa hoặc thứ tự",
     "duplicateRole": "Đáp ứng và yếu tố phải dùng hai cột khác nhau",
@@ -274,6 +281,8 @@
         "standardDeviation": "Độ lệch chuẩn"
       },
       "summaryOfFit": {
+        "constructModelEffects": "Hiệu ứng xây dựng mô hình",
+        "factorialDegree": "Bậc giai thừa",
         "fittedEquation": "Phương trình khớp",
         "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
         "rSquared": "R bình phương",

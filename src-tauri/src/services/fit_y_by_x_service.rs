@@ -1,6 +1,8 @@
-use crate::engine::fit_y_by_x::{calculate_bivariate, calculate_oneway};
+use crate::engine::fit_y_by_x::{calculate_bivariate, calculate_oneway, BivariateModelConfig};
 use crate::error::AppError;
-use crate::models::fit_y_by_x::{FitYByXPersonality, FitYByXRequest, FitYByXResult, FitYByXRow};
+use crate::models::fit_y_by_x::{
+    FitYByXConstructModelEffects, FitYByXPersonality, FitYByXRequest, FitYByXResult, FitYByXRow,
+};
 use crate::state::AppState;
 
 pub struct FitYByXService<'a> {
@@ -58,9 +60,39 @@ impl<'a> FitYByXService<'a> {
                 into_bivariate_rows(row_data.rows)?,
                 excluded_rows,
                 request.confidence_level,
+                resolve_bivariate_model_config(&request)?,
             )),
         }
     }
+}
+
+fn resolve_bivariate_model_config(request: &FitYByXRequest) -> Result<BivariateModelConfig, AppError> {
+    let construct_model_effects = request
+        .construct_model_effects
+        .clone()
+        .unwrap_or(FitYByXConstructModelEffects::FullFactorial);
+    let factorial_degree = match construct_model_effects {
+        FitYByXConstructModelEffects::FactorialToDegree => {
+            let degree = request.factorial_degree.unwrap_or(2);
+            if !(1..=2).contains(&degree) {
+                return Err(AppError::InvalidParam(format!(
+                    "factorial degree must be within [1, 2], received {degree}"
+                )));
+            }
+            Some(degree)
+        }
+        _ => None,
+    };
+    let polynomial_degree = match construct_model_effects {
+        FitYByXConstructModelEffects::FullFactorial => 1,
+        FitYByXConstructModelEffects::FactorialToDegree => factorial_degree.unwrap_or(2) as usize,
+        FitYByXConstructModelEffects::ResponseSurface => 2,
+    };
+    Ok(BivariateModelConfig {
+        construct_model_effects,
+        factorial_degree,
+        polynomial_degree,
+    })
 }
 
 fn into_bivariate_rows(rows: Vec<FitYByXRow>) -> Result<Vec<(f64, f64)>, AppError> {

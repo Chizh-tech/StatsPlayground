@@ -214,10 +214,26 @@ function createSummaryOfFitSection(
   t: Translate,
   undefinedValue: string,
 ): FitYByXReportSectionModel {
+  const modelRows: Array<{ key: string; label: string; value: string; numericColumns?: number[] | null }> = [
+    {
+      key: "constructModelEffects",
+      label: t("fitYByX.report.summaryOfFit.constructModelEffects"),
+      numericColumns: null,
+      value: t(`fitYByX.constructModelEffectsOptions.${result.constructModelEffects}`),
+    },
+  ];
+  if (result.constructModelEffects === "factorialToDegree") {
+    modelRows.push({
+      key: "factorialDegree",
+      label: t("fitYByX.report.summaryOfFit.factorialDegree"),
+      value: formatCount(result.factorialDegree, undefinedValue),
+    });
+  }
   return createLabeledValueSection(
     "summaryOfFit",
     t("fitYByX.report.section.summaryOfFit"),
     [
+      ...modelRows,
       {
         key: "fittedEquation",
         label: t("fitYByX.report.summaryOfFit.fittedEquation"),

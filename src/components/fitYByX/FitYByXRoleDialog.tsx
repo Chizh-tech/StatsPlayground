@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { inferFieldType, type FieldRef } from "@/graphCore/types";
 import { dataService } from "@/services/dataService";
 import type { ColumnDisplayProps, ColumnMeta, DatasetMeta } from "@/types/data";
-import type { FitYByXItem } from "@/types/fitYByX";
+import type { FitYByXConstructModelEffects, FitYByXItem } from "@/types/fitYByX";
 
 import {
   assignFitYByXField,
@@ -12,6 +12,8 @@ import {
   clearFitYByXField,
   createFitYByXDialogState,
   filterFitYByXFields,
+  setConstructModelEffects,
+  setFactorialDegree,
   type FitYByXFieldInfo,
 } from "./fitYByXDialogState";
 import {
@@ -102,6 +104,7 @@ export function FitYByXRoleDialog({ dataset, defaultName, onCancel, onCreate }: 
       ? t("fitYByX.assignResponseHelp", { defaultValue: "Assign a continuous response field for Y." })
       : t("fitYByX.assignFactorHelp", { defaultValue: "Assign a continuous, nominal, or ordinal field for X." });
   const createDisabled = loading || !canCreateFitYByX(draft);
+  const selectedPersonality = draft.factor ? deriveFitYByXPersonality(draft.factor) : null;
 
   const responseItem = toRoleZoneItem(draft.response, fieldsByName);
   const factorItem = toFactorRoleZoneItem(draft.factor, fieldsByName, t);
@@ -131,6 +134,11 @@ export function FitYByXRoleDialog({ dataset, defaultName, onCancel, onCreate }: 
       sourceDatasetId: dataset.id,
       response: draft.response,
       factor: draft.factor,
+      constructModelEffects: selectedPersonality === "bivariate" ? draft.constructModelEffects : undefined,
+      factorialDegree:
+        selectedPersonality === "bivariate" && draft.constructModelEffects === "factorialToDegree"
+          ? draft.factorialDegree
+          : undefined,
       createdAt: new Date().toISOString(),
     }));
   };
@@ -288,6 +296,54 @@ export function FitYByXRoleDialog({ dataset, defaultName, onCancel, onCreate }: 
               />
 
               {helpMessage ? <div className="sp-fit-y-by-x-help">{helpMessage}</div> : null}
+              {selectedPersonality === "bivariate" ? (
+                <div className="sp-dialog-field">
+                  <label className="sp-dialog-label" htmlFor={`${titleId}-construct`}>
+                    {t("fitYByX.constructModelEffects", { defaultValue: "Construct model effects" })}
+                  </label>
+                  <select
+                    id={`${titleId}-construct`}
+                    className="sp-dialog-input"
+                    value={draft.constructModelEffects}
+                    onChange={(event) => {
+                      setDraft((current) => setConstructModelEffects(
+                        current,
+                        event.target.value as FitYByXConstructModelEffects,
+                      ));
+                    }}
+                  >
+                    <option value="fullFactorial">
+                      {t("fitYByX.constructModelEffectsOptions.fullFactorial", { defaultValue: "Full factorial" })}
+                    </option>
+                    <option value="factorialToDegree">
+                      {t("fitYByX.constructModelEffectsOptions.factorialToDegree", { defaultValue: "Factorial to degree" })}
+                    </option>
+                    <option value="responseSurface">
+                      {t("fitYByX.constructModelEffectsOptions.responseSurface", { defaultValue: "Response surface" })}
+                    </option>
+                  </select>
+                </div>
+              ) : null}
+              {selectedPersonality === "bivariate" && draft.constructModelEffects === "factorialToDegree" ? (
+                <div className="sp-dialog-field">
+                  <label className="sp-dialog-label" htmlFor={`${titleId}-degree`}>
+                    {t("fitYByX.factorialDegree", { defaultValue: "Factorial degree" })}
+                  </label>
+                  <input
+                    id={`${titleId}-degree`}
+                    className="sp-dialog-input"
+                    type="number"
+                    min={1}
+                    max={2}
+                    step={1}
+                    value={draft.factorialDegree}
+                    onChange={(event) => {
+                      const next = Number.parseInt(event.target.value, 10);
+                      setDraft((current) => setFactorialDegree(current, Number.isFinite(next) ? next : 2));
+                    }}
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
 

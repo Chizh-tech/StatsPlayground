@@ -139,6 +139,8 @@ function makeBivariateResult(overrides: Partial<FitYByXBivariateResult> = {}): F
     usedRows: 12,
     excludedRows: 3,
     confidenceLevel: 0.95,
+    constructModelEffects: "fullFactorial",
+    factorialDegree: null,
     intercept: 1.23456789,
     slope: 0.0000123456789,
     summaryOfFit: {
@@ -341,12 +343,13 @@ function testBivariateViewModelSectionsAndFormatting(): void {
   );
   assert.equal(model.sections.every((section) => section.open), true);
   assert.equal(model.sections[0]?.rows[0]?.numericColumns, undefined);
-  assert.deepEqual(model.sections[0]?.rows[1]?.numericColumns, [1]);
-  assert.deepEqual(model.sections[0]?.rows[0]?.values, [
+  assert.equal(model.sections[0]?.rows[1]?.numericColumns, undefined);
+  assert.deepEqual(model.sections[0]?.rows[2]?.numericColumns, [1]);
+  assert.deepEqual(model.sections[0]?.rows[1]?.values, [
     "fitYByX.report.summaryOfFit.fittedEquation",
     "fitYByX.report.summaryOfFit.equationTemplate|factor=temperature,intercept=1.23457,response=diameter,slope=0.0000123457",
   ]);
-  assert.equal(model.sections[0]?.rows[1]?.values[1], "0.998878");
+  assert.equal(model.sections[0]?.rows[2]?.values[1], "0.998878");
   assert.equal(model.sections[1]?.rows[0]?.values.at(-1), "—");
   assert.equal(model.sections[1]?.rows[1]?.values.at(-1), "fitYByX.report.boolean.yes");
   assert.equal(model.sections[2]?.rows[1]?.values[0], "fitYByX.report.profiler.Center");
@@ -381,16 +384,16 @@ function testBivariateEquationRowFormatsPositiveAndNegativeSlopes(): void {
     datasetMissing: false,
   });
 
-  assert.deepEqual(positiveModel.sections[0]?.rows[0]?.values, [
+  assert.deepEqual(positiveModel.sections[0]?.rows[1]?.values, [
     "fitYByX.report.summaryOfFit.fittedEquation",
     "fitYByX.report.summaryOfFit.equationTemplate|factor=temperature,intercept=1.23457,response=diameter,slope=0.0000123457",
   ]);
-  assert.deepEqual(negativeModel.sections[0]?.rows[0]?.values, [
+  assert.deepEqual(negativeModel.sections[0]?.rows[1]?.values, [
     "fitYByX.report.summaryOfFit.fittedEquation",
     "fitYByX.report.summaryOfFit.equationTemplate|factor=speed,intercept=4.56789,response=torque,slope=-0.0000123457",
   ]);
   assert.doesNotMatch(
-    negativeModel.sections[0]?.rows[0]?.values[1] ?? "",
+    negativeModel.sections[0]?.rows[1]?.values[1] ?? "",
     /\+\s+-/,
     "Negative slopes must not render with a '+ -' sequence.",
   );
@@ -446,6 +449,10 @@ function testLocaleParityForKnownReportLabels(): void {
   const keys = [
     "fitYByX.report.summaryOfFit.fittedEquation",
     "fitYByX.report.summaryOfFit.equationTemplate",
+    "fitYByX.report.summaryOfFit.constructModelEffects",
+    "fitYByX.constructModelEffectsOptions.fullFactorial",
+    "fitYByX.constructModelEffectsOptions.factorialToDegree",
+    "fitYByX.constructModelEffectsOptions.responseSurface",
     "fitYByX.report.source.Between",
     "fitYByX.report.source.Within",
     "fitYByX.report.source.Total",
@@ -555,8 +562,8 @@ function testKnownBivariateLabelsLocalizeOutsideEnglishAndUnknownLabelsPassThrou
     datasetMissing: false,
   });
 
-  assert.equal(model.sections[0]?.rows[0]?.values[0], "拟合方程");
-  assert.equal(model.sections[0]?.rows[0]?.values[1], "直径 = 1.23457 + 0.0000123457 * 温度");
+  assert.equal(model.sections[0]?.rows[1]?.values[0], "拟合方程");
+  assert.equal(model.sections[0]?.rows[1]?.values[1], "直径 = 1.23457 + 0.0000123457 * 温度");
   assert.equal(model.sections[3]?.rows[0]?.values[0], "失拟");
   assert.equal(model.sections[3]?.rows[1]?.values[0], "纯误差");
   assert.equal(model.sections[3]?.rows[2]?.values[0], "总误差");

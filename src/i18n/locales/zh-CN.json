@@ -214,6 +214,13 @@
     "graph": "图形",
     "graphHint": "嵌入式运行视图",
     "personalityLabel": "分析类型",
+    "constructModelEffects": "构建模型效应",
+    "factorialDegree": "因子阶数",
+    "constructModelEffectsOptions": {
+      "fullFactorial": "全因子",
+      "factorialToDegree": "按阶数因子",
+      "responseSurface": "响应面"
+    },
     "missingResponse": "选择一个连续响应",
     "missingFactor": "选择一个连续、名义或有序 X",
     "duplicateRole": "响应和因子必须使用不同列",
@@ -275,6 +282,8 @@
         "standardDeviation": "标准差"
       },
       "summaryOfFit": {
+        "constructModelEffects": "构建模型效应",
+        "factorialDegree": "因子阶数",
         "fittedEquation": "拟合方程",
         "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
         "rSquared": "R 方",
