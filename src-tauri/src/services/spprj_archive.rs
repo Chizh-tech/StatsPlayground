@@ -436,6 +436,36 @@ pub fn validate_archive_manifest_and_entries(
             )));
         }
     }
+    for entry in &expected_manifest.report_files {
+        let mut doc_entry = zip.by_name(&entry.file).map_err(|e| {
+            AppError::FileIO(format!("Archive missing report entry {}: {e}", entry.file))
+        })?;
+        let value: Value = serde_json::from_reader(&mut doc_entry).map_err(|e| {
+            AppError::FileIO(format!(
+                "Archive report entry {} is not valid JSON: {e}",
+                entry.file
+            ))
+        })?;
+        validate_report_value(&value, &entry.file)?;
+        let body_id = value.get("id").and_then(Value::as_str).ok_or_else(|| {
+            AppError::FileIO(format!("Archive report entry {} missing id", entry.file))
+        })?;
+        if body_id != entry.id {
+            return Err(AppError::FileIO(format!(
+                "Archive report id mismatch in {}: manifest={}, body={}",
+                entry.file, entry.id, body_id
+            )));
+        }
+        if strict_v4_name_checks {
+            let body_name = value_required_name(&value, &entry.file, "report")?;
+            if body_name != entry.name {
+                return Err(AppError::FileIO(format!(
+                    "Archive report name mismatch in {}: manifest={}, body={}",
+                    entry.file, entry.name, body_name
+                )));
+            }
+        }
+    }
     for entry in &expected_manifest.fit_y_by_x_files {
         let mut doc_entry = zip.by_name(&entry.file).map_err(|e| {
             AppError::FileIO(format!("Archive missing fit entry {}: {e}", entry.file))
@@ -1662,6 +1692,11 @@ fn validate_manifest_stable_ids(manifest: &ProjectManifest) -> Result<(), AppErr
         ensure_unique_manifest_id(&mut graph_ids, &entry.id, "graph")?;
     }
 
+    let mut report_ids = HashSet::new();
+    for entry in &manifest.report_files {
+        ensure_unique_manifest_id(&mut report_ids, &entry.id, "report")?;
+    }
+
     let mut fit_ids = HashSet::new();
     let mut tabulate_ids = HashSet::new();
     let mut active_document_ids = HashSet::new();
@@ -2612,6 +2647,31 @@ mod tests {
             matches!(duplicate_fit, Err(AppError::FileIO(message)) if message.contains("Duplicate fitYByX stable id"))
         );
 
+        let duplicate_report = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![],
+            vec![],
+            vec![],
+            vec![
+                report_doc("report-1", "a", "# a"),
+                report_doc("report-1", "b", "# b"),
+            ],
+            vec![],
+            Vec::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        assert!(
+            matches!(duplicate_report, Err(AppError::FileIO(message)) if message.contains("Duplicate report stable id"))
+        );
+
         let duplicate_tabulate = build_bundle(
             "Project".into(),
             "4.0.0".into(),
@@ -3286,8 +3346,11 @@ mod tests {
         let table = table_doc("table-1", "data");
         let graph = graph_doc("graph-1", "data");
         let fit = fit_doc("fit-1", "data");
+        let report = report_doc("report-1", "Report 1", "# report body");
         let tabulate = tabulate_doc("tab-1", "data");
         let snapshot = snapshot_doc("snap-1", "data");
+        let report_folders = HashMap::from([("report-1".to_string(), "Root/Nested".to_string())]);
+        let tabulate_folders = HashMap::from([("tab-1".to_string(), "Root".to_string())]);
 
         let bundle = build_bundle(
             "Project".to_string(),
@@ -3296,7 +3359,7 @@ mod tests {
             vec![table],
             vec![graph],
             vec![fit],
-            Vec::new(),
+            vec![report],
             vec![tabulate],
             vec![
                 "Root".to_string(),
@@ -3306,8 +3369,8 @@ mod tests {
             &HashMap::from([("table-1".to_string(), "Root/Nested".to_string())]),
             &HashMap::from([("graph-1".to_string(), "Root/Nested/Leaf".to_string())]),
             &HashMap::from([("fit-1".to_string(), "Root/Nested/Leaf".to_string())]),
-            &HashMap::from([("tab-1".to_string(), "Root".to_string())]),
-            &HashMap::new(),
+            &report_folders,
+            &tabulate_folders,
             vec![json!({"event": "save"})],
             vec![snapshot],
         )
@@ -3328,15 +3391,22 @@ mod tests {
             "data/data.sptb".to_string(),
             "data/data.spgh".to_string(),
             "data/data.spf".to_string(),
+            "data/Report 1.sprp".to_string(),
             "data/data-2.spf".to_string(),
             "snapshots/data.json".to_string(),
             ".history.json".to_string(),
         ]);
         assert_eq!(entries, expected);
         assert!(!entries.contains(".snapshots.json"));
+        assert!(!entries.contains("data/report-1.sprp"));
         assert!(entries.iter().all(|entry| !entry.starts_with("tables/")));
         assert!(entries.iter().all(|entry| !entry.starts_with("graphs/")));
+        assert!(entries.iter().all(|entry| !entry.contains("Root/")));
         assert!(entries.iter().all(|entry| !entry.ends_with('/')));
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.manifest.report_folders, report_folders);
+        assert_eq!(loaded.manifest.tabulate_folders, tabulate_folders);
 
         let _ = std::fs::remove_file(path);
     }
@@ -3465,6 +3535,50 @@ mod tests {
         let error = write_project_archive(&bundle, path.to_str().unwrap()).unwrap_err();
         assert!(
             matches!(error, AppError::FileIO(message) if message.contains("Duplicate fitYByX stable id"))
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
+        assert!(!std::path::PathBuf::from(format!("{}.tmp", path.to_string_lossy())).exists());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn write_project_archive_rejects_duplicate_report_manifest_stable_ids_before_writing_destination(
+    ) {
+        let path = temp_project_path("write-v4-duplicate-report-stable-id");
+        std::fs::write(&path, b"destination-before-save").unwrap();
+        let original_bytes = std::fs::read(&path).unwrap();
+
+        let mut bundle = build_bundle(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-09-01T00:00:00Z".to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![report_doc("report-1", "Report 1", "# body")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        bundle.manifest.report_files.push(DocumentEntryRef {
+            id: "report-1".to_string(),
+            name: "Report 1 copy".to_string(),
+            file: "data/Report 1 copy.sprp".to_string(),
+            kind: DocumentKind::Report,
+        });
+
+        let error = write_project_archive(&bundle, path.to_str().unwrap()).unwrap_err();
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("Duplicate report stable id in manifest"))
         );
         assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
         assert!(!std::path::PathBuf::from(format!("{}.tmp", path.to_string_lossy())).exists());
@@ -3730,6 +3844,21 @@ mod tests {
                     { "id": "graph-1", "name": "b", "file": "data/b.spgh" }
                 ],
                 "folders": [],
+                "fitYByXFiles": [],
+                "tabulateFiles": [],
+                "snapshotFiles": []
+            }),
+            json!({
+                "name": "Project",
+                "version": "4.0.0",
+                "createdAt": "now",
+                "tables": [],
+                "graphs": [],
+                "folders": [],
+                "reportFiles": [
+                    { "id": "report-1", "name": "a", "file": "data/a.sprp", "kind": "report" },
+                    { "id": "report-1", "name": "b", "file": "data/b.sprp", "kind": "report" }
+                ],
                 "fitYByXFiles": [],
                 "tabulateFiles": [],
                 "snapshotFiles": []

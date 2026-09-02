@@ -1376,7 +1376,12 @@ mod tests {
                     "response": { "name": "y", "type": "continuous" },
                     "factor": { "name": "x", "type": "continuous" }
                 })],
-                reports: Vec::new(),
+                reports: vec![serde_json::json!({
+                    "schemaVersion": 1,
+                    "id": "report-1",
+                    "name": "Report 1",
+                    "markdown": "# report body"
+                })],
                 tabulates: vec![serde_json::json!({
                     "id": "tab-1",
                     "name": "data",
@@ -1399,7 +1404,10 @@ mod tests {
                     "fit-1".to_string(),
                     "Root/Nested/Leaf".to_string(),
                 )]),
-                report_folders: HashMap::new(),
+                report_folders: HashMap::from([(
+                    "report-1".to_string(),
+                    "Root/Nested".to_string(),
+                )]),
                 tabulate_folders: HashMap::from([("tab-1".to_string(), "Root".to_string())]),
             },
         }
@@ -1604,6 +1612,7 @@ mod tests {
             "data/data.sptb".to_string(),
             "data/data.spgh".to_string(),
             "data/data.spf".to_string(),
+            "data/Report 1.sprp".to_string(),
             "data/data-2.spf".to_string(),
             "snapshots/data.json".to_string(),
             ".history.json".to_string(),
@@ -1611,8 +1620,10 @@ mod tests {
 
         assert_eq!(entries, expected);
         assert!(!entries.contains(".snapshots.json"));
+        assert!(!entries.contains("data/report-1.sprp"));
         assert!(entries.iter().all(|entry| !entry.starts_with("tables/")));
         assert!(entries.iter().all(|entry| !entry.starts_with("graphs/")));
+        assert!(entries.iter().all(|entry| !entry.contains("Root/")));
         assert!(entries.iter().all(|entry| !entry.ends_with('/')));
 
         let _ = std::fs::remove_file(destination);
@@ -1651,6 +1662,21 @@ mod tests {
             assert_eq!(
                 value.get("name").and_then(serde_json::Value::as_str),
                 Some(fit_ref.name.as_str())
+            );
+        }
+
+        for report_ref in &manifest.report_files {
+            let mut entry = zip.by_name(&report_ref.file).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                value.get("id").and_then(serde_json::Value::as_str),
+                Some(report_ref.id.as_str())
+            );
+            assert_eq!(
+                value.get("name").and_then(serde_json::Value::as_str),
+                Some(report_ref.name.as_str())
             );
         }
 
@@ -2014,6 +2040,57 @@ mod tests {
         install_save_test_hook(None);
 
         assert!(matches!(error, AppError::FileIO(message) if message.contains("graph name")));
+        assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(std::fs::read(&destination).unwrap(), original_bytes);
+        assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());
+
+        let _ = std::fs::remove_file(&destination);
+    }
+
+    #[test]
+    fn stream_writer_validation_failure_on_invalid_report_preserves_destination_bytes() {
+        let state = AppState::new().unwrap();
+        let dataset = seed_benchmark_dataset(&state, 128);
+        let destination = temp_path("validation-invalid-report");
+        std::fs::write(&destination, b"destination-before-save").unwrap();
+        let original_bytes = std::fs::read(&destination).unwrap();
+        let snapshot =
+            save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
+
+        let replacer_state = Arc::new(TestReplacerState::default());
+        let replacer: Arc<dyn ArchiveReplacer> = Arc::new(TestReplacer {
+            state: Arc::clone(&replacer_state),
+        });
+
+        install_save_test_hook(Some(Box::new(move |point, context| {
+            if point == SaveFailurePoint::Validation {
+                let temp_archive_path = context.temp_archive_path.ok_or_else(|| {
+                    AppError::FileIO(
+                        "validation hook missing temp archive path context".to_string(),
+                    )
+                })?;
+                let rewritten =
+                    PathBuf::from(format!("{}.mut", temp_archive_path.to_string_lossy()));
+                rewrite_named_entry_in_archive(
+                    &temp_archive_path,
+                    &rewritten,
+                    "data/Report 1.sprp",
+                    br#"{"schemaVersion":1,"id":"report-1","name":"Report 1"}"#,
+                )?;
+                std::fs::remove_file(&temp_archive_path)?;
+                std::fs::rename(&rewritten, &temp_archive_path)?;
+            }
+            Ok(())
+        })));
+
+        let guard = state.save_coordinator.begin_save().unwrap();
+        let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, replacer);
+        let error = writer.write(&snapshot, &destination, None).unwrap_err();
+        install_save_test_hook(None);
+
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("data/Report 1.sprp report is missing required markdown"))
+        );
         assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 0);
         assert_eq!(std::fs::read(&destination).unwrap(), original_bytes);
         assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());
