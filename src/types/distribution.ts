@@ -63,59 +63,6 @@ export interface DistributionColumnDescriptorV1 {
   index: number;
 }
 
-export interface AnalysisSnapshotV1 {
-  schemaVersion: DistributionSchemaVersionV1;
-  analysisId: string;
-  snapshotId: string;
-  datasetId: string;
-  sourceDataVersion: string;
-  datasetGeneration: number;
-  schemaFingerprint: string;
-  filterFingerprint: string;
-  createdAt: string;
-}
-
-export interface DistributionProgressV1 {
-  analysisId: string;
-  configRevision: number;
-  runId: string;
-  snapshotId: string;
-  phase: string;
-  current: number;
-  total: number;
-  messageKey: string;
-  percent: number;
-}
-
-export interface DistributionCancelTokenV1 {
-  cancelToken: string;
-}
-
-export interface DistributionRunAcceptedV1 {
-  analysisId: string;
-  configRevision: number;
-  runId: string;
-  snapshotId: string;
-  cancelToken: string;
-}
-
-export type DistributionRunStatusV1 =
-  | "running"
-  | "completed"
-  | "cancelled"
-  | "stale"
-  | "failed";
-
-export interface DistributionRunStateV1 {
-  analysisId: string;
-  configRevision: number;
-  runId: string;
-  status: DistributionRunStatusV1;
-  progress: DistributionProgressV1 | null;
-  snapshotId: string;
-  cancelToken: string;
-}
-
 export type ContinuousDistributionIdV1 =
   | "normal"
   | "lognormal"
@@ -223,8 +170,7 @@ export interface DistributionFitProvenanceV1 {
   convergenceTolerance: number;
   iterationLimit: number;
   dependencyVersions: Record<string, string>;
-  snapshotId: string;
-  configRevision: number;
+  computationId: string;
   candidateRegistryIds: ContinuousDistributionIdV1[];
   compatibilityStatus: Jmp19CompatibilityStatusV1;
 }
@@ -288,25 +234,6 @@ export interface DistributionFitComparisonDataV1 {
   rows: DistributionFitComparisonRowV1[];
 }
 
-export interface DistributionResultEnvelopeV1 {
-  analysisId: string;
-  configRevision: number;
-  runId: string;
-  snapshotId: string;
-  completedAt: string;
-  groups?: DistributionGroupResultV1[];
-  reportBlocks: DistributionReportBlockV1[];
-}
-
-export interface DistributionRunFailureV1 {
-  analysisId: string;
-  configRevision: number;
-  runId: string;
-  snapshotId: string;
-  code: string;
-  messageKey: string;
-}
-
 export interface ObservationContributionDimensionV1 {
   code: string;
   action: string;
@@ -322,7 +249,6 @@ export interface ResourceBudgetV1 {
   maxRowsPerGroup: number;
   maxTotalRows: number;
   maxTotalBytes: number;
-  cancelToken: string | null;
 }
 
 export interface DistributionRequestV1 {
@@ -368,7 +294,7 @@ export interface DistributionChartProvenanceV1 {
   methodId: string;
   methodVersion: string;
   compatibilityStatus: Jmp19CompatibilityStatusV1;
-  snapshotId: string;
+  computationId: string;
 }
 
 export type DiagnosticProvenanceV1 = DistributionChartProvenanceV1;
@@ -564,7 +490,7 @@ export interface ProcessCapabilityDensitySeriesV1 {
 export interface ProcessCapabilityChartProvenanceV1 {
   capabilityMethod: string;
   normalDensityMethod: string;
-  snapshotId: string;
+  computationId: string;
   specFingerprint: string;
 }
 
@@ -684,16 +610,6 @@ export interface CapabilityDescriptorV1 {
   scope: string;
   menuScope: string;
   statusKey: string;
-}
-
-export interface DistributionWorkspaceBootstrapV1 {
-  schemaVersion: DistributionSchemaVersionV1;
-  mode: DistributionModeV1;
-  canRun: boolean;
-  datasetCount: number;
-  capabilities: CapabilityDescriptorV1[];
-  observationPolicy: ObservationContributionPolicyV1;
-  resourceBudget: ResourceBudgetV1;
 }
 
 export type BlackBoxValueV1 =

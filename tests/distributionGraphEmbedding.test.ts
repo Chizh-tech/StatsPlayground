@@ -60,7 +60,7 @@ const viewSource = readFileSync(
 assert.match(viewSource, /import \{ GraphRuntime \}/);
 assert.match(viewSource, /createEmbeddedGraphItem/);
 assert.match(viewSource, /externalDataState=/);
-assert.match(viewSource, /useDistributionReport\(dataset \? item : null/);
+assert.match(viewSource, /useDistributionReport\(\s*dataset \? item : null/);
 assert.match(viewSource, /\{ getCurrentItem \}/, "view must fence reports against the latest stored item");
 assert.doesNotMatch(viewSource, /echarts|DistributionChart/);
 assert.equal((viewSource.match(/<GraphRuntime/g) ?? []).length, 1, "one mapped runtime expression renders all four roles");

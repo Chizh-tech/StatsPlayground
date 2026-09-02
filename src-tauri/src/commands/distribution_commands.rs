@@ -3,17 +3,9 @@ use tauri::State;
 use crate::error::AppError;
 use crate::models::distribution::{
     BlackBoxCaseV1, CapabilityDescriptorV1, DistributionReportResponse, DistributionRequest,
-    DistributionWorkspaceBootstrapV1,
 };
 use crate::services::distribution_service::DistributionService;
 use crate::state::AppState;
-
-#[tauri::command]
-pub fn bootstrap_distribution_workspace(
-    state: State<'_, AppState>,
-) -> Result<DistributionWorkspaceBootstrapV1, AppError> {
-    DistributionService::new(&state).bootstrap_distribution_workspace()
-}
 
 #[tauri::command]
 pub fn list_distribution_capabilities(

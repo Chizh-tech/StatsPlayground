@@ -61,92 +61,6 @@ pub enum DistributionGroupValueV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct AnalysisSnapshotV1 {
-    pub schema_version: DistributionSchemaVersionV1,
-    pub analysis_id: String,
-    pub snapshot_id: String,
-    pub dataset_id: String,
-    pub source_data_version: String,
-    pub dataset_generation: u64,
-    pub schema_fingerprint: String,
-    pub filter_fingerprint: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DistributionProgressV1 {
-    pub analysis_id: String,
-    pub config_revision: u64,
-    pub run_id: String,
-    pub snapshot_id: String,
-    pub phase: String,
-    pub current: u64,
-    pub total: u64,
-    pub message_key: String,
-    pub percent: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DistributionCancelTokenV1 {
-    pub cancel_token: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DistributionRunAcceptedV1 {
-    pub analysis_id: String,
-    pub config_revision: u64,
-    pub run_id: String,
-    pub snapshot_id: String,
-    pub cancel_token: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum DistributionRunStatusV1 {
-    Running,
-    Completed,
-    Cancelled,
-    Stale,
-    Failed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DistributionRunStateV1 {
-    pub analysis_id: String,
-    pub config_revision: u64,
-    pub run_id: String,
-    pub status: DistributionRunStatusV1,
-    pub progress: Option<DistributionProgressV1>,
-    pub snapshot_id: String,
-    pub cancel_token: String,
-}
-
-impl DistributionRunStateV1 {
-    pub fn running(
-        analysis_id: &str,
-        config_revision: u64,
-        run_id: &str,
-        snapshot_id: &str,
-        cancel_token: &str,
-    ) -> Self {
-        Self {
-            analysis_id: analysis_id.to_string(),
-            config_revision,
-            run_id: run_id.to_string(),
-            status: DistributionRunStatusV1::Running,
-            progress: None,
-            snapshot_id: snapshot_id.to_string(),
-            cancel_token: cancel_token.to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub enum ContinuousDistributionIdV1 {
     Normal,
     Lognormal,
@@ -268,8 +182,7 @@ pub struct DistributionFitProvenanceV1 {
     pub iteration_limit: u64,
     pub dependency_versions: BTreeMap<String, String>,
     #[serde(skip_serializing)]
-    pub snapshot_id: String,
-    pub config_revision: u64,
+    pub computation_id: String,
     pub candidate_registry_ids: Vec<ContinuousDistributionIdV1>,
     pub compatibility_status: Jmp19CompatibilityStatusV1,
 }
@@ -565,7 +478,6 @@ pub struct ResourceBudgetV1 {
     pub max_rows_per_group: u64,
     pub max_total_rows: u64,
     pub max_total_bytes: u64,
-    pub cancel_token: Option<String>,
 }
 
 impl Default for ResourceBudgetV1 {
@@ -575,7 +487,6 @@ impl Default for ResourceBudgetV1 {
             max_rows_per_group: 100_000,
             max_total_rows: 1_000_000,
             max_total_bytes: 64 * 1024 * 1024,
-            cancel_token: None,
         }
     }
 }
@@ -660,7 +571,7 @@ pub struct DistributionChartProvenanceV1 {
     pub method_version: String,
     pub compatibility_status: Jmp19CompatibilityStatusV1,
     #[serde(skip_serializing)]
-    pub snapshot_id: String,
+    pub computation_id: String,
 }
 
 pub type DiagnosticProvenanceV1 = DistributionChartProvenanceV1;
@@ -987,7 +898,7 @@ pub struct ProcessCapabilityChartProvenanceV1 {
     pub capability_method: String,
     pub normal_density_method: String,
     #[serde(skip_serializing)]
-    pub snapshot_id: String,
+    pub computation_id: String,
     pub spec_fingerprint: String,
 }
 
@@ -1119,30 +1030,6 @@ pub struct DistributionReportResponse {
     pub graph_frames: DistributionGraphFrames,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DistributionResultEnvelopeV1 {
-    pub analysis_id: String,
-    pub config_revision: u64,
-    pub run_id: String,
-    pub snapshot_id: String,
-    pub completed_at: String,
-    #[serde(default)]
-    pub groups: Vec<DistributionGroupResultV1>,
-    pub report_blocks: Vec<DistributionReportBlockV1>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DistributionRunFailureV1 {
-    pub analysis_id: String,
-    pub config_revision: u64,
-    pub run_id: String,
-    pub snapshot_id: String,
-    pub code: String,
-    pub message_key: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CapabilityDescriptorV1 {
@@ -1151,18 +1038,6 @@ pub struct CapabilityDescriptorV1 {
     pub scope: String,
     pub menu_scope: String,
     pub status_key: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DistributionWorkspaceBootstrapV1 {
-    pub schema_version: DistributionSchemaVersionV1,
-    pub mode: DistributionModeV1,
-    pub can_run: bool,
-    pub dataset_count: usize,
-    pub capabilities: Vec<CapabilityDescriptorV1>,
-    pub observation_policy: ObservationContributionPolicyV1,
-    pub resource_budget: ResourceBudgetV1,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1410,57 +1285,6 @@ mod tests {
     }
 
     #[test]
-    fn run_envelopes_serialize_camel_case_four_key_identity() {
-        let accepted = DistributionRunAcceptedV1 {
-            analysis_id: "analysis-1".to_string(),
-            config_revision: 3,
-            run_id: "run-1".to_string(),
-            snapshot_id: "snapshot-1".to_string(),
-            cancel_token: "cancel-1".to_string(),
-        };
-        let progress = DistributionProgressV1 {
-            analysis_id: accepted.analysis_id.clone(),
-            config_revision: accepted.config_revision,
-            run_id: accepted.run_id.clone(),
-            snapshot_id: accepted.snapshot_id.clone(),
-            phase: "distribution.run.accepted".to_string(),
-            current: 0,
-            total: 1,
-            message_key: "distribution.run.accepted".to_string(),
-            percent: 0.0,
-        };
-        let completed = DistributionResultEnvelopeV1 {
-            analysis_id: accepted.analysis_id.clone(),
-            config_revision: accepted.config_revision,
-            run_id: accepted.run_id.clone(),
-            snapshot_id: accepted.snapshot_id.clone(),
-            completed_at: "1".to_string(),
-            groups: Vec::new(),
-            report_blocks: Vec::new(),
-        };
-        let failed = DistributionRunFailureV1 {
-            analysis_id: accepted.analysis_id.clone(),
-            config_revision: accepted.config_revision,
-            run_id: accepted.run_id.clone(),
-            snapshot_id: accepted.snapshot_id.clone(),
-            code: "distribution.run.failed".to_string(),
-            message_key: "distribution.run.failed".to_string(),
-        };
-
-        for envelope in [
-            serde_json::to_value(&accepted).expect("accepted"),
-            serde_json::to_value(&progress).expect("progress"),
-            serde_json::to_value(&completed).expect("completed"),
-            serde_json::to_value(&failed).expect("failed"),
-        ] {
-            assert_eq!(envelope["analysisId"], "analysis-1");
-            assert_eq!(envelope["configRevision"], 3);
-            assert_eq!(envelope["runId"], "run-1");
-            assert_eq!(envelope["snapshotId"], "snapshot-1");
-        }
-    }
-
-    #[test]
     fn distribution_request_v1_serializes_camel_case_and_versioned_filter_ast() {
         let request = DistributionRequestV1 {
             schema_version: "1".to_string(),
@@ -1496,7 +1320,6 @@ mod tests {
                 max_rows_per_group: 100_000,
                 max_total_rows: 1_000_000,
                 max_total_bytes: 64 * 1024 * 1024,
-                cancel_token: Some("cancel-1".to_string()),
             },
             exact: true,
         };
@@ -1681,7 +1504,7 @@ mod tests {
                 method_id: "histogram-v1".to_string(),
                 method_version: "1.0.0".to_string(),
                 compatibility_status: Jmp19CompatibilityStatusV1::CompatibilityPending,
-                snapshot_id: "snapshot-1".to_string(),
+                computation_id: "distribution:test:histogram".to_string(),
             },
             bins: vec![HistogramBinV1 {
                 lower: 0.0,

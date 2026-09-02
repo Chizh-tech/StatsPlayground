@@ -12,7 +12,6 @@ import type {
   DistributionReportResponse,
   DistributionRequest,
   DistributionResultStatus,
-  DistributionWorkspaceBootstrapV1,
   ProcessCapabilityDataV1,
 } from "../src/types/distribution.ts";
 import {
@@ -78,7 +77,7 @@ const chartData: DistributionChartDataV1 = {
     methodId: "histogram-v1",
     methodVersion: "1.0.0",
     compatibilityStatus: "compatibilityPending",
-    snapshotId: "snapshot-1",
+    computationId: "distribution:sha256:test",
   },
   bins: [{ lower: 0, upper: 1, count: 3, probability: 1, density: 1 }],
 };
@@ -229,8 +228,7 @@ const fitData: DistributionFitDataV1 = {
       convergenceTolerance: 0,
       iterationLimit: 0,
       dependencyVersions: {},
-      snapshotId: "snapshot-1",
-      configRevision: 1,
+      computationId: "distribution:sha256:test",
       candidateRegistryIds: ["normal"],
       compatibilityStatus: "compatibilityPending",
     },
@@ -262,8 +260,7 @@ const fitData: DistributionFitDataV1 = {
     convergenceTolerance: 0,
     iterationLimit: 0,
     dependencyVersions: {},
-    snapshotId: "snapshot-1",
-    configRevision: 1,
+    computationId: "distribution:sha256:test",
     candidateRegistryIds: ["normal"],
     compatibilityStatus: "compatibilityPending",
   },
@@ -327,39 +324,12 @@ const fitComparison: DistributionFitComparisonDataV1 = {
 assert.equal(fitComparison.rows[0].distributionId, "normal");
 assert.deepEqual(fitComparison.candidateRegistryIds, ["normal", "gamma"]);
 
-const bootstrap: DistributionWorkspaceBootstrapV1 = {
-  schemaVersion: "1",
-  mode: "emptySystem",
-  canRun: false,
-  datasetCount: 0,
-  capabilities: [],
-  observationPolicy: { schemaVersion: "1", dimensions: [] },
-  resourceBudget: {
-    maxGroups: 1_000,
-    maxRowsPerGroup: 100_000,
-    maxTotalRows: 1_000_000,
-    maxTotalBytes: 64 * 1024 * 1024,
-    cancelToken: null,
-  },
-};
-
-assert.equal(bootstrap.mode, "emptySystem");
-assert.equal(bootstrap.capabilities.length, 0);
-assert.deepEqual(Object.keys(bootstrap.resourceBudget), [
-  "maxGroups",
-  "maxRowsPerGroup",
-  "maxTotalRows",
-  "maxTotalBytes",
-  "cancelToken",
-]);
-
 const invokeCalls: Array<{ command: string; args: unknown }> = [];
 Object.assign(globalThis, {
   window: {
     __TAURI_INTERNALS__: {
       invoke: async (command: string, args: unknown = {}) => {
         invokeCalls.push({ command, args });
-        if (command === "bootstrap_distribution_workspace") return bootstrap;
         if (command === "list_distribution_capabilities") return [];
         return undefined;
       },
@@ -368,17 +338,6 @@ Object.assign(globalThis, {
 });
 
 const { distributionService } = await import("../src/services/distributionService.ts");
-const bootstrapResult = await distributionService.bootstrapWorkspace();
-assert.equal(bootstrapResult.mode, "emptySystem");
-assert.equal(bootstrapResult.capabilities.length, 0);
-assert.deepEqual(Object.keys(bootstrapResult.resourceBudget), [
-  "maxGroups",
-  "maxRowsPerGroup",
-  "maxTotalRows",
-  "maxTotalBytes",
-  "cancelToken",
-]);
-
 await distributionService.listCapabilities();
 const blackBoxCase: BlackBoxCaseV1 = {
   schemaVersion: "1",
@@ -400,7 +359,6 @@ const blackBoxCase: BlackBoxCaseV1 = {
 await distributionService.validateBlackBoxCase(blackBoxCase);
 
 assert.deepEqual(invokeCalls, [
-  { command: "bootstrap_distribution_workspace", args: {} },
   { command: "list_distribution_capabilities", args: {} },
   {
     command: "validate_black_box_case",

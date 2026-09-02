@@ -153,6 +153,10 @@ mod tests {
                 "commands::fit_y_by_x_commands::fit_y_by_x",
                 CommandClass::ReadOnly,
             ),
+            (
+                "commands::distribution_commands::compute_distribution_report",
+                CommandClass::ReadOnly,
+            ),
             ("commands::tabulate_commands::tabulate", CommandClass::ReadOnly),
             ("commands::io_commands::export_csv", CommandClass::ReadOnly),
             ("commands::io_commands::import_sqlite", CommandClass::Mutation),

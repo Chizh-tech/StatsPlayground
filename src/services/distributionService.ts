@@ -5,12 +5,9 @@ import type {
   CapabilityDescriptorV1,
   DistributionReportResponse,
   DistributionRequest,
-  DistributionWorkspaceBootstrapV1,
 } from "@/types/distribution";
 
 export const distributionService = {
-  bootstrapWorkspace: () =>
-    invoke<DistributionWorkspaceBootstrapV1>("bootstrap_distribution_workspace"),
   listCapabilities: () =>
     invoke<CapabilityDescriptorV1[]>("list_distribution_capabilities"),
   validateBlackBoxCase: (caseDefinition: BlackBoxCaseV1) =>

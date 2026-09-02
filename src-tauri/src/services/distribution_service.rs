@@ -11,11 +11,11 @@ use crate::models::distribution::{
     DistributionFitConvergenceStatusV1, DistributionFitConvergenceV1, DistributionFitDataV1,
     DistributionFitProvenanceV1, DistributionFitStatusV1, DistributionFittedCurveDataV1,
     DistributionGraphFrames, DistributionGroupResult, DistributionGroupResultV1,
-    DistributionModeV1, DistributionQuantileValueV1, DistributionReportBlock,
+    DistributionQuantileValueV1, DistributionReportBlock,
     DistributionReportBlockV1, DistributionReportResponse, DistributionRequest,
-    DistributionRequestV1, DistributionSummaryDataV1, DistributionWorkspaceBootstrapV1,
+    DistributionRequestV1, DistributionSummaryDataV1,
     DistributionYResult, DistributionYResultV1, GraphDataFrameDto, HistogramBinV1,
-    Jmp19CompatibilityStatusV1, ObservationContributionPolicyV1, ProcessCapabilityChartBinV1,
+    Jmp19CompatibilityStatusV1, ProcessCapabilityChartBinV1,
     ProcessCapabilityChartDataV1, ProcessCapabilityChartProvenanceV1, ProcessCapabilityDataV1,
     ProcessCapabilityDensitySeriesV1, ProcessCapabilityExpectedNonconformanceBySigmaV1,
     ProcessCapabilityExpectedTailV1, ProcessCapabilityIndicesV1,
@@ -24,7 +24,7 @@ use crate::models::distribution::{
     ProcessCapabilityObservedNonconformanceV1, ProcessCapabilityObservedTailV1,
     ProcessCapabilityProportionIntervalV1, ProcessCapabilitySpecificationLinesV1,
     ProcessCapabilitySpecificationV1, ProcessCapabilityStabilityIndexV1,
-    ProcessCapabilitySummaryV1, ResourceBudgetV1,
+    ProcessCapabilitySummaryV1,
 };
 use crate::models::graph_data::{
     BoxPlotEntry, BoxPlotOutlier, BoxPlotPacket, GraphAggregatePacket, GraphRawPointDisposition,
@@ -36,7 +36,6 @@ use crate::models::graph_data::{
     DISTRIBUTION_NORMAL_QUANTILE_UPPER_ELEMENT_ID, DISTRIBUTION_OVERVIEW_FITTED_CURVES_ELEMENT_ID,
     DISTRIBUTION_OVERVIEW_HISTOGRAM_ELEMENT_ID, GRAPH_SCATTER_RENDER_BUDGET,
 };
-use crate::services::data_service::DataService;
 use crate::services::distribution_fit::{
     attach_parameter_inference, build_pdf_curve, effective_n, fit_information_criteria,
     objective_failure, FitFailureClassificationV1, FitFailureV1, FitMetricSetV1,
@@ -61,7 +60,6 @@ pub struct DistributionService<'a> {
 
 struct OneShotExecutionContext {
     provenance_id: String,
-    config_revision: u64,
 }
 
 #[derive(serde::Serialize)]
@@ -73,21 +71,6 @@ struct OneShotExecutionResult {
 impl<'a> DistributionService<'a> {
     pub fn new(state: &'a AppState) -> Self {
         Self { state }
-    }
-
-    pub fn bootstrap_distribution_workspace(
-        &self,
-    ) -> Result<DistributionWorkspaceBootstrapV1, AppError> {
-        let dataset_count = DataService::new(self.state).list_datasets()?.len();
-        Ok(DistributionWorkspaceBootstrapV1 {
-            schema_version: "1".to_string(),
-            mode: DistributionModeV1::Continuous,
-            can_run: true,
-            dataset_count,
-            capabilities: self.list_distribution_capabilities()?,
-            observation_policy: ObservationContributionPolicyV1::strict_v1()?,
-            resource_budget: ResourceBudgetV1::default(),
-        })
     }
 
     pub fn list_distribution_capabilities(&self) -> Result<Vec<CapabilityDescriptorV1>, AppError> {
@@ -140,7 +123,6 @@ impl<'a> DistributionService<'a> {
                     request.generation,
                     &response_column.column_id,
                 ),
-                config_revision: 1,
             };
             let result = self.execute_one_shot(&resolved, &context)?;
             for legacy_group in result.groups {
@@ -1339,8 +1321,7 @@ fn fit_provenance(
             ("statrs".to_string(), "0.18.0".to_string()),
             ("argmin".to_string(), "0.11.0".to_string()),
         ]),
-        snapshot_id: context.provenance_id.clone(),
-        config_revision: context.config_revision,
+        computation_id: context.provenance_id.clone(),
         candidate_registry_ids: candidate_ids.to_vec(),
         compatibility_status: Jmp19CompatibilityStatusV1::CompatibilityPending,
     }
@@ -1622,7 +1603,7 @@ fn map_capability_chart_data(value: NormalCapabilityChartDataV1) -> ProcessCapab
         provenance: ProcessCapabilityChartProvenanceV1 {
             capability_method: value.provenance.capability_method,
             normal_density_method: value.provenance.normal_density_method,
-            snapshot_id: value.provenance.snapshot_id,
+            computation_id: value.provenance.computation_id,
             spec_fingerprint: value.provenance.spec_fingerprint,
         },
     }
@@ -1724,7 +1705,7 @@ fn chart_provenance_with_status_and_version(
         method_id: method_id.to_string(),
         method_version: method_version.to_string(),
         compatibility_status,
-        snapshot_id: context.provenance_id.clone(),
+        computation_id: context.provenance_id.clone(),
     }
 }
 
@@ -1893,11 +1874,6 @@ fn validate_run_request(request: &DistributionRequestV1) -> Result<(), AppError>
             ));
         }
     }
-    if request.resource_budget.cancel_token.is_some() {
-        return Err(AppError::InvalidParam(
-            "distribution.run.clientCancelTokenNotAllowed".to_string(),
-        ));
-    }
     Ok(())
 }
 
@@ -1952,8 +1928,9 @@ mod tests {
     use super::*;
     use crate::models::distribution::{
         BlackBoxObservationV1, BlackBoxProvenanceV1, BlackBoxStatusV1, BlackBoxValueV1,
-        DistributionColumnRefV1, DistributionModelingTypeV1, DistributionRequest,
-        DistributionRequestV1,
+        DistributionColumnRefV1, DistributionModeV1, DistributionModelingTypeV1,
+        DistributionRequest, DistributionRequestV1, ObservationContributionPolicyV1,
+        ResourceBudgetV1,
     };
     use crate::services::data_service::DataService;
     use std::collections::HashMap;
@@ -1992,7 +1969,6 @@ mod tests {
     fn one_shot_context(config_revision: u64) -> OneShotExecutionContext {
         OneShotExecutionContext {
             provenance_id: format!("distribution:test:{config_revision}"),
-            config_revision,
         }
     }
 
@@ -2254,7 +2230,6 @@ mod tests {
             configure(&mut request, &frequency_id, &weight_id);
             let context = OneShotExecutionContext {
                 provenance_id: "distribution:test:continuous-fit".to_string(),
-                config_revision: request.config_revision,
             };
             DistributionService::new(state).execute_one_shot(&request, &context)
         }
@@ -2765,28 +2740,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn bootstrap_distribution_workspace_returns_continuous_capabilities() {
-        let state = AppState::new().expect("test state");
-        let service = DistributionService::new(&state);
-        let bootstrap = service
-            .bootstrap_distribution_workspace()
-            .expect("bootstrap");
-
-        assert!(bootstrap.can_run);
-        assert_eq!(bootstrap.capabilities.len(), 11);
-        assert_eq!(
-            bootstrap
-                .capabilities
-                .iter()
-                .filter_map(|capability| capability.id.strip_prefix("fit.continuous."))
-                .collect::<Vec<_>>(),
-            vec!["normal", "lognormal", "exponential", "gamma", "weibull"],
-        );
-        assert_eq!(bootstrap.mode, DistributionModeV1::Continuous);
-        assert_eq!(bootstrap.observation_policy.schema_version, "1");
-    }
-
     fn synthetic_black_box_case() -> BlackBoxCaseV1 {
         BlackBoxCaseV1 {
             schema_version: "1".to_string(),
@@ -2974,7 +2927,7 @@ mod tests {
             "capability.normal.individuals"
         );
         assert_eq!(
-            capability_chart.provenance.snapshot_id,
+            capability_chart.provenance.computation_id,
             context.provenance_id
         );
         assert!(capability_chart.overall_density.coordinates.len() >= 2);
