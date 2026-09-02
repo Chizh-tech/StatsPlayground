@@ -260,6 +260,26 @@ function testCreateRequestNormalizesConstructModelEffects(): void {
   });
 }
 
+function testCreateRequestStripsModelEffectsForOneway(): void {
+  const onewayRequest = createFitYByXRequest(
+    createItem({
+      personality: "oneway",
+      factor: { name: "group", type: "nominal" },
+      constructModelEffects: "factorialToDegree",
+      factorialDegree: 2,
+    }),
+    43,
+  );
+  assert.deepEqual(onewayRequest, {
+    datasetId: "dataset-1",
+    generation: 43,
+    responseColumn: "response",
+    factorColumn: "group",
+    personality: "oneway",
+    confidenceLevel: 0.95,
+  });
+}
+
 async function testLaterRequestWinsWhenEarlierCompletionArrivesLast(): Promise<void> {
   const item = createItem();
   const generationA = createDeferred<number>();
@@ -450,5 +470,6 @@ await testReloadsSameItemWhenGenerationChangesAndIgnoresStaleGenerationFetch();
 testHookSourceContractUsesGenerationSignalAndCleanup();
 testHookSourceContractFetchesGenerationAndGuardsResolutionFailures();
 testCreateRequestNormalizesConstructModelEffects();
+testCreateRequestStripsModelEffectsForOneway();
 
 console.log("fitYByX report state contract passed");

@@ -590,6 +590,42 @@ mod tests {
     }
 
     #[test]
+    fn rejects_factorial_degree_when_effects_omitted() {
+        let state = AppState::new().expect("test state");
+        seed_dataset(
+            &state,
+            "fit-bivariate-factorial-degree-without-effects",
+            &["response", "factor"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_bivariate_factorial_degree_without_effects" (_row_id, response, factor) VALUES
+                (1, 3.0, 1.0),
+                (2, 5.0, 2.0),
+                (3, 7.0, 3.0),
+                (4, 9.0, 4.0);
+            "#,
+            4,
+        );
+
+        let error = FitYByXService::new(&state)
+            .run(FitYByXRequest {
+                dataset_id: "fit-bivariate-factorial-degree-without-effects".into(),
+                generation: 0,
+                response_column: "response".into(),
+                factor_column: "factor".into(),
+                personality: FitYByXPersonality::Bivariate,
+                construct_model_effects: None,
+                factorial_degree: Some(2),
+                confidence_level: 0.95,
+            })
+            .expect_err("missing constructModelEffects should reject factorialDegree payload");
+
+        assert!(
+            matches!(error, AppError::InvalidParam(message) if message.contains("only valid when construct model effects is factorialToDegree"))
+        );
+    }
+
+    #[test]
     fn bivariate_response_surface_returns_quadratic_term() -> Result<(), AppError> {
         let state = AppState::new().expect("test state");
         seed_dataset(
