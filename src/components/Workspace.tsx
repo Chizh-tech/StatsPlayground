@@ -318,6 +318,8 @@ export function Workspace() {
       existingNames = graphBuilders.map((item) => item.name);
     } else if (kind === "fitYByX" || kind === "tabulate") {
       existingNames = fitAndTabulateNames;
+    } else if (kind === "report") {
+      existingNames = reportItems.map((item) => item.name);
     } else {
       existingNames = [];
     }
@@ -336,7 +338,7 @@ export function Workspace() {
       return { basename: null, error: invalidProjectNameMessage(resolved.error) };
     }
     return { basename: resolved.basename, error: null };
-  }, [datasets, fitAndTabulateNames, graphBuilders, invalidProjectNameMessage, t]);
+  }, [datasets, fitAndTabulateNames, graphBuilders, invalidProjectNameMessage, reportItems, t]);
 
   /** Called when history/snapshot is restored — refresh all UI */
   const handleHistoryRestored = useCallback(async () => {

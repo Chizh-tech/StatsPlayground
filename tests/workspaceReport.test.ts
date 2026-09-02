@@ -54,6 +54,16 @@ assertSourceIncludes(workspaceSource, "fsSetReportFolder", "Drop handling must a
 assertSourceIncludes(workspaceSource, "history.newReport", "Creation must record report history");
 assertSourceIncludes(workspaceSource, "history.renameReport", "Rename must record report history");
 assertSourceIncludes(workspaceSource, "history.deleteReport", "Delete must record report history");
+assertSourceIncludes(
+  workspaceSource,
+  'kind === "report"',
+  "Report naming must have an explicit resolver branch",
+);
+assertSourceIncludes(
+  workspaceSource,
+  "reportItems.map((item) => item.name)",
+  "Report rename must de-duplicate within the .sprp namespace",
+);
 
 assertSourceIncludes(workspaceSource, "schemaVersion: 1", "New reports must start at schema version 1");
 assertSourceIncludes(workspaceSource, 'name: allocateProjectBasename(', "New reports must allocate an independent basename through the shared naming policy");
