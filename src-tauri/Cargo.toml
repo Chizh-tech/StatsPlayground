@@ -33,7 +33,6 @@ tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 sqlparser = "0.62.0"
 statrs = "0.19.1"
-nalgebra = "0.35.0"
 argmin = "0.11.0"
 sha2 = "0.10.9"
 

@@ -20,7 +20,7 @@ use crate::services::spprj_archive::{
 };
 use crate::state::AppState;
 
-const STREAM_VERSION: &str = "4.0.0";
+const STREAM_VERSION: &str = "3.0.0";
 const TABLE_DOC_VERSION: &str = "2";
 const TARGET_BATCH_BYTES: usize = 6 * 1024 * 1024;
 const HARD_BATCH_BYTES: usize = 8 * 1024 * 1024;
@@ -357,7 +357,6 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             placeholder_tables,
             graph_docs,
             snapshot.request.fit_y_by_x.clone(),
-            snapshot.request.fit_models.clone(),
             snapshot.request.tabulates.clone(),
             distributions,
             derived_formulas,
@@ -366,12 +365,11 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             &snapshot.request.table_folders,
             &snapshot.request.graph_folders,
             &snapshot.request.fit_y_by_x_folders,
-            &snapshot.request.fit_model_folders,
             &snapshot.request.tabulate_folders,
             &snapshot.request.distribution_folders,
             snapshot.request.history.clone(),
             snapshot.request.snapshots.clone(),
-        )?;
+        );
 
         thread::scope(|scope| {
             let mut perf = SaveRunPerf::default();
@@ -386,7 +384,8 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 overall_progress: Some(0.0),
             });
 
-            let (temp_archive, temp_file) = create_unique_temp_archive(&snapshot.destination_path)?;
+            let (temp_archive, temp_file) =
+                create_unique_temp_archive(&snapshot.destination_path)?;
             let temp_path = temp_archive.path();
             if let Err(error) = self.write_temp_archive(
                 snapshot,
@@ -394,9 +393,6 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 &bundle.graphs,
                 &bundle.distributions,
                 &bundle.derived_formulas,
-                &bundle.fit_y_by_x,
-                &bundle.tabulates,
-                &bundle.snapshots,
                 &temp_path,
                 temp_file,
                 total_rows,
@@ -448,9 +444,6 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         graph_docs: &[GraphDoc],
         distribution_docs: &[spprj_archive::DistributionArchiveRecordV1],
         derived_formulas: &[spprj_archive::DerivedFormulaArchiveEnvelopeV1],
-        fit_docs: &[serde_json::Value],
-        tabulate_docs: &[serde_json::Value],
-        snapshot_docs: &[serde_json::Value],
         temp_path: &Path,
         temp_file: std::fs::File,
         total_rows: usize,
@@ -461,12 +454,19 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         let file_opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .compression_level(Some(1));
+        let dir_opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
 
         let manifest_bytes = serde_json::to_vec_pretty(manifest)
             .map_err(|e| AppError::FileIO(format!("failed to serialize manifest: {e}")))?;
         zip.start_file("manifest.json", file_opts)
             .map_err(|e| AppError::FileIO(e.to_string()))?;
         zip.write_all(&manifest_bytes)?;
+
+        for folder in &manifest.folders {
+            zip.add_directory(format!("{folder}/"), dir_opts)
+                .map_err(|e| AppError::FileIO(e.to_string()))?;
+        }
 
         let graph_by_id: HashMap<&str, &GraphDoc> = graph_docs
             .iter()
@@ -480,33 +480,6 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             .iter()
             .map(|envelope| (envelope.body.formula_id.as_str(), envelope))
             .collect::<HashMap<_, _>>();
-        let fit_by_id: HashMap<&str, &serde_json::Value> = fit_docs
-            .iter()
-            .filter_map(|value| {
-                value
-                    .get("id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|id| (id, value))
-            })
-            .collect();
-        let tabulate_by_id: HashMap<&str, &serde_json::Value> = tabulate_docs
-            .iter()
-            .filter_map(|value| {
-                value
-                    .get("id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|id| (id, value))
-            })
-            .collect();
-        let snapshot_by_id: HashMap<&str, &serde_json::Value> = snapshot_docs
-            .iter()
-            .filter_map(|value| {
-                value
-                    .get("id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|id| (id, value))
-            })
-            .collect();
         let mut rows_written = 0usize;
 
         for (table_index, dataset) in snapshot.datasets.iter().enumerate() {
@@ -543,14 +516,14 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             let column_write_modes = plan
                 .columns
                 .iter()
-                .map(|(_, column_type)| archive_cell_write_mode(column_type))
+                .map(|(_, _, column_type)| archive_cell_write_mode(column_type))
                 .collect::<Vec<_>>();
 
             let columns = table_columns_from_plan(&dataset.id, &plan, &snapshot.column_display);
 
             zip.start_file(&table_ref.file, file_opts)
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
-            write_table_header(&mut zip, dataset, &table_ref.name, &columns)?;
+            write_table_header(&mut zip, dataset, &columns)?;
             run_save_test_hook!(
                 SaveFailurePoint::AfterHeader,
                 Some(dataset.id.clone()),
@@ -696,60 +669,13 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         });
 
         for graph_ref in &manifest.graphs {
-            let graph_doc = graph_by_id.get(graph_ref.id.as_str()).ok_or_else(|| {
-                AppError::FileIO(format!(
-                    "missing graph payload for manifest reference {}",
-                    graph_ref.id
-                ))
-            })?;
-            zip.start_file(&graph_ref.file, file_opts)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
-            let bytes = serde_json::to_vec(graph_doc)
-                .map_err(|e| AppError::FileIO(format!("failed to serialize graph doc: {e}")))?;
-            zip.write_all(&bytes)?;
-        }
-
-        for fit_ref in &manifest.fit_y_by_x_files {
-            let fit_doc = fit_by_id.get(fit_ref.id.as_str()).ok_or_else(|| {
-                AppError::FileIO(format!(
-                    "missing fit payload for manifest reference {}",
-                    fit_ref.id
-                ))
-            })?;
-            zip.start_file(&fit_ref.file, file_opts)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
-            serde_json::to_writer(&mut zip, fit_doc)
-                .map_err(|e| AppError::FileIO(format!("failed to serialize fit doc: {e}")))?;
-        }
-
-        for tabulate_ref in &manifest.tabulate_files {
-            let tabulate_doc = tabulate_by_id
-                .get(tabulate_ref.id.as_str())
-                .ok_or_else(|| {
-                    AppError::FileIO(format!(
-                        "missing tabulate payload for manifest reference {}",
-                        tabulate_ref.id
-                    ))
-                })?;
-            zip.start_file(&tabulate_ref.file, file_opts)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
-            serde_json::to_writer(&mut zip, tabulate_doc)
-                .map_err(|e| AppError::FileIO(format!("failed to serialize tabulate doc: {e}")))?;
-        }
-
-        for snapshot_ref in &manifest.snapshot_files {
-            let snapshot_doc = snapshot_by_id
-                .get(snapshot_ref.id.as_str())
-                .ok_or_else(|| {
-                    AppError::FileIO(format!(
-                        "missing snapshot payload for manifest reference {}",
-                        snapshot_ref.id
-                    ))
-                })?;
-            zip.start_file(&snapshot_ref.file, file_opts)
-                .map_err(|e| AppError::FileIO(e.to_string()))?;
-            serde_json::to_writer(&mut zip, snapshot_doc)
-                .map_err(|e| AppError::FileIO(format!("failed to serialize snapshot doc: {e}")))?;
+            if let Some(graph_doc) = graph_by_id.get(graph_ref.id.as_str()) {
+                zip.start_file(&graph_ref.file, file_opts)
+                    .map_err(|e| AppError::FileIO(e.to_string()))?;
+                let bytes = serde_json::to_vec(graph_doc)
+                    .map_err(|e| AppError::FileIO(format!("failed to serialize graph doc: {e}")))?;
+                zip.write_all(&bytes)?;
+            }
         }
         for entry in &manifest.distributions {
             if let Some(record) = distribution_by_id.get(entry.analysis_id.as_str()) {
@@ -785,6 +711,13 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             serde_json::to_writer(&mut zip, &snapshot.request.history)
                 .map_err(|e| AppError::FileIO(format!("failed to serialize history: {e}")))?;
         }
+        if !snapshot.request.snapshots.is_empty() {
+            zip.start_file(".snapshots.json", file_opts)
+                .map_err(|e| AppError::FileIO(e.to_string()))?;
+            serde_json::to_writer(&mut zip, &snapshot.request.snapshots)
+                .map_err(|e| AppError::FileIO(format!("failed to serialize snapshots: {e}")))?;
+        }
+
         dispatcher.emit(SaveProgress {
             phase: SavePhase::Compressing,
             table_index: snapshot.datasets.len(),
@@ -832,6 +765,9 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         if !snapshot.request.history.is_empty() {
             expected_entries.push(".history.json");
         }
+        if !snapshot.request.snapshots.is_empty() {
+            expected_entries.push(".snapshots.json");
+        }
         let validation_started = Instant::now();
         spprj_archive::validate_archive_manifest_and_entries(
             temp_path,
@@ -868,9 +804,10 @@ fn table_columns_from_plan(
     plan.columns
         .iter()
         .enumerate()
-        .map(|(index, (name, column_type))| {
+        .map(|(index, (column_id, name, column_type))| {
             let props = display.and_then(|items| items.iter().find(|item| item.col_index == index));
             TableColumn {
+                column_id: Some(column_id.clone()),
                 name: name.clone(),
                 col_type: column_type.clone(),
                 width: props.and_then(|item| item.width),
@@ -890,14 +827,13 @@ fn table_columns_from_plan(
 fn write_table_header<W: Write>(
     writer: &mut W,
     dataset: &crate::models::table::DatasetMeta,
-    resolved_name: &str,
     columns: &[TableColumn],
 ) -> Result<(), AppError> {
     writer.write_all(b"{\"id\":")?;
     serde_json::to_writer(&mut *writer, &dataset.id)
         .map_err(|e| AppError::FileIO(format!("failed to write table id: {e}")))?;
     writer.write_all(b",\"name\":")?;
-    serde_json::to_writer(&mut *writer, resolved_name)
+    serde_json::to_writer(&mut *writer, &dataset.name)
         .map_err(|e| AppError::FileIO(format!("failed to write table name: {e}")))?;
     writer.write_all(b",\"sourceType\":")?;
     serde_json::to_writer(&mut *writer, &dataset.source_type)
@@ -1118,7 +1054,7 @@ fn run_test_hook(point: SaveFailurePoint, context: SaveHookContext) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1336,7 +1272,6 @@ mod tests {
                     "graphType": "line",
                 })],
                 fit_y_by_x: vec![serde_json::json!({"id": "fit-1"})],
-                fit_models: vec![serde_json::json!({"id": "fit-model-1"})],
                 tabulates: vec![serde_json::json!({"id": "tab-1"})],
                 distributions: Vec::new(),
                 derived_formulas: Vec::new(),
@@ -1345,119 +1280,10 @@ mod tests {
                 table_folders: HashMap::new(),
                 graph_folders: HashMap::new(),
                 fit_y_by_x_folders: HashMap::new(),
-                fit_model_folders: HashMap::new(),
                 tabulate_folders: HashMap::new(),
                 distribution_folders: HashMap::new(),
             },
         }
-    }
-
-    fn save_snapshot_with_named_docs_and_nested_folders(
-        destination_path: &std::path::Path,
-        datasets: Vec<crate::models::table::DatasetMeta>,
-    ) -> SaveSnapshot {
-        let dataset_generations = datasets
-            .iter()
-            .map(|dataset| (dataset.id.clone(), 0_u64))
-            .collect();
-        SaveSnapshot {
-            current_project: ProjectInfo {
-                name: "Streaming Project".to_string(),
-                file_path: destination_path.to_string_lossy().to_string(),
-                created_at: "2026-08-21T00:00:00Z".to_string(),
-            },
-            destination_path: destination_path.to_path_buf(),
-            destination_name: "Streaming Project".to_string(),
-            datasets,
-            dataset_generations,
-            column_display: HashMap::new(),
-            request: SaveProjectRequest {
-                file_path: None,
-                history: vec![serde_json::json!({"event": "save"})],
-                snapshots: vec![serde_json::json!({
-                    "id": "snap-1",
-                    "name": "data",
-                    "createdAt": "2026-09-01T00:00:00Z",
-                    "request": {
-                        "name": "snapshot request",
-                        "datasets": [],
-                        "graphBuilders": [],
-                        "fitYByX": [],
-                        "tabulates": [],
-                        "history": [],
-                        "folders": [],
-                        "tableFolders": {},
-                        "graphFolders": {},
-                        "fitYByXFolders": {},
-                        "tabulateFolders": {}
-                    }
-                })],
-                graph_builders: vec![serde_json::json!({
-                    "id": "graph-1",
-                    "name": "data",
-                    "graphType": "line",
-                })],
-                fit_y_by_x: vec![serde_json::json!({
-                    "id": "fit-1",
-                    "name": "data",
-                    "sourceDatasetId": "table_1",
-                    "response": { "name": "y", "type": "continuous" },
-                    "factor": { "name": "x", "type": "continuous" }
-                })],
-                fit_models: Vec::new(),
-                tabulates: vec![serde_json::json!({
-                    "id": "tab-1",
-                    "name": "data",
-                    "sourceDatasetId": "table_1",
-                    "rowFields": [],
-                    "columnFields": [],
-                    "statistics": []
-                })],
-                distributions: Vec::new(),
-                derived_formulas: Vec::new(),
-                distribution_issues: Vec::new(),
-                folders: vec![
-                    "Root".to_string(),
-                    "Root/Nested".to_string(),
-                    "Root/Nested/Leaf".to_string(),
-                ],
-                table_folders: HashMap::from([("table_1".to_string(), "Root/Nested".to_string())]),
-                graph_folders: HashMap::from([(
-                    "graph-1".to_string(),
-                    "Root/Nested/Leaf".to_string(),
-                )]),
-                fit_y_by_x_folders: HashMap::from([(
-                    "fit-1".to_string(),
-                    "Root/Nested/Leaf".to_string(),
-                )]),
-                fit_model_folders: HashMap::new(),
-                tabulate_folders: HashMap::from([("tab-1".to_string(), "Root".to_string())]),
-                distribution_folders: HashMap::new(),
-            },
-        }
-    }
-
-    fn seed_named_dataset(
-        state: &AppState,
-        id: &str,
-        name: &str,
-    ) -> crate::models::table::DatasetMeta {
-        let db = state.db.lock().unwrap();
-        db.create_empty_table(id, name, &["value".to_string()], &["BIGINT".to_string()])
-            .unwrap();
-        db.conn()
-            .execute(
-                &format!("INSERT INTO \"dataset_{id}\" (\"_row_id\", \"value\") VALUES ($1, $2)"),
-                params![1_i64, 10_i64],
-            )
-            .unwrap();
-        db.conn()
-            .execute(
-                "UPDATE _meta_datasets SET row_count = 1 WHERE id = $1",
-                params![id],
-            )
-            .unwrap();
-        db.get_dataset_meta(id).unwrap()
     }
 
     fn truncate_archive_file(path: &std::path::Path) -> Result<(), AppError> {
@@ -1504,86 +1330,6 @@ mod tests {
         Ok(())
     }
 
-    fn remove_named_entry_from_archive(
-        source_path: &std::path::Path,
-        destination_path: &std::path::Path,
-        removed_entry: &str,
-    ) -> Result<(), AppError> {
-        let input = std::fs::File::open(source_path)?;
-        let mut input_zip = zip::ZipArchive::new(input)
-            .map_err(|e| AppError::FileIO(format!("failed to open archive for mutation: {e}")))?;
-        let output = std::fs::File::create(destination_path)?;
-        let mut output_zip = zip::ZipWriter::new(output);
-        let opts = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-
-        for index in 0..input_zip.len() {
-            let mut entry = input_zip
-                .by_index(index)
-                .map_err(|e| AppError::FileIO(format!("failed to read archive entry: {e}")))?;
-            if entry.name() == removed_entry {
-                continue;
-            }
-            let mut bytes = Vec::new();
-            entry
-                .read_to_end(&mut bytes)
-                .map_err(|e| AppError::FileIO(format!("failed to copy archive entry: {e}")))?;
-            output_zip
-                .start_file(entry.name(), opts)
-                .map_err(|e| AppError::FileIO(format!("failed to create archive entry: {e}")))?;
-            output_zip
-                .write_all(&bytes)
-                .map_err(|e| AppError::FileIO(format!("failed to write archive entry: {e}")))?;
-        }
-
-        output_zip
-            .finish()
-            .map_err(|e| AppError::FileIO(format!("failed to finish mutated archive: {e}")))?;
-        Ok(())
-    }
-
-    fn rewrite_named_entry_in_archive(
-        source_path: &std::path::Path,
-        destination_path: &std::path::Path,
-        target_entry: &str,
-        replacement_bytes: &[u8],
-    ) -> Result<(), AppError> {
-        let input = std::fs::File::open(source_path)?;
-        let mut input_zip = zip::ZipArchive::new(input)
-            .map_err(|e| AppError::FileIO(format!("failed to open archive for mutation: {e}")))?;
-        let output = std::fs::File::create(destination_path)?;
-        let mut output_zip = zip::ZipWriter::new(output);
-        let opts = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-
-        for index in 0..input_zip.len() {
-            let mut entry = input_zip
-                .by_index(index)
-                .map_err(|e| AppError::FileIO(format!("failed to read archive entry: {e}")))?;
-            let mut bytes = Vec::new();
-            entry
-                .read_to_end(&mut bytes)
-                .map_err(|e| AppError::FileIO(format!("failed to copy archive entry: {e}")))?;
-            output_zip
-                .start_file(entry.name(), opts)
-                .map_err(|e| AppError::FileIO(format!("failed to create archive entry: {e}")))?;
-            if entry.name() == target_entry {
-                output_zip.write_all(replacement_bytes).map_err(|e| {
-                    AppError::FileIO(format!("failed to write replacement archive entry: {e}"))
-                })?;
-            } else {
-                output_zip
-                    .write_all(&bytes)
-                    .map_err(|e| AppError::FileIO(format!("failed to write archive entry: {e}")))?;
-            }
-        }
-
-        output_zip
-            .finish()
-            .map_err(|e| AppError::FileIO(format!("failed to finish mutated archive: {e}")))?;
-        Ok(())
-    }
-
     #[test]
     fn save_path_is_streaming() {
         let project_source = include_str!("project_service.rs");
@@ -1609,140 +1355,6 @@ mod tests {
             !write_archive_body.contains("serde_json::to_vec(doc)"),
             "write_project_archive must not duplicate full table/graph JSON buffers"
         );
-    }
-
-    #[test]
-    fn stream_writer_writes_flat_named_v4_entries_without_logical_folder_paths() {
-        let state = AppState::new().unwrap();
-        let dataset = seed_named_dataset(&state, "table_1", "data");
-        let destination = temp_path("flat-v4-layout");
-        let snapshot =
-            save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
-
-        let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::new(&state, &guard);
-        writer.write(&snapshot, &destination, None).unwrap();
-
-        let file = std::fs::File::open(&destination).unwrap();
-        let mut zip = zip::ZipArchive::new(file).unwrap();
-        let mut entries = HashSet::new();
-        for idx in 0..zip.len() {
-            let entry = zip.by_index(idx).unwrap();
-            entries.insert(entry.name().to_string());
-        }
-
-        let expected = HashSet::from([
-            "manifest.json".to_string(),
-            "data/data.sptb".to_string(),
-            "data/data.spgh".to_string(),
-            "data/data.spf".to_string(),
-            "data/data-2.spf".to_string(),
-            "snapshots/data.json".to_string(),
-            ".history.json".to_string(),
-        ]);
-
-        assert_eq!(entries, expected);
-        assert!(!entries.contains(".snapshots.json"));
-        assert!(entries.iter().all(|entry| !entry.starts_with("tables/")));
-        assert!(entries.iter().all(|entry| !entry.starts_with("graphs/")));
-        assert!(entries.iter().all(|entry| !entry.ends_with('/')));
-
-        let _ = std::fs::remove_file(destination);
-    }
-
-    #[test]
-    fn stream_writer_serializes_manifest_normalized_body_names_for_indexed_docs() {
-        let state = AppState::new().unwrap();
-        let dataset = seed_named_dataset(&state, "table_1", "data");
-        let destination = temp_path("v4-body-name-sync");
-        let snapshot =
-            save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
-
-        let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::new(&state, &guard);
-        writer.write(&snapshot, &destination, None).unwrap();
-
-        let file = std::fs::File::open(&destination).unwrap();
-        let mut zip = zip::ZipArchive::new(file).unwrap();
-        let mut manifest_entry = zip.by_name("manifest.json").unwrap();
-        let mut manifest_bytes = Vec::new();
-        manifest_entry.read_to_end(&mut manifest_bytes).unwrap();
-        drop(manifest_entry);
-        let manifest: crate::services::spprj_archive::ProjectManifest =
-            serde_json::from_slice(&manifest_bytes).unwrap();
-
-        for fit_ref in &manifest.fit_y_by_x_files {
-            let mut entry = zip.by_name(&fit_ref.file).unwrap();
-            let mut bytes = Vec::new();
-            entry.read_to_end(&mut bytes).unwrap();
-            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(
-                value.get("id").and_then(serde_json::Value::as_str),
-                Some(fit_ref.id.as_str())
-            );
-            assert_eq!(
-                value.get("name").and_then(serde_json::Value::as_str),
-                Some(fit_ref.name.as_str())
-            );
-        }
-
-        for tabulate_ref in &manifest.tabulate_files {
-            let mut entry = zip.by_name(&tabulate_ref.file).unwrap();
-            let mut bytes = Vec::new();
-            entry.read_to_end(&mut bytes).unwrap();
-            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(
-                value.get("id").and_then(serde_json::Value::as_str),
-                Some(tabulate_ref.id.as_str())
-            );
-            assert_eq!(
-                value.get("name").and_then(serde_json::Value::as_str),
-                Some(tabulate_ref.name.as_str())
-            );
-        }
-
-        for snapshot_ref in &manifest.snapshot_files {
-            let mut entry = zip.by_name(&snapshot_ref.file).unwrap();
-            let mut bytes = Vec::new();
-            entry.read_to_end(&mut bytes).unwrap();
-            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(
-                value.get("id").and_then(serde_json::Value::as_str),
-                Some(snapshot_ref.id.as_str())
-            );
-            assert_eq!(
-                value.get("name").and_then(serde_json::Value::as_str),
-                Some(snapshot_ref.name.as_str())
-            );
-        }
-
-        let _ = std::fs::remove_file(destination);
-    }
-
-    #[test]
-    fn stream_writer_reopens_tables_after_manifest_name_collision_resolution() {
-        let state = AppState::new().unwrap();
-        let first = seed_named_dataset(&state, "table_1", "Data");
-        let mut second = seed_named_dataset(&state, "table_2", "Other");
-        second.name = "data".to_string();
-        let destination = temp_path("v4-table-name-sync");
-        let snapshot = save_snapshot(&destination, vec![first, second]);
-
-        let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::new(&state, &guard);
-        writer.write(&snapshot, &destination, None).unwrap();
-
-        let reopened = spprj_archive::read_project_file(destination.to_str().unwrap()).unwrap();
-        assert_eq!(
-            reopened
-                .tables
-                .iter()
-                .map(|table| table.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["Data", "data-2"]
-        );
-
-        let _ = std::fs::remove_file(destination);
     }
 
     #[test]
@@ -1853,9 +1465,7 @@ mod tests {
 
         let events = events.lock().unwrap();
         assert!(events.len() >= 3);
-        assert!(events
-            .iter()
-            .all(|event| event.phase == SavePhase::Metadata));
+        assert!(events.iter().all(|event| event.phase == SavePhase::Metadata));
     }
 
     #[test]
@@ -1957,100 +1567,6 @@ mod tests {
 
             let _ = std::fs::remove_file(&destination);
         }
-    }
-
-    #[test]
-    fn stream_writer_validation_failure_on_missing_indexed_spf_preserves_destination_bytes() {
-        let state = AppState::new().unwrap();
-        let dataset = seed_benchmark_dataset(&state, 128);
-        let destination = temp_path("validation-missing-spf");
-        std::fs::write(&destination, b"destination-before-save").unwrap();
-        let original_bytes = std::fs::read(&destination).unwrap();
-        let snapshot = save_snapshot(&destination, vec![dataset]);
-
-        let replacer_state = Arc::new(TestReplacerState::default());
-        let replacer: Arc<dyn ArchiveReplacer> = Arc::new(TestReplacer {
-            state: Arc::clone(&replacer_state),
-        });
-
-        install_save_test_hook(Some(Box::new(move |point, context| {
-            if point == SaveFailurePoint::Validation {
-                let temp_archive_path = context.temp_archive_path.ok_or_else(|| {
-                    AppError::FileIO(
-                        "validation hook missing temp archive path context".to_string(),
-                    )
-                })?;
-                let rewritten =
-                    PathBuf::from(format!("{}.mut", temp_archive_path.to_string_lossy()));
-                remove_named_entry_from_archive(&temp_archive_path, &rewritten, "data/fit-1.spf")?;
-                std::fs::remove_file(&temp_archive_path)?;
-                std::fs::rename(&rewritten, &temp_archive_path)?;
-            }
-            Ok(())
-        })));
-
-        let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, replacer);
-        let error = writer.write(&snapshot, &destination, None).unwrap_err();
-        install_save_test_hook(None);
-
-        assert!(
-            matches!(error, AppError::FileIO(message) if message.contains("missing fit entry data/fit-1.spf"))
-        );
-        assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 0);
-        assert_eq!(std::fs::read(&destination).unwrap(), original_bytes);
-        assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());
-
-        let _ = std::fs::remove_file(&destination);
-    }
-
-    #[test]
-    fn stream_writer_validation_failure_on_indexed_body_parity_preserves_destination_bytes() {
-        let state = AppState::new().unwrap();
-        let dataset = seed_benchmark_dataset(&state, 128);
-        let destination = temp_path("validation-body-parity");
-        std::fs::write(&destination, b"destination-before-save").unwrap();
-        let original_bytes = std::fs::read(&destination).unwrap();
-        let snapshot =
-            save_snapshot_with_named_docs_and_nested_folders(&destination, vec![dataset]);
-
-        let replacer_state = Arc::new(TestReplacerState::default());
-        let replacer: Arc<dyn ArchiveReplacer> = Arc::new(TestReplacer {
-            state: Arc::clone(&replacer_state),
-        });
-
-        install_save_test_hook(Some(Box::new(move |point, context| {
-            if point == SaveFailurePoint::Validation {
-                let temp_archive_path = context.temp_archive_path.ok_or_else(|| {
-                    AppError::FileIO(
-                        "validation hook missing temp archive path context".to_string(),
-                    )
-                })?;
-                let rewritten =
-                    PathBuf::from(format!("{}.mut", temp_archive_path.to_string_lossy()));
-                rewrite_named_entry_in_archive(
-                    &temp_archive_path,
-                    &rewritten,
-                    "data/data.spgh",
-                    br#"{"id":"graph-1","name":"wrong-name","version":"1"}"#,
-                )?;
-                std::fs::remove_file(&temp_archive_path)?;
-                std::fs::rename(&rewritten, &temp_archive_path)?;
-            }
-            Ok(())
-        })));
-
-        let guard = state.save_coordinator.begin_save().unwrap();
-        let writer = StreamingProjectWriter::with_clock_and_replacer(&state, &guard, replacer);
-        let error = writer.write(&snapshot, &destination, None).unwrap_err();
-        install_save_test_hook(None);
-
-        assert!(matches!(error, AppError::FileIO(message) if message.contains("graph name")));
-        assert_eq!(replacer_state.calls.load(Ordering::SeqCst), 0);
-        assert_eq!(std::fs::read(&destination).unwrap(), original_bytes);
-        assert!(!PathBuf::from(format!("{}.tmp", destination.to_string_lossy())).exists());
-
-        let _ = std::fs::remove_file(&destination);
     }
 
     #[test]
