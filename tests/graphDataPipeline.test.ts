@@ -669,7 +669,25 @@ assert.equal(isGraphAggregatePacket({
       count: 1,
     },
   ],
-}), false);
+}), true);
+
+assert.equal(isGraphAggregatePacket({
+  kind: "boxPlot",
+  yColumn: "cost",
+  entries: [
+    {
+      count: 4,
+      min: 1,
+      q1: 2,
+      median: 3,
+      q3: 4,
+      max: 5,
+      whiskerLow: 1,
+      whiskerHigh: 5,
+      outliers: [],
+    },
+  ],
+}), true);
 
 const validCorrelationPacket = {
   kind: "correlationMatrix" as const,
@@ -1661,6 +1679,70 @@ function makeProgressedChunk(
   assert.equal(transportError, null);
   assert.deepEqual(events, ["header", "payload", "complete"]);
   assert.equal(completionCalls, 1);
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
+  let payloadByteLength = 0;
+  let receivedBytes: number[] = [];
+  const request = makeRequest("req-transport-byte-array", 29);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {
+      events.push("header");
+    },
+    onPayload: (payload) => {
+      events.push("payload");
+      payloadByteLength = payload.byteLength;
+      receivedBytes = Array.from(new Uint8Array(payload));
+    },
+    onAggregate: () => {},
+    onComplete: () => {
+      events.push("complete");
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  const payload = makePayload(0);
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader(request.requestId, request.generation, 0, true),
+  });
+  transport.onChannelMessage(Array.from(new Uint8Array(payload)));
+  transport.onChannelMessage({
+    messageType: "complete",
+    ...makeCompletion(request.requestId, request.generation),
+    chunksSent: 1,
+  });
+
+  assert.equal(transportError, null);
+  assert.equal(payloadByteLength, payload.byteLength);
+  assert.deepEqual(receivedBytes, Array.from(new Uint8Array(payload)));
+  assert.deepEqual(events, ["header", "payload", "complete"]);
+}
+
+{
+  let transportError: string | null = null;
+  const request = makeRequest("req-transport-sparse-byte-array", 30);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {},
+    onPayload: () => {},
+    onAggregate: () => {},
+    onComplete: () => {},
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader(request.requestId, request.generation, 0, true),
+  });
+  transport.onChannelMessage([1, , 3]);
+
+  assert.match(transportError ?? "", /unknown chunk/i);
 }
 
 {
