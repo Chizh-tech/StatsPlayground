@@ -1,5 +1,16 @@
 import type { TableWindowFilter } from "./data";
 
+export const DISTRIBUTION_GRAPH_ELEMENT_IDS = {
+  overviewHistogram: "distribution.overview.histogram",
+  overviewFittedCurves: "distribution.overview.fittedCurves",
+  boxPlot: "distribution.boxPlot",
+  ecdf: "distribution.ecdf",
+  normalQuantilePoints: "distribution.normalQuantile.points",
+  normalQuantileReference: "distribution.normalQuantile.reference",
+  normalQuantileLower: "distribution.normalQuantile.lower",
+  normalQuantileUpper: "distribution.normalQuantile.upper",
+} as const;
+
 export interface GraphFieldBinding {
   role: string;
   column: string;
@@ -202,6 +213,8 @@ export interface PrecomputedPoint {
 export interface PrecomputedPointPacket {
   kind: "precomputedPoints";
   elementId: string;
+  seriesId?: string;
+  seriesName?: string;
   points: PrecomputedPoint[];
 }
 
@@ -215,6 +228,8 @@ export interface PrecomputedCurvePoint {
 export interface PrecomputedCurvePacket {
   kind: "precomputedCurve";
   elementId: string;
+  seriesId?: string;
+  seriesName?: string;
   interpolation: PrecomputedCurveInterpolation;
   points: PrecomputedCurvePoint[];
 }
@@ -489,11 +504,15 @@ export function isGraphAggregatePacket(value: unknown): value is GraphAggregateP
   }
   if (value.kind === "precomputedPoints") {
     return isNonEmptyString(value.elementId)
+      && (value.seriesId === undefined || isNonEmptyString(value.seriesId))
+      && (value.seriesName === undefined || isNonEmptyString(value.seriesName))
       && Array.isArray(value.points)
       && value.points.every(isPrecomputedPoint);
   }
   if (value.kind === "precomputedCurve") {
     return isNonEmptyString(value.elementId)
+      && (value.seriesId === undefined || isNonEmptyString(value.seriesId))
+      && (value.seriesName === undefined || isNonEmptyString(value.seriesName))
       && isPrecomputedCurveInterpolation(value.interpolation)
       && Array.isArray(value.points)
       && value.points.every(isPrecomputedCurvePoint);

@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
+use crate::models::graph_data::{GraphAggregatePacket, GraphRawPointDisposition, GraphSampling};
 
 pub type DistributionSchemaVersionV1 = String;
 
@@ -266,6 +267,7 @@ pub struct DistributionFitProvenanceV1 {
     pub convergence_tolerance: f64,
     pub iteration_limit: u64,
     pub dependency_versions: BTreeMap<String, String>,
+    #[serde(skip_serializing)]
     pub snapshot_id: String,
     pub config_revision: u64,
     pub candidate_registry_ids: Vec<ContinuousDistributionIdV1>,
@@ -605,6 +607,30 @@ pub struct DistributionRequestV1 {
     pub exact: bool,
 }
 
+pub type DistributionFitKind = ContinuousDistributionIdV1;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SpecLimitsOverride {
+    pub lsl: Option<f64>,
+    pub target: Option<f64>,
+    pub usl: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionRequest {
+    pub dataset_id: String,
+    pub generation: u64,
+    pub response_columns: Vec<String>,
+    pub weight_column: Option<String>,
+    pub freq_column: Option<String>,
+    pub by_columns: Vec<String>,
+    pub confidence_level: f64,
+    pub spec_limits: HashMap<String, SpecLimitsOverride>,
+    pub fit_distributions: Vec<DistributionFitKind>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum DistributionChartKindV1 {
@@ -633,6 +659,7 @@ pub struct DistributionChartProvenanceV1 {
     pub method_id: String,
     pub method_version: String,
     pub compatibility_status: Jmp19CompatibilityStatusV1,
+    #[serde(skip_serializing)]
     pub snapshot_id: String,
 }
 
@@ -770,6 +797,14 @@ pub struct DistributionReportBlockV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distribution_fit_comparison_data: Option<DistributionFitComparisonDataV1>,
     pub chart_data: Option<DistributionChartDataV1>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionReportBlock {
+    #[serde(flatten)]
+    pub block: DistributionReportBlockV1,
+    pub reason_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -951,6 +986,7 @@ pub struct ProcessCapabilityDensitySeriesV1 {
 pub struct ProcessCapabilityChartProvenanceV1 {
     pub capability_method: String,
     pub normal_density_method: String,
+    #[serde(skip_serializing)]
     pub snapshot_id: String,
     pub spec_fingerprint: String,
 }
@@ -1021,6 +1057,66 @@ pub struct DistributionGroupResultV1 {
     #[serde(default)]
     pub group_names: Vec<String>,
     pub y_results: Vec<DistributionYResultV1>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionYResult {
+    pub y_column: DistributionColumnRefV1,
+    pub y_name: String,
+    pub quantiles: Vec<DistributionQuantileValueV1>,
+    pub blocks: Vec<DistributionReportBlock>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionGroupResult {
+    pub group_key: Vec<DistributionGroupValueV1>,
+    #[serde(default)]
+    pub group_names: Vec<String>,
+    pub y_results: Vec<DistributionYResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphExtentDto {
+    pub min: f64,
+    pub max: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphDataFrameDto {
+    pub request_id: String,
+    pub dataset_id: String,
+    pub generation: u64,
+    pub source_rows: u64,
+    pub processed_rows: u64,
+    pub sampling: GraphSampling,
+    pub dictionaries: HashMap<String, Vec<String>>,
+    pub extents: HashMap<String, GraphExtentDto>,
+    pub raw_chunks: Vec<serde_json::Value>,
+    pub aggregates: Vec<GraphAggregatePacket>,
+    pub raw_point_disposition: GraphRawPointDisposition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionGraphFrames {
+    pub overview: GraphDataFrameDto,
+    pub box_plot: GraphDataFrameDto,
+    pub ecdf: GraphDataFrameDto,
+    pub normal_quantile: GraphDataFrameDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionReportResponse {
+    pub dataset_id: String,
+    pub generation: u64,
+    pub groups: Vec<DistributionGroupResult>,
+    pub report_blocks: Vec<DistributionReportBlock>,
+    pub graph_frames: DistributionGraphFrames,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1180,9 +1276,110 @@ pub struct DistributionIssueV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::models::graph_data::{
+        GraphRawPointDisposition, GraphSampling, GRAPH_SCATTER_RENDER_BUDGET,
+    };
     use proptest::prelude::*;
     use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+    use serde_json::json;
+
+    fn empty_graph_frame(role: &str) -> GraphDataFrameDto {
+        GraphDataFrameDto {
+            request_id: format!("distribution:{role}"),
+            dataset_id: "dataset-1".to_string(),
+            generation: 7,
+            source_rows: 0,
+            processed_rows: 0,
+            sampling: GraphSampling::Full,
+            dictionaries: HashMap::new(),
+            extents: HashMap::new(),
+            raw_chunks: Vec::new(),
+            aggregates: Vec::new(),
+            raw_point_disposition: GraphRawPointDisposition::Empty {
+                valid_rows: 0,
+                budget: GRAPH_SCATTER_RENDER_BUDGET,
+            },
+        }
+    }
+
+    #[test]
+    fn distribution_request_round_trips_camel_case_wire_fields() {
+        let value = json!({
+            "datasetId": "dataset-1",
+            "generation": 7,
+            "responseColumns": ["height", "width"],
+            "weightColumn": "weight",
+            "freqColumn": "frequency",
+            "byColumns": ["region", "batch"],
+            "confidenceLevel": 0.95,
+            "specLimits": {
+                "height": { "lsl": 1.0, "target": 2.0, "usl": 3.0 }
+            },
+            "fitDistributions": ["normal", "gamma"]
+        });
+        let request: DistributionRequest =
+            serde_json::from_value(value.clone()).expect("deserialize one-shot request");
+
+        assert_eq!(request.response_columns, vec!["height", "width"]);
+        assert_eq!(request.by_columns, vec!["region", "batch"]);
+        assert_eq!(
+            serde_json::to_value(request).expect("serialize request"),
+            value
+        );
+    }
+
+    #[test]
+    fn distribution_report_response_serializes_exact_frames_and_no_lifecycle_fields() {
+        let response = DistributionReportResponse {
+            dataset_id: "dataset-1".to_string(),
+            generation: 7,
+            groups: Vec::new(),
+            report_blocks: vec![DistributionReportBlock {
+                block: DistributionReportBlockV1 {
+                    schema_version: "1".to_string(),
+                    block_id: "height-normal-quantile".to_string(),
+                    kind: "normalQuantile".to_string(),
+                    title_key: "distribution.report.normalQuantilePlot".to_string(),
+                    status: "unavailable".to_string(),
+                    summary_data: None,
+                    capability_data: None,
+                    distribution_fit_data: None,
+                    distribution_fit_comparison_data: None,
+                    chart_data: None,
+                },
+                reason_code: Some("normalQuantile.weightUnsupported.v1".to_string()),
+            }],
+            graph_frames: DistributionGraphFrames {
+                overview: empty_graph_frame("overview"),
+                box_plot: empty_graph_frame("boxPlot"),
+                ecdf: empty_graph_frame("ecdf"),
+                normal_quantile: empty_graph_frame("normalQuantile"),
+            },
+        };
+        let value = serde_json::to_value(response).expect("serialize one-shot response");
+
+        assert_eq!(value["generation"], 7);
+        assert_eq!(value["reportBlocks"][0]["status"], "unavailable");
+        assert_eq!(
+            value["reportBlocks"][0]["reasonCode"],
+            "normalQuantile.weightUnsupported.v1"
+        );
+        let mut keys = value["graphFrames"]
+            .as_object()
+            .expect("graph frames")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["boxPlot", "ecdf", "normalQuantile", "overview"]);
+        let serialized = value.to_string();
+        for forbidden in ["runId", "snapshotId", "cancelToken", "progress"] {
+            assert!(
+                !serialized.contains(forbidden),
+                "unexpected field {forbidden}"
+            );
+        }
+    }
 
     #[test]
     fn fit_convergence_serializes_optional_objective_and_gradient_norm_only_when_present() {
@@ -1196,7 +1393,8 @@ mod tests {
             objective: None,
             gradient_norm: None,
         };
-        let without_optionals_json = serde_json::to_value(&without_optionals).expect("serialize fit convergence without optionals");
+        let without_optionals_json = serde_json::to_value(&without_optionals)
+            .expect("serialize fit convergence without optionals");
         assert_eq!(without_optionals_json.get("objective"), None);
         assert_eq!(without_optionals_json.get("gradientNorm"), None);
 
@@ -1205,7 +1403,8 @@ mod tests {
             gradient_norm: Some(0.25),
             ..without_optionals
         };
-        let with_optionals_json = serde_json::to_value(&with_optionals).expect("serialize fit convergence with optionals");
+        let with_optionals_json = serde_json::to_value(&with_optionals)
+            .expect("serialize fit convergence with optionals");
         assert_eq!(with_optionals_json["objective"], json!(12.5));
         assert_eq!(with_optionals_json["gradientNorm"], json!(0.25));
     }

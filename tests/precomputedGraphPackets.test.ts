@@ -296,3 +296,67 @@ assert.equal(
   1,
   "element-keyed curve packets must render once across color groups",
 );
+
+const multiSeriesBuilt = buildGraph(
+  {
+    encoding: graphSpec.encoding,
+    elements: [
+      {
+        kind: "points",
+        enabled: true,
+        options: { summaryStat: "none", elementId: "shared-points" },
+      },
+      {
+        kind: "line",
+        enabled: true,
+        options: { summaryStat: "none", elementId: "shared-curves" },
+      },
+    ],
+  },
+  baseData(["x", "y"]),
+  theme,
+  undefined,
+  frameWithAggregates([
+    {
+      kind: "precomputedPoints",
+      elementId: "shared-points",
+      seriesId: "response-a-points",
+      seriesName: "Response A",
+      points: [{ x: 1, y: 10 }],
+    },
+    {
+      kind: "precomputedPoints",
+      elementId: "shared-points",
+      seriesId: "response-b-points",
+      seriesName: "Response B",
+      points: [{ x: 2, y: 20 }],
+    },
+    {
+      kind: "precomputedCurve",
+      elementId: "shared-curves",
+      seriesId: "response-a-curve",
+      seriesName: "Response A",
+      interpolation: "linear",
+      points: [{ x: 1, y: 11 }],
+    },
+    {
+      kind: "precomputedCurve",
+      elementId: "shared-curves",
+      seriesId: "response-b-curve",
+      seriesName: "Response B",
+      interpolation: "linear",
+      points: [{ x: 2, y: 22 }],
+    },
+  ] as readonly GraphAggregatePacket[]),
+);
+const multiSeries = seriesList(multiSeriesBuilt.panels[0].option as Record<string, unknown>);
+assert.deepEqual(
+  multiSeries.map((entry) => entry.id),
+  ["response-a-points", "response-b-points", "response-a-curve", "response-b-curve"],
+  "all packets sharing a stable element role must emit distinct deterministic series",
+);
+assert.deepEqual(
+  multiSeries.map((entry) => entry.name),
+  ["Response A", "Response B", "Response A", "Response B"],
+  "packet series names must flow to ordinary ECharts series",
+);

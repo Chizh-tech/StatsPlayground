@@ -9,6 +9,9 @@ import type {
   DistributionFitCapabilityV1,
   DistributionFitComparisonDataV1,
   DistributionFitDataV1,
+  DistributionReportResponse,
+  DistributionRequest,
+  DistributionResultStatus,
   DistributionWorkspaceBootstrapV1,
   ProcessCapabilityDataV1,
 } from "../src/types/distribution.ts";
@@ -30,6 +33,43 @@ const chartKinds = [
 ] as const satisfies readonly DistributionChartKindV1[];
 
 assert.equal(new Set(chartKinds).size, 8);
+
+const oneShotRequest: DistributionRequest = {
+  datasetId: "dataset-1",
+  generation: 7,
+  responseColumns: ["value"],
+  weightColumn: null,
+  freqColumn: null,
+  byColumns: ["batch"],
+  confidenceLevel: 0.95,
+  specLimits: {},
+  fitDistributions: ["normal"],
+};
+assert.deepEqual(Object.keys(oneShotRequest), [
+  "datasetId",
+  "generation",
+  "responseColumns",
+  "weightColumn",
+  "freqColumn",
+  "byColumns",
+  "confidenceLevel",
+  "specLimits",
+  "fitDistributions",
+]);
+const resultStatuses = [
+  "available",
+  "unavailable",
+  "failed",
+] as const satisfies readonly DistributionResultStatus[];
+assert.deepEqual(resultStatuses, ["available", "unavailable", "failed"]);
+type GraphRole = keyof DistributionReportResponse["graphFrames"];
+const graphRoles = [
+  "overview",
+  "boxPlot",
+  "ecdf",
+  "normalQuantile",
+] as const satisfies readonly GraphRole[];
+assert.deepEqual(graphRoles, ["overview", "boxPlot", "ecdf", "normalQuantile"]);
 
 const chartData: DistributionChartDataV1 = {
   kind: "histogramData",

@@ -1521,28 +1521,24 @@ function findCorrelationMatrixPacket(
   return packet;
 }
 
-function findPrecomputedPointPacket(
+function findPrecomputedPointPackets(
   aggregatePackets: readonly GraphAggregatePacket[] | undefined,
   elementId: string,
-): PrecomputedPointPacket | null {
-  if (!aggregatePackets || aggregatePackets.length === 0) return null;
-  const packet = aggregatePackets.find((candidate) =>
+): PrecomputedPointPacket[] {
+  if (!aggregatePackets || aggregatePackets.length === 0) return [];
+  return aggregatePackets.filter((candidate): candidate is PrecomputedPointPacket =>
     candidate.kind === "precomputedPoints" && candidate.elementId === elementId,
   );
-  if (!packet || packet.kind !== "precomputedPoints") return null;
-  return packet;
 }
 
-function findPrecomputedCurvePacket(
+function findPrecomputedCurvePackets(
   aggregatePackets: readonly GraphAggregatePacket[] | undefined,
   elementId: string,
-): PrecomputedCurvePacket | null {
-  if (!aggregatePackets || aggregatePackets.length === 0) return null;
-  const packet = aggregatePackets.find((candidate) =>
+): PrecomputedCurvePacket[] {
+  if (!aggregatePackets || aggregatePackets.length === 0) return [];
+  return aggregatePackets.filter((candidate): candidate is PrecomputedCurvePacket =>
     candidate.kind === "precomputedCurve" && candidate.elementId === elementId,
   );
-  if (!packet || packet.kind !== "precomputedCurve") return null;
-  return packet;
 }
 
 function buildPrecomputedPointSeries(
@@ -1552,9 +1548,9 @@ function buildPrecomputedPointSeries(
 ): Record<string, unknown> {
   const symbol = markerToSymbol(style.point.marker);
   return {
-    id: packet.elementId,
+    id: packet.seriesId ?? packet.elementId,
     type: "scatter",
-    name: seriesName,
+    name: packet.seriesName ?? seriesName,
     clip: true,
     symbol: symbol.symbol,
     symbolSize: style.point.size,
@@ -1571,9 +1567,9 @@ function buildPrecomputedCurveSeries(
   style: ResolvedGroupStyle,
 ): Record<string, unknown> {
   return {
-    id: packet.elementId,
+    id: packet.seriesId ?? packet.elementId,
     type: "line",
-    name: seriesName,
+    name: packet.seriesName ?? seriesName,
     clip: true,
     showSymbol: false,
     symbol: "none",
@@ -5218,7 +5214,7 @@ function buildSingleOption(
     );
   }
 
-  const emittedPrecomputedElementIds = new Set<string>();
+  const emittedPrecomputedSeriesIds = new Set<string>();
   groupKeys.forEach((gKey) => {
     // Skip groups hidden via the legend show/hide toggle.
     if (isHidden(gKey)) return;
@@ -5236,21 +5232,25 @@ function buildSingleOption(
       const elementId = getOpt<string>(el.options, "elementId", "");
       if (frameBackedAggregateMode && elementId.length > 0) {
         if (el.kind === "points") {
-          const pointPacket = findPrecomputedPointPacket(aggregatePackets, elementId);
-          if (pointPacket) {
-            if (!emittedPrecomputedElementIds.has(elementId)) {
+          const pointPackets = findPrecomputedPointPackets(aggregatePackets, elementId);
+          if (pointPackets.length > 0) {
+            for (const pointPacket of pointPackets) {
+              const emittedSeriesId = pointPacket.seriesId ?? pointPacket.elementId;
+              if (emittedPrecomputedSeriesIds.has(emittedSeriesId)) continue;
               series.push(buildPrecomputedPointSeries(pointPacket, seriesName, resolvedStyle));
-              emittedPrecomputedElementIds.add(elementId);
+              emittedPrecomputedSeriesIds.add(emittedSeriesId);
             }
             return;
           }
         }
         if (el.kind === "line") {
-          const curvePacket = findPrecomputedCurvePacket(aggregatePackets, elementId);
-          if (curvePacket) {
-            if (!emittedPrecomputedElementIds.has(elementId)) {
+          const curvePackets = findPrecomputedCurvePackets(aggregatePackets, elementId);
+          if (curvePackets.length > 0) {
+            for (const curvePacket of curvePackets) {
+              const emittedSeriesId = curvePacket.seriesId ?? curvePacket.elementId;
+              if (emittedPrecomputedSeriesIds.has(emittedSeriesId)) continue;
               series.push(buildPrecomputedCurveSeries(curvePacket, seriesName, resolvedStyle));
-              emittedPrecomputedElementIds.add(elementId);
+              emittedPrecomputedSeriesIds.add(emittedSeriesId);
             }
             return;
           }

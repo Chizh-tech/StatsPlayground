@@ -28,6 +28,7 @@ pub fn run() {
             commands::data_commands::get_dataset_generation,
             commands::data_commands::locate_table_row,
             commands::data_commands::query_table_filter_values,
+            commands::distribution_commands::compute_distribution_report,
             commands::graph_data_commands::stream_graph_data,
             commands::graph_data_commands::cancel_graph_data,
             commands::data_commands::execute_sql_query,

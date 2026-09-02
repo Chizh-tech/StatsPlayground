@@ -1,13 +1,15 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 
-use duckdb::types::{TimeUnit, Value};
 use duckdb::params_from_iter;
+use duckdb::types::{TimeUnit, Value};
 
 use crate::engine::duckdb_engine::DuckDbEngine;
 use crate::error::AppError;
 use crate::models::distribution::{
-    DistributionColumnRefV1, DistributionGroupValueV1, DistributionRequestV1, FilterExprV1,
+    CapabilityOverrideEnvelopeV1, DistributionColumnRefV1, DistributionGroupValueV1,
+    DistributionModeV1, DistributionModelingTypeV1, DistributionRequest, DistributionRequestV1,
+    FilterExprV1, ObservationContributionPolicyV1, ResourceBudgetV1,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,6 +32,239 @@ pub(crate) struct PreparedGroupV1 {
 
 #[derive(Clone)]
 struct GroupKey(Vec<DistributionGroupValueV1>);
+
+pub(crate) fn resolve_distribution_requests(
+    engine: &DuckDbEngine,
+    request: &DistributionRequest,
+) -> Result<Vec<DistributionRequestV1>, AppError> {
+    validate_wire_request(request)?;
+    if engine.get_dataset_generation(&request.dataset_id)? != request.generation {
+        return Err(AppError::InvalidParam(
+            "distribution.run.staleGeneration".to_string(),
+        ));
+    }
+
+    let user_columns = engine
+        .get_user_columns(&request.dataset_id)?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    let descriptors = engine
+        .get_distribution_columns(&request.dataset_id)?
+        .into_iter()
+        .map(|column| (column.name.clone(), column))
+        .collect::<HashMap<_, _>>();
+    for name in request
+        .response_columns
+        .iter()
+        .chain(request.weight_column.iter())
+        .chain(request.freq_column.iter())
+        .chain(request.by_columns.iter())
+    {
+        if !user_columns.contains_key(name) || !descriptors.contains_key(name) {
+            return Err(AppError::InvalidParam(
+                "distribution.config.columnUnknown".to_string(),
+            ));
+        }
+    }
+    for name in &request.response_columns {
+        if !is_numeric_sql_type(user_columns.get(name).map(String::as_str)) {
+            return Err(AppError::InvalidParam(
+                "distribution.config.numericTypeRequired".to_string(),
+            ));
+        }
+    }
+    if let Some(name) = &request.weight_column {
+        if !is_numeric_sql_type(user_columns.get(name).map(String::as_str)) {
+            return Err(AppError::InvalidParam(
+                "distribution.config.weightInvalid".to_string(),
+            ));
+        }
+    }
+    if let Some(name) = &request.freq_column {
+        if !is_integer_sql_type(user_columns.get(name).map(String::as_str)) {
+            return Err(AppError::InvalidParam(
+                "distribution.config.frequencyInvalid".to_string(),
+            ));
+        }
+    }
+
+    let column_id = |name: &str| {
+        descriptors
+            .get(name)
+            .map(|column| column.column_id.clone())
+            .ok_or_else(|| AppError::InvalidParam("distribution.config.columnUnknown".to_string()))
+    };
+    let weight_column_id = request
+        .weight_column
+        .as_deref()
+        .map(&column_id)
+        .transpose()?;
+    let frequency_column_id = request.freq_column.as_deref().map(&column_id).transpose()?;
+    let by_column_ids = request
+        .by_columns
+        .iter()
+        .map(|name| column_id(name))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    request
+        .response_columns
+        .iter()
+        .map(|response_name| {
+            let capability_overrides = request
+                .spec_limits
+                .get(response_name)
+                .map(|limits| {
+                    serde_json::to_value(limits)
+                        .map(|payload| {
+                            vec![CapabilityOverrideEnvelopeV1 {
+                                schema_version: "1".to_string(),
+                                capability_id: "capability.normal.individuals".to_string(),
+                                payload_schema_version: "1".to_string(),
+                                payload,
+                            }]
+                        })
+                        .map_err(|error| AppError::InvalidParam(error.to_string()))
+                })
+                .transpose()?
+                .unwrap_or_default();
+            Ok(DistributionRequestV1 {
+                schema_version: "1".to_string(),
+                analysis_id: "distribution-report".to_string(),
+                config_revision: 1,
+                source_dataset_id: Some(request.dataset_id.clone()),
+                source_data_version: Some(request.generation.to_string()),
+                mode: DistributionModeV1::Continuous,
+                y_columns: vec![DistributionColumnRefV1 {
+                    column_id: column_id(response_name)?,
+                    modeling_type: DistributionModelingTypeV1::Continuous,
+                }],
+                weight_column_id: weight_column_id.clone(),
+                frequency_column_id: frequency_column_id.clone(),
+                by_column_ids: by_column_ids.clone(),
+                filter_expr: FilterExprV1::And { exprs: Vec::new() },
+                confidence_level: request.confidence_level,
+                histograms_only: false,
+                continuous_fit: crate::models::distribution::DistributionContinuousFitConfigV1 {
+                    enabled_distribution_ids: request.fit_distributions.clone(),
+                    fit_all: false,
+                    diagnostics: Default::default(),
+                },
+                visual_diagnostics: Default::default(),
+                enabled_capability_ids: vec!["capability.normal.individuals".to_string()],
+                capability_overrides,
+                observation_policy: ObservationContributionPolicyV1::strict_v1()?,
+                resource_budget: ResourceBudgetV1::default(),
+                exact: true,
+            })
+        })
+        .collect()
+}
+
+fn validate_wire_request(request: &DistributionRequest) -> Result<(), AppError> {
+    use std::collections::HashSet;
+
+    if request.dataset_id.trim().is_empty() || request.response_columns.is_empty() {
+        return Err(AppError::InvalidParam(
+            "distribution.config.responseRequired".to_string(),
+        ));
+    }
+    if !request.confidence_level.is_finite()
+        || request.confidence_level <= 0.0
+        || request.confidence_level >= 1.0
+    {
+        return Err(AppError::InvalidParam(
+            "distribution.config.confidenceOutOfRange".to_string(),
+        ));
+    }
+    let mut names = HashSet::new();
+    for name in request
+        .response_columns
+        .iter()
+        .chain(request.weight_column.iter())
+        .chain(request.freq_column.iter())
+        .chain(request.by_columns.iter())
+    {
+        if name.trim().is_empty() {
+            return Err(AppError::InvalidParam(
+                "distribution.config.columnRequired".to_string(),
+            ));
+        }
+        if !names.insert(name) {
+            return Err(AppError::InvalidParam(
+                "distribution.config.roleCollision".to_string(),
+            ));
+        }
+    }
+    let response_names = request.response_columns.iter().collect::<HashSet<_>>();
+    if request
+        .spec_limits
+        .keys()
+        .any(|name| !response_names.contains(name))
+    {
+        return Err(AppError::InvalidParam(
+            "distribution.config.specColumnUnknown".to_string(),
+        ));
+    }
+    for limits in request.spec_limits.values() {
+        let values = [limits.lsl, limits.target, limits.usl];
+        if values.into_iter().flatten().any(|value| !value.is_finite())
+            || limits
+                .lsl
+                .zip(limits.usl)
+                .is_some_and(|(lsl, usl)| lsl >= usl)
+            || limits
+                .lsl
+                .zip(limits.target)
+                .is_some_and(|(lsl, target)| target < lsl)
+            || limits
+                .target
+                .zip(limits.usl)
+                .is_some_and(|(target, usl)| target > usl)
+        {
+            return Err(AppError::InvalidParam(
+                "capability.invalidOverride.v1".to_string(),
+            ));
+        }
+    }
+    let mut fits = Vec::new();
+    for kind in &request.fit_distributions {
+        if fits.contains(&kind) {
+            return Err(AppError::InvalidParam(
+                "distribution.config.fitDuplicate".to_string(),
+            ));
+        }
+        fits.push(kind);
+    }
+    Ok(())
+}
+
+fn is_numeric_sql_type(sql_type: Option<&str>) -> bool {
+    sql_type.is_some_and(|value| {
+        let normalized = value.to_ascii_uppercase();
+        [
+            "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "FLOAT", "REAL", "DOUBLE", "DECIMAL",
+            "NUMERIC",
+        ]
+        .iter()
+        .any(|kind| normalized.starts_with(kind))
+    })
+}
+
+fn is_integer_sql_type(sql_type: Option<&str>) -> bool {
+    sql_type.is_some_and(|value| {
+        matches!(
+            value.to_ascii_uppercase().as_str(),
+            "TINYINT"
+                | "SMALLINT"
+                | "INTEGER"
+                | "BIGINT"
+                | "UTINYINT"
+                | "USMALLINT"
+                | "UINTEGER"
+                | "UBIGINT"
+        )
+    })
+}
 
 impl PartialEq for GroupKey {
     fn eq(&self, other: &Self) -> bool {
@@ -85,10 +320,7 @@ pub(crate) fn prepare_continuous_groups(
     let mut filter_params = Vec::new();
     let filter_sql = compile_filter(&request.filter_expr, &metadata, &mut filter_params)?;
 
-    let mut select_columns = vec![
-        "\"_row_id\"".to_string(),
-        quote_identifier(y_name),
-    ];
+    let mut select_columns = vec!["\"_row_id\"".to_string(), quote_identifier(y_name)];
     if let Some(column) = weight_name {
         select_columns.push(quote_identifier(column));
     }
@@ -167,7 +399,11 @@ pub(crate) fn prepare_continuous_groups(
             ));
         }
         group.source_rows += 1;
-        add_estimated_bytes(&mut estimated_bytes, 8, request.resource_budget.max_total_bytes)?;
+        add_estimated_bytes(
+            &mut estimated_bytes,
+            8,
+            request.resource_budget.max_total_bytes,
+        )?;
         let weight = optional_positive_f64(weight_value, 1.0)?;
         let frequency = optional_frequency(frequency_value, 1)?;
         let Some(y_number) = optional_f64(y_value)? else {
@@ -253,7 +489,9 @@ fn optional_f64(value: Value) -> Result<Option<f64>, AppError> {
 }
 
 fn optional_positive_f64(value: Option<Value>, default: f64) -> Result<Option<f64>, AppError> {
-    let Some(value) = value else { return Ok(Some(default)); };
+    let Some(value) = value else {
+        return Ok(Some(default));
+    };
     if matches!(value, Value::Null) {
         return Ok(None);
     }
@@ -267,7 +505,9 @@ fn optional_positive_f64(value: Option<Value>, default: f64) -> Result<Option<f6
 }
 
 fn optional_frequency(value: Option<Value>, default: u64) -> Result<Option<u64>, AppError> {
-    let Some(value) = value else { return Ok(Some(default)); };
+    let Some(value) = value else {
+        return Ok(Some(default));
+    };
     if matches!(value, Value::Null) {
         return Ok(None);
     }
@@ -294,7 +534,9 @@ fn value_to_group(value: Value) -> Result<DistributionGroupValueV1, AppError> {
         }),
         value => optional_f64(value)?
             .map(|value| DistributionGroupValueV1::Number { value })
-            .ok_or_else(|| AppError::InvalidParam("distribution.config.byValueInvalid".to_string())),
+            .ok_or_else(|| {
+                AppError::InvalidParam("distribution.config.byValueInvalid".to_string())
+            }),
     }
 }
 
@@ -340,15 +582,20 @@ fn estimated_group_bytes(key: &[DistributionGroupValueV1]) -> Result<u64, AppErr
     let fixed = std::mem::size_of::<PreparedGroupV1>()
         .checked_add(std::mem::size_of_val(key))
         .ok_or_else(|| AppError::InvalidParam("distribution.run.budgetExceeded".to_string()))?;
-    let text_bytes = key.iter().try_fold(0_usize, |total, value| {
-        total.checked_add(match value {
-            DistributionGroupValueV1::Text { value } => value.len(),
-            _ => 0,
+    let text_bytes = key
+        .iter()
+        .try_fold(0_usize, |total, value| {
+            total.checked_add(match value {
+                DistributionGroupValueV1::Text { value } => value.len(),
+                _ => 0,
+            })
         })
-    }).ok_or_else(|| AppError::InvalidParam("distribution.run.budgetExceeded".to_string()))?;
-    u64::try_from(fixed.checked_add(text_bytes).ok_or_else(|| {
-        AppError::InvalidParam("distribution.run.budgetExceeded".to_string())
-    })?)
+        .ok_or_else(|| AppError::InvalidParam("distribution.run.budgetExceeded".to_string()))?;
+    u64::try_from(
+        fixed
+            .checked_add(text_bytes)
+            .ok_or_else(|| AppError::InvalidParam("distribution.run.budgetExceeded".to_string()))?,
+    )
     .map_err(|_| AppError::InvalidParam("distribution.run.budgetExceeded".to_string()))
 }
 
@@ -358,7 +605,9 @@ fn compare_group_keys(
 ) -> Ordering {
     for (left_value, right_value) in left.iter().zip(right) {
         let ordering = match (left_value, right_value) {
-            (DistributionGroupValueV1::Missing, DistributionGroupValueV1::Missing) => Ordering::Equal,
+            (DistributionGroupValueV1::Missing, DistributionGroupValueV1::Missing) => {
+                Ordering::Equal
+            }
             (DistributionGroupValueV1::Missing, _) => Ordering::Greater,
             (_, DistributionGroupValueV1::Missing) => Ordering::Less,
             (
@@ -441,6 +690,126 @@ mod tests {
             .column_id
     }
 
+    fn wire_request(engine: &DuckDbEngine) -> DistributionRequest {
+        DistributionRequest {
+            dataset_id: "distribution_fixture".to_string(),
+            generation: engine
+                .get_dataset_generation("distribution_fixture")
+                .expect("fixture generation"),
+            response_columns: vec!["y".to_string()],
+            weight_column: Some("weight".to_string()),
+            freq_column: Some("freq".to_string()),
+            by_columns: vec!["region".to_string(), "batch".to_string()],
+            confidence_level: 0.95,
+            spec_limits: HashMap::new(),
+            fit_distributions: Vec::new(),
+        }
+    }
+
+    fn assert_invalid_code(result: Result<Vec<DistributionRequestV1>, AppError>, expected: &str) {
+        assert!(matches!(result, Err(AppError::InvalidParam(code)) if code == expected));
+    }
+
+    #[test]
+    fn resolve_rejects_stale_generation() {
+        let engine = fixture_engine();
+        let mut request = wire_request(&engine);
+        request.generation = request.generation.saturating_add(1);
+
+        assert_invalid_code(
+            resolve_distribution_requests(&engine, &request),
+            "distribution.run.staleGeneration",
+        );
+    }
+
+    #[test]
+    fn resolve_rejects_unknown_and_injection_like_column_names() {
+        let engine = fixture_engine();
+        for name in ["unknown", "y; DROP TABLE distribution_fixture"] {
+            let mut request = wire_request(&engine);
+            request.response_columns = vec![name.to_string()];
+            assert_invalid_code(
+                resolve_distribution_requests(&engine, &request),
+                "distribution.config.columnUnknown",
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_rejects_duplicate_or_colliding_roles() {
+        let engine = fixture_engine();
+        let mut duplicate = wire_request(&engine);
+        duplicate.by_columns = vec!["region".to_string(), "region".to_string()];
+        assert_invalid_code(
+            resolve_distribution_requests(&engine, &duplicate),
+            "distribution.config.roleCollision",
+        );
+
+        let mut collision = wire_request(&engine);
+        collision.weight_column = Some("y".to_string());
+        assert_invalid_code(
+            resolve_distribution_requests(&engine, &collision),
+            "distribution.config.roleCollision",
+        );
+    }
+
+    #[test]
+    fn resolve_rejects_invalid_confidence_specs_and_duplicate_fits() {
+        let engine = fixture_engine();
+        let mut invalid_confidence = wire_request(&engine);
+        invalid_confidence.confidence_level = f64::NAN;
+        assert_invalid_code(
+            resolve_distribution_requests(&engine, &invalid_confidence),
+            "distribution.config.confidenceOutOfRange",
+        );
+
+        let mut invalid_spec = wire_request(&engine);
+        invalid_spec.spec_limits.insert(
+            "y".to_string(),
+            crate::models::distribution::SpecLimitsOverride {
+                lsl: Some(5.0),
+                target: Some(f64::INFINITY),
+                usl: Some(4.0),
+            },
+        );
+        assert_invalid_code(
+            resolve_distribution_requests(&engine, &invalid_spec),
+            "capability.invalidOverride.v1",
+        );
+
+        let mut duplicate_fit = wire_request(&engine);
+        duplicate_fit.fit_distributions = vec![
+            crate::models::distribution::ContinuousDistributionIdV1::Normal,
+            crate::models::distribution::ContinuousDistributionIdV1::Normal,
+        ];
+        assert_invalid_code(
+            resolve_distribution_requests(&engine, &duplicate_fit),
+            "distribution.config.fitDuplicate",
+        );
+    }
+
+    #[test]
+    fn resolve_maps_names_to_stable_ids_and_preserves_by_order() {
+        let engine = fixture_engine();
+        let request = wire_request(&engine);
+        let resolved = resolve_distribution_requests(&engine, &request).expect("resolve request");
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].y_columns[0].column_id, column_id(&engine, "y"));
+        assert_eq!(
+            resolved[0].weight_column_id,
+            Some(column_id(&engine, "weight"))
+        );
+        assert_eq!(
+            resolved[0].frequency_column_id,
+            Some(column_id(&engine, "freq"))
+        );
+        assert_eq!(
+            resolved[0].by_column_ids,
+            vec![column_id(&engine, "region"), column_id(&engine, "batch")]
+        );
+    }
+
     fn request(engine: &DuckDbEngine) -> DistributionRequestV1 {
         DistributionRequestV1 {
             schema_version: "1".to_string(),
@@ -459,8 +828,10 @@ mod tests {
             filter_expr: FilterExprV1::And { exprs: Vec::new() },
             confidence_level: 0.95,
             histograms_only: false,
-            continuous_fit: crate::models::distribution::DistributionContinuousFitConfigV1::default(),
-            visual_diagnostics: crate::models::distribution::DistributionVisualDiagnosticsConfigV1::default(),
+            continuous_fit: crate::models::distribution::DistributionContinuousFitConfigV1::default(
+            ),
+            visual_diagnostics:
+                crate::models::distribution::DistributionVisualDiagnosticsConfigV1::default(),
             enabled_capability_ids: Vec::new(),
             capability_overrides: Vec::new(),
             observation_policy: ObservationContributionPolicyV1::strict_v1()
@@ -532,21 +903,30 @@ mod tests {
             )
             .expect("seed rows");
         let mut grouped_request = request(&engine);
-        grouped_request.by_column_ids = vec![column_id(&engine, "region"), column_id(&engine, "batch")];
+        grouped_request.by_column_ids =
+            vec![column_id(&engine, "region"), column_id(&engine, "batch")];
 
-        let groups = prepare_continuous_groups(&engine, &grouped_request, &y_column(&grouped_request))
-            .expect("prepare groups");
+        let groups =
+            prepare_continuous_groups(&engine, &grouped_request, &y_column(&grouped_request))
+                .expect("prepare groups");
 
         assert_eq!(groups.len(), 3);
         assert_eq!(
-            groups.iter().map(|group| group.key.clone()).collect::<Vec<_>>(),
+            groups
+                .iter()
+                .map(|group| group.key.clone())
+                .collect::<Vec<_>>(),
             vec![
                 vec![
-                    DistributionGroupValueV1::Text { value: "East".to_string() },
+                    DistributionGroupValueV1::Text {
+                        value: "East".to_string()
+                    },
                     DistributionGroupValueV1::Number { value: 1.0 },
                 ],
                 vec![
-                    DistributionGroupValueV1::Text { value: "East".to_string() },
+                    DistributionGroupValueV1::Text {
+                        value: "East".to_string()
+                    },
                     DistributionGroupValueV1::Number { value: 2.0 },
                 ],
                 vec![
@@ -603,8 +983,8 @@ mod tests {
             )
             .expect("seed rows");
         let request = request(&engine);
-        let groups = prepare_continuous_groups(&engine, &request, &y_column(&request))
-            .expect("groups");
+        let groups =
+            prepare_continuous_groups(&engine, &request, &y_column(&request)).expect("groups");
         assert_eq!(groups[0].excluded_rows, 2);
         assert_eq!(groups[0].observations.len(), 1);
 
@@ -699,7 +1079,9 @@ mod tests {
         );
         assert_eq!(
             value_to_group(Value::Date32(2)).expect("date group"),
-            DistributionGroupValueV1::DateTime { utc_millis: 172_800_000 },
+            DistributionGroupValueV1::DateTime {
+                utc_millis: 172_800_000
+            },
         );
         assert_eq!(
             value_to_group(Value::Timestamp(TimeUnit::Microsecond, -1))
@@ -777,10 +1159,15 @@ fn compile_filter(
     match filter {
         FilterExprV1::And { exprs } => compile_filter_list("AND", exprs, metadata, params, "TRUE"),
         FilterExprV1::Or { exprs } => compile_filter_list("OR", exprs, metadata, params, "FALSE"),
-        FilterExprV1::Not { expr } => Ok(format!("NOT ({})", compile_filter(expr, metadata, params)?)),
+        FilterExprV1::Not { expr } => {
+            Ok(format!("NOT ({})", compile_filter(expr, metadata, params)?))
+        }
         FilterExprV1::IsNull { field_id, negate } => {
             let column = quote_identifier(resolve_column(metadata, field_id)?);
-            Ok(format!("{column} IS {}NULL", if *negate { "NOT " } else { "" }))
+            Ok(format!(
+                "{column} IS {}NULL",
+                if *negate { "NOT " } else { "" }
+            ))
         }
         FilterExprV1::NumericRange {
             field_id,
@@ -798,7 +1185,10 @@ fn compile_filter(
                     ));
                 }
                 params.push(Value::Double(*minimum));
-                clauses.push(format!("{column} {} ?", if *include_min { ">=" } else { ">" }));
+                clauses.push(format!(
+                    "{column} {} ?",
+                    if *include_min { ">=" } else { ">" }
+                ));
             }
             if let Some(maximum) = max {
                 if !maximum.is_finite() {
@@ -807,9 +1197,16 @@ fn compile_filter(
                     ));
                 }
                 params.push(Value::Double(*maximum));
-                clauses.push(format!("{column} {} ?", if *include_max { "<=" } else { "<" }));
+                clauses.push(format!(
+                    "{column} {} ?",
+                    if *include_max { "<=" } else { "<" }
+                ));
             }
-            Ok(if clauses.is_empty() { "TRUE".to_string() } else { clauses.join(" AND ") })
+            Ok(if clauses.is_empty() {
+                "TRUE".to_string()
+            } else {
+                clauses.join(" AND ")
+            })
         }
         FilterExprV1::CategorySet {
             field_id,
@@ -844,13 +1241,23 @@ fn compile_filter(
             let mut clauses = Vec::new();
             if let Some(start) = start {
                 params.push(Value::Text(start.clone()));
-                clauses.push(format!("{column} {} ?", if *include_start { ">=" } else { ">" }));
+                clauses.push(format!(
+                    "{column} {} ?",
+                    if *include_start { ">=" } else { ">" }
+                ));
             }
             if let Some(end) = end {
                 params.push(Value::Text(end.clone()));
-                clauses.push(format!("{column} {} ?", if *include_end { "<=" } else { "<" }));
+                clauses.push(format!(
+                    "{column} {} ?",
+                    if *include_end { "<=" } else { "<" }
+                ));
             }
-            Ok(if clauses.is_empty() { "TRUE".to_string() } else { clauses.join(" AND ") })
+            Ok(if clauses.is_empty() {
+                "TRUE".to_string()
+            } else {
+                clauses.join(" AND ")
+            })
         }
     }
 }

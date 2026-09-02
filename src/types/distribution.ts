@@ -1,6 +1,28 @@
-import type { FilterExprV1 } from "./filter";
+import type { GraphDataFrame } from "./graphData";
 
-export type { FilterExprV1 } from "./filter";
+export type FilterExprV1 =
+  | { kind: "and"; exprs: FilterExprV1[] }
+  | { kind: "or"; exprs: FilterExprV1[] }
+  | { kind: "not"; expr: FilterExprV1 }
+  | { kind: "isNull"; fieldId: string; negate: boolean }
+  | {
+      kind: "numericRange";
+      fieldId: string;
+      min: number | null;
+      max: number | null;
+      includeMin: boolean;
+      includeMax: boolean;
+    }
+  | { kind: "categorySet"; fieldId: string; values: string[]; negate: boolean }
+  | {
+      kind: "dateRange";
+      fieldId: string;
+      start: string | null;
+      end: string | null;
+      includeStart: boolean;
+      includeEnd: boolean;
+      timeZone: string;
+    };
 
 export type DistributionSchemaVersionV1 = "1";
 export type DistributionModeV1 =
@@ -98,6 +120,26 @@ export type ContinuousDistributionIdV1 =
   | "exponential"
   | "gamma"
   | "weibull";
+
+export type DistributionFitKind = ContinuousDistributionIdV1;
+
+export interface SpecLimitsOverride {
+  lsl: number | null;
+  target: number | null;
+  usl: number | null;
+}
+
+export interface DistributionRequest {
+  datasetId: string;
+  generation: number;
+  responseColumns: string[];
+  weightColumn: string | null;
+  freqColumn: string | null;
+  byColumns: string[];
+  confidenceLevel: number;
+  specLimits: Record<string, SpecLimitsOverride>;
+  fitDistributions: DistributionFitKind[];
+}
 
 export type DistributionFitStatusV1 = "available" | "unavailable" | "failed";
 
@@ -384,6 +426,34 @@ export interface DistributionReportBlockV1 {
   distributionFitData?: DistributionFitDataV1;
   distributionFitComparisonData?: DistributionFitComparisonDataV1;
   chartData: DistributionChartDataV1 | null;
+}
+
+export type DistributionResultStatus = "available" | "unavailable" | "failed";
+
+export type DistributionReportBlock = Omit<DistributionReportBlockV1, "status"> & {
+  status: DistributionResultStatus;
+  reasonCode: string | null;
+};
+
+export type DistributionYResult = Omit<DistributionYResultV1, "blocks"> & {
+  blocks: DistributionReportBlock[];
+};
+
+export type DistributionGroupResult = Omit<DistributionGroupResultV1, "yResults"> & {
+  yResults: DistributionYResult[];
+};
+
+export interface DistributionReportResponse {
+  datasetId: string;
+  generation: number;
+  groups: DistributionGroupResult[];
+  reportBlocks: DistributionReportBlock[];
+  graphFrames: {
+    overview: GraphDataFrame;
+    boxPlot: GraphDataFrame;
+    ecdf: GraphDataFrame;
+    normalQuantile: GraphDataFrame;
+  };
 }
 
 export interface CapabilityTypedValueV1 {
