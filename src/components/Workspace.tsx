@@ -191,6 +191,7 @@ export function Workspace() {
   const deleteDistributionByDataset = useDistributionStore((s) => s.deleteByDataset);
   const nextDistributionName = useDistributionStore((s) => s.nextName);
   const resetDistributions = useDistributionStore((s) => s.reset);
+  const loadDistributionsFromProject = useDistributionStore((s) => s.loadFromProject);
   const tabulates = useTabulateStore((s) => s.items);
   const addGraphBuilder = useGraphBuilderStore((s) => s.addItem);
   const renameGraphBuilder = useGraphBuilderStore((s) => s.renameItem);
@@ -653,7 +654,7 @@ export function Workspace() {
 
   const handleCreateDistributionItem = (item: DistributionItem) => {
     if (readOnly) return;
-    const resolved = resolveProjectBasename(item.name.trim() || nextDistributionName(), "fitYByX");
+    const resolved = resolveProjectBasename(item.name.trim() || nextDistributionName(), "distribution");
     if (resolved.error) {
       alert(resolved.error);
       return;
@@ -735,7 +736,7 @@ export function Workspace() {
     }
     const distribution = useDistributionStore.getState().items.find((item) => item.id === id);
     if (distribution) {
-      const resolved = resolveProjectBasename(trimmed, "fitYByX", distribution.name);
+      const resolved = resolveProjectBasename(trimmed, "distribution", distribution.name);
       if (resolved.error !== null) {
         alert(resolved.error);
         return;
@@ -1040,6 +1041,7 @@ export function Workspace() {
       graphFolders,
       fitYByXFolders,
       tabulateFolders,
+      distributionFolders,
     };
     try {
       if (!project?.filePath) {
@@ -1056,11 +1058,13 @@ export function Workspace() {
           graphBuilders: gbItems,
           fitYByX: fitYByXItems,
           tabulates,
+          distributions: distributionItems,
           folders: folderPayload.folders,
           tableFolders: folderPayload.tableFolders,
           graphFolders: folderPayload.graphFolders,
           fitYByXFolders: folderPayload.fitYByXFolders,
           tabulateFolders: folderPayload.tabulateFolders,
+          distributionFolders: folderPayload.distributionFolders,
         });
       } else {
         await saveProject({
@@ -1069,11 +1073,13 @@ export function Workspace() {
           graphBuilders: gbItems,
           fitYByX: fitYByXItems,
           tabulates,
+          distributions: distributionItems,
           folders: folderPayload.folders,
           tableFolders: folderPayload.tableFolders,
           graphFolders: folderPayload.graphFolders,
           fitYByXFolders: folderPayload.fitYByXFolders,
           tabulateFolders: folderPayload.tabulateFolders,
+          distributionFolders: folderPayload.distributionFolders,
         });
       }
       showToast(t("common.saved"), 1500);
@@ -1170,6 +1176,7 @@ export function Workspace() {
         }
         loadFitYByXFromProject((result.fitYByX ?? []) as FitYByXItem[]);
         loadTabulatesFromProject((result.tabulates ?? []) as TabulateItem[]);
+        loadDistributionsFromProject(result.distributions ?? []);
         // Restore folder tree + table/graph→folder assignments. We do this
         // after datasets/graphs are loaded so a subsequent prune pass keeps
         // assignments in sync with currently-existing items.
@@ -1179,7 +1186,7 @@ export function Workspace() {
           graphFolders: result.graphFolders ?? {},
           fitYByXFolders: result.fitYByXFolders ?? {},
           tabulateFolders: result.tabulateFolders ?? {},
-          distributionFolders: {},
+          distributionFolders: result.distributionFolders ?? {},
         });
         if (result.documentNameMigrations.length > 0) {
           showToast(

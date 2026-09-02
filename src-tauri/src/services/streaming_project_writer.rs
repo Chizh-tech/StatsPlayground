@@ -351,11 +351,13 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             placeholder_tables,
             graph_docs,
             snapshot.request.fit_y_by_x.clone(),
+            snapshot.request.distributions.clone(),
             snapshot.request.tabulates.clone(),
             snapshot.request.folders.clone(),
             &snapshot.request.table_folders,
             &snapshot.request.graph_folders,
             &snapshot.request.fit_y_by_x_folders,
+            &snapshot.request.distribution_folders,
             &snapshot.request.tabulate_folders,
             snapshot.request.history.clone(),
             snapshot.request.snapshots.clone(),
@@ -381,6 +383,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 &bundle.manifest,
                 &bundle.graphs,
                 &bundle.fit_y_by_x,
+                &bundle.distributions,
                 &bundle.tabulates,
                 &bundle.snapshots,
                 &temp_path,
@@ -433,6 +436,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
         manifest: &ProjectManifest,
         graph_docs: &[GraphDoc],
         fit_docs: &[serde_json::Value],
+        distribution_docs: &[serde_json::Value],
         tabulate_docs: &[serde_json::Value],
         snapshot_docs: &[serde_json::Value],
         temp_path: &Path,
@@ -457,6 +461,15 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
             .map(|doc| (doc.id.as_str(), doc))
             .collect();
         let fit_by_id: HashMap<&str, &serde_json::Value> = fit_docs
+            .iter()
+            .filter_map(|value| {
+                value
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|id| (id, value))
+            })
+            .collect();
+        let distribution_by_id: HashMap<&str, &serde_json::Value> = distribution_docs
             .iter()
             .filter_map(|value| {
                 value
@@ -696,6 +709,22 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 .map_err(|e| AppError::FileIO(e.to_string()))?;
             serde_json::to_writer(&mut zip, fit_doc)
                 .map_err(|e| AppError::FileIO(format!("failed to serialize fit doc: {e}")))?;
+        }
+
+        for distribution_ref in &manifest.distributions {
+            let distribution_doc = distribution_by_id
+                .get(distribution_ref.id.as_str())
+                .ok_or_else(|| {
+                    AppError::FileIO(format!(
+                        "missing distribution payload for manifest reference {}",
+                        distribution_ref.id
+                    ))
+                })?;
+            zip.start_file(&distribution_ref.file, file_opts)
+                .map_err(|e| AppError::FileIO(e.to_string()))?;
+            serde_json::to_writer(&mut zip, distribution_doc).map_err(|e| {
+                AppError::FileIO(format!("failed to serialize distribution doc: {e}"))
+            })?;
         }
 
         for tabulate_ref in &manifest.tabulate_files {
@@ -1285,11 +1314,13 @@ mod tests {
                     "graphType": "line",
                 })],
                 fit_y_by_x: vec![serde_json::json!({"id": "fit-1"})],
+                distributions: Vec::new(),
                 tabulates: vec![serde_json::json!({"id": "tab-1"})],
                 folders: vec!["Bench".to_string(), "Bench/Sub".to_string()],
                 table_folders: HashMap::new(),
                 graph_folders: HashMap::new(),
                 fit_y_by_x_folders: HashMap::new(),
+                distribution_folders: HashMap::new(),
                 tabulate_folders: HashMap::new(),
             },
         }
@@ -1347,6 +1378,25 @@ mod tests {
                     "response": { "name": "y", "type": "continuous" },
                     "factor": { "name": "x", "type": "continuous" }
                 })],
+                distributions: vec![serde_json::json!({
+                    "id": "dist-1",
+                    "name": "Distribution",
+                    "sourceDatasetId": "table_1",
+                    "responses": [{ "name": "value", "type": "continuous" }],
+                    "weight": null,
+                    "frequency": null,
+                    "by": [],
+                    "analysis": {
+                        "confidenceLevel": 0.95,
+                        "specLimits": {},
+                        "fitDistributions": []
+                    },
+                    "graphs": {},
+                    "createdAt": "2026-09-02T00:00:00Z",
+                    "result": { "transient": true },
+                    "graphFrames": { "transient": true },
+                    "runState": { "status": "completed" }
+                })],
                 tabulates: vec![serde_json::json!({
                     "id": "tab-1",
                     "name": "data",
@@ -1368,6 +1418,10 @@ mod tests {
                 fit_y_by_x_folders: HashMap::from([(
                     "fit-1".to_string(),
                     "Root/Nested/Leaf".to_string(),
+                )]),
+                distribution_folders: HashMap::from([(
+                    "dist-1".to_string(),
+                    "Root/Nested".to_string(),
                 )]),
                 tabulate_folders: HashMap::from([("tab-1".to_string(), "Root".to_string())]),
             },
@@ -1574,6 +1628,7 @@ mod tests {
             "data/data.spgh".to_string(),
             "data/data.spf".to_string(),
             "data/data-2.spf".to_string(),
+            "distributions/Distribution.spdist".to_string(),
             "snapshots/data.json".to_string(),
             ".history.json".to_string(),
         ]);
@@ -1608,6 +1663,11 @@ mod tests {
         let manifest: crate::services::spprj_archive::ProjectManifest =
             serde_json::from_slice(&manifest_bytes).unwrap();
 
+        assert_eq!(
+            manifest.distribution_folders.get("dist-1"),
+            Some(&"Root/Nested".to_string())
+        );
+
         for fit_ref in &manifest.fit_y_by_x_files {
             let mut entry = zip.by_name(&fit_ref.file).unwrap();
             let mut bytes = Vec::new();
@@ -1636,6 +1696,24 @@ mod tests {
                 value.get("name").and_then(serde_json::Value::as_str),
                 Some(tabulate_ref.name.as_str())
             );
+        }
+
+        for distribution_ref in &manifest.distributions {
+            let mut entry = zip.by_name(&distribution_ref.file).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                value.get("id").and_then(serde_json::Value::as_str),
+                Some(distribution_ref.id.as_str())
+            );
+            assert_eq!(
+                value.get("name").and_then(serde_json::Value::as_str),
+                Some(distribution_ref.name.as_str())
+            );
+            assert!(value.get("result").is_none());
+            assert!(value.get("graphFrames").is_none());
+            assert!(value.get("runState").is_none());
         }
 
         for snapshot_ref in &manifest.snapshot_files {

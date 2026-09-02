@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { DistributionItem } from "@/types/distribution";
 import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
 
 /** Optional folder payload accepted by the save_project command.
@@ -17,6 +18,8 @@ export interface SaveProjectFolders {
   fitYByXFolders: Record<string, string>;
   /** tabulateId → folder path. Root tabulates are simply absent. */
   tabulateFolders: Record<string, string>;
+  /** distributionId → folder path. Root analyses are simply absent. */
+  distributionFolders: Record<string, string>;
 }
 
 export interface SaveProjectRequest {
@@ -26,11 +29,13 @@ export interface SaveProjectRequest {
   graphBuilders: unknown[];
   fitYByX: unknown[];
   tabulates: unknown[];
+  distributions: DistributionItem[];
   folders: string[];
   tableFolders: Record<string, string>;
   graphFolders: Record<string, string>;
   fitYByXFolders: Record<string, string>;
   tabulateFolders: Record<string, string>;
+  distributionFolders: Record<string, string>;
 }
 
 export type SavePhase = "preparing" | "table" | "metadata" | "compressing" | "finalizing";

@@ -13,6 +13,7 @@ assert.equal(projectFileExtension("table"), ".sptb");
 assert.equal(projectFileExtension("graph"), ".spgh");
 assert.equal(projectFileExtension("fitYByX"), ".spf");
 assert.equal(projectFileExtension("tabulate"), ".spf");
+assert.equal(projectFileExtension("distribution"), ".spdist");
 assert.equal(projectFileExtension("snapshot"), ".json");
 assert.equal(
   formatSnapshotTimestamp(new Date(2026, 8, 1, 13, 34, 5)),
@@ -30,6 +31,10 @@ assert.equal(
 );
 assert.equal(
   allocateProjectBasename("data", ".spf", ["data"]),
+  "data-2",
+);
+assert.equal(
+  allocateProjectBasename("data", ".spdist", ["data"]),
   "data-2",
 );
 
@@ -67,6 +72,16 @@ assert.deepEqual(normalizeProjectBasenameInput("table.spgh", ".sptb"), {
   strippedExtension: false,
   wrongExtension: ".spgh",
 });
+assert.deepEqual(normalizeProjectBasenameInput("Distribution.SPDIST", ".spdist"), {
+  basename: "Distribution",
+  strippedExtension: true,
+  wrongExtension: null,
+});
+assert.deepEqual(normalizeProjectBasenameInput("distribution.spf", ".spdist"), {
+  basename: "distribution.spf",
+  strippedExtension: false,
+  wrongExtension: ".spf",
+});
 assert.deepEqual(normalizeProjectBasenameInput(".sptb", ".sptb"), {
   basename: "",
   strippedExtension: true,
@@ -94,7 +109,7 @@ const snapshots = ["snapshot", "snapshot-2"];
 assert.equal(allocateProjectBasename("snapshot", ".json", activeSpf), "snapshot-2");
 assert.equal(allocateProjectBasename("snapshot", ".json", snapshots), "snapshot-3");
 
-const explicitExtension: ProjectFileExtension = ".json";
-assert.equal(explicitExtension, ".json");
+const explicitExtension: ProjectFileExtension = ".spdist";
+assert.equal(explicitExtension, ".spdist");
 
 console.log("project-file-naming contract passed");

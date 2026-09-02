@@ -35,6 +35,8 @@ pub struct OpenProjectResult {
     #[serde(default)]
     pub fit_y_by_x: Vec<serde_json::Value>,
     #[serde(default)]
+    pub distributions: Vec<serde_json::Value>,
+    #[serde(default)]
     pub tabulates: Vec<serde_json::Value>,
     /// All folder paths that exist in the project (including empty ones).
     #[serde(default)]
@@ -47,6 +49,8 @@ pub struct OpenProjectResult {
     pub graph_folders: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub fit_y_by_x_folders: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub distribution_folders: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub document_name_migrations: Vec<DocumentNameMigration>,
     #[serde(default)]
@@ -137,6 +141,8 @@ impl<'a> ProjectService<'a> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            &empty_folders,
             &empty_folders,
             &empty_folders,
             &empty_folders,
@@ -218,6 +224,7 @@ impl<'a> ProjectService<'a> {
             None => derive_folders_from_entries(&bundle.manifest.graphs, "graphs"),
         };
         let fit_y_by_x_folders = bundle.manifest.fit_y_by_x_folders.clone();
+        let distribution_folders = bundle.manifest.distribution_folders.clone();
         let tabulate_folders = bundle.manifest.tabulate_folders.clone();
         let folders = bundle.manifest.folders.clone();
 
@@ -278,11 +285,13 @@ impl<'a> ProjectService<'a> {
             snapshots: bundle.snapshots,
             graph_builders,
             fit_y_by_x: bundle.fit_y_by_x,
+            distributions: bundle.distributions,
             tabulates: bundle.tabulates,
             folders,
             table_folders,
             graph_folders,
             fit_y_by_x_folders,
+            distribution_folders,
             document_name_migrations,
             dataset_name_migrations,
             requires_migration,
@@ -1253,11 +1262,13 @@ mod tests {
             snapshots,
             graph_builders,
             fit_y_by_x,
+            distributions: Vec::new(),
             tabulates,
             folders,
             table_folders,
             graph_folders,
             fit_y_by_x_folders,
+            distribution_folders: HashMap::new(),
             tabulate_folders,
         }
     }
@@ -1741,6 +1752,25 @@ mod tests {
             "columnFields": [],
             "statistics": ["sum"]
         })];
+        let distributions = vec![serde_json::json!({
+            "id": "dist-1",
+            "name": "Revenue Distribution",
+            "sourceDatasetId": "preserve-id",
+            "responses": [{ "name": "amount", "type": "continuous" }],
+            "weight": null,
+            "frequency": null,
+            "by": [],
+            "analysis": {
+                "confidenceLevel": 0.95,
+                "specLimits": {},
+                "fitDistributions": ["normal"]
+            },
+            "graphs": {},
+            "createdAt": "2026-09-02T00:00:00Z",
+            "result": { "transient": true },
+            "graphFrames": { "transient": true },
+            "runState": { "status": "completed" }
+        })];
         let folders = vec!["Analysis".to_string(), "Analysis/Yearly".to_string()];
         let table_folders =
             HashMap::from([("preserve-id".to_string(), "Analysis/Yearly".to_string())]);
@@ -1748,25 +1778,27 @@ mod tests {
         let fit_y_by_x_folders = HashMap::from([("fit-1".to_string(), "Analysis".to_string())]);
         let tabulate_folders =
             HashMap::from([("tab-1".to_string(), "Analysis/Yearly".to_string())]);
+        let distribution_folders =
+            HashMap::from([("dist-1".to_string(), "Analysis/Yearly".to_string())]);
 
         let service = ProjectService::new(&state);
+        let mut request = save_request(
+            None,
+            history.clone(),
+            snapshots.clone(),
+            graph_builders.clone(),
+            fit_y_by_x.clone(),
+            tabulates.clone(),
+            folders.clone(),
+            table_folders.clone(),
+            graph_folders.clone(),
+            fit_y_by_x_folders.clone(),
+            tabulate_folders.clone(),
+        );
+        request.distributions = distributions;
+        request.distribution_folders = distribution_folders.clone();
         service
-            .save_project(
-                save_request(
-                    None,
-                    history.clone(),
-                    snapshots.clone(),
-                    graph_builders.clone(),
-                    fit_y_by_x.clone(),
-                    tabulates.clone(),
-                    folders.clone(),
-                    table_folders.clone(),
-                    graph_folders.clone(),
-                    fit_y_by_x_folders.clone(),
-                    tabulate_folders.clone(),
-                ),
-                None,
-            )
+            .save_project(request, None)
             .unwrap();
 
         let reopened_state = AppState::new().unwrap();
@@ -1796,10 +1828,17 @@ mod tests {
             })]
         );
         assert_eq!(reopened.tabulates, tabulates);
+        assert_eq!(reopened.distributions.len(), 1);
+        assert_eq!(reopened.distributions[0]["id"], "dist-1");
+        assert_eq!(reopened.distributions[0]["name"], "Revenue Distribution");
+        assert!(reopened.distributions[0].get("result").is_none());
+        assert!(reopened.distributions[0].get("graphFrames").is_none());
+        assert!(reopened.distributions[0].get("runState").is_none());
         assert_eq!(reopened.folders, folders);
         assert_eq!(reopened.table_folders, table_folders);
         assert_eq!(reopened.graph_folders, graph_folders);
         assert_eq!(reopened.fit_y_by_x_folders, fit_y_by_x_folders);
+        assert_eq!(reopened.distribution_folders, distribution_folders);
         assert_eq!(reopened.tabulate_folders, tabulate_folders);
 
         let restored_display = reopened_state.column_display.lock().unwrap();
@@ -2234,6 +2273,8 @@ mod tests {
                 serde_json::json!({"id": "f3", "name": "A/B"}),
             ],
             fit_y_by_x_folders: HashMap::new(),
+            distributions: vec![],
+            distribution_folders: HashMap::new(),
             tabulates: vec![
                 serde_json::json!({"id": "tb1", "name": "model"}),
                 serde_json::json!({"id": "tb2", "name": "A/B"}),
@@ -2443,6 +2484,8 @@ mod tests {
             graph_folders: Some(HashMap::new()),
             fit_y_by_x: vec![],
             fit_y_by_x_folders: HashMap::new(),
+            distributions: vec![],
+            distribution_folders: HashMap::new(),
             tabulates: vec![],
             tabulate_folders: HashMap::new(),
             fit_y_by_x_files: vec![],
@@ -2507,6 +2550,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &folders,
             &folders,
             &folders,
             &folders,
@@ -2555,6 +2600,8 @@ mod tests {
             graph_folders: Some(HashMap::new()),
             fit_y_by_x: vec![],
             fit_y_by_x_folders: HashMap::new(),
+            distributions: vec![],
+            distribution_folders: HashMap::new(),
             tabulates: vec![],
             tabulate_folders: HashMap::new(),
             fit_y_by_x_files: vec![],
