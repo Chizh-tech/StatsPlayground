@@ -50,6 +50,8 @@
     "exportSpgh": "Xuất biểu đồ hiện tại sang .spgh",
     "importSpgh": "Nhập tệp biểu đồ .spgh",
     "analyze": "Analyze",
+    "report": "Báo cáo",
+    "newReport": "Báo cáo mới",
     "tabulate": "Tabulate",
     "fitYByX": "Khớp Y theo X",
     "ops": "Thao tác",
@@ -109,13 +111,16 @@
     "createSnapshot": "Tạo ảnh chụp",
     "newTable": "Bảng mới \"{{name}}\"",
     "newGraph": "Biểu đồ mới \"{{name}}\" (nguồn: {{source}})",
+    "newReport": "Báo cáo mới \"{{name}}\"",
     "newTabulate": "New tabulate \"{{name}}\" (source: {{source}})",
     "newFitYByX": "Tạo Khớp Y theo X \"{{name}}\" (nguồn: {{source}})",
     "renameGraph": "Đổi tên biểu đồ \"{{old}}\" → \"{{new}}\"",
+    "renameReport": "Đổi tên báo cáo \"{{old}}\" → \"{{new}}\"",
     "renameTable": "Đổi tên bảng \"{{old}}\" → \"{{new}}\"",
     "renameTabulate": "Rename tabulate \"{{old}}\" → \"{{new}}\"",
     "renameFitYByX": "Đổi tên Khớp Y theo X \"{{old}}\" → \"{{new}}\"",
     "deleteGraph": "Xóa biểu đồ \"{{name}}\"",
+    "deleteReport": "Xóa báo cáo \"{{name}}\"",
     "deleteTable": "Xóa bảng \"{{name}}\"",
     "deleteTabulate": "Delete tabulate \"{{name}}\"",
     "deleteFitYByX": "Xóa Khớp Y theo X \"{{name}}\"",
@@ -146,6 +151,7 @@
     "datasourceDeleted": "Nguồn đã bị xóa",
     "datasourceMissing": "—",
     "graphMissing": "Biểu đồ không còn tồn tại",
+    "reportMissing": "Báo cáo không còn tồn tại",
     "tabulateSourceMissing": "Source data table is unavailable",
     "tabulateMissing": "Tabulate analysis no longer exists",
     "fitYByXSourceMissing": "Bảng dữ liệu nguồn không khả dụng",
@@ -180,6 +186,9 @@
     "zoomOut": "Thu nhỏ bảng",
     "zoomReset": "Đặt lại về 100%",
     "zoomTooltip": "Thu phóng bảng"
+  },
+  "report": {
+    "placeholder": "Chỉnh sửa báo cáo sẽ được làm ở Task 6; bề mặt này hiện chỉ là phần giữ chỗ tối thiểu."
   },
   "fitYByX": {
     "title": "Khớp Y theo X",

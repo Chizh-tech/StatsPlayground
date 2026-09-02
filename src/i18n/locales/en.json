@@ -50,6 +50,8 @@
     "exportSpgh": "Export Current Graph as .spgh",
     "importSpgh": "Import .spgh Graph File",
     "analyze": "Analyze",
+    "report": "Report",
+    "newReport": "New Report",
     "tabulate": "Tabulate",
     "fitYByX": "Fit Y by X",
     "ops": "Operations",
@@ -109,13 +111,16 @@
     "createSnapshot": "Create Snapshot",
     "newTable": "New table \"{{name}}\"",
     "newGraph": "New graph \"{{name}}\" (source: {{source}})",
+    "newReport": "New report \"{{name}}\"",
     "newTabulate": "New tabulate \"{{name}}\" (source: {{source}})",
     "newFitYByX": "New Fit Y by X \"{{name}}\" (source: {{source}})",
     "renameGraph": "Rename graph \"{{old}}\" → \"{{new}}\"",
+    "renameReport": "Rename report \"{{old}}\" → \"{{new}}\"",
     "renameTable": "Rename table \"{{old}}\" → \"{{new}}\"",
     "renameTabulate": "Rename tabulate \"{{old}}\" → \"{{new}}\"",
     "renameFitYByX": "Rename Fit Y by X \"{{old}}\" → \"{{new}}\"",
     "deleteGraph": "Delete graph \"{{name}}\"",
+    "deleteReport": "Delete report \"{{name}}\"",
     "deleteTable": "Delete table \"{{name}}\"",
     "deleteTabulate": "Delete tabulate \"{{name}}\"",
     "deleteFitYByX": "Delete Fit Y by X \"{{name}}\"",
@@ -147,6 +152,7 @@
     "datasourceDeleted": "Source deleted",
     "datasourceMissing": "—",
     "graphMissing": "Graph no longer exists",
+    "reportMissing": "Report no longer exists",
     "tabulateSourceMissing": "Source data table is unavailable",
     "tabulateMissing": "Tabulate analysis no longer exists",
     "fitYByXSourceMissing": "Source data table is unavailable",
@@ -181,6 +187,9 @@
     "zoomOut": "Zoom out",
     "zoomReset": "Reset to 100%",
     "zoomTooltip": "Table zoom"
+  },
+  "report": {
+    "placeholder": "Report editing arrives in Task 6. This surface is intentionally minimal for now."
   },
   "fitYByX": {
     "title": "Fit Y by X",
