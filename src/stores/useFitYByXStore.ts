@@ -7,6 +7,7 @@ import {
   FitYByXRoleValidationError,
   deriveFitYByXPersonality,
   normalizeConstructModelEffects,
+  resolveFitYByXPolynomialDegree,
 } from "@/components/fitYByX/fitYByXConfig";
 import { createEmbeddedGraphItem } from "@/components/graphBuilder/graphBuilderMode";
 import { normalizeGroupThemeSlots } from "@/components/graphBuilder/graphThemeIdentity";
@@ -71,21 +72,50 @@ function isMatchingField(
   return actual?.name === expected.name && actual.type === expected.type;
 }
 
-function isExpectedFamily(personality: FitYByXPersonality, graph: EmbeddedGraphConfig): boolean {
+function resolveLoadedFitlineDegree(graph: EmbeddedGraphConfig): number | null {
+  const fitline = graph.modeStates.twoD.elements.find((element) => element.enabled !== false && element.kind === "fitline");
+  if (!fitline) {
+    return null;
+  }
+  const options = fitline.options as Record<string, unknown> | undefined;
+  if (!options || options.fitType !== "polynomial") {
+    return 1;
+  }
+  return typeof options.degree === "number" && Number.isFinite(options.degree)
+    ? options.degree
+    : 1;
+}
+
+function isExpectedFamily(
+  item: Pick<FitYByXItem, "personality" | "constructModelEffects" | "factorialDegree">,
+  graph: EmbeddedGraphConfig,
+): boolean {
   if (graph.mode !== "2d") return false;
   const activeKinds = graph.modeStates.twoD.elements
     .filter((element) => element.enabled !== false)
     .map((element) => element.kind);
-  return personality === "bivariate"
-    ? activeKinds.includes("fitline") && !activeKinds.includes("boxplot")
-    : activeKinds.includes("boxplot") && !activeKinds.includes("fitline");
+  if (item.personality === "bivariate") {
+    if (!activeKinds.includes("fitline") || activeKinds.includes("boxplot")) {
+      return false;
+    }
+    const persistedDegree = resolveLoadedFitlineDegree(graph);
+    if (persistedDegree == null) {
+      return false;
+    }
+    const expectedDegree = resolveFitYByXPolynomialDegree(
+      item.constructModelEffects,
+      item.factorialDegree,
+    );
+    return persistedDegree === expectedDegree;
+  }
+  return activeKinds.includes("boxplot") && !activeKinds.includes("fitline");
 }
 
 function isUsableFitYByXGraph(item: FitYByXItem, graph: EmbeddedGraphConfig): boolean {
   return graph.mode === "2d"
     && isMatchingField(graph.modeStates.twoD.encoding.x, item.factor)
     && isMatchingField(graph.modeStates.twoD.encoding.y, item.response)
-    && isExpectedFamily(item.personality, graph);
+    && isExpectedFamily(item, graph);
 }
 
 function normalizeLoadedItem(item: FitYByXItem): FitYByXItem {

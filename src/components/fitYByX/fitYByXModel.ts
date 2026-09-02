@@ -34,3 +34,18 @@ export function normalizeFactorialDegree(value: number | undefined): number {
   }
   return Math.max(1, Math.min(2, value));
 }
+
+export function resolveFitYByXPolynomialDegree(
+  constructModelEffects: FitYByXConstructModelEffects | undefined,
+  factorialDegree: number | undefined,
+): number {
+  switch (constructModelEffects ?? DEFAULT_CONSTRUCT_MODEL_EFFECTS) {
+    case "responseSurface":
+      return 2;
+    case "factorialToDegree":
+      return normalizeFactorialDegree(factorialDegree);
+    case "fullFactorial":
+    default:
+      return 1;
+  }
+}

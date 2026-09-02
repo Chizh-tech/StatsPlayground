@@ -15,13 +15,14 @@ import {
   DEFAULT_FACTORIAL_DEGREE,
   deriveFitYByXPersonality,
   normalizeConstructModelEffects,
-  normalizeFactorialDegree,
+  resolveFitYByXPolynomialDegree,
 } from "./fitYByXModel";
 export {
   DEFAULT_CONSTRUCT_MODEL_EFFECTS,
   DEFAULT_FACTORIAL_DEGREE,
   deriveFitYByXPersonality,
   normalizeConstructModelEffects,
+  resolveFitYByXPolynomialDegree,
 } from "./fitYByXModel";
 export {
   canAssignFitYByXRole,
@@ -92,7 +93,7 @@ function createBivariateFitYByXGraphConfig(input: {
   factorialDegree?: number;
 }): EmbeddedGraphConfig {
   const twoD = createDefaultGraph2DState();
-  const degree = resolvePolynomialDegree(input.constructModelEffects, input.factorialDegree);
+  const degree = resolveFitYByXPolynomialDegree(input.constructModelEffects, input.factorialDegree);
 
   return {
     mode: "2d",
@@ -127,21 +128,6 @@ export function createDefaultFitYByXGraphConfig(input: {
   return deriveFitYByXPersonality(input.factor) === "bivariate"
     ? createBivariateFitYByXGraphConfig(input)
     : createOnewayFitYByXGraphConfig(input);
-}
-
-function resolvePolynomialDegree(
-  constructModelEffects: FitYByXConstructModelEffects | undefined,
-  factorialDegree: number | undefined,
-): number {
-  switch (constructModelEffects ?? DEFAULT_CONSTRUCT_MODEL_EFFECTS) {
-    case "responseSurface":
-      return 2;
-    case "factorialToDegree":
-      return normalizeFactorialDegree(factorialDegree);
-    case "fullFactorial":
-    default:
-      return 1;
-  }
 }
 
 export function createFitYByXItem(input: {

@@ -11,6 +11,7 @@ import type {
   FitYByXResult,
 } from "../src/types/fitYByX.ts";
 import {
+  createFitYByXRequest,
   createFitYByXReportController,
   type FitYByXReportState,
 } from "../src/components/fitYByX/useFitYByXReport.ts";
@@ -222,6 +223,43 @@ function testHookSourceContractFetchesGenerationAndGuardsResolutionFailures(): v
   );
 }
 
+function testCreateRequestNormalizesConstructModelEffects(): void {
+  const responseSurfaceRequest = createFitYByXRequest(
+    createItem({
+      constructModelEffects: "responseSurface",
+      factorialDegree: 2,
+    }),
+    41,
+  );
+  assert.deepEqual(responseSurfaceRequest, {
+    datasetId: "dataset-1",
+    generation: 41,
+    responseColumn: "response",
+    factorColumn: "factor",
+    personality: "bivariate",
+    constructModelEffects: "responseSurface",
+    confidenceLevel: 0.95,
+  });
+
+  const factorialToDegreeRequest = createFitYByXRequest(
+    createItem({
+      constructModelEffects: "factorialToDegree",
+      factorialDegree: 9,
+    }),
+    42,
+  );
+  assert.deepEqual(factorialToDegreeRequest, {
+    datasetId: "dataset-1",
+    generation: 42,
+    responseColumn: "response",
+    factorColumn: "factor",
+    personality: "bivariate",
+    constructModelEffects: "factorialToDegree",
+    factorialDegree: 2,
+    confidenceLevel: 0.95,
+  });
+}
+
 async function testLaterRequestWinsWhenEarlierCompletionArrivesLast(): Promise<void> {
   const item = createItem();
   const generationA = createDeferred<number>();
@@ -411,5 +449,6 @@ await testNormalizesErrorsAndIgnoresCancelAndUnmount();
 await testReloadsSameItemWhenGenerationChangesAndIgnoresStaleGenerationFetch();
 testHookSourceContractUsesGenerationSignalAndCleanup();
 testHookSourceContractFetchesGenerationAndGuardsResolutionFailures();
+testCreateRequestNormalizesConstructModelEffects();
 
 console.log("fitYByX report state contract passed");
