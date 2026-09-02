@@ -706,7 +706,7 @@ impl DuckDbEngine {
     /// Get metadata for a single dataset
     pub fn get_dataset_meta(&self, id: &str) -> Result<DatasetMeta, AppError> {
         let meta = self.conn.query_row(
-            "SELECT id, name, source_path, source_type, row_count, col_count, created_at, updated_at FROM _meta_datasets WHERE id = $1",
+            "SELECT id, name, source_path, source_type, row_count, col_count, generation, created_at, updated_at FROM _meta_datasets WHERE id = $1",
             params![id],
             |row| {
                 Ok(DatasetMeta {
@@ -716,8 +716,9 @@ impl DuckDbEngine {
                     source_type: row.get(3)?,
                     row_count: row.get(4)?,
                     col_count: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
+                    generation: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
                 })
             },
         ).map_err(|error| match error {
@@ -732,7 +733,7 @@ impl DuckDbEngine {
     /// List all datasets
     pub fn list_datasets(&self) -> Result<Vec<DatasetMeta>, AppError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, source_path, source_type, row_count, col_count, created_at, updated_at FROM _meta_datasets ORDER BY created_at DESC",
+            "SELECT id, name, source_path, source_type, row_count, col_count, generation, created_at, updated_at FROM _meta_datasets ORDER BY created_at DESC",
         )?;
 
         let datasets = stmt
@@ -744,8 +745,9 @@ impl DuckDbEngine {
                     source_type: row.get(3)?,
                     row_count: row.get(4)?,
                     col_count: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
+                    generation: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -8663,9 +8665,11 @@ mod tests {
         db.seed_benchmark_table("benchmark-id", "Benchmark", 10, 2)
             .unwrap();
         assert_eq!(db.get_dataset_generation("benchmark-id").unwrap(), 0);
+        assert_eq!(db.get_dataset_meta("benchmark-id").unwrap().generation, 0);
 
         db.update_cell("benchmark-id", 1, "value_1", "99").unwrap();
         assert_eq!(db.get_dataset_generation("benchmark-id").unwrap(), 1);
+        assert_eq!(db.get_dataset_meta("benchmark-id").unwrap().generation, 1);
         assert!(matches!(
             db.get_dataset_generation("missing").unwrap_err(),
             AppError::InvalidParam(_)

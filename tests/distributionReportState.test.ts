@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   createDistributionReportController,
@@ -103,6 +104,25 @@ const requestAffectingMutations: Partial<DistributionItem>[] = [
 for (const mutation of requestAffectingMutations) {
   assert.notEqual(distributionRequestFingerprint(item(mutation)), baseFingerprint);
 }
+assert.equal(
+  distributionRequestFingerprint(item({
+    graphs: {
+      ...item().graphs,
+      overview: {
+        ...item().graphs.overview,
+        modeStates: {
+          ...item().graphs.overview.modeStates,
+          twoD: {
+            ...item().graphs.overview.modeStates.twoD,
+            xAxis: { min: 1, max: 5 },
+          },
+        },
+      },
+    },
+  })),
+  baseFingerprint,
+  "graph-only updates must not affect the report request fingerprint",
+);
 assert.equal(
   distributionRequestFingerprint(item({
     analysis: {
@@ -221,5 +241,15 @@ async function testMutationGenerationCancelAndDispose(): Promise<void> {
 await testLoadingSuccessAndError();
 await testLatestRequestAndEchoFences();
 await testMutationGenerationCancelAndDispose();
+
+const hookSource = readFileSync(
+  new URL("../src/components/distribution/useDistributionReport.ts", import.meta.url),
+  "utf8",
+);
+assert.doesNotMatch(
+  hookSource,
+  /\[[^\]]*getDatasetGeneration, item\]/,
+  "graph-only item identity changes must not restart the report effect",
+);
 
 console.log("distribution report state contract passed");

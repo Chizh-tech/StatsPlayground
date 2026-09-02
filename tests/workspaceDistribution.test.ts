@@ -20,6 +20,11 @@ assertSourceIncludes(workspaceSource, "DistributionView", "Workspace must render
 assertSourceIncludes(workspaceSource, "menu.distribution", "Analysis menu must include menu.distribution");
 assertSourceIncludes(workspaceSource, "handleCreateDistribution", "Distribution menu entry must open the creation flow");
 assertSourceIncludes(workspaceSource, "handleCreateDistributionItem", "Validated dialog output must enter the document store");
+assert.match(
+  workspaceSource,
+  /kind === "distribution"[\s\S]*existingNames = distributionItems\.map\(\(item\) => item\.name\)/,
+  "Distribution create and rename must resolve collisions in the .spdist namespace before persistence",
+);
 
 assertSourceIncludes(workspaceSource, "activeDistributionId", "Workspace must track the active Distribution analysis");
 assertSourceIncludes(workspaceSource, "showDistributionDialog", "Workspace must track the Distribution creation dialog");

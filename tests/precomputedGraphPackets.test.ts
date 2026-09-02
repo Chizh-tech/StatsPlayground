@@ -360,3 +360,32 @@ assert.deepEqual(
   ["Response A", "Response B", "Response A", "Response B"],
   "packet series names must flow to ordinary ECharts series",
 );
+
+const ungroupedHistogram = buildGraph(
+  {
+    encoding: {
+      x: { name: "response", type: "continuous" },
+    },
+    elements: [{ kind: "histogram", enabled: true }],
+  },
+  baseData(["response"]),
+  theme,
+  undefined,
+  frameWithAggregates([{
+    kind: "histogram",
+    bins: [
+      { binStart: 0, binEnd: 1, count: 3, group: "Response A" },
+      { binStart: 1, binEnd: 2, count: 5, group: "Response B" },
+    ],
+    totalCount: 8,
+  }]),
+);
+const histogramSeries = seriesList(ungroupedHistogram.panels[0].option as Record<string, unknown>)
+  .filter((entry) => entry.type === "bar");
+const histogramCount = histogramSeries.flatMap((entry) => entry.data as Array<[number, number]>)
+  .reduce((sum, point) => sum + point[1], 0);
+assert.equal(
+  histogramCount,
+  8,
+  "ungrouped histograms must aggregate named backend packet groups instead of filtering every bin",
+);

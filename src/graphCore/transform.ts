@@ -4636,7 +4636,7 @@ function buildSingleOption(
         const styleKey = grouping ? slot.key : DEFAULT_GROUP_KEY;
         const rs = resolvedStyleFor(styleKey);
         const gxs = packetModeA ? [] : slot.rowIdxs.map((i) => toNum(data.rows[i][xIdx]));
-        const groupCounts = binOntoGrid(gxs, slot.key);
+        const groupCounts = binOntoGrid(gxs, grouping ? slot.key : undefined);
 
         // Resolve the visible fill color for bars. `resolveGroupStyle`
         // defaults ungrouped fill to "transparent" (so JMP-style point

@@ -57,7 +57,7 @@ export function DistributionView({ item, dataset }: DistributionViewProps) {
   );
   const reportState = useDistributionReport(
     dataset ? item : null,
-    dataset?.updatedAt ?? null,
+    dataset?.generation ?? null,
     { getCurrentItem },
   );
   const graphItems = useMemo(() => materializeDistributionGraphItems(item), [item]);

@@ -102,6 +102,7 @@ test("renders all four external frames without graph-data streaming", async ({ m
     sourceType: "manual",
     rowCount: 0,
     colCount: 1,
+    generation: 0,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   }} />);

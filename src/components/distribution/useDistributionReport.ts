@@ -287,7 +287,7 @@ export function useDistributionReport(
       mounted = false;
       controller?.dispose();
     };
-  }, [compute, fingerprint, generationSignal, getCurrentItem, getDatasetGeneration, item]);
+  }, [compute, fingerprint, generationSignal, getCurrentItem, getDatasetGeneration]);
 
   return state;
 }
