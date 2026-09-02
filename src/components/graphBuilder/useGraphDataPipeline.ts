@@ -628,7 +628,8 @@ export function canExecuteGraphRequest(
 
   const hasX = fields.some((field) => field.role === "x");
   const hasY = fields.some((field) => field.role === "y");
-  return hasX && hasY;
+  const multiXCount = fields.filter((field) => /^multiX\d+$/.test(field.role)).length;
+  return (hasX && hasY) || multiXCount >= 2;
 }
 
 function hasEnabledElementKinds(elements: readonly GraphElementRequest[]): Set<string> {

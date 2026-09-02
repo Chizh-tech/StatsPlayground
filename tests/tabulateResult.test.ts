@@ -135,6 +135,9 @@ assert.match(tabulateResultTableSource, /style=\{\{ left: rowLabelIndex \* ROW_L
 assert.match(tabulateViewSource, /onTableCreated/);
 assert.match(tabulateViewSource, /buildTabulateExportRequest/);
 assert.match(tabulateViewSource, /createTableFromRows/);
+assert.match(tabulateViewSource, /resolveProjectBasenameForKind\(/);
+assert.match(tabulateViewSource, /invalidName\.wrongExtension/);
+assert.match(tabulateViewSource, /invalidName\.reserved/);
 assert.match(tabulateViewSource, /exporting/);
 assert.match(tabulateViewSource, /readOnly/);
 assert.match(tabulateResultTableSource, /fa-table-arrow-up/);

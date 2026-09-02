@@ -17,6 +17,13 @@ export interface DatasetNameMigration {
   newName: string;
 }
 
+export interface DocumentNameMigration {
+  id: string;
+  kind: string;
+  oldName: string;
+  newName: string;
+}
+
 /** open_project 返回结果，包含历史/快照数据 + 文件夹布局 */
 export interface OpenProjectResult {
   project: ProjectInfo;
@@ -34,7 +41,9 @@ export interface OpenProjectResult {
   graphFolders: Record<string, string>;
   fitYByXFolders: Record<string, string>;
   fitModelFolders?: Record<string, string>;
+  documentNameMigrations: DocumentNameMigration[];
   datasetNameMigrations: DatasetNameMigration[];
+  requiresMigration: boolean;
   /** tabulateId → folder path。 */
   tabulateFolders: Record<string, string>;
   distributions: DistributionDocV1[];

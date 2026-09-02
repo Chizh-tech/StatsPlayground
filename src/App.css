@@ -476,6 +476,21 @@
   color: var(--fg-primary);
 }
 
+.ds-rename-shell {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ds-fixed-ext {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--fg-placeholder);
+  user-select: none;
+}
+
 .ds-info {
   font-size: 10px;
   color: var(--fg-placeholder);
@@ -2905,7 +2920,8 @@
 }
 
 .snapshot-rename-input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 1px 4px;
   font-size: 12px;
   border: 1px solid var(--border-input-focus);
@@ -2913,6 +2929,21 @@
   outline: none;
   background: var(--bg-input);
   color: var(--fg-primary);
+}
+
+.snapshot-rename-shell {
+  width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.snapshot-fixed-ext {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--fg-placeholder);
+  user-select: none;
 }
 
 .snapshot-add-btn {

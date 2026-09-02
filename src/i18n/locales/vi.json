@@ -166,6 +166,8 @@
     "creatingSnapshot": "Đang tạo ảnh chụp…",
     "restoringSnapshot": "Đang khôi phục ảnh chụp…",
     "importingSqlite": "Đang nhập cơ sở dữ liệu SQLite…",
+    "documentNameMigrations": "Đã đổi tên {{count}} tài liệu dự án khi mở dự án này. Hãy lưu dự án để ghi lại các tên đã cập nhật.",
+    "projectRequiresMigration": "Dự án đã được di trú trong bộ nhớ khi mở. Hãy lưu dự án để ghi lại định dạng đã nâng cấp.",
     "datasetNameMigrations": "Đã đổi tên {{count}} bảng có tên trùng khi mở dự án này. Hãy lưu dự án để ghi lại các tên đã cập nhật.",
     "importProgressTable": "Bảng {{i}}/{{total}}: {{name}}",
     "importProgressRows": "hàng",

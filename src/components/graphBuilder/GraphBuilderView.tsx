@@ -19,6 +19,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import { dataService } from "@/services/dataService";
 import { isMissing, DEFAULT_GROUP_KEY, type FieldRef, type ChartElement, type ElementKind, type MarkStyle, type GroupStyle, type GroupStyleMap, type MarkerShape, type RefLineY, type RefLineX, type YAxisConfig } from "@/graphCore";
 import { SCATTER_RENDER_BUDGET } from "@/graphCore/scatterBudget";
 import type { DatasetMeta } from "@/types/data";
@@ -347,6 +348,10 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
   // Filter rules (JMP-style Local Data Filter). Persist on the item so
   // they survive project save/load.
   const filters = useMemo(() => item.filters ?? [], [item.filters]);
+  const getGraphCategoricalValues = useCallback(async (field: string, search: string) => {
+    const generation = await dataService.getDatasetGeneration(dataset.id);
+    return dataService.queryTableFilterValues(dataset.id, field, search, 500, generation);
+  }, [dataset.id]);
   const meltInfo = runtimeModel.meltInfo;
   const frame = runtimeState?.frame ?? null;
   const pipelineStatus = runtimeState?.status ?? "idle";
@@ -1312,6 +1317,8 @@ export function GraphBuilderView({ item, dataset }: GraphBuilderViewProps) {
               onChange={setFilters}
               onClose={() => setShowFilters(false)}
               width={filterWidth}
+              categoricalMode="exclude"
+              getCategoricalValues={getGraphCategoricalValues}
             />
             <div
               className="gb-splitter"

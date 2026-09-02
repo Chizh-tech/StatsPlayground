@@ -572,7 +572,6 @@ fn execute(options: Options) -> Result<PerformanceReport, AppError> {
             )?;
             (snapshot.rows.len(), 0)
         }
-        Operation::Graph => unreachable!("graph operation is handled by execute_graph"),
         Operation::Graph => unreachable!("graph is handled before this branch"),
         Operation::Save => unreachable!("save is handled before this branch"),
     };

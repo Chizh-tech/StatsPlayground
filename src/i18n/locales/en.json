@@ -167,6 +167,8 @@
     "creatingSnapshot": "Creating snapshot…",
     "restoringSnapshot": "Restoring snapshot…",
     "importingSqlite": "Importing SQLite database…",
+    "documentNameMigrations": "Renamed {{count}} project document name(s) while opening this project. Save to persist the updated names.",
+    "projectRequiresMigration": "This project was migrated in memory while opening. Save to persist the upgraded format.",
     "datasetNameMigrations": "Renamed {{count}} duplicate dataset name(s) while opening this project. Save to persist the updated names.",
     "importProgressTable": "Table {{i}}/{{total}}: {{name}}",
     "importProgressRows": "rows",
