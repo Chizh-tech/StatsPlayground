@@ -3273,8 +3273,8 @@ function buildSingleOption(
     histogramElementCount === 1;
   const boxplotPacketMode = frameBackedAggregateMode && hasBoxplot && !!boxPlotPacket;
 
-  // 按 color/overlay 分组
-  const grouping = colorField || overlayField;
+  // 按 overlay/color 分组，Overlay 是 GraphBuilder 的主 group identity。
+  const grouping = overlayField ?? colorField;
   const groupingOrder = grouping ? valueOrders?.[grouping.name] : undefined;
   const packetGroupKeys = histogramPacket
     ? Array.from(new Set(histogramPacket.bins.map((bin) => String(bin.group ?? DEFAULT_GROUP_KEY))))
@@ -3345,6 +3345,11 @@ function buildSingleOption(
       if (i >= 0) return i;
     }
     return Math.max(0, groupKeys.indexOf(gKey));
+  };
+
+  const resolvedStyleFor = (groupKey: string): ResolvedGroupStyle => {
+    const fallbackColor = theme.categorical[colorIndexOf(groupKey) % theme.categorical.length];
+    return resolveGroupStyle(groupKey, fallbackColor, !!grouping, theme, spec.styles);
   };
 
   /** Set of group values the user has hidden via the legend show/hide
@@ -3466,16 +3471,18 @@ function buildSingleOption(
       emitGroups.forEach((gKey) => {
         const cells = byGroup.get(gKey) ?? [];
         if (cells.length === 0) return;
-        const color = grouping
-          ? theme.categorical[colorIndexOf(gKey) % theme.categorical.length]
-          : theme.categorical[0];
+        const styleKey = grouping ? gKey : DEFAULT_GROUP_KEY;
+        const heatStyle = resolvedStyleFor(styleKey);
         series.push({
           type: "heatmap",
           name: grouping ? gKey : (yField?.name || "heatmap"),
           data: cells.map((cell) => [cell.x, cell.y, cell.count]),
           pointSize: [Math.max(1, heatmapPacket.xBinWidth), Math.max(1, heatmapPacket.yBinWidth)],
           blurSize: 0,
-          itemStyle: { color, opacity: grouping ? 0.55 : 0.7 },
+          itemStyle: {
+            color: grouping ? heatStyle.fill.color : theme.categorical[0],
+            opacity: grouping ? 0.55 : 0.7,
+          },
           progressive: 2000,
           animation: false,
           z: 1,
@@ -3523,16 +3530,20 @@ function buildSingleOption(
           },
           buildAxisOverrides(spec.yAxis, aggregateMode),
         ),
-        visualMap: {
-          min: 0,
-          max: Math.max(1, maxCount),
-          calculable: false,
-          orient: "horizontal",
-          left: "center",
-          bottom: 8,
-          inRange: { color: [theme.sequential[0], theme.sequential[1]] },
-          textStyle: { color: theme.fgSecondary },
-        },
+        ...(!grouping
+          ? {
+            visualMap: {
+              min: 0,
+              max: Math.max(1, maxCount),
+              calculable: false,
+              orient: "horizontal",
+              left: "center",
+              bottom: 8,
+              inRange: { color: [theme.sequential[0], theme.sequential[1]] },
+              textStyle: { color: theme.fgSecondary },
+            },
+          }
+          : {}),
         series,
       } as EChartsOption;
     }
@@ -3592,7 +3603,9 @@ function buildSingleOption(
     const histGroupSlots: HistGroupSlot[] = [];
     if (grouping) {
       const iterGroups = groupKeys.length > 0
-        ? groupKeys
+        ? (frameBackedAggregateMode && histogramPacket
+          ? groupKeys.filter((key) => packetGroupKeys.includes(key))
+          : groupKeys)
         : (frameBackedAggregateMode && histogramPacket
           ? packetGroupKeys
           : []);
@@ -3973,13 +3986,7 @@ function buildSingleOption(
       // computed against the appropriate axis.
       histGroupSlots.forEach((slot) => {
         const styleKey = grouping ? slot.key : DEFAULT_GROUP_KEY;
-        const rs = resolveGroupStyle(
-          styleKey,
-          slot.baseColor,
-          !!grouping,
-          theme,
-          spec.styles,
-        );
+        const rs = resolvedStyleFor(styleKey);
         // Visible fill color: same fallback logic as the bar layer —
         // `resolveGroupStyle` defaults ungrouped fill to "transparent"
         // which would render the histogram invisible.
@@ -4627,13 +4634,7 @@ function buildSingleOption(
       const stackId = "__hist_stack__";
       histGroupSlots.forEach((slot) => {
         const styleKey = grouping ? slot.key : DEFAULT_GROUP_KEY;
-        const rs = resolveGroupStyle(
-          styleKey,
-          slot.baseColor,
-          !!grouping,
-          theme,
-          spec.styles,
-        );
+        const rs = resolvedStyleFor(styleKey);
         const gxs = packetModeA ? [] : slot.rowIdxs.map((i) => toNum(data.rows[i][xIdx]));
         const groupCounts = binOntoGrid(gxs, slot.key);
 
@@ -4895,12 +4896,12 @@ function buildSingleOption(
       const boxIterGroups: string[] = grouping ? groupKeys : [DEFAULT_GROUP_KEY];
       boxIterGroups.forEach((gKey) => {
         if (isHidden(gKey)) return;
+        const seriesName = grouping ? gKey : (yField?.name ?? "");
+        const styleKey = grouping ? gKey : DEFAULT_GROUP_KEY;
         const groupColor = grouping
           ? theme.categorical[colorIndexOf(gKey) % theme.categorical.length]
           : theme.categorical[0];
-        const seriesName = grouping ? gKey : (yField?.name ?? "");
-        const styleKey = grouping ? gKey : DEFAULT_GROUP_KEY;
-        const boxGroupStyle = resolveGroupStyle(styleKey, groupColor, !!grouping, theme, spec.styles);
+        const boxGroupStyle = resolvedStyleFor(styleKey);
         const userFill = spec.styles?.[styleKey]?.fill;
         const hasUserFill = !!(userFill?.color ?? userFill?.fillColor);
         const neutralBoxFill = shade("#000000", SHADE_RATIO_FILL);
@@ -5083,7 +5084,7 @@ function buildSingleOption(
       // median / whisker line use the `line` sub-mark. Outliers use the
       // group's `point` sub-mark.
       const styleKey = grouping ? gKey : DEFAULT_GROUP_KEY;
-      const boxGroupStyle = resolveGroupStyle(styleKey, groupColor, !!grouping, theme, spec.styles);
+      const boxGroupStyle = resolvedStyleFor(styleKey);
       // Box plots are special: the fill IS the primary mark, not an
       // overlay on top of a stroke layer (as with points / lines / bars).
       // `resolveGroupStyle` defaults ungrouped fill to "transparent" to
@@ -5226,7 +5227,7 @@ function buildSingleOption(
     // The per-element renderers below pull from this resolved style so
     // changing it in the UI affects every active layer simultaneously.
     const styleKey = grouping ? gKey : DEFAULT_GROUP_KEY;
-    const resolvedStyle = resolveGroupStyle(styleKey, color, !!grouping, theme, spec.styles);
+    const resolvedStyle = resolvedStyleFor(styleKey);
 
     enabledElements.forEach((el) => {
       const elementId = getOpt<string>(el.options, "elementId", "");
@@ -6560,7 +6561,7 @@ function computeSharedRanges(
   // that belong to a hidden legend group. Hidden rows shouldn't drag the
   // shared axis bounds — otherwise hiding a noisy outlier group does
   // nothing visible because the axes still cover its range.
-  const grouping = encoding.color || encoding.overlay;
+  const grouping = encoding.overlay ?? encoding.color;
   const groupingIdx = grouping ? colIndex(data, grouping.name) : -1;
   const hiddenSet = new Set(hiddenGroups ?? []);
   const useHiddenFilter = !!grouping && groupingIdx >= 0 && hiddenSet.size > 0;
@@ -6781,7 +6782,7 @@ function buildFrameBackedScatterSeries(
     0,
     Math.min(1, getOpt<number>(pointsElement.options, "jitterLimit", 0.5)),
   );
-  const grouping = spec.encoding.color || spec.encoding.overlay;
+  const grouping = spec.encoding.overlay ?? spec.encoding.color;
   const groupOrder = grouping
     ? applyValueOrder(
       [...(frame.dictionaries.group ?? [])],
@@ -6826,12 +6827,13 @@ function buildFrameBackedScatterSeries(
       yMax: yMax === yMin ? yMin + 1 : yMax,
     },
   });
+  const visibleFrameGroups = frameGroups.filter((group) => group.items.length > 0);
 
   let xMin = Infinity;
   let xMax = -Infinity;
   let pointYMin = Infinity;
   let pointYMax = -Infinity;
-  for (const group of frameGroups) {
+  for (const group of visibleFrameGroups) {
     for (const item of group.items) {
       const x = Number(item.value[0]);
       const y = item.value[1];
@@ -6844,11 +6846,12 @@ function buildFrameBackedScatterSeries(
     }
   }
 
-  const scatterSeries = frameGroups.map((group) => {
+  const scatterSeries = visibleFrameGroups.map((group) => {
     const orderedIndex = grouping ? Math.max(0, groupOrder.indexOf(group.name)) : 0;
     const color = theme.categorical[orderedIndex % theme.categorical.length];
+    const styleKey = grouping ? group.name : DEFAULT_GROUP_KEY;
     const style = resolveGroupStyle(
-      grouping ? group.name : DEFAULT_GROUP_KEY,
+      styleKey,
       color,
       !!grouping,
       theme,
@@ -6923,7 +6926,7 @@ function materializeFrameRows(
     const index = columnIndexes.get(field.name);
     if (index !== undefined) row[index] = value;
   };
-  const grouping = spec.encoding.color || spec.encoding.overlay;
+  const grouping = spec.encoding.overlay ?? spec.encoding.color;
 
   for (const chunk of frame.rawChunks) {
     const groupCodes = chunk.groupCodes
@@ -7027,7 +7030,7 @@ function buildGraphBase(
   // dataset so each panel can map its local group(s) back to the same
   // color slot. Without this, every panel restarts its group index at 0
   // and the per-group themes set in the legend collapse to a single hue.
-  const grouping = encoding.color || encoding.overlay;
+  const grouping = encoding.overlay ?? encoding.color;
   const globalGroupKeys = grouping
     ? applyValueOrder(
       frameBacked && frame?.dictionaries.group

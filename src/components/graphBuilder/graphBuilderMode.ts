@@ -335,6 +335,7 @@ function normalizeCurrentModeItem(item: GraphBuilderItem): GraphBuilderItem {
     },
     filters: Array.isArray(item.filters) ? clone(item.filters) : undefined,
     sampling: normalizeSampling(item.sampling),
+    groupThemeSlots: isObject(item.groupThemeSlots) ? clone(item.groupThemeSlots) : undefined,
     createdAt: item.createdAt,
   };
 }
@@ -378,6 +379,9 @@ export function normalizeGraphBuilderItem(item: unknown): GraphBuilderItem {
       },
       filters: Array.isArray(source.filters) ? clone(source.filters) : undefined,
       sampling: normalizeSampling(source.sampling as GraphSampling | undefined),
+      groupThemeSlots: isObject(source.groupThemeSlots)
+        ? clone(source.groupThemeSlots) as GraphBuilderItem["groupThemeSlots"]
+        : undefined,
       createdAt: toStringOr(source.createdAt, new Date(0).toISOString()),
     };
   }
@@ -437,6 +441,9 @@ export function normalizeGraphBuilderItem(item: unknown): GraphBuilderItem {
     },
     filters: Array.isArray(source.filters) ? clone(source.filters) : undefined,
     sampling: normalizeSampling(source.sampling as GraphSampling | undefined),
+    groupThemeSlots: isObject(source.groupThemeSlots)
+      ? clone(source.groupThemeSlots) as GraphBuilderItem["groupThemeSlots"]
+      : undefined,
     createdAt: toStringOr(source.createdAt, new Date(0).toISOString()),
   };
 }
