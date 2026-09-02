@@ -80,7 +80,7 @@
     "exportGraphFailed": "Export graph failed: ",
     "importGraphFailed": "Import graph failed: ",
     "exportFolderFailed": "Export folder failed: ",
-    "openProjectFailed": "Failed to open project: ",
+    "openProjectFailed": "Failed to open project: {{msg}}",
     "invalidName": {
       "empty": "Name cannot be empty.",
       "invalidChars": "Name contains invalid characters: / \\ : * ? \" < > |",

@@ -80,7 +80,7 @@
     "exportGraphFailed": "匯出圖形失敗：",
     "importGraphFailed": "匯入圖形失敗：",
     "exportFolderFailed": "匯出資料夾失敗：",
-    "openProjectFailed": "開啟專案失敗：",
+    "openProjectFailed": "開啟專案失敗：{{msg}}",
     "invalidName": {
       "empty": "名稱不可為空。",
       "invalidChars": "名稱包含非法字元：/ \\ : * ? \" < > |",

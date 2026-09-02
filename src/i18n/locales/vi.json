@@ -80,7 +80,7 @@
     "exportGraphFailed": "Xuất biểu đồ thất bại: ",
     "importGraphFailed": "Nhập biểu đồ thất bại: ",
     "exportFolderFailed": "Xuất thư mục thất bại: ",
-    "openProjectFailed": "Mở dự án thất bại: ",
+    "openProjectFailed": "Mở dự án thất bại: {{msg}}",
     "invalidName": {
       "empty": "Tên không được để trống.",
       "invalidChars": "Tên chứa ký tự không hợp lệ: / \\ : * ? \" < > |",

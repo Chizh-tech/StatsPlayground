@@ -80,7 +80,7 @@
     "exportGraphFailed": "导出图形失败: ",
     "importGraphFailed": "导入图形失败: ",
     "exportFolderFailed": "导出文件夹失败: ",
-    "openProjectFailed": "打开项目失败: ",
+    "openProjectFailed": "打开项目失败: {{msg}}",
     "invalidName": {
       "empty": "名称不能为空。",
       "invalidChars": "名称包含非法字符: / \\ : * ? \" < > |",
