@@ -18,7 +18,7 @@
 
 import { create } from "zustand";
 import { useProjectStore } from "./useProjectStore";
-import { assertProjectMutable } from "@/utils/saveReadOnly";
+import { assertProjectMutable } from "../utils/saveReadOnly";
 
 const STORAGE_KEY_COLLAPSED = "sp.folderTree.collapsed";
 
