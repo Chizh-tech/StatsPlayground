@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 
 import { ReportView, type ReportLinkOption } from "../src/components/report/ReportView";
 import type { ReportEmbedRuntime } from "../src/components/report/ReportEmbed.tsx";
-import { setGraphReportEmbedTestRenderOverride } from "../src/components/report/GraphReportEmbed";
 import { useDataStore } from "../src/stores/useDataStore.ts";
 import { useFitYByXStore } from "../src/stores/useFitYByXStore.ts";
 import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
@@ -143,22 +142,11 @@ export function ReportViewHarness({
     useTabulateStore.getState().loadFromProject(tabulates);
   }, [datasets, fitYByX, graphs, tabulates]);
 
-  useEffect(() => {
-    if (graphMode === "stub") {
-      setGraphReportEmbedTestRenderOverride(({ item, dataset }) => <div>{`Graph:${item.name}:${dataset.name}`}</div>);
-      return () => setGraphReportEmbedTestRenderOverride(null);
-    }
-
-    if (graphMode === "error") {
-      setGraphReportEmbedTestRenderOverride(() => {
-        throw new Error("graph exploded");
-      });
-      return () => setGraphReportEmbedTestRenderOverride(null);
-    }
-
-    setGraphReportEmbedTestRenderOverride(null);
-    return undefined;
-  }, [graphMode]);
+  const graphRuntime = graphMode === "stub"
+    ? { render: ({ item, dataset }: Parameters<NonNullable<NonNullable<ReportEmbedRuntime["graph"]>["render"]>>[0]) => <div>{`Graph:${item.name}:${dataset.name}`}</div> }
+    : graphMode === "error"
+      ? { render: () => { throw new Error("graph exploded"); } }
+      : embedRuntime?.graph;
 
   return (
     <ReportView
@@ -167,8 +155,24 @@ export function ReportViewHarness({
       graphOptions={graphOptions}
       fitYByXOptions={fitYByXOptions}
       tabulateOptions={tabulateOptions}
-      embedRuntime={embedRuntime}
+      embedRuntime={{ ...embedRuntime, graph: graphRuntime }}
       onMarkdownChange={setMarkdown}
     />
+  );
+}
+
+export function ReportEmbedRecoveryHarness() {
+  const [recovered, setRecovered] = useState(false);
+  const graph = recovered ? { ...defaultGraph, name: "Recovered Graph" } : defaultGraph;
+
+  return (
+    <>
+      <button type="button" onClick={() => setRecovered(true)}>Recover graph</button>
+      <ReportViewHarness
+        initialMarkdown={'{{sp-embed kind="graph" id="graph-1"}}'}
+        graphs={[graph]}
+        graphMode={recovered ? "stub" : "error"}
+      />
+    </>
   );
 }

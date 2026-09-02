@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { resolveReportDependency } from "../src/components/report/ReportEmbed.tsx";
 import { useDataStore } from "../src/stores/useDataStore.ts";
 import { useFitYByXStore } from "../src/stores/useFitYByXStore.ts";
 import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
+import { useHistoryStore } from "../src/stores/useHistoryStore.ts";
 import { useProjectStore } from "../src/stores/useProjectStore.ts";
 import { useTabulateStore } from "../src/stores/useTabulateStore.ts";
 import type { DatasetMeta } from "../src/types/data.ts";
@@ -159,5 +162,26 @@ assert.deepEqual(resolveReportDependency({ kind: "table", documentId: "missing-t
   status: "missing",
   dependency: { kind: "table", documentId: "missing-table" },
 });
+
+const graphEmbedSource = readFileSync(resolve(process.cwd(), "src/components/report/GraphReportEmbed.tsx"), "utf8");
+const reportEmbedSource = readFileSync(resolve(process.cwd(), "src/components/report/ReportEmbed.tsx"), "utf8");
+const dataTableSource = readFileSync(resolve(process.cwd(), "src/components/DataTableView.tsx"), "utf8");
+const workspaceSource = readFileSync(resolve(process.cwd(), "src/components/Workspace.tsx"), "utf8");
+
+assert.doesNotMatch(graphEmbedSource, /TestRenderOverride|testGraphRenderOverride/, "Production graph embeds must not expose test-only global overrides");
+assert.match(reportEmbedSource, /key=\{embedRevision\}/, "Render errors must reset when the embedded source revision changes");
+assert.match(reportEmbedSource, /dataRevision/, "Embeds must react to successful table mutations");
+assert.match(dataTableSource, /setColumnDisplayProps[\s\S]*invalidateData\(\)/, "Display-property writes must invalidate embeds");
+assert.match(workspaceSource, /handleHistoryRestored[\s\S]*invalidateData\(\)/, "Snapshot restores must invalidate embeds");
+assert.match(workspaceSource, /onUpdated=\{async \(\) => \{[\s\S]*invalidateData\(\)/, "In-place table updates must invalidate embeds");
+
+const initialDataRevision = useHistoryStore.getState().dataRevision;
+useHistoryStore.getState().recordTable("Edit cell", {
+  kind: "cells",
+  datasetId: dataset.id,
+  generation: 1,
+  cells: [{ rowId: 1, columnName: "strength", before: 1, after: 2 }],
+});
+assert.equal(useHistoryStore.getState().dataRevision, initialDataRevision + 1);
 
 console.log("report embed resolver contract passed");

@@ -172,7 +172,7 @@ export function Workspace() {
   } = useProjectStore();
   const { datasets, activeDatasetId, setActiveDataset, refreshDatasets, statusInfo } = useDataStore();
   const { openProject } = useProjectStore();
-  const { record: recordHistory, createSnapshot, restoreSnapshot, deleteSnapshot, reset: resetHistory } = useHistoryStore();
+  const { record: recordHistory, createSnapshot, restoreSnapshot, deleteSnapshot, reset: resetHistory, invalidateData } = useHistoryStore();
   const graphBuilders = useGraphBuilderStore((s) => s.items);
   const fitYByXItems = useFitYByXStore((s) => s.items);
   const fitYByXCounter = useFitYByXStore((s) => s.counter);
@@ -408,7 +408,8 @@ export function Workspace() {
     }
     // Force DataTableView to remount and reload data
     setTableKey((k) => k + 1);
-  }, [refreshDatasets, activeDatasetId, activeFitYByXId, setActiveDataset]);
+    invalidateData();
+  }, [refreshDatasets, activeDatasetId, activeFitYByXId, setActiveDataset, invalidateData]);
 
   useEffect(() => {
     refreshDatasets();
@@ -2275,6 +2276,7 @@ export function Workspace() {
           onUpdated={async () => {
             await refreshDatasets();
             setTableKey(k => k + 1);
+            invalidateData();
             markDirty();
           }}
         />

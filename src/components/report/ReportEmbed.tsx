@@ -5,6 +5,7 @@ import type { FitYByXReportDependencies } from "@/components/fitYByX/useFitYByXR
 import { useDataStore } from "@/stores/useDataStore";
 import { useFitYByXStore } from "@/stores/useFitYByXStore";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
+import { useHistoryStore } from "@/stores/useHistoryStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";
 import type { DatasetMeta } from "@/types/data";
 import type { FitYByXItem } from "@/types/fitYByX";
@@ -212,13 +213,23 @@ function renderResolvedEmbed(source: ReportResolvedSource, runtime: ReportEmbedR
 export function ReportEmbed({ dependency, runtime }: ReportEmbedProps) {
   const { t } = useTranslation();
   const resolution = useReportDependencyResolution(dependency);
+  const dataRevision = useHistoryStore((state) => state.dataRevision);
 
   if (resolution.status === "missing") {
     return <div className="sp-report-embed-unavailable">{renderMissingMessage(t as never, dependency)}</div>;
   }
 
+  const embedRevision = [
+    resolution.source.kind,
+    dependency.documentId,
+    dataRevision,
+    JSON.stringify(resolution.source.dataset),
+    JSON.stringify(resolution.source.item),
+  ].join("\0");
+
   return (
     <ReportEmbedBoundary
+      key={embedRevision}
       fallback={(message) => (
         <div className="sp-report-embed-error">
           {t("report.embedError", {

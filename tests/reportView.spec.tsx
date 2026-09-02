@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/experimental-ct-react";
 
-import { ReportViewHarness } from "./reportViewHarness";
+import { ReportEmbedRecoveryHarness, ReportViewHarness } from "./reportViewHarness";
 
 test("renders markdown editor, GFM preview, and safe HTML handling", async ({ mount }) => {
   const component = await mount(
@@ -154,6 +154,15 @@ test("keeps neighboring markdown and embeds visible when one embed is missing or
   await expect(preview.getByText("Unavailable: Tables missing-table")).toBeVisible();
   await expect(preview.getByText("graph exploded", { exact: false })).toBeVisible();
   await expect(preview.getByText("Not computable")).toBeVisible();
+});
+
+test("recovers an embed after its source revision changes", async ({ mount }) => {
+  const component = await mount(<ReportEmbedRecoveryHarness />);
+
+  await expect(component.getByText("graph exploded", { exact: false })).toBeVisible();
+  await component.getByRole("button", { name: "Recover graph" }).click();
+  await expect(component.getByText("Graph:Recovered Graph:Incoming Data")).toBeVisible();
+  await expect(component.getByText("graph exploded", { exact: false })).toHaveCount(0);
 });
 
 test("uses a segmented editor or preview mode on narrow viewports", async ({ mount, page }) => {

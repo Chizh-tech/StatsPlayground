@@ -9,17 +9,9 @@ const DefaultGraphRuntime = lazy(async () => ({
   default: (await import("@/components/graphBuilder/GraphRuntime")).GraphRuntime,
 }));
 
-let testGraphRenderOverride: ((props: GraphRuntimeProps) => ReactNode) | null = null;
-
 export interface GraphReportEmbedRuntime {
   RuntimeComponent?: ComponentType<GraphRuntimeProps>;
   render?: (props: GraphRuntimeProps) => ReactNode;
-}
-
-export function setGraphReportEmbedTestRenderOverride(
-  render: ((props: GraphRuntimeProps) => ReactNode) | null,
-): void {
-  testGraphRenderOverride = render;
 }
 
 export function GraphReportEmbed({
@@ -31,7 +23,7 @@ export function GraphReportEmbed({
 }) {
   const { t } = useTranslation();
   const RuntimeComponent = runtime?.RuntimeComponent;
-  const render = runtime?.render ?? testGraphRenderOverride;
+  const render = runtime?.render;
 
   return (
     <section className="sp-report-embed-card" data-kind="graph">
