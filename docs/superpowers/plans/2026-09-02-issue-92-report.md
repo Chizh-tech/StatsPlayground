@@ -121,6 +121,7 @@ Commit: `feat(report): add report document domain`
 - Modify: `src/types/project.ts`
 - Create: `tests/folderStore.report.test.ts`
 - Create: `tests/reportProjectContracts.test.ts`
+- Create: `tests/tsconfig.report.json`
 
 **Interfaces:**
 - Consumes: `ReportItem` from Task 1.
@@ -159,14 +160,14 @@ in both frontend request/result contracts and `SaveProjectFolders`.
 
 - [ ] **Step 6: Run contract test and verify RED**
 
-Run: `npx tsx --tsconfig tsconfig.app.json tests/reportProjectContracts.test.ts`
+Run: `npx tsc -p tests/tsconfig.report.json`
 Expected: FAIL with missing `reports`/`reportFolders` properties.
 
 - [ ] **Step 7: Extend frontend contracts and run focused tests**
 
 Add Report fields without weakening existing types. Run:
 
-`npx tsx --tsconfig tsconfig.app.json tests/reportProjectContracts.test.ts; npx tsx --tsconfig tsconfig.app.json tests/folderStore.fitYByX.test.ts`
+`npx tsc -p tests/tsconfig.report.json; npx tsx --tsconfig tsconfig.app.json tests/reportProjectContracts.test.ts; npx tsx --tsconfig tsconfig.app.json tests/folderStore.fitYByX.test.ts`
 
 Expected: PASS.
 
@@ -323,6 +324,7 @@ Commit: `feat(report): integrate reports into workspace`
 **Files:**
 - Modify: `package.json`
 - Modify: `package-lock.json`
+- Modify: `src/components/Workspace.tsx`
 - Modify: `src/components/report/ReportView.tsx`
 - Create: `src/components/report/ReportMarkdown.tsx`
 - Create: `src/components/report/report.css`
@@ -441,6 +443,7 @@ Run frontend focused tests:
 npx tsx --tsconfig tsconfig.app.json tests/reportParser.test.ts
 npx tsx --tsconfig tsconfig.app.json tests/reportStore.test.ts
 npx tsx --tsconfig tsconfig.app.json tests/folderStore.report.test.ts
+npx tsc -p tests/tsconfig.report.json
 npx tsx --tsconfig tsconfig.app.json tests/reportProjectContracts.test.ts
 npx tsx --tsconfig tsconfig.app.json tests/workspaceReport.test.ts
 npx tsx --tsconfig tsconfig.app.json tests/reportEditor.test.ts
