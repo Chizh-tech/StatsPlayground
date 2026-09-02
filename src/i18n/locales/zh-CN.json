@@ -112,6 +112,7 @@
     "newTable": "新建数据表 \"{{name}}\"",
     "newGraph": "新建图形 \"{{name}}\" (数据源: {{source}})",
     "newReport": "新建报告 \"{{name}}\"",
+    "editReport": "编辑报告 \"{{name}}\"",
     "newTabulate": "New tabulate \"{{name}}\" (source: {{source}})",
     "newFitYByX": "新建拟合 Y by X \"{{name}}\" (数据源: {{source}})",
     "renameGraph": "重命名图形 \"{{old}}\" → \"{{new}}\"",

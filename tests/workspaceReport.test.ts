@@ -31,6 +31,14 @@ function assertSourceIncludes(source: string, needle: string, message: string): 
 
 const workspaceSource = readSource("../src/components/Workspace.tsx");
 
+function sourceBetween(start: string, end: string): string {
+  const startIndex = workspaceSource.indexOf(start);
+  const endIndex = workspaceSource.indexOf(end, startIndex + start.length);
+  assert.notEqual(startIndex, -1, `Missing source boundary: ${start}`);
+  assert.notEqual(endIndex, -1, `Missing source boundary: ${end}`);
+  return workspaceSource.slice(startIndex, endIndex);
+}
+
 assertSourceIncludes(workspaceSource, "useReportStore", "Workspace must consume the report store");
 assertSourceIncludes(workspaceSource, "ReportView", "Workspace must render the report main-pane view");
 assertSourceIncludes(workspaceSource, "menu.report", "Workspace must expose a Report menu group");
@@ -54,6 +62,16 @@ assertSourceIncludes(workspaceSource, "fsSetReportFolder", "Drop handling must a
 assertSourceIncludes(workspaceSource, "history.newReport", "Creation must record report history");
 assertSourceIncludes(workspaceSource, "history.renameReport", "Rename must record report history");
 assertSourceIncludes(workspaceSource, "history.deleteReport", "Delete must record report history");
+assertSourceIncludes(
+  sourceBetween("const handleCloseProject", "const handleOpenAnother"),
+  "flushPendingReportHistory();",
+  "Closing a project must flush pending report history before reset",
+);
+assertSourceIncludes(
+  sourceBetween("const handleOpenAnother", "// ---- Folder-aware export helpers"),
+  "flushPendingReportHistory();",
+  "Opening another project must flush pending report history before reset",
+);
 assertSourceIncludes(
   workspaceSource,
   'kind === "report"',

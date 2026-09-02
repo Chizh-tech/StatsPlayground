@@ -112,6 +112,7 @@
     "newTable": "Bảng mới \"{{name}}\"",
     "newGraph": "Biểu đồ mới \"{{name}}\" (nguồn: {{source}})",
     "newReport": "Báo cáo mới \"{{name}}\"",
+    "editReport": "Chỉnh sửa báo cáo \"{{name}}\"",
     "newTabulate": "New tabulate \"{{name}}\" (source: {{source}})",
     "newFitYByX": "Tạo Khớp Y theo X \"{{name}}\" (nguồn: {{source}})",
     "renameGraph": "Đổi tên biểu đồ \"{{old}}\" → \"{{new}}\"",

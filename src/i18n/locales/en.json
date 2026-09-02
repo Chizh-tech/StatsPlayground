@@ -112,6 +112,7 @@
     "newTable": "New table \"{{name}}\"",
     "newGraph": "New graph \"{{name}}\" (source: {{source}})",
     "newReport": "New report \"{{name}}\"",
+    "editReport": "Edit report \"{{name}}\"",
     "newTabulate": "New tabulate \"{{name}}\" (source: {{source}})",
     "newFitYByX": "New Fit Y by X \"{{name}}\" (source: {{source}})",
     "renameGraph": "Rename graph \"{{old}}\" → \"{{new}}\"",

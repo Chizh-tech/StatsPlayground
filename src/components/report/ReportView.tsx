@@ -136,6 +136,10 @@ export function ReportView({
           <div className="sp-report-mode-toggle" role="tablist" aria-label={t("report.modeLabel", { defaultValue: "Report view mode" })}>
             <button
               type="button"
+              role="tab"
+              id="report-editor-tab"
+              aria-controls="report-editor-pane"
+              aria-selected={mobilePane === "editor"}
               className={`sp-report-mode-btn${mobilePane === "editor" ? " is-active" : ""}`}
               onClick={() => setMobilePane("editor")}
             >
@@ -143,6 +147,10 @@ export function ReportView({
             </button>
             <button
               type="button"
+              role="tab"
+              id="report-preview-tab"
+              aria-controls="report-preview-pane"
+              aria-selected={mobilePane === "preview"}
               className={`sp-report-mode-btn${mobilePane === "preview" ? " is-active" : ""}`}
               onClick={() => setMobilePane("preview")}
             >
@@ -155,13 +163,19 @@ export function ReportView({
       </div>
 
       <div className="sp-report-panes">
-        <section className={`sp-report-pane sp-report-editor-pane${isNarrow && mobilePane !== "editor" ? " is-hidden" : ""}`}>
+        <section
+          id="report-editor-pane"
+          role={isNarrow ? "tabpanel" : undefined}
+          aria-labelledby={isNarrow ? "report-editor-tab" : undefined}
+          className={`sp-report-pane sp-report-editor-pane${isNarrow && mobilePane !== "editor" ? " is-hidden" : ""}`}
+        >
           <div className="sp-panel-header">
             <span className="sp-panel-header-title">{t("report.editor", { defaultValue: "Editor" })}</span>
             <div className="sp-report-toolbar" ref={menuRef}>
               <button
                 type="button"
                 className="sp-report-insert-btn"
+                title={t("report.insertTooltip", { defaultValue: "Insert project document" })}
                 aria-haspopup="menu"
                 aria-expanded={isInsertMenuOpen}
                 onClick={() => setIsInsertMenuOpen((open) => !open)}
@@ -205,7 +219,12 @@ export function ReportView({
           />
         </section>
 
-        <section className={`sp-report-pane sp-report-preview-pane${isNarrow && mobilePane !== "preview" ? " is-hidden" : ""}`}>
+        <section
+          id="report-preview-pane"
+          role={isNarrow ? "tabpanel" : undefined}
+          aria-labelledby={isNarrow ? "report-preview-tab" : undefined}
+          className={`sp-report-pane sp-report-preview-pane${isNarrow && mobilePane !== "preview" ? " is-hidden" : ""}`}
+        >
           <div className="sp-panel-header">
             <span className="sp-panel-header-title">{t("report.preview", { defaultValue: "Preview" })}</span>
           </div>

@@ -332,10 +332,8 @@ export function Workspace() {
   }, [activeReportId, flushPendingReportHistory]);
 
   useEffect(() => () => {
-    if (reportHistoryTimerRef.current !== null) {
-      window.clearTimeout(reportHistoryTimerRef.current);
-    }
-  }, []);
+    flushPendingReportHistory();
+  }, [flushPendingReportHistory]);
 
   const fitAndTabulateNames = useMemo(
     () => [...fitYByXItems.map((item) => item.name), ...tabulates.map((item) => item.name)],
@@ -1116,6 +1114,7 @@ export function Workspace() {
   };
 
   const handleCloseProject = async () => {
+    flushPendingReportHistory();
     setActiveDataset(null);
     setActiveGraphBuilderId(null);
     setActiveFitYByXId(null);
@@ -1139,6 +1138,7 @@ export function Workspace() {
       multiple: false,
     });
     if (selected) {
+      flushPendingReportHistory();
       setActiveDataset(null);
       setActiveGraphBuilderId(null);
       setActiveFitYByXId(null);

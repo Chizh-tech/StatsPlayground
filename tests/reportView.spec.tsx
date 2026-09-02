@@ -33,18 +33,27 @@ test("inserts canonical embeds from grouped menu choices", async ({ mount }) => 
 
   await expect(editor).toHaveValue(`Summary\n{{sp-embed kind="graph" id="graph-1"}}`);
   await expect(component.locator(".sp-report-embed-placeholder")).toContainText("Scatter Plot");
+  await expect(editor).toBeFocused();
+  expect(await editor.evaluate((node: HTMLTextAreaElement) => node.selectionStart)).toBe(
+    `Summary\n{{sp-embed kind="graph" id="graph-1"}}`.length,
+  );
+  await expect(component.getByTitle("Insert project document")).toBeVisible();
 });
 
 test("uses a segmented editor or preview mode on narrow viewports", async ({ mount, page }) => {
   await page.setViewportSize({ width: 720, height: 820 });
   const component = await mount(<ReportViewHarness initialMarkdown={"# Compact"} />);
 
-  await expect(component.getByRole("button", { name: "Editor" })).toBeVisible();
-  await expect(component.getByRole("button", { name: "Preview" })).toBeVisible();
+  const editorTab = component.getByRole("tab", { name: "Editor" });
+  const previewTab = component.getByRole("tab", { name: "Preview" });
+  await expect(editorTab).toHaveAttribute("aria-selected", "true");
+  await expect(previewTab).toHaveAttribute("aria-selected", "false");
   await expect(component.getByRole("textbox", { name: "Markdown editor" })).toBeVisible();
 
-  await component.getByRole("button", { name: "Preview" }).click();
+  await previewTab.click();
 
+  await expect(editorTab).toHaveAttribute("aria-selected", "false");
+  await expect(previewTab).toHaveAttribute("aria-selected", "true");
   await expect(component.locator(".sp-report-preview h1")).toHaveText("Compact");
   await expect(component.getByRole("textbox", { name: "Markdown editor" })).toBeHidden();
 });
