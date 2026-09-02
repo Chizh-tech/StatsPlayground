@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
+import type { ReportItem } from "@/types/report";
 
 /** Optional folder payload accepted by the save_project command.
  *  Folder maps are manifest metadata now; they are not used to route archive
@@ -17,6 +18,10 @@ export interface SaveProjectFolders {
   fitYByXFolders: Record<string, string>;
   /** tabulateId → folder path. Root tabulates are simply absent. */
   tabulateFolders: Record<string, string>;
+  /** reportId → folder path. Root reports are simply absent. */
+  reportFolders: Record<string, string>;
+  /** Reports persisted with the project. */
+  reports: ReportItem[];
 }
 
 export interface SaveProjectRequest {
@@ -31,6 +36,8 @@ export interface SaveProjectRequest {
   graphFolders: Record<string, string>;
   fitYByXFolders: Record<string, string>;
   tabulateFolders: Record<string, string>;
+  reportFolders: Record<string, string>;
+  reports: ReportItem[];
 }
 
 export type SavePhase = "preparing" | "table" | "metadata" | "compressing" | "finalizing";

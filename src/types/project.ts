@@ -5,6 +5,8 @@ export interface ProjectInfo {
   createdAt: string;
 }
 
+import type { ReportItem } from "./report";
+
 export interface DatasetNameMigration {
   datasetId: string;
   oldName: string;
@@ -38,6 +40,10 @@ export interface OpenProjectResult {
   requiresMigration: boolean;
   /** tabulateId → folder path。 */
   tabulateFolders: Record<string, string>;
+  /** reportId → folder path。 */
+  reportFolders: Record<string, string>;
+  /** 项目中的报告。 */
+  reports: ReportItem[];
 }
 
 /** 导入 .sptb 的返回值。
