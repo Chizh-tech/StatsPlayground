@@ -711,6 +711,7 @@
       "bar": "Bar",
       "correlationMatrix": "Correlation Matrix",
       "histogram": "Histogram",
+      "normalCurve": "Normal Curve",
       "boxplot": "Box plot",
       "smoother": "Smoother",
       "fitline": "Fit Line",

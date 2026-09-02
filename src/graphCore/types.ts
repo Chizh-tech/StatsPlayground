@@ -31,6 +31,7 @@ export type ElementKind =
   | "heatmap"      // 热力图
   | "correlationMatrix" // 相关矩阵热力图
   | "histogram"    // 直方图
+  | "normalCurve"  // 正态分布拟合曲线
   | "boxplot"      // 箱线
   | "smoother"     // 平滑曲线
   | "fitline"      // 拟合线（多项式 / 稳健 Cauchy + 置信区间 + 统计量）

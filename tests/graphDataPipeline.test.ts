@@ -1065,6 +1065,45 @@ function makeLegacyGraphBuilderItem(overrides: Record<string, unknown> = {}): Gr
   return makeGraphBuilderItem(raw);
 }
 
+{
+  const normalCurveItem = makeCanonicalGraphBuilderItem({
+    mode: "2d",
+    modeStates: {
+      ...defaultModeStates(),
+      twoD: {
+        ...defaultModeStates().twoD,
+        encoding: { y: continuous("measurement") },
+        elements: [{ kind: "normalCurve", enabled: true }],
+      },
+    },
+    sampling: { mode: "full" },
+  });
+  const parts = deriveGraphRequestParts(normalCurveItem);
+
+  assert.deepEqual(parts.fields, [{ role: "y", column: "measurement" }]);
+  assert.deepEqual(parts.elements, [{ kind: "normalCurve", summaryStat: "none" }]);
+  assert.deepEqual(parts.sampling, { mode: "full" });
+  assert.equal(canExecuteGraphRequest(normalCurveItem, parts.fields, parts.elements), true);
+}
+
+{
+  const xOnlyNormalCurve = makeCanonicalGraphBuilderItem({
+    mode: "2d",
+    modeStates: {
+      ...defaultModeStates(),
+      twoD: {
+        ...defaultModeStates().twoD,
+        encoding: { x: continuous("measurement") },
+        elements: [{ kind: "normalCurve", enabled: true }],
+      },
+    },
+  });
+  const parts = deriveGraphRequestParts(xOnlyNormalCurve);
+
+  assert.deepEqual(parts.fields, [{ role: "y", column: "measurement" }]);
+  assert.equal(canExecuteGraphRequest(xOnlyNormalCurve, parts.fields, parts.elements), true);
+}
+
 function makeEquivalentEmbeddedGraphItem(item: GraphBuilderItem): GraphBuilderItem {
   return createEmbeddedGraphItem({
     id: `${item.id}-embedded`,
