@@ -189,7 +189,22 @@
     "zoomTooltip": "Table zoom"
   },
   "report": {
-    "placeholder": "Report editing arrives in Task 6. This surface is intentionally minimal for now."
+    "placeholder": "Report editing arrives in Task 6. This surface is intentionally minimal for now.",
+    "titleHint": "Markdown editor with live preview",
+    "modeLabel": "Report view mode",
+    "editor": "Editor",
+    "preview": "Preview",
+    "insert": "Insert",
+    "markdownEditorLabel": "Markdown editor",
+    "editorPlaceholder": "Write Markdown here...",
+    "previewEmpty": "Preview updates as you type.",
+    "embedPlaceholder": "{{kind}}: {{name}}",
+    "group": {
+      "table": "Tables",
+      "graph": "Graphs",
+      "fitYByX": "Fit Y by X",
+      "tabulate": "Tabulate"
+    }
   },
   "fitYByX": {
     "title": "Fit Y by X",

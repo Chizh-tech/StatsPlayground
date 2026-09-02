@@ -277,11 +277,65 @@ export function Workspace() {
   const [tableKey, setTableKey] = useState(0);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const tableCounter = useRef(0);
+  const reportHistoryTimerRef = useRef<number | null>(null);
+  const pendingReportHistoryRef = useRef<{ id: string; name: string } | null>(null);
 
   /** Record an action to history (synchronous — no IPC) */
   const recordAction = useCallback((desc: string) => {
     recordHistory(desc);
   }, [recordHistory]);
+
+  const flushPendingReportHistory = useCallback(() => {
+    const pending = pendingReportHistoryRef.current;
+    if (!pending) {
+      return;
+    }
+    pendingReportHistoryRef.current = null;
+    if (reportHistoryTimerRef.current !== null) {
+      window.clearTimeout(reportHistoryTimerRef.current);
+      reportHistoryTimerRef.current = null;
+    }
+    recordAction(t("history.editReport", {
+      defaultValue: 'Edit report "{{name}}"',
+      name: pending.name,
+    }));
+  }, [recordAction, t]);
+
+  const scheduleReportHistory = useCallback((id: string, name: string) => {
+    pendingReportHistoryRef.current = { id, name };
+    if (reportHistoryTimerRef.current !== null) {
+      window.clearTimeout(reportHistoryTimerRef.current);
+    }
+    reportHistoryTimerRef.current = window.setTimeout(() => {
+      flushPendingReportHistory();
+    }, 700);
+  }, [flushPendingReportHistory]);
+
+  const handleReportMarkdownChange = useCallback((id: string, markdown: string) => {
+    if (readOnly) {
+      return;
+    }
+    const current = useReportStore.getState().items.find((item) => item.id === id);
+    if (!current || current.markdown === markdown) {
+      return;
+    }
+    useReportStore.getState().updateMarkdown(id, markdown, new Date().toISOString());
+    markDirty();
+    scheduleReportHistory(id, current.name);
+  }, [markDirty, readOnly, scheduleReportHistory]);
+
+  useEffect(() => {
+    const pending = pendingReportHistoryRef.current;
+    if (pending && activeReportId !== pending.id) {
+      flushPendingReportHistory();
+    }
+  }, [activeReportId, flushPendingReportHistory]);
+
+  useEffect(() => () => {
+    if (reportHistoryTimerRef.current !== null) {
+      window.clearTimeout(reportHistoryTimerRef.current);
+    }
+  }, []);
 
   const fitAndTabulateNames = useMemo(
     () => [...fitYByXItems.map((item) => item.name), ...tabulates.map((item) => item.name)],
@@ -988,6 +1042,7 @@ export function Workspace() {
 
   const handleSave = async () => {
     if (saving) return;
+    flushPendingReportHistory();
     const { snapshots } = useHistoryStore.getState();
     const gbItems = useGraphBuilderStore.getState().items;
     // History is session-only (not persisted); only snapshots are saved.
@@ -2128,7 +2183,17 @@ export function Workspace() {
               if (!item) {
                 return <div className="main-content"><div className="workspace-empty"><p>{t("workspace.reportMissing")}</p></div></div>;
               }
-              return <ReportView item={item} />;
+              return (
+                <ReportView
+                  item={item}
+                  tableOptions={datasets.map((dataset) => ({ id: dataset.id, name: dataset.name }))}
+                  graphOptions={graphBuilders.map((graph) => ({ id: graph.id, name: graph.name }))}
+                  fitYByXOptions={fitYByXItems.map((analysis) => ({ id: analysis.id, name: analysis.name }))}
+                  tabulateOptions={tabulates.map((analysis) => ({ id: analysis.id, name: analysis.name }))}
+                  onMarkdownChange={(markdown) => handleReportMarkdownChange(item.id, markdown)}
+                  readOnly={readOnly}
+                />
+              );
             })()
           ) : activeDatasetId ? (
             <DataTableView key={tableKey} datasetId={activeDatasetId} onTableOp={setTableOp} />

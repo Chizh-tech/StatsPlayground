@@ -188,7 +188,22 @@
     "zoomTooltip": "Thu phóng bảng"
   },
   "report": {
-    "placeholder": "Chỉnh sửa báo cáo sẽ được làm ở Task 6; bề mặt này hiện chỉ là phần giữ chỗ tối thiểu."
+    "placeholder": "Chỉnh sửa báo cáo sẽ được làm ở Task 6; bề mặt này hiện chỉ là phần giữ chỗ tối thiểu.",
+    "titleHint": "Trình soạn thảo Markdown với xem trước trực tiếp",
+    "modeLabel": "Chế độ xem báo cáo",
+    "editor": "Soạn thảo",
+    "preview": "Xem trước",
+    "insert": "Chèn",
+    "markdownEditorLabel": "Trình soạn thảo Markdown",
+    "editorPlaceholder": "Viết Markdown ở đây...",
+    "previewEmpty": "Bản xem trước cập nhật khi bạn gõ.",
+    "embedPlaceholder": "{{kind}}: {{name}}",
+    "group": {
+      "table": "Bảng",
+      "graph": "Biểu đồ",
+      "fitYByX": "Khớp Y theo X",
+      "tabulate": "Tabulate"
+    }
   },
   "fitYByX": {
     "title": "Khớp Y theo X",

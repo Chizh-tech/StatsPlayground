@@ -189,7 +189,22 @@
     "zoomTooltip": "表格缩放"
   },
   "report": {
-    "placeholder": "报告编辑会在 Task 6 完成；当前界面按要求仅保留最小文档占位。"
+    "placeholder": "报告编辑会在 Task 6 完成；当前界面按要求仅保留最小文档占位。",
+    "titleHint": "Markdown 编辑器与实时预览",
+    "modeLabel": "报告视图模式",
+    "editor": "编辑",
+    "preview": "预览",
+    "insert": "插入",
+    "markdownEditorLabel": "Markdown 编辑器",
+    "editorPlaceholder": "在此编写 Markdown...",
+    "previewEmpty": "输入时会实时更新预览。",
+    "embedPlaceholder": "{{kind}}: {{name}}",
+    "group": {
+      "table": "数据表",
+      "graph": "图形",
+      "fitYByX": "拟合 Y by X",
+      "tabulate": "Tabulate"
+    }
   },
   "fitYByX": {
     "title": "拟合 Y by X",

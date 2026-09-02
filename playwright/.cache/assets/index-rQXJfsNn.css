@@ -1,0 +1,3223 @@
+:root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0;
+
+  /* ---- Theme variables (light) ---- */
+  --bg-app: #f8f9fa;
+  --bg-main: #fafafa;
+  --bg-card: #fff;
+  --bg-panel: #ffffff;
+  --bg-header: #f0f0f0;
+  --bg-header-hover: #e4e8f0;
+  --bg-header-active: #dce4f8;
+  --bg-header-selected: #c5d0f0;
+  --bg-menubar: #ffffff;
+  --bg-menu: #fff;
+  --bg-menu-hover: #e8edff;
+  --bg-cell: transparent;
+  --bg-cell-hover: #f0f4ff;
+  --bg-cell-active: #fff;
+  --bg-cell-selected: #d4e2ff;
+  --bg-cell-input: #fff;
+  --bg-row-selected: #e8edff;
+  --bg-stripe: #f0f0f0;
+  --bg-btn-secondary: #fff;
+  --bg-btn-secondary-hover: #f5f5f5;
+  --bg-dialog: #fff;
+  --bg-dialog-overlay: rgba(0, 0, 0, 0.25);
+  --bg-toast: #d32f2f;
+  --bg-ctx-menu: #fff;
+  --bg-ctx-hover: #eef2ff;
+  --bg-ctx-danger-hover: #fdeaea;
+  --bg-input: transparent;
+  --bg-welcome: linear-gradient(135deg, #f5f7fa 0%, #e4e8f0 100%);
+  --bg-add-col-bar: #e8edff;
+  --bg-status-bar: #f8f9fa;
+
+  --fg-primary: #1a1a2e;
+  --fg-secondary: #333;
+  --fg-muted: #555;
+  --fg-hint: #888;
+  --fg-dim: #999;
+  --fg-placeholder: #aaa;
+  --fg-disabled: #ccc;
+  --fg-null: #ccc;
+  --fg-accent: #4a6cf7;
+  --fg-accent-hover: #3b5de7;
+  --fg-danger: #e74c3c;
+  --fg-status: #888;
+  --fg-menu: #444;
+  --fg-shortcut: #999;
+  --fg-ctx-shortcut: #aaa;
+  --fg-ds-icon: #333;
+
+  --border-main: #e0e0e0;
+  --border-cell: #e2e2e2;
+  --border-header: #c0c0c0;
+  --border-header-h: #d0d0d0;
+  --border-header-bottom: #b0b0b0;
+  --border-input: #ddd;
+  --border-input-focus: #4a6cf7;
+  --border-dialog: #d0d0d0;
+  --border-ctx: #d0d0d0;
+  --border-menu: #d8d8d8;
+  --border-sep: #e8e8e8;
+  --border-add-col-bar: #c5cce8;
+
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.08);
+  --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-dialog: 0 8px 32px rgba(0, 0, 0, 0.16);
+  --shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.2);
+
+  --scrollbar-track: #f0f0f0;
+  --scrollbar-thumb: #c1c1c1;
+  --scrollbar-thumb-hover: #a8a8a8;
+
+  --bg-activity-bar: #ececec;
+  --fg-activity: #6c6c6c;
+  --fg-activity-active: #1f1f1f;
+  --bg-activity-indicator: #4a6cf7;
+
+  color: var(--fg-primary);
+  background-color: var(--bg-app);
+}
+
+[data-theme="dark"] {
+  --bg-app: #1e1e1e;
+  --bg-main: #1e1e1e;
+  --bg-card: #252526;
+  --bg-panel: #252526;
+  --bg-header: #2d2d2d;
+  --bg-header-hover: #353535;
+  --bg-header-active: #3c3c3c;
+  --bg-header-selected: #094771;
+  --bg-menubar: #3c3c3c;
+  --bg-menu: #2d2d30;
+  --bg-menu-hover: #094771;
+  --bg-cell: transparent;
+  --bg-cell-hover: #2a2d2e;
+  --bg-cell-active: #1e1e1e;
+  --bg-cell-selected: #264f78;
+  --bg-cell-input: #1e1e1e;
+  --bg-row-selected: #2a2d2e;
+  --bg-stripe: #2d2d2d;
+  --bg-btn-secondary: #3c3c3c;
+  --bg-btn-secondary-hover: #454545;
+  --bg-dialog: #252526;
+  --bg-dialog-overlay: rgba(0, 0, 0, 0.5);
+  --bg-toast: #c62828;
+  --bg-ctx-menu: #2d2d30;
+  --bg-ctx-hover: #094771;
+  --bg-ctx-danger-hover: #5a1d1d;
+  --bg-input: #3c3c3c;
+  --bg-welcome: linear-gradient(135deg, #1e1e1e 0%, #252526 100%);
+  --bg-add-col-bar: #2d2d2d;
+  --bg-status-bar: #1e1e1e;
+
+  --fg-primary: #d4d4d4;
+  --fg-secondary: #cccccc;
+  --fg-muted: #aaaaaa;
+  --fg-hint: #858585;
+  --fg-dim: #6e6e6e;
+  --fg-placeholder: #5a5a5a;
+  --fg-disabled: #4e4e4e;
+  --fg-null: #5a5a5a;
+  --fg-accent: #569cd6;
+  --fg-accent-hover: #4a8cc2;
+  --fg-danger: #f44747;
+  --fg-status: #858585;
+  --fg-menu: #cccccc;
+  --fg-shortcut: #858585;
+  --fg-ctx-shortcut: #6e6e6e;
+  --fg-ds-icon: #cccccc;
+
+  --border-main: #3c3c3c;
+  --border-cell: #3c3c3c;
+  --border-header: #3c3c3c;
+  --border-header-h: #3c3c3c;
+  --border-header-bottom: #4e4e4e;
+  --border-input: #4e4e4e;
+  --border-input-focus: #569cd6;
+  --border-dialog: #4e4e4e;
+  --border-ctx: #454545;
+  --border-menu: #454545;
+  --border-sep: #3c3c3c;
+  --border-add-col-bar: #3c3c3c;
+
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-dialog: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+  --scrollbar-track: #2d2d2d;
+  --scrollbar-thumb: #555555;
+  --scrollbar-thumb-hover: #6e6e6e;
+
+  --bg-activity-bar: #333333;
+  --fg-activity: #858585;
+  --fg-activity-active: #ffffff;
+  --bg-activity-indicator: #569cd6;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 5px;
+  border: 2px solid var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
+}
+
+body {
+  margin: 0;
+  display: flex;
+  min-height: 100vh;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 100vh;
+}
+/* ========= Global ========= */
+* {
+  box-sizing: border-box;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ========= Welcome Page ========= */
+.welcome-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: var(--bg-welcome);
+}
+
+.welcome-card {
+  text-align: center;
+  padding: 48px 56px;
+  background: var(--bg-card);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  min-width: 380px;
+}
+
+.welcome-card h1 {
+  font-size: 32px;
+  font-weight: 300;
+  color: var(--fg-primary);
+  margin: 0 0 8px;
+}
+
+.welcome-card .subtitle {
+  font-size: 14px;
+  color: var(--fg-hint);
+  margin: 0 0 4px;
+}
+
+.welcome-card .version-tag {
+  font-size: 11px;
+  color: var(--fg-placeholder);
+  margin-bottom: 28px;
+}
+
+.welcome-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.create-form input {
+  padding: 10px 12px;
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  font-size: 14px;
+  outline: none;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+}
+
+.create-form input:focus {
+  border-color: var(--border-input-focus);
+}
+
+.create-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+/* ========= Buttons ========= */
+.btn-primary {
+  padding: 10px 20px;
+  background: var(--fg-accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover {
+  background: var(--fg-accent-hover);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  padding: 10px 20px;
+  background: var(--bg-btn-secondary);
+  color: var(--fg-muted);
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-secondary:hover {
+  background: var(--bg-btn-secondary-hover);
+}
+
+.btn-text {
+  background: none;
+  border: none;
+  color: var(--fg-accent);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 8px;
+}
+
+.btn-text:hover {
+  text-decoration: underline;
+}
+
+.btn-sm {
+  background: none;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--fg-muted);
+}
+
+.btn-sm:hover {
+  background: var(--bg-header);
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--fg-dim);
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+.btn-icon:hover {
+  color: var(--fg-danger);
+}
+
+.btn-icon-sm {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--fg-disabled);
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.btn-icon-sm:hover {
+  color: var(--fg-danger);
+}
+
+/* ========= Menu Bar ========= */
+.menu-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--bg-menubar);
+  border-bottom: 1px solid var(--border-main);
+  font-size: 13px;
+  user-select: none;
+}
+
+.menu-bar-title {
+  font-weight: 600;
+  color: var(--fg-primary);
+  margin-right: 10px;
+}
+
+.menu-bar-menus {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.menu-bar .menu-spacer {
+  flex: 1;
+}
+
+/* Save button in menu bar */
+.menu-bar-save {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: var(--fg-disabled);
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+
+.menu-bar-save:hover {
+  background: var(--bg-header);
+}
+
+.menu-bar-save-dirty {
+  color: var(--fg-primary);
+}
+
+.menu-bar-save > i {
+  width: 20px;
+  font-size: 20px;
+  text-align: center;
+}
+
+/* Save toast */
+.save-toast {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  padding: 6px 20px;
+  background: var(--bg-card);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-main);
+  border-radius: 6px;
+  box-shadow: var(--shadow-menu);
+  font-size: 13px;
+  animation: save-toast-in 0.2s ease-out;
+}
+
+@keyframes save-toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* Dropdown */
+.menu-dropdown {
+  position: relative;
+}
+
+.menu-dropdown-trigger {
+  background: none;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--fg-menu);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.menu-dropdown-trigger:hover {
+  background: var(--bg-header);
+}
+
+.menu-dropdown-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  min-width: 160px;
+  background: var(--bg-menu);
+  border: 1px solid var(--border-menu);
+  border-radius: 6px;
+  box-shadow: var(--shadow-menu);
+  padding: 4px 0;
+}
+
+.menu-item {
+  padding: 6px 16px;
+  font-size: 13px;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+}
+
+.menu-shortcut {
+  font-size: 12px;
+  color: var(--fg-shortcut);
+  margin-left: auto;
+}
+
+.menu-item:hover {
+  background: var(--bg-menu-hover);
+}
+
+.menu-item-disabled {
+  color: var(--fg-disabled);
+  cursor: default;
+}
+
+.menu-item-disabled:hover {
+  background: transparent;
+}
+
+.menu-sep {
+  height: 1px;
+  background: var(--border-sep);
+  margin: 4px 0;
+}
+
+/* ========= Workspace ========= */
+.workspace {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ========= Side Panel ========= */
+.side-panel {
+  width: 240px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border-main);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 6px;
+}
+
+.panel-header h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--fg-hint);
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.panel-action-btn {
+  background: transparent;
+  border: none;
+  padding: 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--fg-hint);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, color 0.1s;
+}
+
+.panel-action-btn:hover {
+  background: var(--bg-cell-hover);
+  color: var(--fg-primary);
+}
+
+.panel-action-btn > i {
+  width: 14px;
+  font-size: 14px;
+  text-align: center;
+}
+
+.dataset-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 8px;
+}
+
+/* Folder tree ----------------------------------------------------------- */
+
+.sp-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg-secondary);
+  transition: background 0.1s;
+  user-select: none;
+}
+
+.sp-folder-row:hover {
+  background: var(--bg-cell-hover);
+}
+
+.sp-folder-chevron {
+  flex-shrink: 0;
+  color: var(--fg-hint);
+  transition: transform 0.12s;
+}
+
+.sp-folder-chevron-open {
+  transform: rotate(90deg);
+}
+
+.sp-folder-children {
+  /* Children are indented per-row via inline padding-left so we don't need
+     a wrapper border or margin here. */
+}
+
+/* Drag-over highlight: subtle outline around the target folder row. */
+.sp-folder-droptarget > .sp-folder-row,
+.sp-droptarget-root {
+  outline: 2px solid var(--border-input-focus);
+  outline-offset: -2px;
+  background: var(--bg-cell-hover);
+}
+
+.dataset-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg-secondary);
+  transition: background 0.1s;
+}
+
+.dataset-item:hover {
+  background: var(--bg-cell-hover);
+}
+
+.dataset-item.active {
+  background: var(--bg-menu-hover);
+  color: var(--fg-accent);
+}
+
+.ds-icon {
+  flex-shrink: 0;
+  width: 14px;
+  color: var(--fg-ds-icon);
+  font-size: 14px;
+  text-align: center;
+}
+
+.ds-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  font-size: 12px;
+  border: 1px solid var(--border-input-focus);
+  border-radius: 3px;
+  outline: none;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+}
+
+.ds-rename-shell {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ds-fixed-ext {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--fg-placeholder);
+  user-select: none;
+}
+
+.ds-info {
+  font-size: 10px;
+  color: var(--fg-placeholder);
+  flex-shrink: 0;
+}
+
+.gb-source-tag {
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+
+.ds-delete {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.dataset-item:hover .ds-delete {
+  opacity: 1;
+}
+
+.empty-hint {
+  font-size: 12px;
+  color: var(--fg-placeholder);
+  font-style: italic;
+  padding: 12px 8px;
+}
+
+/* ========= Main Area ========= */
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-main);
+  overflow: hidden;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workspace-empty {
+  text-align: center;
+  color: var(--fg-placeholder);
+  font-size: 14px;
+}
+
+/* ========= Main View Tabs (Table / Graph Builder) ========= */
+.main-view-tabs {
+  display: flex;
+  height: 30px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-main);
+  padding: 0 6px;
+  gap: 2px;
+  align-items: end;
+  flex-shrink: 0;
+}
+
+.main-view-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+  padding: 4px 14px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  height: 26px;
+}
+
+.main-view-tab:hover {
+  background: var(--bg-header);
+  color: var(--fg-primary);
+}
+
+.main-view-tab-active {
+  background: var(--bg-main);
+  border-color: var(--border-main);
+  color: var(--fg-primary);
+  position: relative;
+  top: 1px;
+}
+
+.main-view-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sp-fit-y-by-x-view {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-main);
+}
+
+.sp-fit-y-by-x-summary,
+.sp-fit-y-by-x-runtime-panel,
+.sp-fit-y-by-x-report-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-panel);
+}
+
+.sp-fit-y-by-x-summary {
+  border-right: 1px solid var(--border-main);
+}
+
+.sp-fit-y-by-x-summary-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px;
+}
+
+.sp-fit-y-by-x-summary-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sp-fit-y-by-x-summary-label,
+.sp-fit-y-by-x-report-summary-label {
+  color: var(--fg-hint);
+  font-size: 12px;
+}
+
+.sp-fit-y-by-x-summary-value,
+.sp-fit-y-by-x-report-summary-value {
+  color: var(--fg-primary);
+  font-weight: 600;
+  margin: 0;
+  word-break: break-word;
+}
+
+.sp-fit-y-by-x-analysis-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+}
+
+.sp-fit-y-by-x-runtime-panel,
+.sp-fit-y-by-x-report-panel {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-main);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.sp-fit-y-by-x-graph-shell {
+  height: clamp(320px, 52vh, 620px);
+  min-height: clamp(320px, 52vh, 620px);
+  max-height: clamp(320px, 52vh, 620px);
+}
+
+.sp-fit-y-by-x-graph-shell > * {
+  width: 100%;
+  height: 100%;
+}
+
+.sp-fit-y-by-x-report-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.sp-fit-y-by-x-report-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.sp-fit-y-by-x-report-summary-item {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sp-fit-y-by-x-report-sections {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.sp-fit-y-by-x-report-section {
+  max-width: 100%;
+  border: 1px solid var(--border-main);
+  border-radius: 6px;
+  background: var(--bg-main);
+  overflow: hidden;
+}
+
+.sp-fit-y-by-x-report-section-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-main);
+}
+
+.sp-fit-y-by-x-report-section-summary::-webkit-details-marker {
+  display: none;
+}
+
+.sp-fit-y-by-x-report-table-wrap {
+  overflow-x: auto;
+}
+
+.sp-fit-y-by-x-report-table {
+  width: max-content;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.sp-fit-y-by-x-report-column-label {
+  width: 220px;
+}
+
+.sp-fit-y-by-x-report-column-value {
+  width: 150px;
+}
+
+.sp-fit-y-by-x-report-column-value-wide {
+  width: 360px;
+}
+
+.sp-fit-y-by-x-report-table th,
+.sp-fit-y-by-x-report-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-main);
+  border-right: 1px solid var(--border-main);
+  text-align: left;
+  vertical-align: top;
+}
+
+.sp-fit-y-by-x-report-table th {
+  color: var(--fg-secondary);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--bg-header) 55%, transparent);
+  border-right-color: var(--border-header-h);
+  white-space: nowrap;
+}
+
+.sp-fit-y-by-x-report-table th:last-child,
+.sp-fit-y-by-x-report-table td:last-child {
+  border-right: none;
+}
+
+.sp-fit-y-by-x-report-cell-numeric {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.sp-fit-y-by-x-report-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+@media (max-width: 900px) {
+  .sp-fit-y-by-x-view {
+    grid-template-columns: 1fr;
+  }
+
+  .sp-fit-y-by-x-summary {
+    border-right: none;
+    border-bottom: 1px solid var(--border-main);
+  }
+}
+
+@media (max-width: 720px) {
+  .sp-fit-y-by-x-report-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .sp-fit-y-by-x-analysis-root {
+    padding: 10px;
+  }
+}
+
+/* ========= Spreadsheet (Excel-like) ========= */
+.sp-spreadsheet {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  outline: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.sp-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--fg-dim);
+  font-size: 14px;
+}
+
+/* Toolbar */
+
+/* Table operations toolbar — sits at the top of every spreadsheet view
+   and hosts the buttons that used to live under the menu-bar
+   `Operations` menu (Summary / Subset / Sort / Stack / Split / Transpose
+   / Join / Update / Concatenate). Looks intentionally identical to the
+   Graph Builder's `.gb-toolbar` so switching between table and graph
+   panes feels visually consistent. Wraps when the table is narrow so
+   buttons stay clickable instead of clipping. */
+.sp-table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-main);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+.sp-tb-btn {
+  background: var(--bg-btn-secondary);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sp-tb-btn:hover {
+  background: var(--bg-btn-secondary-hover);
+  color: var(--fg-primary);
+}
+
+/* Thin vertical divider between logical groups of buttons, e.g.
+   single-table ops vs multi-table ops. Mirrors the `menu-sep`
+   horizontal divider used inside dropdown menus. */
+.sp-tb-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border-main);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+/* Toggled-on state for a toolbar button (e.g. Filter when the sidebar
+   is open). Mirrors `.gb-tb-btn-active` from the Graph Builder so the
+   two surfaces feel consistent. */
+.sp-tb-btn-active {
+  background: var(--bg-btn-secondary-hover);
+  color: var(--fg-primary);
+  border-color: var(--accent, #2563eb);
+}
+
+/* Tiny count chip rendered inside a toolbar button (e.g. how many
+   active filter rules). Sits next to the button label. */
+.sp-tb-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--accent, #2563eb);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+/* Add column / rename bar */
+.sp-add-col-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-add-col-bar);
+  border-bottom: 1px solid var(--border-add-col-bar);
+}
+
+.sp-input {
+  padding: 3px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  font-size: 12px;
+  outline: none;
+  width: 140px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+}
+
+.sp-input:focus {
+  border-color: var(--border-input-focus);
+}
+
+.sp-select {
+  padding: 3px 6px;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  font-size: 12px;
+  outline: none;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+}
+
+.sp-rename-label {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* Grid wrapper */
+.sp-grid-wrapper {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+}
+
+/* ========= Spreadsheet table area: left columns panel + (formula bar + grid) ========= */
+.sp-table-area {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Wider, easier-to-grab scrollbars within the table area for frequent dragging. */
+.sp-table-area ::-webkit-scrollbar {
+  width: 16px;
+  height: 16px;
+}
+.sp-table-area ::-webkit-scrollbar-thumb {
+  border-radius: 8px;
+  border: 3px solid var(--scrollbar-track);
+  min-height: 40px;
+  min-width: 40px;
+}
+
+.sp-table-right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ========= Formula bar (Excel-like) ========= */
+.sp-formula-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-main);
+  font-size: 12px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+}
+
+.sp-formula-ref-input {
+  min-width: 90px;
+  width: 110px;
+  height: 22px;
+  padding: 0 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  outline: none;
+  color: var(--fg-primary);
+  font-weight: 600;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: center;
+}
+
+.sp-formula-ref-input:focus {
+  border-color: var(--border-input-focus);
+}
+
+.sp-formula-input {
+  flex: 1;
+  height: 22px;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  outline: none;
+  padding: 0 8px;
+  font-size: 13px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font-family: inherit;
+}
+
+.sp-formula-input:focus {
+  border-color: var(--border-input-focus);
+}
+
+.sp-formula-input:disabled {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-placeholder);
+}
+
+.sp-cols-panel {
+  width: 200px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Vertical splitter between cols panel and table area. */
+.sp-cols-panel-splitter {
+  flex: 0 0 auto;
+  width: 4px;
+  cursor: col-resize;
+  background: var(--border-main);
+  transition: background 0.1s;
+}
+
+.sp-cols-panel-splitter:hover,
+.sp-cols-panel-splitter:active {
+  background: var(--fg-accent);
+}
+
+.sp-cols-panel-collapsed {
+  width: 18px;
+  min-width: 18px;
+  align-items: center;
+  padding-top: 4px;
+  border-right: 1px solid var(--border-main);
+}
+
+/* ===== Unified panel section header =====
+   Use this for every side-panel section title (Table column list, LAYERS,
+   LEGEND, STYLE, …) so the workspace has a consistent visual language. */
+.sp-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-main);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.sp-panel-header-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Legacy sp-cols-panel-header retained as an alias of sp-panel-header so
+   existing markup keeps working without per-callsite churn. */
+.sp-cols-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-main);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.sp-cols-panel-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.sp-cols-panel-toggle {
+  background: transparent;
+  border: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.sp-cols-panel-toggle:hover {
+  background: var(--bg-header-hover);
+  color: var(--fg-primary);
+}
+
+.sp-cols-panel-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 0;
+}
+
+.sp-cols-panel-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sp-cols-panel-item:hover {
+  background: var(--bg-header-hover);
+}
+
+.sp-cols-panel-item-selected,
+.sp-cols-panel-item-selected:hover {
+  background: var(--bg-cell-selected);
+  color: var(--fg-primary);
+}
+
+.sp-cols-panel-item-type {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: var(--bg-header);
+  color: var(--fg-secondary);
+  border: 1px solid var(--border-main);
+  min-width: 28px;
+  text-align: center;
+}
+
+.sp-cols-panel-item-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Small "extras" badge on cols panel items (📎N) */
+.sp-cols-panel-item-extras {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--fg-accent);
+  color: #fff;
+  white-space: nowrap;
+}
+
+/* Drag handle (☰) for reordering columns from the COLUMNS side panel. */
+.sp-cols-panel-item-drag {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--fg-secondary);
+  cursor: grab;
+  opacity: 0;
+  user-select: none;
+}
+.sp-cols-panel-item:hover .sp-cols-panel-item-drag,
+.sp-cols-panel-item-selected .sp-cols-panel-item-drag {
+  opacity: 0.6;
+}
+.sp-cols-panel-item-drag:hover {
+  opacity: 1;
+}
+.sp-cols-panel-item-drag:active {
+  cursor: grabbing;
+}
+.sp-cols-panel-item-dragging {
+  opacity: 0.5;
+}
+/* Drop indicator: a line under the row the dragged column will land on. */
+.sp-cols-panel-item-dropbelow {
+  box-shadow: inset 0 -2px 0 var(--fg-accent);
+}
+
+/* Additional column properties editor (inside column dialog) */
+.sp-extras-editor {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-main);
+  padding-top: 8px;
+}
+.sp-extras-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.sp-extras-title {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  font-weight: 600;
+}
+.sp-extras-add-select {
+  font-size: 12px;
+  padding: 2px 4px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+}
+.sp-extras-empty {
+  font-size: 11px;
+  color: var(--fg-hint);
+  padding: 6px 0;
+  text-align: center;
+}
+.sp-extras-card {
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  margin-top: 6px;
+  background: var(--bg-panel);
+}
+.sp-extras-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-main);
+  border-radius: 4px 4px 0 0;
+}
+.sp-extras-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+.sp-extras-card-remove {
+  background: none;
+  border: none;
+  color: var(--fg-hint);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.sp-extras-card-remove:hover {
+  color: var(--fg-danger);
+}
+.sp-extras-card-body {
+  padding: 6px 8px;
+}
+.sp-extras-field-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.sp-extras-field-row:last-child {
+  margin-bottom: 0;
+}
+.sp-extras-field-label {
+  flex: 0 0 56px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+}
+.sp-extras-field-input {
+  flex: 1 1 auto;
+  font-size: 12px;
+}
+
+/* Value-order list editor (JMP-style "Value Order" custom list) */
+.sp-value-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 4px;
+}
+.sp-value-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.sp-value-list-toolbar-btn {
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.sp-value-list-toolbar-btn:hover:not(:disabled) {
+  background: var(--bg-cell-hover);
+}
+.sp-value-list-toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sp-value-list-items {
+  border: 1px solid var(--border-input);
+  background: var(--bg-input);
+  border-radius: 3px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.sp-value-list-empty {
+  font-size: 11px;
+  color: var(--fg-hint);
+  padding: 8px 6px;
+  text-align: center;
+}
+.sp-value-list-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  border-radius: 2px;
+}
+.sp-value-list-item:hover {
+  background: var(--bg-cell-hover);
+}
+.sp-value-list-item-idx {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--fg-hint);
+  min-width: 18px;
+  text-align: right;
+}
+.sp-value-list-item-text {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-value-list-item-btn {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+.sp-value-list-item-btn:hover:not(:disabled) {
+  background: var(--bg-cell-hover);
+  color: var(--fg-primary);
+}
+.sp-value-list-item-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.sp-value-list-item-remove:hover {
+  color: var(--fg-danger);
+}
+.sp-value-list-add {
+  display: flex;
+  gap: 4px;
+}
+.sp-value-list-add-input {
+  flex: 1 1 auto;
+  font-size: 12px;
+  padding: 2px 6px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  min-width: 0;
+}
+.sp-value-list-hint {
+  font-size: 10px;
+  color: var(--fg-hint);
+  font-style: italic;
+}
+
+/* "管理附加属性" dialog: column/kind picker (step 1) */
+.sp-extras-picker-list {
+  border: 1px solid var(--border-input);
+  background: var(--bg-input);
+  border-radius: 3px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  user-select: none;
+}
+.sp-extras-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  cursor: pointer;
+  border-radius: 2px;
+}
+.sp-extras-picker-item:hover {
+  background: var(--bg-cell-hover);
+}
+.sp-extras-picker-item-anchor {
+  /* Persistent highlight for the most recently clicked row, so users keep a
+     visual reference for where the next shift-range will start from. */
+  background: var(--bg-cell-hover);
+  box-shadow: inset 2px 0 0 var(--fg-accent);
+}
+.sp-extras-picker-item-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "管理附加属性" dialog: batch edit grid (step 2) */
+.sp-extras-batch-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sp-extras-batch-hint {
+  font-size: 11px;
+  color: var(--fg-hint);
+}
+.sp-extras-batch-scroll {
+  max-height: min(60vh, 480px);
+  overflow: auto;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  background: var(--bg-main);
+}
+.sp-extras-batch-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+.sp-extras-batch-table th,
+.sp-extras-batch-table td {
+  padding: 0;
+  border-right: 1px solid var(--border-cell);
+  border-bottom: 1px solid var(--border-cell);
+  text-align: left;
+}
+.sp-extras-batch-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-header);
+  color: var(--fg-secondary);
+  padding: 4px 6px;
+  font-weight: 600;
+  border-bottom: 2px solid var(--border-header-bottom);
+  z-index: 1;
+}
+.sp-extras-batch-th-name {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 2 !important;
+  min-width: 140px;
+}
+.sp-extras-batch-th {
+  min-width: 100px;
+  white-space: nowrap;
+}
+.sp-extras-batch-td-name {
+  position: sticky;
+  left: 0;
+  background: var(--bg-header);
+  color: var(--fg-primary);
+  padding: 4px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  z-index: 1;
+}
+.sp-extras-batch-input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg-primary);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  box-sizing: border-box;
+}
+.sp-extras-batch-input:focus {
+  background: var(--bg-cell-input);
+  box-shadow: inset 0 0 0 2px var(--fg-accent);
+}
+
+/* "管理附加属性" step 2: import/export toolbar */
+.sp-extras-batch-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sp-extras-batch-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sp-extras-batch-select {
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  min-width: 180px;
+}
+.sp-extras-batch-status {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+.sp-extras-batch-status-info {
+  background: var(--bg-info, rgba(80, 150, 255, 0.1));
+  border-color: var(--border-input);
+  color: var(--fg-primary);
+}
+.sp-extras-batch-status-warn {
+  background: rgba(220, 160, 0, 0.12);
+  border-color: rgba(220, 160, 0, 0.4);
+  color: var(--fg-primary);
+}
+.sp-extras-batch-status-error {
+  background: rgba(220, 60, 60, 0.12);
+  border-color: rgba(220, 60, 60, 0.5);
+  color: var(--fg-primary);
+}
+
+/* The spreadsheet grid */
+.sp-grid {
+  border-collapse: collapse;
+  /* Base font-size scaled by the spreadsheet zoom factor (set as inline
+     style on .sp-spreadsheet). Defaults to 1x when the variable is unset. */
+  font-size: calc(13px * var(--sp-zoom, 1));
+  table-layout: fixed;
+}
+
+/* Corner cell (top-left) */
+.sp-corner {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  width: calc(46px * var(--sp-zoom, 1));
+  min-width: calc(46px * var(--sp-zoom, 1));
+  background: var(--bg-header);
+  background-clip: padding-box;
+  /* inset box-shadow instead of border-right/bottom — same reason as .sp-cell:
+     border-collapse: collapse drops shared 1px borders during scroll. */
+  box-shadow:
+    inset -1px 0 0 var(--border-header),
+    inset 0 -2px 0 var(--border-header-bottom);
+}
+
+.sp-corner-active {
+  background-color: var(--bg-header-active) !important;
+}
+
+/* Column headers */
+.sp-col-hdr {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-header);
+  background-clip: padding-box;
+  box-shadow:
+    inset -1px 0 0 var(--border-header-h),
+    inset 0 -2px 0 var(--border-header-bottom);
+  padding: 0;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+}
+
+.sp-col-hdr:hover {
+  background-color: var(--bg-header-hover);
+}
+
+.sp-col-active {
+  background-color: var(--bg-header-active) !important;
+}
+
+.sp-col-selected {
+  background-color: var(--bg-header-selected) !important;
+}
+
+/* Column resize handle */
+.sp-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 4;
+}
+
+.sp-resize-handle:hover,
+.sp-resize-handle:active {
+  background: var(--fg-accent);
+  opacity: 0.4;
+}
+
+.sp-col-hdr-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: calc(3px * var(--sp-zoom, 1)) calc(8px * var(--sp-zoom, 1));
+  gap: 0;
+}
+
+.sp-col-letter {
+  font-size: calc(10px * var(--sp-zoom, 1));
+  color: var(--fg-hint);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.sp-col-name {
+  font-size: calc(12px * var(--sp-zoom, 1));
+  font-weight: 600;
+  color: var(--fg-secondary);
+  line-height: 1.3;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sp-col-type {
+  font-size: calc(9px * var(--sp-zoom, 1));
+  color: var(--fg-dim);
+  line-height: 1;
+}
+
+/* "+" column header */
+.sp-add-col-hdr {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-header);
+  border-bottom: 2px solid var(--border-header-bottom);
+  width: calc(32px * var(--sp-zoom, 1));
+  min-width: calc(32px * var(--sp-zoom, 1));
+  text-align: center;
+  color: var(--fg-dim);
+  font-size: calc(16px * var(--sp-zoom, 1));
+  cursor: pointer;
+  user-select: none;
+}
+
+.sp-add-col-hdr:hover {
+  background: var(--bg-header-active);
+  color: var(--fg-accent);
+}
+
+/* Row header (row number) */
+.sp-row-hdr {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: calc(46px * var(--sp-zoom, 1));
+  min-width: calc(46px * var(--sp-zoom, 1));
+  background: var(--bg-header);
+  background-clip: padding-box;
+  box-shadow:
+    inset -1px 0 0 var(--border-header),
+    inset 0 -1px 0 var(--border-header-h);
+  text-align: center;
+  font-size: calc(11px * var(--sp-zoom, 1));
+  color: var(--fg-hint);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  padding: 0;
+}
+
+.sp-row-hdr:hover {
+  background-color: var(--bg-header-hover);
+}
+
+.sp-row-active {
+  background-color: var(--bg-header-active) !important;
+  color: var(--fg-accent);
+}
+
+.sp-row-selected-hdr {
+  background-color: var(--bg-header-selected) !important;
+  color: var(--fg-secondary);
+}
+
+/* Cells */
+.sp-cell {
+  /* Use inset box-shadow for the right/bottom grid lines instead of CSS
+     borders. With `border-collapse: collapse`, cell borders are shared and
+     get rounded to sub-pixel boundaries during virtualized scroll, which
+     occasionally drops 1px segments. box-shadow is painted at the cell's
+     own pixel grid and does not participate in border-collapse arithmetic,
+     so the grid lines stay reliable. */
+  box-shadow:
+    inset -1px 0 0 var(--border-cell),
+    inset 0 -1px 0 var(--border-cell);
+  padding: 0;
+  height: calc(26px * var(--sp-zoom, 1));
+  position: relative;
+  cursor: cell;
+  overflow: hidden;
+  background: var(--bg-main);
+  background-clip: padding-box;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sp-cell .sp-val,
+.sp-cell .sp-null {
+  display: block;
+  padding: 0 calc(6px * var(--sp-zoom, 1));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: calc(26px * var(--sp-zoom, 1));
+  height: calc(26px * var(--sp-zoom, 1));
+  box-sizing: border-box;
+}
+
+.sp-placeholder-row {
+  pointer-events: none;
+}
+
+.sp-placeholder-row .sp-row-hdr {
+  color: var(--fg-dim);
+}
+
+.sp-placeholder-cell {
+  background-color: var(--bg-main);
+}
+
+.sp-null {
+  color: var(--fg-null);
+}
+
+.sp-cell-active {
+  box-shadow: inset 0 0 0 2px var(--fg-accent);
+  z-index: 1;
+  background-color: var(--bg-cell-active) !important;
+}
+
+.sp-cell-selected {
+  background-color: var(--bg-cell-selected) !important;
+}
+
+.sp-cell-selected.sp-cell-active {
+  background-color: var(--bg-cell-active) !important;
+}
+
+.sp-cell-editing {
+  padding: 0 !important;
+  box-shadow: inset 0 0 0 2px var(--fg-accent);
+  z-index: 1;
+}
+
+.sp-cell-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  padding: 0 calc(6px * var(--sp-zoom, 1));
+  font-size: calc(13px * var(--sp-zoom, 1));
+  font-family: inherit;
+  background: var(--bg-cell-input);
+  color: var(--fg-primary);
+  line-height: calc(26px * var(--sp-zoom, 1));
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+/* Selected row */
+.sp-row-selected td {
+  background-color: var(--bg-row-selected) !important;
+}
+
+.sp-row-selected .sp-row-hdr {
+  background-color: var(--fg-accent) !important;
+  color: #fff !important;
+}
+
+/* Selected column cells */
+.sp-col-selected-cell {
+  background-color: var(--bg-row-selected) !important;
+}
+
+/* "+ " cell at end of row (placeholder) */
+.sp-add-col-cell {
+  border-bottom: 1px solid var(--border-cell);
+  width: 32px;
+  min-width: 32px;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 3px,
+    var(--bg-stripe) 3px,
+    var(--bg-stripe) 4px
+  );
+}
+
+/* "Add row" bottom row */
+.sp-add-row-tr {
+}
+
+.sp-add-row-hdr {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 46px;
+  min-width: 46px;
+  background: var(--bg-header);
+  border-right: 1px solid var(--border-header);
+  text-align: center;
+  color: var(--fg-dim);
+  font-size: 16px;
+  cursor: pointer;
+  user-select: none;
+  padding: 0;
+}
+
+.sp-add-row-hdr:hover {
+  background: var(--bg-header-active);
+  color: var(--fg-accent);
+}
+
+.sp-add-row-cell {
+  border-right: 1px solid var(--border-cell);
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 3px,
+    var(--bg-stripe) 3px,
+    var(--bg-stripe) 4px
+  );
+}
+
+.sp-add-corner {
+  background: var(--bg-header);
+}
+
+/* Empty table */
+.sp-empty {
+  text-align: center;
+  color: var(--fg-placeholder);
+  font-style: italic;
+  padding: 32px 0 !important;
+}
+
+/* Footer */
+.sp-footer {
+  display: flex;
+  gap: 16px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--fg-hint);
+  background: var(--bg-app);
+  border-top: 1px solid var(--border-main);
+}
+
+/* Error Toast */
+.sp-toast-error {
+  position: fixed;
+  bottom: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  background: var(--bg-toast);
+  color: #fff;
+  border-radius: 6px;
+  box-shadow: var(--shadow-toast);
+  font-size: 13px;
+  animation: sp-toast-in 0.25s ease-out;
+  max-width: 480px;
+}
+.sp-toast-error button {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0.8;
+}
+.sp-toast-error button:hover { opacity: 1; }
+@keyframes sp-toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* Context Menu */
+.sp-ctx-menu {
+  position: fixed;
+  z-index: 200;
+  background: var(--bg-ctx-menu);
+  border: 1px solid var(--border-ctx);
+  border-radius: 6px;
+  box-shadow: var(--shadow-menu);
+  padding: 4px 0;
+  min-width: 160px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sp-ctx-item {
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--fg-secondary);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+
+.sp-ctx-shortcut {
+  font-size: 11px;
+  color: var(--fg-ctx-shortcut);
+  margin-left: auto;
+}
+
+.sp-ctx-item:hover {
+  background: var(--bg-ctx-hover);
+}
+
+.sp-ctx-danger {
+  color: var(--fg-danger);
+}
+
+.sp-ctx-danger:hover {
+  background: var(--bg-ctx-danger-hover);
+}
+
+.sp-ctx-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.sp-ctx-sep {
+  height: 1px;
+  background: var(--border-sep);
+  margin: 4px 0;
+}
+
+/* ========= Spreadsheet Dialog ========= */
+.sp-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg-dialog-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.sp-dialog {
+  background: var(--bg-dialog);
+  border-radius: 8px;
+  box-shadow: var(--shadow-dialog);
+  min-width: 300px;
+  max-width: 400px;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sp-dialog-title {
+  padding: 14px 18px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-primary);
+  flex: 0 0 auto;
+}
+
+.sp-dialog-body {
+  padding: 14px 18px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.sp-dialog-label {
+  display: block;
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+  margin-top: 10px;
+}
+
+.sp-dialog-label:first-child {
+  margin-top: 0;
+}
+
+.sp-dialog-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border-dialog);
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+}
+
+.sp-dialog-input:focus {
+  border-color: var(--border-input-focus);
+}
+
+.sp-dialog-select {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border-dialog);
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+  background: var(--bg-dialog);
+  color: var(--fg-primary);
+}
+
+.sp-dialog-select:focus {
+  border-color: var(--border-input-focus);
+}
+
+.sp-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 18px 14px;
+  flex: 0 0 auto;
+}
+
+.sp-dialog-btn {
+  padding: 6px 16px;
+  border: 1px solid var(--border-dialog);
+  border-radius: 4px;
+  background: var(--bg-btn-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--fg-menu);
+}
+
+.sp-dialog-btn:hover {
+  background: var(--bg-btn-secondary-hover);
+}
+
+.sp-dialog-btn-primary {
+  background: var(--fg-accent);
+  color: #fff;
+  border-color: var(--fg-accent);
+}
+
+.sp-dialog-btn-primary:hover {
+  background: var(--fg-accent-hover);
+}
+
+.sp-dialog-wide {
+  min-width: 640px;
+  max-width: min(90vw, 880px);
+}
+
+/*
+ * Wide dialogs that contain a DualListPicker should fill most of the viewport
+ * vertically so the lists have plenty of room. Capped to a sensible max so
+ * very tall monitors don't produce an awkward letterbox, and a min so the
+ * controls never get squeezed out.
+ */
+.sp-dialog-wide:has(.sp-dlp) {
+  width: min(92vw, 960px);
+  max-width: min(92vw, 960px);
+  height: min(85vh, 780px);
+  min-height: 460px;
+}
+
+.sp-dialog-error {
+  color: var(--fg-danger);
+  font-size: 12px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: rgba(255, 80, 80, 0.1);
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.sp-dialog-field {
+  margin-bottom: 10px;
+}
+
+.sp-col-checklist {
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.sp-col-check-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.sp-col-check-item:hover {
+  background: var(--bg-menu-hover);
+}
+
+.sp-col-check-item input[type="checkbox"] {
+  margin: 0;
+}
+
+.sp-col-type-hint {
+  margin-left: auto;
+  color: var(--fg-secondary);
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+/* DualListPicker — JMP-style two-pane chooser. Used by Stack and any other
+ * dialog that needs an "available items / chosen items" picker.
+ *
+ * Markup contract (see src/components/DualListPicker.tsx):
+ *   .sp-dlp                  — outer flex row, gap 12px
+ *     .sp-dlp-pane           — one of the two columns
+ *       .sp-dlp-pane-header  — small uppercase label + count badge
+ *       .sp-dlp-list         — scrollable list
+ *         .sp-dlp-list-item  — one row, .is-selected for highlight
+ *           .sp-dlp-list-name
+ *           .sp-dlp-hint     — right-aligned secondary text
+ *         .sp-dlp-list-empty — empty state inside the chosen pane
+ *     .sp-dlp-actions        — center column with Add/Remove buttons
+ *   .sp-dlp-info-note        — small grey hint shown below the picker
+ */
+.sp-dlp {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex: 1 1 0;
+  min-height: 240px;
+}
+.sp-dlp-pane {
+  flex: 1 1 0;
+  min-width: 220px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sp-dlp-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-secondary);
+  padding: 2px 4px 4px 4px;
+}
+.sp-dlp-pane-count {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--fg-secondary);
+  opacity: 0.75;
+}
+.sp-dlp-list {
+  flex: 1 1 0;
+  min-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  padding: 2px;
+  background: var(--bg-cell, transparent);
+  /* Block the native shift-click text selection drag that WebView2 sometimes
+     starts on the empty padding between items. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.sp-dlp-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+  user-select: none;
+}
+.sp-dlp-list-item:hover {
+  background: var(--bg-menu-hover);
+}
+.sp-dlp-list-item.is-selected {
+  background: var(--fg-accent);
+  color: #fff;
+}
+.sp-dlp-list-item.is-selected .sp-dlp-hint {
+  color: #fff;
+  opacity: 0.85;
+}
+.sp-dlp-list-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-dlp-hint {
+  margin-left: auto;
+  color: var(--fg-secondary);
+  font-size: 11px;
+  opacity: 0.7;
+  flex: 0 0 auto;
+}
+.sp-dlp-list-empty {
+  padding: 12px 8px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  text-align: center;
+  font-style: italic;
+}
+.sp-dlp-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding-top: 22px; /* align with first list item, accounting for header */
+}
+.sp-dlp-actions .sp-dialog-btn {
+  white-space: nowrap;
+  min-width: 96px;
+  padding: 5px 10px;
+}
+.sp-dlp-info-note {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  margin-bottom: 8px;
+  padding: 0 2px;
+}
+
+/*
+ * Help → About / License dialog. Reuses .sp-dialog-overlay /
+ * .sp-dialog-wide so it's centered and capped at 92vh, but trims the
+ * default min-width back down because the content (a short About
+ * blurb or the LICENSE text) reads better in a narrower column.
+ */
+.sp-help-dialog {
+  min-width: 520px;
+  max-width: min(90vw, 720px);
+}
+
+.sp-help-about {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sp-help-appname {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.sp-help-version {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.sp-help-desc {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--fg-primary);
+  line-height: 1.5;
+}
+
+.sp-help-copyright {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.sp-help-section-title {
+  margin-top: 18px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.sp-help-section-intro {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.5;
+}
+
+.sp-help-acks {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  line-height: 1.7;
+}
+
+.sp-help-ack-name {
+  color: var(--fg-primary);
+  font-weight: 500;
+}
+
+.sp-help-ack-license {
+  color: var(--fg-secondary);
+  font-size: 11px;
+}
+
+.sp-help-license {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fg-primary);
+  white-space: pre-wrap;
+  word-break: normal;
+}
+
+/* Batch column list */
+.sp-batch-col-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  margin-top: 4px;
+}
+
+.sp-batch-col-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.sp-batch-col-item:hover {
+  background: var(--bg-cell-hover);
+}
+.sp-batch-col-item input[type="checkbox"] {
+  margin: 0;
+}
+.sp-batch-col-name {
+  flex: 1;
+  font-weight: 500;
+}
+
+/* Progress bar */
+.sp-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-cell, #e0e0e0);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.sp-progress-fill {
+  height: 100%;
+  background: var(--accent, #2563eb);
+  border-radius: 3px;
+  transition: width 0.15s ease;
+}
+.sp-progress-indeterminate {
+  width: 30% !important;
+  animation: sp-progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes sp-progress-slide {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(230%); }
+  100% { transform: translateX(-100%); }
+}
+
+/* ---- Column filter (REMOVED) ----
+   The per-column filter popover was retired in favour of the shared
+   FilterPanel sidebar. See src/components/filter/. The old `.sp-filter-*`
+   classes used to live in this block; they had no other consumers, so
+   removing them frees up the namespace without affecting anything. */
+
+.sp-batch-col-type {
+  color: var(--fg-hint);
+  font-size: 11px;
+}
+.sp-batch-col-actions-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+.sp-batch-sel-btn {
+  padding: 2px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-input);
+  background: var(--bg-app);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.sp-batch-sel-btn:hover {
+  background: var(--bg-header);
+}
+
+/* ========= Dialog ========= */
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg-dialog-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.dialog {
+  background: var(--bg-dialog);
+  border-radius: 10px;
+  padding: 24px 28px;
+  min-width: 400px;
+  max-width: 520px;
+  box-shadow: var(--shadow-dialog);
+}
+
+.dialog h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  color: var(--fg-primary);
+}
+
+.dialog-field {
+  margin-bottom: 14px;
+}
+
+.dialog-field label {
+  display: block;
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+}
+
+.dialog-field input,
+.dialog-field select {
+  padding: 7px 10px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+}
+
+.dialog-field input:focus {
+  border-color: var(--border-input-focus);
+}
+
+.dialog-field input {
+  width: 100%;
+}
+
+.column-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.column-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.column-row input {
+  flex: 1;
+}
+
+.column-row select {
+  width: 120px;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+/* ========= Status Bar ========= */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 24px;
+  padding: 0 12px;
+  background: var(--bg-status-bar);
+  border-top: 1px solid var(--border-main);
+  color: var(--fg-status);
+  font-size: 11px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.status-spacer {
+  flex: 1;
+}
+
+/* Compact table-zoom control rendered at the far right of the status bar.
+   Three small buttons: zoom-out, current percentage (resets to 100%), zoom-in. */
+.sp-zoom-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 8px;
+}
+
+.sp-zoom-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--fg-status);
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.sp-zoom-btn:hover {
+  background: var(--bg-header-hover);
+  color: var(--fg-primary);
+}
+
+.sp-zoom-btn:active {
+  background: var(--bg-header-active);
+}
+
+.sp-zoom-value {
+  min-width: 38px;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-stats {
+  display: flex;
+  gap: 12px;
+}
+
+/* ========= Preferences Dialog ========= */
+.pref-dialog {
+  width: 640px;
+  max-width: 90vw;
+}
+
+.pref-body {
+  display: flex;
+  /* Override .sp-dialog-body's `flex-direction: column` so the nav
+     (left) and the detail pane (right) sit side-by-side instead of
+     stacking vertically. Affects every dialog that reuses .pref-body
+     (Preferences + Y Axis Settings). */
+  flex-direction: row;
+  gap: 0;
+  padding: 0;
+  min-height: 280px;
+}
+
+.pref-nav {
+  display: flex;
+  flex-direction: column;
+  width: 160px;
+  flex: 0 0 160px;
+  border-right: 1px solid var(--border-main);
+  padding: 8px 0;
+  gap: 2px;
+  background: var(--bg-panel);
+}
+
+.pref-nav-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 6px 16px;
+  font-size: 13px;
+  color: var(--fg-primary);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.pref-nav-item:hover {
+  background: var(--bg-hover, rgba(0,0,0,0.05));
+}
+
+.pref-nav-item-active {
+  background: var(--bg-selected-light, rgba(37,99,235,0.10));
+  border-left-color: var(--fg-accent);
+  font-weight: 500;
+}
+
+.pref-pane {
+  flex: 1 1 auto;
+  padding: 16px 20px;
+  overflow: auto;
+}
+
+.pref-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.pref-select {
+  width: 240px;
+  max-width: 100%;
+  padding: 4px 8px;
+  font-size: 13px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+}
+
+.pref-select:focus {
+  outline: none;
+  border-color: var(--border-input-focus);
+}
+
+/* ========= Activity Bar ========= */
+.activity-bar {
+  width: 40px;
+  min-width: 40px;
+  background: var(--bg-activity-bar);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 4px;
+  gap: 2px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.activity-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  color: var(--fg-activity);
+  transition: color 0.15s;
+  padding: 0;
+}
+
+.activity-btn:hover {
+  color: var(--fg-activity-active);
+}
+
+.activity-btn-active {
+  color: var(--fg-activity-active);
+  border-left-color: var(--bg-activity-indicator);
+}
+
+/* ========= Snapshot Button (menu bar) ========= */
+.menu-bar-snapshot {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: var(--fg-disabled);
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+
+.menu-bar-snapshot:hover {
+  background: var(--bg-header);
+}
+
+.menu-bar-snapshot-dirty {
+  color: var(--fg-primary);
+}
+
+.menu-bar-snapshot > i {
+  width: 18px;
+  font-size: 18px;
+  text-align: center;
+}
+
+/* ========= History Panel ========= */
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.history-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.snapshot-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Draggable divider between history and snapshot */
+.history-divider {
+  flex-shrink: 0;
+  height: 4px;
+  cursor: row-resize;
+  background: var(--border-main);
+  position: relative;
+  z-index: 1;
+}
+
+.history-divider:hover,
+.history-divider:active {
+  background: var(--fg-accent);
+}
+
+.history-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 4px;
+  flex-shrink: 0;
+}
+
+.history-section-header h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--fg-hint);
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+
+.history-count {
+  font-size: 10px;
+  color: var(--fg-placeholder);
+  background: var(--bg-header);
+  padding: 0 6px;
+  border-radius: 8px;
+  line-height: 16px;
+}
+
+.history-list,
+.snapshot-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+/* History item */
+.history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.history-item:hover {
+  background: var(--bg-cell-hover);
+}
+
+.history-current {
+  background: var(--bg-menu-hover);
+}
+
+.history-item-icon {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  color: var(--fg-dim);
+}
+
+.history-current .history-item-icon {
+  color: var(--fg-accent);
+}
+
+.history-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.history-item-desc {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-item-time {
+  font-size: 10px;
+  color: var(--fg-placeholder);
+}
+
+/* Snapshot item */
+.snapshot-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  transition: background 0.1s;
+  cursor: default;
+}
+
+.snapshot-item:hover {
+  background: var(--bg-cell-hover);
+}
+
+.snapshot-item-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--fg-accent);
+}
+
+.snapshot-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.snapshot-item-name {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+.snapshot-item-time {
+  font-size: 10px;
+  color: var(--fg-placeholder);
+}
+
+.snapshot-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  font-size: 12px;
+  border: 1px solid var(--border-input-focus);
+  border-radius: 3px;
+  outline: none;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+}
+
+.snapshot-rename-shell {
+  width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.snapshot-fixed-ext {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--fg-placeholder);
+  user-select: none;
+}
+
+.snapshot-add-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg-disabled);
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.snapshot-add-btn:hover {
+  background: var(--bg-header);
+}
+
+.snapshot-add-btn-dirty {
+  color: var(--fg-primary);
+}
+
+/* Snapshot context menu */
+/* Snapshot delete confirmation (inside sp-ctx-menu) */
+.snapshot-ctx-confirm {
+  padding: 6px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.snapshot-ctx-confirm-text {
+  font-size: 12px;
+  color: var(--fg-danger);
+}
+
+.snapshot-ctx-confirm-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.snapshot-ctx-confirm-yes,
+.snapshot-ctx-confirm-no {
+  padding: 2px 12px;
+  font-size: 11px;
+  border: 1px solid var(--border-main);
+  border-radius: 3px;
+  cursor: pointer;
+  background: var(--bg-input);
+  color: var(--fg-secondary);
+}
+
+.snapshot-ctx-confirm-yes {
+  background: var(--fg-danger);
+  border-color: var(--fg-danger);
+  color: #fff;
+}
+
+.snapshot-ctx-confirm-yes:hover {
+  opacity: 0.9;
+}
+
+.snapshot-ctx-confirm-no:hover {
+  background: var(--bg-header);
+}

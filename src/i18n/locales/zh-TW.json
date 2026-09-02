@@ -188,7 +188,22 @@
     "zoomTooltip": "表格縮放"
   },
   "report": {
-    "placeholder": "報告編輯會在 Task 6 完成；目前這個介面依需求只保留最小文件佔位。"
+    "placeholder": "報告編輯會在 Task 6 完成；目前這個介面依需求只保留最小文件佔位。",
+    "titleHint": "Markdown 編輯器與即時預覽",
+    "modeLabel": "報告檢視模式",
+    "editor": "編輯",
+    "preview": "預覽",
+    "insert": "插入",
+    "markdownEditorLabel": "Markdown 編輯器",
+    "editorPlaceholder": "在此撰寫 Markdown...",
+    "previewEmpty": "輸入時會即時更新預覽。",
+    "embedPlaceholder": "{{kind}}: {{name}}",
+    "group": {
+      "table": "資料表",
+      "graph": "圖形",
+      "fitYByX": "配適 Y by X",
+      "tabulate": "Tabulate"
+    }
   },
   "fitYByX": {
     "title": "配適 Y by X",
