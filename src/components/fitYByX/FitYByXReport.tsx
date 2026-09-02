@@ -176,25 +176,50 @@ function createAnovaSection(
 }
 
 function formatSignedEquation(
-  responseName: string,
-  factorName: string,
-  intercept: number,
-  slope: number,
+  item: FitYByXItem,
+  result: FitYByXBivariateResult,
   t: Translate,
   undefinedValue: string,
 ): string {
-  const interceptLabel = formatFitYByXReportValue(intercept, undefinedValue);
-  const slopeLabel = formatFitYByXReportValue(slope, undefinedValue);
+  const terms = new Map(
+    result.parameterEstimates.map((row) => [row.term, row.estimate] as const),
+  );
+  const interceptTerm = terms.get("Intercept");
+  const linearTerm = terms.get("Linear");
+  const quadratic = terms.get("Quadratic");
+  const usesQuadratic = result.constructModelEffects === "responseSurface" || quadratic != null;
 
-  if (interceptLabel === undefinedValue || slopeLabel === undefinedValue) {
+  if (usesQuadratic) {
+    const interceptLabel = formatFitYByXReportValue(interceptTerm, undefinedValue);
+    const linearLabel = formatFitYByXReportValue(linearTerm, undefinedValue);
+    const quadraticLabel = formatFitYByXReportValue(quadratic, undefinedValue);
+    if (
+      interceptLabel === undefinedValue
+      || linearLabel === undefinedValue
+      || quadraticLabel === undefinedValue
+    ) {
+      return undefinedValue;
+    }
+    return t("fitYByX.report.summaryOfFit.equationTemplateQuadratic", {
+      response: item.response.name,
+      intercept: interceptLabel,
+      linear: linearLabel,
+      quadratic: quadraticLabel,
+      factor: item.factor.name,
+    }).replace(/\+\s+-/g, "- ");
+  }
+
+  const interceptLabel = formatFitYByXReportValue(result.intercept, undefinedValue);
+  const linearLabel = formatFitYByXReportValue(result.slope, undefinedValue);
+  if (interceptLabel === undefinedValue || linearLabel === undefinedValue) {
     return undefinedValue;
   }
 
   return t("fitYByX.report.summaryOfFit.equationTemplate", {
-    response: responseName,
+    response: item.response.name,
     intercept: interceptLabel,
-    slope: slopeLabel,
-    factor: factorName,
+    slope: linearLabel,
+    factor: item.factor.name,
   }).replace(/\+\s+-/g, "- ");
 }
 
@@ -238,14 +263,7 @@ function createSummaryOfFitSection(
         key: "fittedEquation",
         label: t("fitYByX.report.summaryOfFit.fittedEquation"),
         numericColumns: null,
-        value: formatSignedEquation(
-          item.response.name,
-          item.factor.name,
-          result.intercept,
-          result.slope,
-          t,
-          undefinedValue,
-        ),
+        value: formatSignedEquation(item, result, t, undefinedValue),
       },
       {
         key: "rSquared",

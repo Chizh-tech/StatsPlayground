@@ -286,6 +286,7 @@
         "factorialDegree": "Factorial degree",
         "fittedEquation": "Fitted Equation",
         "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
+        "equationTemplateQuadratic": "{{response}} = {{intercept}} + {{linear}} * {{factor}} + {{quadratic}} * {{factor}}²",
         "rSquared": "R Square",
         "adjustedRSquared": "Adj R Square",
         "rootMeanSquareError": "Root Mean Square Error",

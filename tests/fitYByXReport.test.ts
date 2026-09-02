@@ -399,6 +399,60 @@ function testBivariateEquationRowFormatsPositiveAndNegativeSlopes(): void {
   );
 }
 
+function testBivariateQuadraticEquationUsesPolynomialTerms(): void {
+  const model = createFitYByXReportViewModel({
+    item: createItem({
+      personality: "bivariate",
+      response: { name: "diameter", type: "continuous" },
+      factor: { name: "temperature", type: "continuous" },
+    }),
+    state: makeSuccessState(makeBivariateResult({
+      constructModelEffects: "responseSurface",
+      parameterEstimates: [
+        {
+          term: "Intercept",
+          estimate: 1,
+          standardError: 0.1,
+          tRatio: 10,
+          pValue: 0.01,
+          lowerConfidenceLimit: 0.5,
+          upperConfidenceLimit: 1.5,
+        },
+        {
+          term: "Linear",
+          estimate: -0.5,
+          standardError: 0.1,
+          tRatio: -5,
+          pValue: 0.02,
+          lowerConfidenceLimit: -0.7,
+          upperConfidenceLimit: -0.3,
+        },
+        {
+          term: "Quadratic",
+          estimate: 0.25,
+          standardError: 0.05,
+          tRatio: 5,
+          pValue: 0.03,
+          lowerConfidenceLimit: 0.15,
+          upperConfidenceLimit: 0.35,
+        },
+      ],
+    })),
+    t,
+    datasetMissing: false,
+  });
+
+  assert.deepEqual(model.sections[0]?.rows[1]?.values, [
+    "fitYByX.report.summaryOfFit.fittedEquation",
+    "fitYByX.report.summaryOfFit.equationTemplateQuadratic|factor=temperature,intercept=1,linear=-0.5,quadratic=0.25,response=diameter",
+  ]);
+  assert.doesNotMatch(
+    model.sections[0]?.rows[1]?.values[1] ?? "",
+    /\+\s+-/,
+    "Quadratic equations must not render with a '+ -' sequence.",
+  );
+}
+
 function testBivariateNotIdentifiableKeepsLocalizedLackOfFitSection(): void {
   const model = createFitYByXReportViewModel({
     item: createItem({ personality: "bivariate", factor: { name: "temperature", type: "continuous" } }),
@@ -449,6 +503,7 @@ function testLocaleParityForKnownReportLabels(): void {
   const keys = [
     "fitYByX.report.summaryOfFit.fittedEquation",
     "fitYByX.report.summaryOfFit.equationTemplate",
+    "fitYByX.report.summaryOfFit.equationTemplateQuadratic",
     "fitYByX.report.summaryOfFit.constructModelEffects",
     "fitYByX.constructModelEffectsOptions.fullFactorial",
     "fitYByX.constructModelEffectsOptions.factorialToDegree",
@@ -669,6 +724,7 @@ function testViewSourceContractsReportOrderAndIndependentHookInvocation(): void 
 testValueFormattingContracts();
 testBivariateViewModelSectionsAndFormatting();
 testBivariateEquationRowFormatsPositiveAndNegativeSlopes();
+testBivariateQuadraticEquationUsesPolynomialTerms();
 testBivariateNotIdentifiableKeepsLocalizedLackOfFitSection();
 testOnewayViewModelSectionsAndFormatting();
 testLocaleParityForKnownReportLabels();

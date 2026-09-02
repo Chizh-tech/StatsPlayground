@@ -285,6 +285,7 @@
         "factorialDegree": "Bậc giai thừa",
         "fittedEquation": "Phương trình khớp",
         "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
+        "equationTemplateQuadratic": "{{response}} = {{intercept}} + {{linear}} * {{factor}} + {{quadratic}} * {{factor}}²",
         "rSquared": "R bình phương",
         "adjustedRSquared": "R bình phương hiệu chỉnh",
         "rootMeanSquareError": "Sai số RMS",

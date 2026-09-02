@@ -109,7 +109,9 @@ fn into_bivariate_rows(rows: Vec<FitYByXRow>) -> Result<Vec<(f64, f64)>, AppErro
 #[cfg(test)]
 mod tests {
     use crate::error::AppError;
-    use crate::models::fit_y_by_x::{FitYByXPersonality, FitYByXRequest, FitYByXResult};
+    use crate::models::fit_y_by_x::{
+        FitYByXConstructModelEffects, FitYByXPersonality, FitYByXRequest, FitYByXResult,
+    };
     use crate::state::AppState;
 
     use super::FitYByXService;
@@ -178,6 +180,8 @@ mod tests {
             response_column: "height".into(),
             factor_column: "site".into(),
             personality: FitYByXPersonality::Oneway,
+            construct_model_effects: None,
+            factorial_degree: None,
             confidence_level: 0.95,
         })?;
 
@@ -212,6 +216,8 @@ mod tests {
             response_column: "height".into(),
             factor_column: "site_code".into(),
             personality: FitYByXPersonality::Oneway,
+            construct_model_effects: None,
+            factorial_degree: None,
             confidence_level: 0.95,
         })?;
 
@@ -249,6 +255,8 @@ mod tests {
             response_column: "response".into(),
             factor_column: "factor".into(),
             personality: FitYByXPersonality::Bivariate,
+            construct_model_effects: None,
+            factorial_degree: None,
             confidence_level: 0.95,
         })?;
 
@@ -295,6 +303,8 @@ mod tests {
                 response_column: "height".into(),
                 factor_column: "site".into(),
                 personality: FitYByXPersonality::Oneway,
+                construct_model_effects: None,
+                factorial_degree: None,
                 confidence_level: 0.95,
             })
             .expect_err("stale generation must fail");
@@ -313,6 +323,8 @@ mod tests {
                 response_column: "height".into(),
                 factor_column: "site".into(),
                 personality: FitYByXPersonality::Oneway,
+                construct_model_effects: None,
+                factorial_degree: None,
                 confidence_level: 0.95,
             })
             .expect_err("unknown dataset must fail");
@@ -343,6 +355,8 @@ mod tests {
                 response_column: "height".into(),
                 factor_column: "missing".into(),
                 personality: FitYByXPersonality::Oneway,
+                construct_model_effects: None,
+                factorial_degree: None,
                 confidence_level: 0.95,
             })
             .expect_err("unknown column must fail");
@@ -373,6 +387,8 @@ mod tests {
                 response_column: "height".into(),
                 factor_column: "height".into(),
                 personality: FitYByXPersonality::Oneway,
+                construct_model_effects: None,
+                factorial_degree: None,
                 confidence_level: 0.95,
             })
             .expect_err("same-column request must fail");
@@ -404,6 +420,8 @@ mod tests {
                 response_column: "height".into(),
                 factor_column: "age".into(),
                 personality: FitYByXPersonality::Oneway,
+                construct_model_effects: None,
+                factorial_degree: None,
                 confidence_level: 0.95,
             })
             .expect_err("continuous numeric factor must fail on oneway");
@@ -435,6 +453,8 @@ mod tests {
                 response_column: "height".into(),
                 factor_column: "site".into(),
                 personality: FitYByXPersonality::Bivariate,
+                construct_model_effects: None,
+                factorial_degree: None,
                 confidence_level: 0.95,
             })
             .expect_err("categorical factor must fail on bivariate");
@@ -466,6 +486,8 @@ mod tests {
                     response_column: "height".into(),
                     factor_column: "site".into(),
                     personality: FitYByXPersonality::Oneway,
+                    construct_model_effects: None,
+                    factorial_degree: None,
                     confidence_level,
                 })
                 .expect_err("invalid confidence level must fail");
@@ -474,5 +496,86 @@ mod tests {
                 matches!(error, AppError::InvalidParam(message) if message.contains("confidence"))
             );
         }
+    }
+
+    #[test]
+    fn bivariate_response_surface_returns_quadratic_term() -> Result<(), AppError> {
+        let state = AppState::new().expect("test state");
+        seed_dataset(
+            &state,
+            "fit-bivariate-response-surface",
+            &["response", "factor"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_bivariate_response_surface" (_row_id, response, factor) VALUES
+                (1, 3.5, 1.0),
+                (2, 7.0, 2.0),
+                (3, 11.5, 3.0),
+                (4, 17.0, 4.0),
+                (5, 23.5, 5.0);
+            "#,
+            5,
+        );
+
+        let result = FitYByXService::new(&state).run(FitYByXRequest {
+            dataset_id: "fit-bivariate-response-surface".into(),
+            generation: 0,
+            response_column: "response".into(),
+            factor_column: "factor".into(),
+            personality: FitYByXPersonality::Bivariate,
+            construct_model_effects: Some(FitYByXConstructModelEffects::ResponseSurface),
+            factorial_degree: None,
+            confidence_level: 0.95,
+        })?;
+
+        let FitYByXResult::Bivariate(bivariate) = result else {
+            panic!("expected bivariate result");
+        };
+        assert_eq!(
+            bivariate.construct_model_effects,
+            FitYByXConstructModelEffects::ResponseSurface
+        );
+        assert_eq!(bivariate.factorial_degree, None);
+        assert_eq!(bivariate.parameter_estimates.len(), 3);
+        assert_eq!(bivariate.parameter_estimates[0].term, "Intercept");
+        assert_eq!(bivariate.parameter_estimates[1].term, "Linear");
+        assert_eq!(bivariate.parameter_estimates[2].term, "Quadratic");
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_factorial_to_degree_outside_supported_range() {
+        let state = AppState::new().expect("test state");
+        seed_dataset(
+            &state,
+            "fit-bivariate-factorial-degree-invalid",
+            &["response", "factor"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_bivariate_factorial_degree_invalid" (_row_id, response, factor) VALUES
+                (1, 3.0, 1.0),
+                (2, 5.0, 2.0),
+                (3, 7.0, 3.0),
+                (4, 9.0, 4.0);
+            "#,
+            4,
+        );
+
+        let error = FitYByXService::new(&state)
+            .run(FitYByXRequest {
+                dataset_id: "fit-bivariate-factorial-degree-invalid".into(),
+                generation: 0,
+                response_column: "response".into(),
+                factor_column: "factor".into(),
+                personality: FitYByXPersonality::Bivariate,
+                construct_model_effects: Some(FitYByXConstructModelEffects::FactorialToDegree),
+                factorial_degree: Some(3),
+                confidence_level: 0.95,
+            })
+            .expect_err("invalid factorial degree must fail");
+
+        assert!(
+            matches!(error, AppError::InvalidParam(message) if message.contains("factorial degree"))
+        );
     }
 }

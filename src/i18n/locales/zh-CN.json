@@ -286,6 +286,7 @@
         "factorialDegree": "因子阶数",
         "fittedEquation": "拟合方程",
         "equationTemplate": "{{response}} = {{intercept}} + {{slope}} * {{factor}}",
+        "equationTemplateQuadratic": "{{response}} = {{intercept}} + {{linear}} * {{factor}} + {{quadratic}} * {{factor}}²",
         "rSquared": "R 方",
         "adjustedRSquared": "调整后 R 方",
         "rootMeanSquareError": "均方根误差",

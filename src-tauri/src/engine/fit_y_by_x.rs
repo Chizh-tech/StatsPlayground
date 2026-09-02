@@ -806,11 +806,19 @@ fn not_computable(
 #[cfg(test)]
 mod tests {
     use crate::models::fit_y_by_x::{
-        FitYByXNotComputableReason, FitYByXPersonality, FitYByXResult, FitYByXRow,
-        NotComputableResult,
+        FitYByXConstructModelEffects, FitYByXNotComputableReason, FitYByXPersonality, FitYByXResult,
+        FitYByXRow, NotComputableResult,
     };
 
-    use super::{calculate_bivariate, calculate_oneway};
+    use super::{calculate_bivariate, calculate_oneway, BivariateModelConfig};
+
+    fn default_model() -> BivariateModelConfig {
+        BivariateModelConfig {
+            construct_model_effects: FitYByXConstructModelEffects::FullFactorial,
+            factorial_degree: None,
+            polynomial_degree: 1,
+        }
+    }
 
     fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         assert!(
@@ -866,7 +874,7 @@ mod tests {
     fn bivariate_exact_line_matches_fixture() {
         let rows = vec![(1.0, 3.0), (2.0, 5.0), (3.0, 7.0), (4.0, 9.0)];
 
-        let result = calculate_bivariate(rows, 0, 0.95);
+        let result = calculate_bivariate(rows, 0, 0.95, default_model());
         let FitYByXResult::Bivariate(bivariate) = result else {
             panic!("expected bivariate result");
         };
@@ -906,7 +914,7 @@ mod tests {
     fn bivariate_noisy_line_returns_finite_inference() {
         let rows = vec![(1.0, 2.2), (2.0, 4.1), (3.0, 5.8), (4.0, 8.4), (5.0, 9.9)];
 
-        let result = calculate_bivariate(rows, 1, 0.95);
+        let result = calculate_bivariate(rows, 1, 0.95, default_model());
         let FitYByXResult::Bivariate(bivariate) = result else {
             panic!("expected bivariate result");
         };
@@ -939,7 +947,7 @@ mod tests {
             (3.0, 4.1),
         ];
 
-        let result = calculate_bivariate(rows, 0, 0.95);
+        let result = calculate_bivariate(rows, 0, 0.95, default_model());
         let FitYByXResult::Bivariate(bivariate) = result else {
             panic!("expected bivariate result");
         };
@@ -1015,7 +1023,7 @@ mod tests {
     fn bivariate_without_repeated_x_marks_lack_of_fit_not_identifiable() {
         let rows = vec![(1.0, 2.0), (2.0, 3.1), (3.0, 5.2), (4.0, 6.9)];
 
-        let result = calculate_bivariate(rows, 0, 0.95);
+        let result = calculate_bivariate(rows, 0, 0.95, default_model());
         let FitYByXResult::Bivariate(bivariate) = result else {
             panic!("expected bivariate result");
         };
@@ -1027,7 +1035,7 @@ mod tests {
     fn bivariate_constant_x_is_not_computable() {
         let rows = vec![(3.0, 1.0), (3.0, 2.0), (3.0, 3.0), (3.0, 4.0)];
 
-        let result = calculate_bivariate(rows, 0, 0.95);
+        let result = calculate_bivariate(rows, 0, 0.95, default_model());
 
         assert_eq!(
             result,
@@ -1043,7 +1051,7 @@ mod tests {
 
     #[test]
     fn bivariate_requires_at_least_three_rows() {
-        let result = calculate_bivariate(vec![(1.0, 2.0), (2.0, 4.0)], 3, 0.95);
+        let result = calculate_bivariate(vec![(1.0, 2.0), (2.0, 4.0)], 3, 0.95, default_model());
 
         assert_eq!(
             result,
