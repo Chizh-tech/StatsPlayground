@@ -67,6 +67,27 @@ export interface GraphDataPipelineResult {
   pendingRequest: GraphDataRequest | null;
 }
 
+export type ExternalGraphDataState =
+  | { status: "loading"; frame: null; error: null }
+  | { status: "ready"; frame: GraphDataFrame; error: null }
+  | { status: "error"; frame: null; error: string };
+
+type GraphRuntimeDataState = Pick<GraphDataPipelineResult, "frame" | "status" | "error" | "progress">;
+
+export function selectGraphRuntimeDataState(
+  internalState: GraphRuntimeDataState,
+  externalState: ExternalGraphDataState | undefined,
+): GraphRuntimeDataState {
+  if (!externalState) return internalState;
+  if (externalState.status === "ready") {
+    return { frame: externalState.frame, status: "ready", error: null, progress: null };
+  }
+  if (externalState.status === "error") {
+    return { frame: null, status: "error", error: externalState.error, progress: null };
+  }
+  return { frame: null, status: "pending", error: null, progress: null };
+}
+
 function sanitizeCount(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -872,6 +893,7 @@ export function useGraphDataPipeline(
   item: GraphBuilderItem,
   dataset: DatasetMeta,
   viewport: GraphViewport,
+  enabled = true,
 ): GraphDataPipelineResult {
   const [state, setState] = useState<GraphStreamState>(() => createInitialGraphStreamState());
   const [debouncedViewport, setDebouncedViewport] = useState<GraphViewport>(viewport);
@@ -886,6 +908,7 @@ export function useGraphDataPipeline(
   }, [viewport.height, viewport.width]);
 
   const requestSkeleton = useMemo(() => {
+    if (!enabled) return null;
     const { fields, filters, elements, sampling } = deriveGraphRequestParts(item);
 
     return {
@@ -896,9 +919,13 @@ export function useGraphDataPipeline(
       sampling,
       viewport: debouncedViewport,
     };
-  }, [dataset.id, item, debouncedViewport]);
+  }, [dataset.id, item, debouncedViewport, enabled]);
 
   useEffect(() => {
+    if (!enabled || !requestSkeleton) {
+      setState(createInitialGraphStreamState());
+      return;
+    }
     if (!canExecuteGraphRequest(item, requestSkeleton.fields, requestSkeleton.elements)) {
       setState((previous) => ({
         ...previous,
@@ -997,7 +1024,7 @@ export function useGraphDataPipeline(
       disposed = true;
       cancellationCoordinator.cancelActive();
     };
-  }, [dataset.id, requestSkeleton]);
+  }, [dataset.id, enabled, item, requestSkeleton]);
 
   return {
     frame: state.committed,

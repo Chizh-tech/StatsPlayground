@@ -16,6 +16,7 @@ const dataset: DatasetMeta = {
   sourceType: "manual",
   rowCount: 42,
   colCount: 4,
+  generation: 0,
   createdAt: "2026-08-30T00:00:00.000Z",
   updatedAt: "2026-08-30T00:00:00.000Z",
 };
@@ -228,6 +229,16 @@ assert.equal(
   graphRuntimeSource.includes("useGraphBuilderStore"),
   false,
   "GraphRuntime must not import or reference useGraphBuilderStore",
+);
+assert.equal(
+  graphRuntimeSource.includes("externalDataState?: ExternalGraphDataState"),
+  true,
+  "GraphRuntime must expose the shared external frame contract",
+);
+assert.equal(
+  graphRuntimeSource.includes("selectGraphRuntimeDataState(internalDataState, externalDataState)"),
+  true,
+  "GraphRuntime must select external state only after calling its internal pipeline hook",
 );
 
 const fitYByXViewSource = readFileSync(

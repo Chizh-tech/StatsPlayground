@@ -10,7 +10,17 @@ import type { GraphSpec, GraphData, ChartElement, FieldRef, GroupStyle, MarkerSh
 import { DEFAULT_GROUP_KEY } from "./types.ts";
 import { buildAxisCommon, buildCorrelationDivergingPalette, type GraphTheme } from "./theme.ts";
 import { buildBandSeries, FIT_BAND_ID_PREFIX } from "./confidenceBand.ts";
-import type { BoxPlotPacket, CorrelationMatrixPacket, GraphDataFrame, GraphAggregatePacket, HeatmapPacket, HistogramPacket, SummaryPacket } from "../types/graphData.ts";
+import type {
+  BoxPlotPacket,
+  CorrelationMatrixPacket,
+  GraphDataFrame,
+  GraphAggregatePacket,
+  HeatmapPacket,
+  HistogramPacket,
+  PrecomputedCurvePacket,
+  PrecomputedPointPacket,
+  SummaryPacket,
+} from "../types/graphData.ts";
 import { buildFrameScatterItems, type FrameScatterItem } from "./frameScatter.ts";
 import {
   computeJitterOffsets as computeStableJitterOffsets,
@@ -1534,6 +1544,70 @@ function findCorrelationMatrixPacket(
   const packet = aggregatePackets.find((candidate) => candidate.kind === "correlationMatrix");
   if (!packet || packet.kind !== "correlationMatrix") return null;
   return packet;
+}
+
+function findPrecomputedPointPackets(
+  aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+  elementId: string,
+): PrecomputedPointPacket[] {
+  if (!aggregatePackets || aggregatePackets.length === 0) return [];
+  return aggregatePackets.filter((candidate): candidate is PrecomputedPointPacket =>
+    candidate.kind === "precomputedPoints" && candidate.elementId === elementId,
+  );
+}
+
+function findPrecomputedCurvePackets(
+  aggregatePackets: readonly GraphAggregatePacket[] | undefined,
+  elementId: string,
+): PrecomputedCurvePacket[] {
+  if (!aggregatePackets || aggregatePackets.length === 0) return [];
+  return aggregatePackets.filter((candidate): candidate is PrecomputedCurvePacket =>
+    candidate.kind === "precomputedCurve" && candidate.elementId === elementId,
+  );
+}
+
+function buildPrecomputedPointSeries(
+  packet: PrecomputedPointPacket,
+  seriesName: string,
+  style: ResolvedGroupStyle,
+): Record<string, unknown> {
+  const symbol = markerToSymbol(style.point.marker);
+  return {
+    id: packet.seriesId ?? packet.elementId,
+    type: "scatter",
+    name: packet.seriesName ?? seriesName,
+    clip: true,
+    symbol: symbol.symbol,
+    symbolSize: style.point.size,
+    itemStyle: pointItemStyle(style.point, symbol.hollow),
+    data: packet.points.map((point) => [point.x, point.y]),
+    progressive: 0,
+    z: 5,
+  };
+}
+
+function buildPrecomputedCurveSeries(
+  packet: PrecomputedCurvePacket,
+  seriesName: string,
+  style: ResolvedGroupStyle,
+): Record<string, unknown> {
+  return {
+    id: packet.seriesId ?? packet.elementId,
+    type: "line",
+    name: packet.seriesName ?? seriesName,
+    clip: true,
+    showSymbol: false,
+    symbol: "none",
+    smooth: false,
+    step: packet.interpolation === "stepEnd" ? "end" : undefined,
+    lineStyle: {
+      color: style.line.color,
+      width: style.line.width,
+      opacity: style.line.opacity,
+    },
+    data: packet.points.map((point) => [point.x, point.y]),
+    z: 3,
+  };
 }
 
 function formatCorrelationCoefficient(value: number): string {
@@ -4714,7 +4788,7 @@ function buildSingleOption(
         const gxs = packetModeA || summaryModeA
           ? []
           : slot.rowIdxs.map((i) => toNum(data.rows[i][xIdx]));
-        const groupCounts = binOntoGrid(gxs, slot.key);
+  const groupCounts = binOntoGrid(gxs, grouping ? slot.key : undefined);
 
         // Resolve the visible fill color for bars. `resolveGroupStyle`
         // defaults ungrouped fill to "transparent" (so JMP-style point
@@ -5321,6 +5395,7 @@ function buildSingleOption(
     );
   }
 
+  const emittedPrecomputedSeriesIds = new Set<string>();
   groupKeys.forEach((gKey) => {
     // Skip groups hidden via the legend show/hide toggle.
     if (isHidden(gKey)) return;
@@ -5335,6 +5410,33 @@ function buildSingleOption(
     const resolvedStyle = resolvedStyleFor(styleKey);
 
     enabledElements.forEach((el) => {
+      const elementId = getOpt<string>(el.options, "elementId", "");
+      if (frameBackedAggregateMode && elementId.length > 0) {
+        if (el.kind === "points") {
+          const pointPackets = findPrecomputedPointPackets(aggregatePackets, elementId);
+          if (pointPackets.length > 0) {
+            for (const pointPacket of pointPackets) {
+              const emittedSeriesId = pointPacket.seriesId ?? pointPacket.elementId;
+              if (emittedPrecomputedSeriesIds.has(emittedSeriesId)) continue;
+              series.push(buildPrecomputedPointSeries(pointPacket, seriesName, resolvedStyle));
+              emittedPrecomputedSeriesIds.add(emittedSeriesId);
+            }
+            return;
+          }
+        }
+        if (el.kind === "line") {
+          const curvePackets = findPrecomputedCurvePackets(aggregatePackets, elementId);
+          if (curvePackets.length > 0) {
+            for (const curvePacket of curvePackets) {
+              const emittedSeriesId = curvePacket.seriesId ?? curvePacket.elementId;
+              if (emittedPrecomputedSeriesIds.has(emittedSeriesId)) continue;
+              series.push(buildPrecomputedCurveSeries(curvePacket, seriesName, resolvedStyle));
+              emittedPrecomputedSeriesIds.add(emittedSeriesId);
+            }
+            return;
+          }
+        }
+      }
       if (
         frame &&
         el.kind === "points" &&

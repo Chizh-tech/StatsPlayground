@@ -19,11 +19,20 @@ import {
 } from "./graphRuntimeModel";
 import { resolveStableGroupKeys } from "./graphGroupOrder";
 import { resolveGroupThemeFieldName } from "./graphThemeIdentity";
-import { useGraphDataPipeline, type GraphDataPipelineResult, type GraphLoadProgress } from "./useGraphDataPipeline";
+import {
+  selectGraphRuntimeDataState,
+  useGraphDataPipeline,
+  type ExternalGraphDataState,
+  type GraphDataPipelineResult,
+  type GraphLoadProgress,
+} from "./useGraphDataPipeline";
+
+export type { ExternalGraphDataState } from "./useGraphDataPipeline";
 
 export interface GraphRuntimeProps {
   item: GraphBuilderItem;
   dataset: DatasetMeta;
+  externalDataState?: ExternalGraphDataState;
   showPointBudgetAction?: boolean;
   onRequestSampleMode?: () => void;
   onPointPick?: (pick: ScatterPointPick) => void;
@@ -79,6 +88,7 @@ function snapshotChanged(previous: GraphRuntimeState | null, next: GraphRuntimeS
 export function GraphRuntime({
   item,
   dataset,
+  externalDataState,
   showPointBudgetAction = false,
   onRequestSampleMode,
   onPointPick,
@@ -181,12 +191,18 @@ export function GraphRuntime({
     [metadata],
   );
 
+  const internalDataState = useGraphDataPipeline(
+    item,
+    dataset,
+    viewport,
+    externalDataState === undefined,
+  );
   const {
     frame,
     status,
     error,
     progress,
-  } = useGraphDataPipeline(item, dataset, viewport);
+  } = selectGraphRuntimeDataState(internalDataState, externalDataState);
   const rawPointNotice = useMemo(
     () => getRawPointNotice(frame?.rawPointDisposition),
     [frame?.rawPointDisposition],

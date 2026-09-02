@@ -14,12 +14,16 @@ pub struct SaveProjectRequest {
     pub graph_builders: Vec<serde_json::Value>,
     #[serde(default)]
     pub fit_y_by_x: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub distributions: Vec<serde_json::Value>,
     pub tabulates: Vec<serde_json::Value>,
     pub folders: Vec<String>,
     pub table_folders: HashMap<String, String>,
     pub graph_folders: HashMap<String, String>,
     #[serde(default)]
     pub fit_y_by_x_folders: HashMap<String, String>,
+    #[serde(default)]
+    pub distribution_folders: HashMap<String, String>,
     pub tabulate_folders: HashMap<String, String>,
     #[serde(default)]
     pub workflows: Vec<WorkflowDefinition>,

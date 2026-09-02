@@ -6,6 +6,7 @@ export interface DatasetMeta {
   sourceType: "csv" | "excel" | "parquet" | "json" | "manual" | "query";
   rowCount: number;
   colCount: number;
+  generation: number;
   createdAt: string;
   updatedAt: string;
 }
