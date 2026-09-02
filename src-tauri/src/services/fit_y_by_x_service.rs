@@ -669,4 +669,47 @@ mod tests {
             matches!(error, AppError::InvalidParam(message) if message.contains("factorial degree"))
         );
     }
+
+    #[test]
+    fn factorial_to_degree_without_degree_defaults_to_quadratic_model() -> Result<(), AppError> {
+        let state = AppState::new().expect("test state");
+        seed_dataset(
+            &state,
+            "fit-bivariate-factorial-degree-default",
+            &["response", "factor"],
+            &["DOUBLE", "DOUBLE"],
+            r#"
+            INSERT INTO "dataset_fit_bivariate_factorial_degree_default" (_row_id, response, factor) VALUES
+                (1, 3.5, 1.0),
+                (2, 7.0, 2.0),
+                (3, 11.5, 3.0),
+                (4, 17.0, 4.0),
+                (5, 23.5, 5.0);
+            "#,
+            5,
+        );
+
+        let result = FitYByXService::new(&state).run(FitYByXRequest {
+            dataset_id: "fit-bivariate-factorial-degree-default".into(),
+            generation: 0,
+            response_column: "response".into(),
+            factor_column: "factor".into(),
+            personality: FitYByXPersonality::Bivariate,
+            construct_model_effects: Some(FitYByXConstructModelEffects::FactorialToDegree),
+            factorial_degree: None,
+            confidence_level: 0.95,
+        })?;
+
+        let FitYByXResult::Bivariate(bivariate) = result else {
+            panic!("expected bivariate result");
+        };
+        assert_eq!(
+            bivariate.construct_model_effects,
+            FitYByXConstructModelEffects::FactorialToDegree
+        );
+        assert_eq!(bivariate.factorial_degree, Some(2));
+        assert_eq!(bivariate.parameter_estimates.len(), 3);
+        assert_eq!(bivariate.parameter_estimates[2].term, "Quadratic");
+        Ok(())
+    }
 }
