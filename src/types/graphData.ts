@@ -338,15 +338,8 @@ function isPrecomputedCurvePoint(value: unknown): value is PrecomputedCurvePoint
   return isFiniteNumber(value.x) && isFiniteNumber(value.y);
 }
 
-function hasOwn(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
 function isHistogramBin(value: unknown): value is HistogramBin {
   if (!isRecord(value)) return false;
-  if (!hasOwn(value, "facetX") || !hasOwn(value, "facetY") || !hasOwn(value, "facetZ") || !hasOwn(value, "wrap")) {
-    return false;
-  }
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
@@ -361,9 +354,6 @@ function isHistogramBin(value: unknown): value is HistogramBin {
 
 function isHeatmapCell(value: unknown): value is HeatmapCell {
   if (!isRecord(value)) return false;
-  if (!hasOwn(value, "facetX") || !hasOwn(value, "facetY") || !hasOwn(value, "facetZ") || !hasOwn(value, "wrap")) {
-    return false;
-  }
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
@@ -389,9 +379,6 @@ function isBoxPlotOutlier(value: unknown): value is BoxPlotOutlier {
 
 function isBoxPlotEntry(value: unknown): value is BoxPlotEntry {
   if (!isRecord(value)) return false;
-  if (!hasOwn(value, "facetX") || !hasOwn(value, "facetY") || !hasOwn(value, "facetZ") || !hasOwn(value, "wrap")) {
-    return false;
-  }
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
@@ -413,9 +400,6 @@ function isBoxPlotEntry(value: unknown): value is BoxPlotEntry {
 
 function isSummaryEntry(value: unknown): value is SummaryEntry {
   if (!isRecord(value)) return false;
-  if (!hasOwn(value, "facetX") || !hasOwn(value, "facetY") || !hasOwn(value, "facetZ") || !hasOwn(value, "wrap")) {
-    return false;
-  }
   return isOptionalString(value.group)
     && isOptionalString(value.category)
     && isOptionalString(value.sourceColumn)
