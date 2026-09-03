@@ -677,6 +677,24 @@ assert.equal(isGraphAggregatePacket({
   yColumn: "cost",
   entries: [
     {
+      count: 4,
+      min: 1,
+      q1: 2,
+      median: 3,
+      q3: 4,
+      max: 5,
+      whiskerLow: 1,
+      whiskerHigh: 5,
+      outliers: [],
+    },
+  ],
+}), true);
+
+assert.equal(isGraphAggregatePacket({
+  kind: "boxPlot",
+  yColumn: "cost",
+  entries: [
+    {
       group: "DV",
       category: "203-A6",
       sourceColumn: "203-A6",
