@@ -1,6 +1,11 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { DistributionItem } from "@/types/distribution";
 import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
+import type {
+  LogicalFolder,
+  WorkflowDefinition,
+  WorkflowRun,
+} from "@/types/workflow";
 
 /** Optional folder payload accepted by the save_project command.
  *  Folder maps are manifest metadata now; they are not used to route archive
@@ -36,6 +41,9 @@ export interface SaveProjectRequest {
   fitYByXFolders: Record<string, string>;
   tabulateFolders: Record<string, string>;
   distributionFolders: Record<string, string>;
+  workflows: WorkflowDefinition[];
+  logicalFolders: LogicalFolder[];
+  workflowRuns: WorkflowRun[];
 }
 
 export type SavePhase = "preparing" | "table" | "metadata" | "compressing" | "finalizing";

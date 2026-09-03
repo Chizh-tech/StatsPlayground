@@ -23,12 +23,14 @@ import { GraphBuilderView } from "./graphBuilder";
 import { FitYByXRoleDialog, FitYByXView } from "./fitYByX";
 import { DistributionDialog, DistributionView, type DistributionFieldInfo } from "./distribution";
 import { TabulateView } from "./tabulate";
+import { WorkflowPanel, WorkflowView } from "./workflow";
 import "./graphBuilder/graphBuilder.css";
 import "./fitYByX/fitYByX.css";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useFitYByXStore } from "@/stores/useFitYByXStore";
 import { useDistributionStore } from "@/stores/useDistributionStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";
+import { useWorkflowStore } from "@/stores/useWorkflowStore";
 import type { GraphBuilderItem } from "@/types/graphBuilder";
 import {
   createDefaultGraph2DState,
@@ -193,6 +195,12 @@ export function Workspace() {
   const resetDistributions = useDistributionStore((s) => s.reset);
   const loadDistributionsFromProject = useDistributionStore((s) => s.loadFromProject);
   const tabulates = useTabulateStore((s) => s.items);
+  const workflows = useWorkflowStore((s) => s.workflows);
+  const logicalFolders = useWorkflowStore((s) => s.logicalFolders);
+  const workflowRuns = useWorkflowStore((s) => s.workflowRuns);
+  const lineageGraph = useWorkflowStore((s) => s.lineageGraph);
+  const loadWorkflowsFromProject = useWorkflowStore((s) => s.loadFromProject);
+  const resetWorkflows = useWorkflowStore((s) => s.reset);
   const addGraphBuilder = useGraphBuilderStore((s) => s.addItem);
   const renameGraphBuilder = useGraphBuilderStore((s) => s.renameItem);
   const deleteGraphBuilder = useGraphBuilderStore((s) => s.deleteItem);
@@ -206,7 +214,8 @@ export function Workspace() {
   const deleteTabulate = useTabulateStore((s) => s.deleteItem);
   const resetTabulates = useTabulateStore((s) => s.reset);
   const loadTabulatesFromProject = useTabulateStore((s) => s.loadFromProject);
-  const [activeTab, setActiveTab] = useState<"files" | "history">("files");
+  const [activeTab, setActiveTab] = useState<"files" | "history" | "workflow">("files");
+  const [activeWorkflowViewId, setActiveWorkflowViewId] = useState("lineage");
   /** 当前选中项的类型与 ID。代替原有的 viewMode 机制。 */
   const [activeGraphBuilderId, setActiveGraphBuilderId] = useState<string | null>(null);
   const [activeFitYByXId, setActiveFitYByXId] = useState<string | null>(null);
@@ -1067,6 +1076,9 @@ export function Workspace() {
           fitYByXFolders: folderPayload.fitYByXFolders,
           tabulateFolders: folderPayload.tabulateFolders,
           distributionFolders: folderPayload.distributionFolders,
+          workflows,
+          logicalFolders,
+          workflowRuns,
         });
       } else {
         await saveProject({
@@ -1082,6 +1094,9 @@ export function Workspace() {
           fitYByXFolders: folderPayload.fitYByXFolders,
           tabulateFolders: folderPayload.tabulateFolders,
           distributionFolders: folderPayload.distributionFolders,
+          workflows,
+          logicalFolders,
+          workflowRuns,
         });
       }
       showToast(t("common.saved"), 1500);
@@ -1113,6 +1128,7 @@ export function Workspace() {
     resetFitYByX();
     resetDistributions();
     resetTabulates();
+    resetWorkflows();
     fsReset();
     await initProject();
     await refreshDatasets();
@@ -1136,6 +1152,7 @@ export function Workspace() {
       resetFitYByX();
       resetDistributions();
       resetTabulates();
+      resetWorkflows();
       setBusyMessage(t("workspace.openingProject"));
       const unlisten = await listen<{
         datasetIndex: number;
@@ -1162,6 +1179,7 @@ export function Workspace() {
         resetFitYByX();
         resetDistributions();
         resetTabulates();
+        resetWorkflows();
         await refreshDatasets();
         tableCounter.current = 0;
         // Restore snapshots from project file (history is session-only)
@@ -1179,6 +1197,17 @@ export function Workspace() {
         loadFitYByXFromProject((result.fitYByX ?? []) as FitYByXItem[]);
         loadTabulatesFromProject((result.tabulates ?? []) as TabulateItem[]);
         loadDistributionsFromProject(result.distributions ?? []);
+        loadWorkflowsFromProject({
+          workflows: result.workflows ?? [],
+          logicalFolders: result.logicalFolders ?? [],
+          workflowRuns: result.workflowRuns ?? [],
+          lineageGraph: result.lineageGraph ?? {
+            id: "project-lineage",
+            name: "Project lineage",
+            nodes: [],
+            edges: [],
+          },
+        });
         // Restore folder tree + table/graph→folder assignments. We do this
         // after datasets/graphs are loaded so a subsequent prune pass keeps
         // assignments in sync with currently-existing items.
@@ -2072,6 +2101,14 @@ export function Workspace() {
               <path d="M320 128C426 128 512 214 512 320C512 426 426 512 320 512C254.8 512 197.1 479.5 162.4 429.7C152.3 415.2 132.3 411.7 117.8 421.8C103.3 431.9 99.8 451.9 109.9 466.4C156.1 532.6 233 576 320 576C461.4 576 576 461.4 576 320C576 178.6 461.4 64 320 64C234.3 64 158.5 106.1 112 170.7L112 144C112 126.3 97.7 112 80 112C62.3 112 48 126.3 48 144L48 256C48 273.7 62.3 288 80 288L104.6 288C105.1 288 105.6 288 106.1 288L192.1 288C209.8 288 224.1 273.7 224.1 256C224.1 238.3 209.8 224 192.1 224L153.8 224C186.9 166.6 249 128 320 128zM344 216C344 202.7 333.3 192 320 192C306.7 192 296 202.7 296 216L296 320C296 326.4 298.5 332.5 303 337L375 409C384.4 418.4 399.6 418.4 408.9 409C418.2 399.6 418.3 384.4 408.9 375.1L343.9 310.1L343.9 216z"/>
             </svg>
           </button>
+          <button
+            className={`activity-btn${activeTab === "workflow" ? " activity-btn-active" : ""}`}
+            onClick={() => setActiveTab("workflow")}
+            title={t("workflow.title", { defaultValue: "Workflow" })}
+            aria-label={t("workflow.title", { defaultValue: "Workflow" })}
+          >
+            <i className="fa-solid fa-diagram-project" aria-hidden="true" />
+          </button>
         </div>
 
         {/* Left: Side Panel */}
@@ -2120,6 +2157,14 @@ export function Workspace() {
                 )}
               </div>
             </>
+          ) : activeTab === "workflow" ? (
+            <WorkflowPanel
+              lineageGraph={lineageGraph}
+              workflows={workflows}
+              workflowRuns={workflowRuns}
+              selectedId={activeWorkflowViewId}
+              onSelect={setActiveWorkflowViewId}
+            />
           ) : (
             <HistoryPanel
               setBusyMessage={setBusyMessage}
@@ -2131,7 +2176,13 @@ export function Workspace() {
 
         {/* Right: Main Content */}
         <div className="main-area">
-          {activeDistributionId ? (
+          {activeTab === "workflow" ? (
+            <WorkflowView
+              lineageGraph={lineageGraph}
+              workflow={workflows.find((workflow) => workflow.id === activeWorkflowViewId)}
+              datasets={datasets}
+            />
+          ) : activeDistributionId ? (
             (() => {
               const item = distributionItems.find((entry) => entry.id === activeDistributionId);
               if (!item) {

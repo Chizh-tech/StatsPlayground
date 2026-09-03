@@ -144,6 +144,24 @@
     "autoFitColumn": "自動調整欄寬",
     "sqlQueryTableCreated": "從 SQL 查詢建立資料表 \"{{name}}\""
   },
+  "workflow": {
+    "title": "工作流程",
+    "projectLineage": "專案譜系",
+    "nodeCount": "{{count}} 個節點",
+    "saved": "已儲存的工作流程",
+    "empty": "尚無已儲存的工作流程",
+    "revisionRuns": "版本 {{revision}} · {{count}} 次執行",
+    "definition": "工作流程定義",
+    "lineage": "譜系",
+    "graphSummary": "{{nodes}} 個節點 · {{edges}} 條連線",
+    "inputs": "工作流程輸入",
+    "chooseTable": "選擇輸入資料表",
+    "checkingSchema": "正在檢查 schema",
+    "schemaCheckFailed": "Schema 檢查失敗",
+    "schemaIncompatible": "缺少 {{missing}} 欄，{{mismatch}} 欄類型不符",
+    "schemaCompatible": "Schema 相容",
+    "noLineage": "目前沒有可用的工作流程譜系。"
+  },
   "workspace": {
     "directory": "目錄",
     "datasourceLabel": "資料來源：{{name}}",
