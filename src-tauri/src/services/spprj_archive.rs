@@ -152,10 +152,14 @@ pub struct ProjectManifest {
     pub fit_y_by_x: Vec<serde_json::Value>,
     #[serde(default)]
     pub fit_y_by_x_folders: HashMap<String, String>,
+    #[serde(default)]
+    pub report_folders: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tabulates: Vec<serde_json::Value>,
     #[serde(default)]
     pub tabulate_folders: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub report_files: Vec<DocumentEntryRef>,
     #[serde(default)]
     pub fit_y_by_x_files: Vec<DocumentEntryRef>,
     #[serde(default)]
@@ -216,6 +220,7 @@ pub struct ProjectRelationship {
 #[serde(rename_all = "camelCase")]
 pub enum DocumentKind {
     FitYByX,
+    Report,
     Distribution,
     Tabulate,
 }
@@ -346,6 +351,7 @@ pub struct ProjectBundle {
     pub tables: Vec<TableDoc>,
     pub graphs: Vec<GraphDoc>,
     pub fit_y_by_x: Vec<Value>,
+    pub reports: Vec<Value>,
     pub distributions: Vec<Value>,
     pub tabulates: Vec<Value>,
     pub history: Vec<Value>,
@@ -489,6 +495,36 @@ pub fn validate_archive_manifest_and_entries(
                 "Archive graph name mismatch in {}: manifest={}, body={}",
                 graph.file, graph.name, doc.name
             )));
+        }
+    }
+    for entry in &expected_manifest.report_files {
+        let mut doc_entry = zip.by_name(&entry.file).map_err(|e| {
+            AppError::FileIO(format!("Archive missing report entry {}: {e}", entry.file))
+        })?;
+        let value: Value = serde_json::from_reader(&mut doc_entry).map_err(|e| {
+            AppError::FileIO(format!(
+                "Archive report entry {} is not valid JSON: {e}",
+                entry.file
+            ))
+        })?;
+        validate_report_value(&value, &entry.file)?;
+        let body_id = value.get("id").and_then(Value::as_str).ok_or_else(|| {
+            AppError::FileIO(format!("Archive report entry {} missing id", entry.file))
+        })?;
+        if body_id != entry.id {
+            return Err(AppError::FileIO(format!(
+                "Archive report id mismatch in {}: manifest={}, body={}",
+                entry.file, entry.id, body_id
+            )));
+        }
+        if strict_v4_name_checks {
+            let body_name = value_required_name(&value, &entry.file, "report")?;
+            if body_name != entry.name {
+                return Err(AppError::FileIO(format!(
+                    "Archive report name mismatch in {}: manifest={}, body={}",
+                    entry.file, entry.name, body_name
+                )));
+            }
         }
     }
     for entry in &expected_manifest.fit_y_by_x_files {
@@ -832,6 +868,16 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
     } else {
         manifest.fit_y_by_x.clone()
     };
+    let reports = if !manifest.report_files.is_empty() {
+        read_indexed_values(
+            &mut zip,
+            &manifest.report_files,
+            DocumentKind::Report,
+            strict_v4_name_checks,
+        )?
+    } else {
+        Vec::new()
+    };
     let distributions = read_indexed_values(
         &mut zip,
         &manifest.distributions,
@@ -873,6 +919,7 @@ fn read_zip_bundle(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         tables,
         graphs,
         fit_y_by_x,
+        reports,
         distributions,
         tabulates,
         history,
@@ -899,6 +946,9 @@ fn read_indexed_values<R: Read + Seek>(
             .ok_or_else(|| AppError::FileIO(format!("Missing indexed entry: {}", entry.file)))?;
         let value: Value = serde_json::from_slice(&bytes)
             .map_err(|e| AppError::FileIO(format!("Invalid indexed file {}: {}", entry.file, e)))?;
+        if expected_kind == DocumentKind::Report {
+            validate_report_value(&value, &entry.file)?;
+        }
         let body_id = value
             .get("id")
             .and_then(Value::as_str)
@@ -1063,10 +1113,12 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         graph_folders: None,
         fit_y_by_x: fit_y_by_x.clone(),
         fit_y_by_x_folders,
+        report_folders: HashMap::new(),
         distributions: Vec::new(),
         distribution_folders: HashMap::new(),
         tabulates: Vec::new(),
         tabulate_folders: HashMap::new(),
+        report_files: Vec::new(),
         fit_y_by_x_files: Vec::new(),
         tabulate_files: Vec::new(),
         snapshot_files: Vec::new(),
@@ -1082,6 +1134,7 @@ fn read_legacy_json(bytes: &[u8]) -> Result<ProjectBundle, AppError> {
         tables,
         graphs,
         fit_y_by_x,
+        reports: Vec::new(),
         distributions: Vec::new(),
         tabulates: Vec::new(),
         history: legacy.history.unwrap_or_default(),
@@ -1139,12 +1192,14 @@ pub fn build_bundle(
     tables: Vec<TableDoc>,
     graphs: Vec<GraphDoc>,
     fit_y_by_x: Vec<Value>,
+    reports: Vec<Value>,
     distributions: Vec<Value>,
     tabulates: Vec<Value>,
     folders: Vec<String>,
     table_folders: &HashMap<String, String>,
     graph_folders: &HashMap<String, String>,
     fit_y_by_x_folders: &HashMap<String, String>,
+    report_folders: &HashMap<String, String>,
     distribution_folders: &HashMap<String, String>,
     tabulate_folders: &HashMap<String, String>,
     history: Vec<Value>,
@@ -1157,12 +1212,14 @@ pub fn build_bundle(
         tables,
         graphs,
         fit_y_by_x,
+        reports,
         distributions,
         tabulates,
         folders,
         table_folders,
         graph_folders,
         fit_y_by_x_folders,
+        report_folders,
         distribution_folders,
         tabulate_folders,
         history,
@@ -1180,12 +1237,14 @@ pub fn build_bundle_with_workflows(
     tables: Vec<TableDoc>,
     graphs: Vec<GraphDoc>,
     fit_y_by_x: Vec<Value>,
+    reports: Vec<Value>,
     distributions: Vec<Value>,
     tabulates: Vec<Value>,
     folders: Vec<String>,
     table_folders: &HashMap<String, String>,
     graph_folders: &HashMap<String, String>,
     fit_y_by_x_folders: &HashMap<String, String>,
+    report_folders: &HashMap<String, String>,
     distribution_folders: &HashMap<String, String>,
     tabulate_folders: &HashMap<String, String>,
     history: Vec<Value>,
@@ -1200,6 +1259,7 @@ pub fn build_bundle_with_workflows(
         .into_iter()
         .map(strip_transient_fit_y_by_x_fields)
         .collect();
+    let mut reports = reports;
     let mut distributions: Vec<Value> = distributions
         .into_iter()
         .map(strip_transient_distribution_fields)
@@ -1228,6 +1288,12 @@ pub fn build_bundle_with_workflows(
             ensure_unique_bundle_id(&mut fit_ids, &id, "fitYByX")?;
             ensure_unique_bundle_id(&mut active_document_ids, &id, "active document")?;
         }
+        let mut report_ids = HashSet::new();
+        for doc in &reports {
+            validate_report_value(doc, "build bundle report")?;
+            let id = value_required_id(doc, "report")?;
+            ensure_unique_bundle_id(&mut report_ids, &id, "report")?;
+        }
         for doc in &tabulates {
             let id = value_required_id(doc, "tabulate")?;
             ensure_unique_bundle_id(&mut tabulate_ids, &id, "tabulate")?;
@@ -1250,6 +1316,7 @@ pub fn build_bundle_with_workflows(
     let mut used_table_paths: HashSet<String> = HashSet::new();
     let mut used_graph_paths: HashSet<String> = HashSet::new();
     let mut used_data_spf_paths: HashSet<String> = HashSet::new();
+    let mut used_report_paths: HashSet<String> = HashSet::new();
     let mut used_distribution_paths: HashSet<String> = HashSet::new();
     let mut used_snapshot_json_paths: HashSet<String> = HashSet::new();
 
@@ -1289,6 +1356,27 @@ pub fn build_bundle_with_workflows(
             name: resolved_name,
             file: resolved_file,
             kind: DocumentKind::FitYByX,
+        });
+    }
+
+    let mut report_refs: Vec<DocumentEntryRef> = Vec::with_capacity(reports.len());
+    for report in &mut reports {
+        validate_report_value(report, "build bundle report")?;
+        let report_id = value_required_id(report, "report")?;
+        let report_name = value_name_or_fallback(report, &report_id);
+        let (resolved_name, resolved_file) = allocate_archive_name(
+            &report_name,
+            &report_id,
+            ".sprp",
+            "data",
+            &mut used_report_paths,
+        )?;
+        set_value_name(report, &resolved_name, "report")?;
+        report_refs.push(DocumentEntryRef {
+            id: report_id,
+            name: resolved_name,
+            file: resolved_file,
+            kind: DocumentKind::Report,
         });
     }
 
@@ -1418,8 +1506,10 @@ pub fn build_bundle_with_workflows(
             graph_folders: Some(graph_folders.clone()),
             fit_y_by_x: manifest_fit_y_by_x,
             fit_y_by_x_folders: fit_y_by_x_folders.clone(),
+            report_folders: report_folders.clone(),
             tabulates: manifest_tabulates,
             tabulate_folders: tabulate_folders.clone(),
+            report_files: report_refs,
             fit_y_by_x_files: fit_y_by_x_refs,
             distributions: distribution_refs,
             distribution_folders: distribution_folders.clone(),
@@ -1434,6 +1524,7 @@ pub fn build_bundle_with_workflows(
         tables,
         graphs,
         fit_y_by_x,
+        reports,
         distributions,
         tabulates,
         history,
@@ -1966,6 +2057,16 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
                     .map(|id| (id, value))
             })
             .collect();
+        let report_by_id: HashMap<&str, &Value> = bundle
+            .reports
+            .iter()
+            .filter_map(|value| {
+                value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| (id, value))
+            })
+            .collect();
         let distribution_by_id: HashMap<&str, &Value> = bundle
             .distributions
             .iter()
@@ -2028,6 +2129,16 @@ pub fn write_project_archive(bundle: &ProjectBundle, path: &str) -> Result<(), A
                 ))
             })?;
             let synced = indexed_payload_with_manifest_name(doc, &entry.id, &entry.name, "fit")?;
+            write_zip_json_entry(&mut zip, &entry.file, &synced, opts)?;
+        }
+        for entry in &bundle.manifest.report_files {
+            let doc = report_by_id.get(entry.id.as_str()).ok_or_else(|| {
+                AppError::FileIO(format!(
+                    "missing report payload for manifest reference {}",
+                    entry.id
+                ))
+            })?;
+            let synced = indexed_payload_with_manifest_name(doc, &entry.id, &entry.name, "report")?;
             write_zip_json_entry(&mut zip, &entry.file, &synced, opts)?;
         }
         for entry in &bundle.manifest.distributions {
@@ -2404,6 +2515,11 @@ fn validate_manifest_stable_ids(manifest: &ProjectManifest) -> Result<(), AppErr
         ensure_unique_manifest_id(&mut graph_ids, &entry.id, "graph")?;
     }
 
+    let mut report_ids = HashSet::new();
+    for entry in &manifest.report_files {
+        ensure_unique_manifest_id(&mut report_ids, &entry.id, "report")?;
+    }
+
     let mut fit_ids = HashSet::new();
     let mut distribution_ids = HashSet::new();
     let mut tabulate_ids = HashSet::new();
@@ -2531,6 +2647,7 @@ fn validate_bundle_payload_stable_ids(bundle: &ProjectBundle) -> Result<(), AppE
     }
 
     let mut fit_ids = HashSet::new();
+    let mut report_ids = HashSet::new();
     let mut distribution_ids = HashSet::new();
     let mut tabulate_ids = HashSet::new();
     let mut active_document_ids = HashSet::new();
@@ -2538,6 +2655,10 @@ fn validate_bundle_payload_stable_ids(bundle: &ProjectBundle) -> Result<(), AppE
         let id = value_required_id(doc, "fitYByX")?;
         ensure_unique_bundle_id(&mut fit_ids, &id, "fitYByX")?;
         ensure_unique_bundle_id(&mut active_document_ids, &id, "active document")?;
+    }
+    for doc in &bundle.reports {
+        let id = value_required_id(doc, "report")?;
+        ensure_unique_bundle_id(&mut report_ids, &id, "report")?;
     }
     for doc in &bundle.tabulates {
         let id = value_required_id(doc, "tabulate")?;
@@ -2614,6 +2735,26 @@ fn validate_manifest_entry_refs(manifest: &ProjectManifest) -> Result<(), AppErr
             )?;
             ensure_unique_file(&mut seen_files, &entry.file)?;
         }
+    }
+
+    for entry in &manifest.report_files {
+        if entry.kind != DocumentKind::Report {
+            return Err(AppError::FileIO(format!(
+                "report file entry has unexpected kind for {}",
+                entry.file
+            )));
+        }
+        validate_indexed_path(&entry.file, "data", ".sprp", "report")?;
+        validate_display_basename(&entry.name)?;
+        if strict_v4_name_checks {
+            validate_manifest_name_matches_file_basename(
+                &entry.file,
+                &entry.name,
+                ".sprp",
+                "report",
+            )?;
+        }
+        ensure_unique_file(&mut seen_files, &entry.file)?;
     }
 
     for entry in &manifest.fit_y_by_x_files {
@@ -2892,14 +3033,38 @@ fn value_required_name<'a>(value: &'a Value, file: &str, kind: &str) -> Result<&
         })
 }
 
-        fn validate_manifest_relationship_projection(manifest: &ProjectManifest) -> Result<(), AppError> {
-            let expected_relationships = build_data_source_relationships(&manifest.lineage_graph)?;
-            if manifest.relationships != expected_relationships {
-                return Err(AppError::FileIO(
-                    "Project relationships differ from lineage graph projection".to_string(),
-                ));
-            }
-            Ok(())
+fn validate_report_value(value: &Value, context: &str) -> Result<(), AppError> {
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            AppError::FileIO(format!(
+                "{context} report is missing required schemaVersion"
+            ))
+        })?;
+    if schema_version != 1 {
+        return Err(AppError::FileIO(format!(
+            "{context} report must use schemaVersion 1"
+        )));
+    }
+    value_required_id(value, "report")?;
+    value_required_name(value, context, "report")?;
+    match value.get("markdown").and_then(Value::as_str) {
+        Some(_) => Ok(()),
+        None => Err(AppError::FileIO(format!(
+            "{context} report is missing required markdown"
+        ))),
+    }
+}
+
+fn validate_manifest_relationship_projection(manifest: &ProjectManifest) -> Result<(), AppError> {
+    let expected_relationships = build_data_source_relationships(&manifest.lineage_graph)?;
+    if manifest.relationships != expected_relationships {
+        return Err(AppError::FileIO(
+            "Project relationships differ from lineage graph projection".to_string(),
+        ));
+    }
+    Ok(())
         }
 
 fn set_value_name(value: &mut Value, name: &str, kind: &str) -> Result<(), AppError> {
@@ -3002,11 +3167,13 @@ mod tests {
         tables: Vec<TableDoc>,
         graphs: Vec<GraphDoc>,
         fit_y_by_x: Vec<Value>,
+        reports: Vec<Value>,
         tabulates: Vec<Value>,
         folders: Vec<String>,
         table_folders: &HashMap<String, String>,
         graph_folders: &HashMap<String, String>,
         fit_y_by_x_folders: &HashMap<String, String>,
+        report_folders: &HashMap<String, String>,
         tabulate_folders: &HashMap<String, String>,
         history: Vec<Value>,
         snapshots: Vec<Value>,
@@ -3018,12 +3185,14 @@ mod tests {
             tables,
             graphs,
             fit_y_by_x,
+            reports,
             Vec::new(),
             tabulates,
             folders,
             table_folders,
             graph_folders,
             fit_y_by_x_folders,
+            report_folders,
             &HashMap::new(),
             tabulate_folders,
             history,
@@ -3122,14 +3291,25 @@ mod tests {
                 "datasets": [],
                 "graphBuilders": [],
                 "fitYByX": [],
+                "reports": [],
                 "tabulates": [],
                 "history": [],
                 "folders": [],
                 "tableFolders": {},
                 "graphFolders": {},
                 "fitYByXFolders": {},
+                "reportFolders": {},
                 "tabulateFolders": {}
             }
+        })
+    }
+
+    fn report_doc(id: &str, name: &str, markdown: &str) -> Value {
+        json!({
+            "schemaVersion": 1,
+            "id": id,
+            "name": name,
+            "markdown": markdown,
         })
     }
 
@@ -3306,6 +3486,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3424,6 +3606,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3453,6 +3637,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3490,11 +3676,13 @@ mod tests {
             vec![table],
             vec![graph],
             vec![fit],
+            vec![],
             vec![tabulate],
             vec!["Raw/2026".into(), "Reports".into(), "Analyses/Fit".into()],
             &table_folders,
             &graph_folders,
             &fit_folders,
+            &HashMap::new(),
             &tabulate_folders,
             vec![],
             vec![snapshot],
@@ -3570,8 +3758,10 @@ mod tests {
             vec![table_doc("table-1", "Table")],
             vec![graph],
             vec![fit_doc("fit-1", "Fit")],
+            vec![],
             vec![tabulate_doc("tab-1", "Tabulate")],
             vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3625,6 +3815,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3673,6 +3865,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3704,6 +3898,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3727,6 +3923,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3771,8 +3969,10 @@ mod tests {
             vec![table_doc("table-1", "Data"), table_doc("table-2", "data")],
             vec![graph_doc("graph-1", "DATA"), graph_doc("graph-2", "data")],
             vec![fit_doc("fit-1", "Data"), fit_doc("fit-2", "data")],
+            vec![],
             vec![tabulate_doc("tab-1", "DATA")],
             vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3802,6 +4002,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3820,6 +4022,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3840,6 +4044,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3860,6 +4066,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3883,6 +4091,8 @@ mod tests {
             vec![json!({"name": "fit"})],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -3908,10 +4118,12 @@ mod tests {
             graph_folders: Some(HashMap::new()),
             fit_y_by_x: vec![],
             fit_y_by_x_folders: HashMap::new(),
+            report_folders: HashMap::new(),
             distributions: vec![],
             distribution_folders: HashMap::new(),
             tabulates: vec![],
             tabulate_folders: HashMap::new(),
+            report_files: vec![],
             fit_y_by_x_files: vec![],
             tabulate_files: vec![],
             snapshot_files: vec![],
@@ -3930,6 +4142,73 @@ mod tests {
         assert_eq!(round_trip.graph_folders, Some(HashMap::new()));
         assert!(round_trip.fit_y_by_x.is_empty());
         assert!(round_trip.fit_y_by_x_folders.is_empty());
+    }
+
+    #[test]
+    fn report_round_trip_preserves_markdown_and_folder_map() {
+        let path = temp_project_path("report-round-trip");
+        let report = report_doc("report-1", "Report 1", "# Hello report");
+        let report_folders = HashMap::from([(String::from("report-1"), String::from("Reports"))]);
+
+        let bundle = build_bundle(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-09-01T00:00:00Z".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![report.clone()],
+            Vec::new(),
+            vec!["Reports".to_string()],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &report_folders,
+            &HashMap::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(loaded.manifest.report_files.len(), 1);
+        assert_eq!(loaded.manifest.report_files[0].file, "data/Report 1.sprp");
+        assert_eq!(loaded.manifest.report_files[0].kind, DocumentKind::Report);
+        assert_eq!(loaded.manifest.report_folders, report_folders);
+        assert_eq!(loaded.reports, vec![report]);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn report_missing_manifest_fields_default_cleanly() {
+        let path = temp_project_path("report-defaults");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let manifest = json!({
+            "name": "Compat Project",
+            "version": "2.0.0",
+            "createdAt": "2026-08-14T00:00:00Z",
+            "tables": [],
+            "graphs": [],
+            "folders": [],
+        });
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(&manifest_bytes).unwrap();
+        zip.finish().unwrap();
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+
+        assert!(loaded.manifest.report_files.is_empty());
+        assert!(loaded.manifest.report_folders.is_empty());
+        assert!(loaded.reports.is_empty());
+
+        let _ = std::fs::remove_file(path);
     }
 
     use serde_json::json;
@@ -3995,6 +4274,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4015,6 +4296,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4035,6 +4318,8 @@ mod tests {
             vec![fit_doc("fit-1", "a"), fit_doc("fit-1", "b")],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4046,6 +4331,31 @@ mod tests {
             matches!(duplicate_fit, Err(AppError::FileIO(message)) if message.contains("Duplicate fitYByX stable id"))
         );
 
+        let duplicate_report = build_bundle(
+            "Project".into(),
+            "4.0.0".into(),
+            "now".into(),
+            vec![],
+            vec![],
+            vec![],
+            vec![
+                report_doc("report-1", "a", "# a"),
+                report_doc("report-1", "b", "# b"),
+            ],
+            vec![],
+            Vec::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        );
+        assert!(
+            matches!(duplicate_report, Err(AppError::FileIO(message)) if message.contains("Duplicate report stable id"))
+        );
+
         let duplicate_tabulate = build_bundle(
             "Project".into(),
             "4.0.0".into(),
@@ -4053,8 +4363,10 @@ mod tests {
             vec![],
             vec![],
             vec![],
-            vec![tabulate_doc("tab-1", "a"), tabulate_doc("tab-1", "b")],
             vec![],
+            vec![tabulate_doc("tab-1", "a"), tabulate_doc("tab-1", "b")],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4075,6 +4387,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4093,8 +4407,10 @@ mod tests {
             vec![],
             vec![],
             vec![fit_doc("shared-id", "fit")],
-            vec![tabulate_doc("shared-id", "tab")],
             vec![],
+            vec![tabulate_doc("shared-id", "tab")],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4127,8 +4443,10 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             vec![tabulate.clone()],
             Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4172,10 +4490,12 @@ mod tests {
             Vec::new(),
             vec![fit.clone()],
             Vec::new(),
+            Vec::new(),
             vec!["Analyses".to_string()],
             &HashMap::new(),
             &HashMap::new(),
             &folders,
+            &HashMap::new(),
             &HashMap::new(),
             Vec::new(),
             Vec::new(),
@@ -4289,10 +4609,12 @@ mod tests {
             Vec::new(),
             vec![fit.clone()],
             Vec::new(),
+            Vec::new(),
             vec!["Analyses".to_string(), "Analyses/Bivariate".to_string()],
             &HashMap::new(),
             &HashMap::new(),
             &folders,
+            &HashMap::new(),
             &HashMap::new(),
             Vec::new(),
             Vec::new(),
@@ -4352,9 +4674,11 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             vec![first],
             Vec::new(),
             vec!["Analyses/One".to_string(), "Analyses/Two".to_string()],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4534,8 +4858,10 @@ mod tests {
             vec![table],
             vec![graph],
             vec![fit],
+            vec![],
             vec![tabulate],
             vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4603,6 +4929,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4628,6 +4956,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4717,6 +5047,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4725,6 +5057,7 @@ mod tests {
             vec![],
         )
         .unwrap();
+
         write_project_archive(&bundle, path.to_str().unwrap()).unwrap();
 
         let seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -4762,6 +5095,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4815,6 +5150,8 @@ mod tests {
             vec![fit_doc("fit-1", "Fit 1")],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4868,6 +5205,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4904,6 +5243,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -4958,6 +5299,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -5006,8 +5349,11 @@ mod tests {
         let table = table_doc("table-1", "data");
         let graph = graph_doc("graph-1", "data");
         let fit = fit_doc("fit-1", "data");
+        let report = report_doc("report-1", "Report 1", "# report body");
         let tabulate = tabulate_doc("tab-1", "data");
         let snapshot = snapshot_doc("snap-1", "data");
+        let report_folders = HashMap::from([("report-1".to_string(), "Root/Nested".to_string())]);
+        let tabulate_folders = HashMap::from([("tab-1".to_string(), "Root".to_string())]);
 
         let bundle = build_bundle(
             "Project".to_string(),
@@ -5016,6 +5362,7 @@ mod tests {
             vec![table],
             vec![graph],
             vec![fit],
+            vec![report],
             vec![tabulate],
             vec![
                 "Root".to_string(),
@@ -5025,7 +5372,8 @@ mod tests {
             &HashMap::from([("table-1".to_string(), "Root/Nested".to_string())]),
             &HashMap::from([("graph-1".to_string(), "Root/Nested/Leaf".to_string())]),
             &HashMap::from([("fit-1".to_string(), "Root/Nested/Leaf".to_string())]),
-            &HashMap::from([("tab-1".to_string(), "Root".to_string())]),
+            &report_folders,
+            &tabulate_folders,
             vec![json!({"event": "save"})],
             vec![snapshot],
         )
@@ -5046,15 +5394,22 @@ mod tests {
             "data/data.sptb".to_string(),
             "data/data.spgh".to_string(),
             "data/data.spf".to_string(),
+            "data/Report 1.sprp".to_string(),
             "data/data-2.spf".to_string(),
             "snapshots/data.json".to_string(),
             ".history.json".to_string(),
         ]);
         assert_eq!(entries, expected);
         assert!(!entries.contains(".snapshots.json"));
+        assert!(!entries.contains("data/report-1.sprp"));
         assert!(entries.iter().all(|entry| !entry.starts_with("tables/")));
         assert!(entries.iter().all(|entry| !entry.starts_with("graphs/")));
+        assert!(entries.iter().all(|entry| !entry.contains("Root/")));
         assert!(entries.iter().all(|entry| !entry.ends_with('/')));
+
+        let loaded = read_project_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.manifest.report_folders, report_folders);
+        assert_eq!(loaded.manifest.tabulate_folders, tabulate_folders);
 
         let _ = std::fs::remove_file(path);
     }
@@ -5072,8 +5427,10 @@ mod tests {
             vec![table_doc("table-1", "data")],
             vec![graph_doc("graph-1", "data")],
             vec![fit_doc("fit-1", "data")],
+            Vec::new(),
             vec![tabulate_doc("tab-1", "data")],
             vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -5112,6 +5469,8 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            Vec::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -5153,8 +5512,10 @@ mod tests {
             vec![table_doc("table-1", "data")],
             vec![],
             vec![fit_doc("fit-1", "fit")],
+            Vec::new(),
             vec![],
             vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -5185,6 +5546,50 @@ mod tests {
     }
 
     #[test]
+    fn write_project_archive_rejects_duplicate_report_manifest_stable_ids_before_writing_destination(
+    ) {
+        let path = temp_project_path("write-v4-duplicate-report-stable-id");
+        std::fs::write(&path, b"destination-before-save").unwrap();
+        let original_bytes = std::fs::read(&path).unwrap();
+
+        let mut bundle = build_bundle(
+            "Project".to_string(),
+            "4.0.0".to_string(),
+            "2026-09-01T00:00:00Z".to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![report_doc("report-1", "Report 1", "# body")],
+            vec![],
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        bundle.manifest.report_files.push(DocumentEntryRef {
+            id: "report-1".to_string(),
+            name: "Report 1 copy".to_string(),
+            file: "data/Report 1 copy.sprp".to_string(),
+            kind: DocumentKind::Report,
+        });
+
+        let error = write_project_archive(&bundle, path.to_str().unwrap()).unwrap_err();
+        assert!(
+            matches!(error, AppError::FileIO(message) if message.contains("Duplicate report stable id in manifest"))
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
+        assert!(!std::path::PathBuf::from(format!("{}.tmp", path.to_string_lossy())).exists());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn write_project_archive_body_parity_validation_failure_preserves_destination() {
         let path = temp_project_path("write-v4-body-parity-validation");
         std::fs::write(&path, b"destination-before-save").unwrap();
@@ -5197,8 +5602,10 @@ mod tests {
             vec![table_doc("table-1", "data")],
             vec![graph_doc("graph-1", "graph-data")],
             vec![fit_doc("fit-1", "fit-data")],
+            Vec::new(),
             vec![tabulate_doc("tab-1", "tab-data")],
             vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -5242,8 +5649,10 @@ mod tests {
             vec![table_doc("table-1", "data")],
             vec![graph_doc("graph-1", "data")],
             vec![fit_doc("fit-1", "data")],
+            Vec::new(),
             vec![tabulate_doc("tab-1", "data")],
             vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -5449,6 +5858,21 @@ mod tests {
                 "tables": [],
                 "graphs": [],
                 "folders": [],
+                "reportFiles": [
+                    { "id": "report-1", "name": "a", "file": "data/a.sprp", "kind": "report" },
+                    { "id": "report-1", "name": "b", "file": "data/b.sprp", "kind": "report" }
+                ],
+                "fitYByXFiles": [],
+                "tabulateFiles": [],
+                "snapshotFiles": []
+            }),
+            json!({
+                "name": "Project",
+                "version": "4.0.0",
+                "createdAt": "now",
+                "tables": [],
+                "graphs": [],
+                "folders": [],
                 "fitYByXFiles": [
                     { "id": "fit-1", "name": "a", "file": "data/a.spf", "kind": "fitYByX" },
                     { "id": "fit-1", "name": "b", "file": "data/b.spf", "kind": "fitYByX" }
@@ -5535,8 +5959,10 @@ mod tests {
             vec![table_doc("table-1", "data")],
             vec![graph_doc("graph-1", "graph-data")],
             vec![fit_doc("fit-1", "fit-data")],
+            vec![],
             vec![tabulate_doc("tab-1", "tab-data")],
             vec![],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),

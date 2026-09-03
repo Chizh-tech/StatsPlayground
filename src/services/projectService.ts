@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { DistributionItem } from "@/types/distribution";
 import type { ProjectInfo, OpenProjectResult, ImportTableResult } from "@/types/project";
+import type { ReportItem } from "@/types/report";
 import type {
   LogicalFolder,
   WorkflowDefinition,
@@ -23,6 +24,10 @@ export interface SaveProjectFolders {
   fitYByXFolders: Record<string, string>;
   /** tabulateId → folder path. Root tabulates are simply absent. */
   tabulateFolders: Record<string, string>;
+  /** reportId → folder path. Root reports are simply absent. */
+  reportFolders: Record<string, string>;
+  /** Reports persisted with the project. */
+  reports: ReportItem[];
   /** distributionId → folder path. Root analyses are simply absent. */
   distributionFolders: Record<string, string>;
 }
@@ -40,6 +45,8 @@ export interface SaveProjectRequest {
   graphFolders: Record<string, string>;
   fitYByXFolders: Record<string, string>;
   tabulateFolders: Record<string, string>;
+  reportFolders: Record<string, string>;
+  reports: ReportItem[];
   distributionFolders: Record<string, string>;
   workflows: WorkflowDefinition[];
   logicalFolders: LogicalFolder[];

@@ -2,6 +2,7 @@ export type { DatasetMeta, ColumnMeta, TableQueryParams, TableFilter, TableQuery
 export type { EmbeddedGraphConfig } from "./graphBuilder";
 export type { ColumnStats, DescriptiveResult } from "./stats";
 export type { ProjectInfo } from "./project";
+export type { ReportDependency, ReportEmbedKind, ReportItem, ReportToken } from "./report";
 export type {
 	FitYByXAnovaRow,
 	FitYByXBivariateResult,

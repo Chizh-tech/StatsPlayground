@@ -833,6 +833,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     tryBeginTableMutation,
     endTableMutation,
     clearPendingRestore,
+    invalidateData,
   } = useHistoryStore();
   const zoom = useTableZoomStore((s) => s.zoom);
   const zoomIn = useTableZoomStore((s) => s.zoomIn);
@@ -1001,8 +1002,9 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     }
     try {
       await dataService.setColumnDisplayProps(datasetId, props);
+      invalidateData();
     } catch { /* ignore */ }
-  }, [datasetId]);
+  }, [datasetId, invalidateData]);
 
   useEffect(() => {
     skipFilterReloadRef.current = true;
