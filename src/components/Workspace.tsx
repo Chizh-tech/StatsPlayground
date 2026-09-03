@@ -1796,8 +1796,8 @@ export function Workspace() {
               </div>
             )}
             <div style={{ marginTop: 16, textAlign: "right" }}>
-              <button className="btn-text" onClick={cancelActiveImport} disabled={cancellingImport || !activeImportRequestId}>
-                {cancellingImport ? t("workspace.cancellingImport") : t("common.cancel")}
+              <button className="btn-secondary" onClick={cancelActiveImport} disabled={cancellingImport || !activeImportRequestId}>
+                {cancellingImport ? t("workspace.cancellingImport") : t("workspace.cancelImport")}
               </button>
             </div>
           </div>

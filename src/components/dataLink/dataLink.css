@@ -189,6 +189,24 @@
   margin-top: 3px;
 }
 
+.datalink-type-policy {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--fg-accent);
+  background: var(--bg-header);
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.datalink-type-policy i {
+  margin-top: 2px;
+  color: var(--fg-accent);
+}
+
 .datalink-target-name {
   display: grid;
   grid-template-columns: auto minmax(180px, 320px);

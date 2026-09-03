@@ -1,4 +1,5 @@
 mod commands;
+pub mod connectors;
 mod engine;
 mod error;
 mod models;

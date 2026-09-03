@@ -226,6 +226,10 @@ export function SqliteDataLinkDialog({
                   </div>
                   {preview.truncated && <span>{t("dataLink.limited", { defaultValue: "Limited to 100 rows" })}</span>}
                 </div>
+                <div className="datalink-type-policy">
+                  <i className="fa-solid fa-circle-info" aria-hidden="true" />
+                  <span>{t("dataLink.typePolicy")}</span>
+                </div>
                 {selectedTables.has(preview.objectName) && (
                   <label className="datalink-target-name">
                     <span>{t("dataLink.targetName", { defaultValue: "Target dataset name" })}</span>
