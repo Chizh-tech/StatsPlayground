@@ -10,6 +10,7 @@ import {
   folderParent,
   validateFolderOrFileName,
 } from "@/stores/useFolderStore";
+import { dataLinkService } from "@/services/dataLinkService";
 import { dataService } from "@/services/dataService";
 import { ioService } from "@/services/ioService";
 import { projectService } from "@/services/projectService";
@@ -18,6 +19,7 @@ import { HistoryPanel, type SnapshotMenuData } from "./HistoryPanel";
 import { PreferencesDialog } from "./PreferencesDialog";
 import { SqlQueryDialog } from "./SqlQueryDialog";
 import { HelpDialog } from "./HelpDialog";
+import { SqliteDataLinkDialog } from "./dataLink/SqliteDataLinkDialog";
 import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
 import { GraphBuilderView } from "./graphBuilder";
 import { TabulateView } from "./tabulate";
@@ -31,6 +33,7 @@ import { listen } from "@tauri-apps/api/event";
 import { modKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import type { NamedSnapshot } from "@/types/history";
+import type { SqliteImportSelection } from "@/types/dataLink";
 
 function formatStat(n: number): string {
   if (Number.isInteger(n) && Math.abs(n) < 1e15) return n.toString();
@@ -177,6 +180,7 @@ export function Workspace() {
   const [renameValue, setRenameValue] = useState("");
   const [showPrefs, setShowPrefs] = useState(false);
   const [showSqlQuery, setShowSqlQuery] = useState(false);
+  const [sqliteDataLinkPath, setSqliteDataLinkPath] = useState<string | null>(null);
   const [helpDialog, setHelpDialog] = useState<"about" | "license" | null>(null);
   const [tableOp, setTableOp] = useState<TableOpType | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -536,35 +540,40 @@ export function Workspace() {
       multiple: false,
     });
     if (selected) {
-      // Listen for progress events
-      const unlisten = await listen<{
-        table_name: string;
-        table_index: number;
-        table_total: number;
-        rows_done: number;
-        rows_total: number;
-      }>("import-progress", (event) => {
-        setImportProgress({
-          tableName: event.payload.table_name,
-          tableIndex: event.payload.table_index,
-          tableTotal: event.payload.table_total,
-          rowsDone: event.payload.rows_done,
-          rowsTotal: event.payload.rows_total,
-        });
+      setSqliteDataLinkPath(selected as string);
+    }
+  };
+
+  const importSelectedSqlite = async (selections: SqliteImportSelection[]) => {
+    if (!sqliteDataLinkPath) return;
+    const unlisten = await listen<{
+      table_name: string;
+      table_index: number;
+      table_total: number;
+      rows_done: number;
+      rows_total: number;
+    }>("import-progress", (event) => {
+      setImportProgress({
+        tableName: event.payload.table_name,
+        tableIndex: event.payload.table_index,
+        tableTotal: event.payload.table_total,
+        rowsDone: event.payload.rows_done,
+        rowsTotal: event.payload.rows_total,
       });
-      try {
-        setImportProgress({ tableName: t("common.preparing"), tableIndex: 0, tableTotal: 0, rowsDone: 0, rowsTotal: 0 });
-        await ioService.importSqlite(selected as string);
-        await refreshDatasets();
-        markDirty();
-        const fileName = (selected as string).split(/[\\\\/]/).pop() ?? "SQLite";
-        recordAction(t("history.importSqlite", { file: fileName }));
-      } catch (e) {
-        alert(t("alert.importSqliteFailed") + String(e));
-      } finally {
-        unlisten();
-        setImportProgress(null);
-      }
+    });
+    try {
+      setImportProgress({ tableName: t("common.preparing"), tableIndex: 0, tableTotal: 0, rowsDone: 0, rowsTotal: 0 });
+      await dataLinkService.importSelectedSqlite(sqliteDataLinkPath, selections);
+      await refreshDatasets();
+      markDirty();
+      const fileName = sqliteDataLinkPath.split(/[\\\\/]/).pop() ?? "SQLite";
+      recordAction(t("history.importSqlite", { file: fileName }));
+    } catch (e) {
+      alert(t("alert.importSqliteFailed") + String(e));
+      throw e;
+    } finally {
+      unlisten();
+      setImportProgress(null);
     }
   };
 
@@ -1694,6 +1703,15 @@ export function Workspace() {
       </div>
 
       {showPrefs && <PreferencesDialog onClose={() => setShowPrefs(false)} />}
+
+      {sqliteDataLinkPath && (
+        <SqliteDataLinkDialog
+          filePath={sqliteDataLinkPath}
+          existingDatasetNames={datasets.map((dataset) => dataset.name)}
+          onClose={() => setSqliteDataLinkPath(null)}
+          onImport={importSelectedSqlite}
+        />
+      )}
 
       {helpDialog && <HelpDialog mode={helpDialog} onClose={() => setHelpDialog(null)} />}
 

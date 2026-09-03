@@ -56,7 +56,30 @@ function toPayloadBuffer(message: unknown): ArrayBuffer | null {
       message.byteOffset + message.byteLength,
     ) as ArrayBuffer;
   }
+  if (
+    Array.isArray(message)
+    && message.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)
+  ) {
+    return Uint8Array.from(message as number[]).buffer;
+  }
   return null;
+}
+
+function describeMessageShape(message: unknown): string {
+  if (message === null) return "null";
+  if (message === undefined) return "undefined";
+  if (typeof message !== "object") return typeof message;
+
+  const record = message as Record<string, unknown>;
+  const tag = Object.prototype.toString.call(message);
+  const constructorName = record.constructor instanceof Function
+    ? record.constructor.name
+    : "unknown";
+  const keys = Object.keys(record).slice(0, 12).join(",");
+  const messageType = typeof record.messageType === "string"
+    ? ` messageType=${record.messageType}`
+    : "";
+  return `${tag}/${constructorName}${messageType} keys=[${keys}]`;
 }
 
 function isMessageType(record: Record<string, unknown>, expected: string): boolean {
@@ -159,7 +182,7 @@ export function createGraphStreamTransport(
 
       const structured = parseStructuredMessage(message);
       if (!structured) {
-        fail("graph stream emitted an unknown chunk message");
+        fail(`graph stream emitted an unknown chunk message (${describeMessageShape(message)})`);
         return;
       }
 
@@ -225,7 +248,7 @@ export function createGraphStreamTransport(
         return;
       }
 
-      fail("graph stream emitted an unknown chunk message");
+      fail(`graph stream emitted an unknown chunk message (${describeMessageShape(message)})`);
     },
 
     onInvokeResolved: (completion: GraphDataCompletion): void => {

@@ -1,3 +1,4 @@
+pub mod data_link_commands;
 pub mod data_commands;
 pub mod graph_data_commands;
 pub mod history_commands;

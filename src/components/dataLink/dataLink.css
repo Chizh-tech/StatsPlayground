@@ -1,0 +1,330 @@
+.datalink-dialog {
+  width: min(1080px, calc(100vw - 48px));
+  max-width: none;
+  height: min(720px, calc(100vh - 48px));
+}
+
+.datalink-header,
+.datalink-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-color: var(--border-main);
+}
+
+.datalink-header {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-main);
+}
+
+.datalink-header h2,
+.datalink-preview-heading h3 {
+  margin: 0;
+  color: var(--fg-primary);
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.datalink-header p {
+  margin: 3px 0 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.datalink-close {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.datalink-content {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.datalink-objects {
+  overflow: auto;
+  border-right: 1px solid var(--border-main);
+  background: var(--bg-main);
+}
+
+.datalink-section-title {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.datalink-object {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  padding-left: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  text-align: left;
+}
+
+.datalink-object-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  padding: 7px 12px 7px 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.datalink-object:hover,
+.datalink-object.active {
+  background: var(--bg-menu-hover);
+}
+
+.datalink-object.active {
+  box-shadow: inset 3px 0 var(--fg-accent);
+}
+
+.datalink-object span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.datalink-object input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--fg-accent);
+}
+
+.datalink-object em {
+  padding: 1px 4px;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  color: var(--fg-muted);
+  font-size: 9px;
+  font-style: normal;
+  line-height: 14px;
+}
+
+.datalink-object small,
+.datalink-object i {
+  color: var(--fg-muted);
+}
+
+.datalink-preview {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+}
+
+.datalink-conflicts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-input);
+  background: var(--bg-header);
+  color: var(--fg-primary);
+  font-size: 12px;
+}
+
+.datalink-strategy {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.datalink-strategy button {
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 1px solid var(--border-input);
+  background: var(--bg-btn-secondary);
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.datalink-strategy button + button {
+  border-left: 0;
+}
+
+.datalink-strategy button.active {
+  background: var(--bg-header-selected);
+  color: var(--fg-primary);
+}
+
+.datalink-preview-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.datalink-preview-heading div span {
+  display: block;
+  margin-top: 3px;
+}
+
+.datalink-target-name {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 320px);
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.datalink-target-name small {
+  grid-column: 2;
+  color: var(--fg-muted);
+}
+
+.datalink-target-name input {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+}
+
+.datalink-target-name input:focus {
+  border-color: var(--border-input-focus);
+  outline: none;
+}
+
+.datalink-schema {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+}
+
+.datalink-schema > span {
+  display: grid;
+  gap: 2px;
+  min-width: 120px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-main);
+  border-radius: 4px;
+  color: var(--fg-primary);
+  font-size: 12px;
+}
+
+.datalink-schema small {
+  color: var(--fg-muted);
+}
+
+.datalink-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border-main);
+}
+
+.datalink-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  color: var(--fg-primary);
+  font-size: 12px;
+}
+
+.datalink-table th,
+.datalink-table td {
+  max-width: 280px;
+  padding: 7px 10px;
+  overflow: hidden;
+  border-right: 1px solid var(--border-main);
+  border-bottom: 1px solid var(--border-main);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.datalink-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-header);
+  z-index: 1;
+}
+
+.datalink-table .is-null {
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+.datalink-state,
+.datalink-error {
+  padding: 18px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.datalink-error {
+  margin-bottom: 12px;
+  border: 1px solid var(--fg-danger);
+  color: var(--fg-danger);
+}
+
+.datalink-actions {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border-main);
+}
+
+.datalink-actions > span {
+  margin-right: auto;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .datalink-dialog {
+    width: calc(100vw - 20px);
+    height: calc(100vh - 20px);
+  }
+
+  .datalink-content {
+    grid-template-columns: 140px minmax(0, 1fr);
+  }
+
+  .datalink-actions > span {
+    display: none;
+  }
+
+  .datalink-conflicts,
+  .datalink-target-name {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .datalink-target-name small {
+    grid-column: 1;
+  }
+}

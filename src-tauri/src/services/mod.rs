@@ -1,4 +1,5 @@
 pub mod archive_cell;
+pub mod data_link_service;
 pub mod data_service;
 pub mod graph_data_service;
 pub mod io_service;

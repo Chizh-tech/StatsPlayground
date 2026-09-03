@@ -84,6 +84,30 @@
       "edgeDots": "Tên không được bắt đầu hoặc kết thúc bằng dấu chấm hoặc khoảng trắng."
     }
   },
+  "dataLink": {
+    "title": "Liên kết dữ liệu SQLite",
+    "objects": "Đối tượng",
+    "noObjects": "Không có bảng hoặc dạng xem",
+    "loadingPreview": "Đang tải bản xem trước...",
+    "previewRows": "Xem trước {{count}} hàng",
+    "limited": "Giới hạn 100 hàng",
+    "selectObject": "Chọn một đối tượng để xem trước",
+    "selectTable": "Chọn {{name}}",
+    "exists": "Đã tồn tại",
+    "conflictsFound": "{{count}} xung đột tên",
+    "conflictStrategy": "Cách xử lý xung đột",
+    "keepBoth": "Giữ cả hai",
+    "appendRows": "Nối thêm hàng",
+    "appendRequiresMatch": "Tên, thứ tự và kiểu cột phải khớp hoàn toàn.",
+    "skipExisting": "Bỏ qua dữ liệu hiện có",
+    "targetName": "Tên tập dữ liệu đích",
+    "targetRequired": "Tên đích không được để trống.",
+    "duplicateTarget": "Tên đích phải là duy nhất.",
+    "targetExists": "Tên đích đã tồn tại.",
+    "selectedCount": "Đã chọn {{count}} bảng",
+    "importing": "Đang nhập...",
+    "importSelected": "Nhập các bảng đã chọn"
+  },
   "folder": {
     "defaultName": "Thư mục mới",
     "newSubfolder": "Thư mục con mới",

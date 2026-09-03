@@ -289,6 +289,35 @@ assert.deepEqual(decoded.dictionaries.x, ["Central", "East"]);
 assert.deepEqual(Array.from(decoded.validity.x), [0b00000001]);
 assert.deepEqual(Array.from(decoded.validity.y), [0b00000011]);
 
+assert.equal(
+  isGraphAggregatePacket({
+    kind: "summary",
+    xColumn: "BillingCountry",
+    yColumn: "Total",
+    groupColumn: null,
+    sourceColumn: null,
+    summaries: [{
+      group: null,
+      category: "USA",
+      sourceColumn: null,
+      facetX: null,
+      facetY: null,
+      facetZ: null,
+      wrap: null,
+      count: 7,
+      mean: 5.7,
+      median: 5.9,
+      stddev: 1.2,
+      min: 0.99,
+      max: 13.86,
+      intervalLow: null,
+      intervalHigh: null,
+    }],
+  }),
+  true,
+  "aggregate guard must accept null fields serialized from Rust Option values",
+);
+
 const dynamicPayload = new ArrayBuffer(184);
 new Uint32Array(dynamicPayload, 0, 2).set([0, 1]);
 new Float64Array(dynamicPayload, 8, 2).set([10, 20]);
@@ -1149,6 +1178,42 @@ function makeProgressedChunk(
   transport.onChannelMessage({
     messageType: "complete",
     ...makeCompletion("req-typed-array-payload", 27),
+    chunksSent: 1,
+  });
+
+  assert.equal(transportError, null);
+  assert.deepEqual(events, ["header", "payload", "complete"]);
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
+  const request = makeRequest("req-number-array-payload", 28);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {
+      events.push("header");
+    },
+    onPayload: (receivedPayload) => {
+      events.push("payload");
+      assert.equal(receivedPayload.byteLength, makePayload(0).byteLength);
+    },
+    onAggregate: () => {},
+    onComplete: () => {
+      events.push("complete");
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader("req-number-array-payload", 28, 0, true),
+  });
+  transport.onChannelMessage(Array.from(new Uint8Array(makePayload(0))));
+  transport.onChannelMessage({
+    messageType: "complete",
+    ...makeCompletion("req-number-array-payload", 28),
     chunksSent: 1,
   });
 

@@ -3141,11 +3141,25 @@ function buildSingleOption(
         ),
       )
       : [];
+  const summaryPacketCats =
+    frameBackedAggregateMode && summaryPacket && xIsCategory
+      ? Array.from(
+        new Set(
+          summaryPacket.summaries
+            .map((entry) => (entry.category == null ? "" : String(entry.category)))
+            .filter((value) => value.length > 0),
+        ),
+      )
+      : [];
   const rawXCats =
     useRowIdxX
       ? [""]
       : xIsCategory
-        ? (histogramOnlyPacketMode ? histogramPacketCats : collectCategories(data, xIdx, yIdx))
+        ? (histogramOnlyPacketMode
+          ? histogramPacketCats
+          : summaryPacketCats.length > 0
+            ? summaryPacketCats
+            : collectCategories(data, xIdx, yIdx))
         : [];
   const localXCats = xField ? applyValueOrder(rawXCats, valueOrders?.[xField.name]) : rawXCats;
   let xCats: string[] = xIsCategory && sharedRanges?.xCats
@@ -5205,6 +5219,12 @@ function buildSingleOption(
   } else {
     let dataMin = Infinity;
     let dataMax = -Infinity;
+    if (frameBackedAggregateMode && summaryPacket) {
+      for (const entry of summaryPacket.summaries) {
+        if (Number.isFinite(entry.min)) dataMin = Math.min(dataMin, entry.min);
+        if (Number.isFinite(entry.max)) dataMax = Math.max(dataMax, entry.max);
+      }
+    }
     if (yIdx >= 0) {
       for (const r of data.rows) {
         if (isRowHidden(r)) continue;
@@ -5480,7 +5500,13 @@ function buildElementSeries(
     const col = meltVarColIdx >= 0 ? String(data.rows[i][meltVarColIdx] ?? "") : yColName;
     points.push({ x: xv, y: yv, size: sv, rowId: Number.isFinite(rid) ? rid : -1, colName: col });
   }
-  if (points.length === 0) return null;
+  const canUseSummaryPacket =
+    (el.kind === "points" || el.kind === "line") &&
+    getOpt<string>(el.options, "summaryStat", "none") !== "none" &&
+    !useRowIdx &&
+    xIdx >= 0 &&
+    summaryPacket !== null;
+  if (points.length === 0 && !canUseSummaryPacket) return null;
 
   switch (el.kind) {
     case "points": {

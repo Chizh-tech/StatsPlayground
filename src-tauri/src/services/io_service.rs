@@ -38,6 +38,24 @@ impl<'a> IoService<'a> {
         Ok(results.into_iter().map(|(_, meta)| meta).collect())
     }
 
+    pub fn import_selected_sqlite<F>(
+        &self,
+        file_path: &str,
+        selections: &[(String, String, bool)],
+        on_progress: F,
+    ) -> Result<Vec<DatasetMeta>, AppError>
+    where
+        F: Fn(&str, usize, usize, usize, usize),
+    {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let results = db.import_selected_sqlite(file_path, selections, &on_progress)?;
+        Ok(results.into_iter().map(|(_, meta)| meta).collect())
+    }
+
     /// Export every dataset into a single SQLite database.
     pub fn export_sqlite(&self, output_path: &str) -> Result<(), AppError> {
         self.export_sqlite_subset(output_path, None, &HashMap::new())

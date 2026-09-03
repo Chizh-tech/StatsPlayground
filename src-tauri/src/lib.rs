@@ -20,6 +20,9 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
+            commands::data_link_commands::list_sqlite_source_objects,
+            commands::data_link_commands::preview_sqlite_source_object,
+            commands::data_link_commands::import_selected_sqlite,
             commands::data_commands::import_file,
             commands::data_commands::list_datasets,
             commands::data_commands::delete_dataset,

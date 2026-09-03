@@ -84,6 +84,30 @@
       "edgeDots": "名称首尾不能为点或空格。"
     }
   },
+  "dataLink": {
+    "title": "SQLite 数据链接",
+    "objects": "对象",
+    "noObjects": "没有表或视图",
+    "loadingPreview": "正在加载预览...",
+    "previewRows": "预览 {{count}} 行",
+    "limited": "最多显示 100 行",
+    "selectObject": "选择一个对象以预览",
+    "selectTable": "选择 {{name}}",
+    "exists": "已存在",
+    "conflictsFound": "发现 {{count}} 个同名冲突",
+    "conflictStrategy": "冲突处理方式",
+    "keepBoth": "保留两份",
+    "appendRows": "追加行",
+    "appendRequiresMatch": "列名、顺序和类型必须完全一致。",
+    "skipExisting": "跳过已存在",
+    "targetName": "目标数据集名称",
+    "targetRequired": "目标名称不能为空。",
+    "duplicateTarget": "目标名称不能重复。",
+    "targetExists": "选中的目标名称已经存在。",
+    "selectedCount": "已选择 {{count}} 张表",
+    "importing": "正在导入...",
+    "importSelected": "导入所选表"
+  },
   "folder": {
     "defaultName": "新建文件夹",
     "newSubfolder": "新建子文件夹",

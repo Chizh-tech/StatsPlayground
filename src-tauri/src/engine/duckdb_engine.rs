@@ -2999,6 +2999,18 @@ impl DuckDbEngine {
     where
         F: Fn(&str, usize, usize, usize, usize),
     {
+        self.import_selected_sqlite(file_path, &[], on_progress)
+    }
+
+    pub fn import_selected_sqlite<F>(
+        &self,
+        file_path: &str,
+        selections: &[(String, String, bool)],
+        on_progress: &F,
+    ) -> Result<Vec<(String, DatasetMeta)>, AppError>
+    where
+        F: Fn(&str, usize, usize, usize, usize),
+    {
         use rusqlite::types::ValueRef;
 
         // Open SQLite file directly with rusqlite (bypasses DuckDB's scanner type issues)
@@ -3016,28 +3028,84 @@ impl DuckDbEngine {
             .collect::<Result<Vec<_>, _>>()?;
         drop(table_stmt);
 
-        let table_total = table_names.len();
+        let imports: Vec<(String, String, bool)> = if selections.is_empty() {
+            table_names
+                .iter()
+                .map(|name| (name.clone(), name.clone(), false))
+                .collect()
+        } else {
+            selections.to_vec()
+        };
+        let mut plans = Vec::with_capacity(imports.len());
+        for (source_name, target_name, append) in &imports {
+            if !table_names.iter().any(|name| name == source_name) {
+                return Err(AppError::InvalidParam(format!(
+                    "SQLite table not found: {source_name}"
+                )));
+            }
+            let mut pragma_stmt =
+                sqlite_conn.prepare(&format!("PRAGMA table_info(\"{}\")", source_name))?;
+            let columns: Vec<(String, String)> = pragma_stmt
+                .query_map([], |row| Ok((row.get(1)?, row.get(2)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(pragma_stmt);
+
+            if *append {
+                let mut dataset_stmt = self.conn.prepare(
+                    "SELECT id FROM _meta_datasets WHERE LOWER(name) = LOWER($1) LIMIT 1",
+                )?;
+                let mut rows = dataset_stmt.query(params![target_name])?;
+                let target_id: String = rows
+                    .next()?
+                    .ok_or_else(|| {
+                        AppError::InvalidParam(format!(
+                            "Append target dataset not found: {target_name}"
+                        ))
+                    })?
+                    .get(0)?;
+                drop(rows);
+                drop(dataset_stmt);
+
+                let mut column_stmt = self.conn.prepare(
+                    "SELECT col_name, col_type FROM _meta_columns WHERE dataset_id = $1 ORDER BY col_index",
+                )?;
+                let target_columns: Vec<(String, String)> = column_stmt
+                    .query_map(params![target_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let source_columns = columns
+                    .iter()
+                    .map(|(name, sqlite_type)| {
+                        (name.clone(), Self::map_sqlite_type(sqlite_type).to_string())
+                    })
+                    .collect::<Vec<_>>();
+                if source_columns != target_columns {
+                    return Err(AppError::InvalidParam(format!(
+                        "Cannot append {source_name} to {target_name}: column names, order, and types must match"
+                    )));
+                }
+                plans.push((
+                    source_name.clone(),
+                    target_name.clone(),
+                    columns,
+                    Some(target_id),
+                ));
+            } else {
+                self.validate_dataset_name(target_name, None)?;
+                plans.push((source_name.clone(), target_name.clone(), columns, None));
+            }
+        }
+
+        let table_total = plans.len();
 
         let mut results = Vec::new();
 
-        for (table_index, src_table) in table_names.iter().enumerate() {
-            self.validate_dataset_name(src_table, None)?;
-
-            let id = uuid::Uuid::new_v4().to_string();
+        for (table_index, (src_table, target_name, columns, append_target_id)) in
+            plans.iter().enumerate()
+        {
+            let id = append_target_id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let table_name = format!("dataset_{}", id.replace('-', "_"));
-
-            // Get column info via PRAGMA table_info
-            let mut pragma_stmt =
-                sqlite_conn.prepare(&format!("PRAGMA table_info(\"{}\")", src_table))?;
-            let columns: Vec<(String, String)> = pragma_stmt
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(1)?, // column name
-                        row.get::<_, String>(2)?, // column type
-                    ))
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            drop(pragma_stmt);
 
             if columns.is_empty() {
                 continue;
@@ -3052,14 +3120,16 @@ impl DuckDbEngine {
                 })
                 .collect();
 
-            self.conn.execute(
-                &format!(
-                    "CREATE TABLE \"{}\" (\"_row_id\" BIGINT, {})",
-                    table_name,
-                    col_defs.join(", ")
-                ),
-                [],
-            )?;
+            if append_target_id.is_none() {
+                self.conn.execute(
+                    &format!(
+                        "CREATE TABLE \"{}\" (\"_row_id\" BIGINT, {})",
+                        table_name,
+                        col_defs.join(", ")
+                    ),
+                    [],
+                )?;
+            }
 
             // Determine target types for value conversion
             let col_types: Vec<&str> = columns
@@ -3162,21 +3232,26 @@ impl DuckDbEngine {
                 |row| row.get(0),
             )?;
 
-            // Insert column metadata
-            let col_count_i32 = columns.len() as i32;
-            for (col_index, (col_name, sqlite_type)) in columns.iter().enumerate() {
-                let duckdb_type = Self::map_sqlite_type(sqlite_type);
+            if append_target_id.is_some() {
                 self.conn.execute(
-                    "INSERT INTO _meta_columns (dataset_id, col_index, col_name, col_type) VALUES ($1, $2, $3, $4)",
-                    params![id, col_index as i32, col_name, duckdb_type],
+                    "UPDATE _meta_datasets SET row_count = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                    params![row_count, id],
+                )?;
+                self.bump_dataset_generation(&id)?;
+            } else {
+                let col_count_i32 = columns.len() as i32;
+                for (col_index, (col_name, sqlite_type)) in columns.iter().enumerate() {
+                    let duckdb_type = Self::map_sqlite_type(sqlite_type);
+                    self.conn.execute(
+                        "INSERT INTO _meta_columns (dataset_id, col_index, col_name, col_type) VALUES ($1, $2, $3, $4)",
+                        params![id, col_index as i32, col_name, duckdb_type],
+                    )?;
+                }
+                self.conn.execute(
+                    "INSERT INTO _meta_datasets (id, name, source_path, source_type, row_count, col_count) VALUES ($1, $2, $3, 'sqlite', $4, $5)",
+                    params![id, target_name, file_path, row_count, col_count_i32],
                 )?;
             }
-
-            // Insert dataset metadata
-            self.conn.execute(
-                "INSERT INTO _meta_datasets (id, name, source_path, source_type, row_count, col_count) VALUES ($1, $2, $3, 'sqlite', $4, $5)",
-                params![id, src_table, file_path, row_count, col_count_i32],
-            )?;
 
             let meta = self.get_dataset_meta(&id)?;
             results.push((src_table.clone(), meta));
@@ -7185,6 +7260,75 @@ mod tests {
         TableWindowFilter, TableWindowFilterRule, TableWindowRequest, TableWindowSort,
     };
     use duckdb::types::Decimal;
+
+    #[test]
+    fn imports_selected_sqlite_table_and_appends_compatible_rows() {
+        let path = std::env::temp_dir().join(format!(
+            "datalink-selected-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
+        sqlite
+            .execute_batch(
+                "CREATE TABLE people (id INTEGER, name TEXT); \
+                 INSERT INTO people VALUES (1, 'Ada'); \
+                 CREATE TABLE ignored (id INTEGER); \
+                 INSERT INTO ignored VALUES (2);",
+            )
+            .expect("populate SQLite fixture");
+        drop(sqlite);
+
+        let db = DuckDbEngine::new_in_memory().expect("create in-memory project");
+        let imported = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[("people".to_string(), "People".to_string(), false)],
+                &|_, _, _, _, _| {},
+            )
+            .expect("import selected table");
+
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].1.name, "People");
+        assert_eq!(imported[0].1.row_count, 1);
+        assert_eq!(db.list_datasets().expect("list datasets").len(), 1);
+        let generation_before_append = db
+            .get_dataset_generation(&imported[0].1.id)
+            .expect("read initial generation");
+
+        let appended = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[("people".to_string(), "People".to_string(), true)],
+                &|_, _, _, _, _| {},
+            )
+            .expect("append compatible table");
+
+        assert_eq!(appended.len(), 1);
+        assert_eq!(appended[0].1.row_count, 2);
+        assert_eq!(db.list_datasets().expect("list datasets").len(), 1);
+        assert_eq!(
+            db.get_dataset_generation(&imported[0].1.id)
+                .expect("read appended generation"),
+            generation_before_append + 1
+        );
+
+        let error = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[("ignored".to_string(), "People".to_string(), true)],
+                &|_, _, _, _, _| {},
+            )
+            .expect_err("reject incompatible append");
+        assert!(error.to_string().contains("column names, order, and types must match"));
+        assert_eq!(
+            db.get_dataset_meta(&imported[0].1.id)
+                .expect("read unchanged dataset")
+                .row_count,
+            2
+        );
+
+        std::fs::remove_file(path).expect("remove fixture");
+    }
 
     #[test]
     fn benchmark_fixture_creates_requested_shape() {

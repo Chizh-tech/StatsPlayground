@@ -84,6 +84,30 @@
       "edgeDots": "Name cannot start or end with a dot or space."
     }
   },
+  "dataLink": {
+    "title": "SQLite DataLink",
+    "objects": "Objects",
+    "noObjects": "No tables or views",
+    "loadingPreview": "Loading preview...",
+    "previewRows": "{{count}} preview rows",
+    "limited": "Limited to 100 rows",
+    "selectObject": "Select an object to preview",
+    "selectTable": "Select {{name}}",
+    "exists": "Exists",
+    "conflictsFound": "{{count}} name conflicts",
+    "conflictStrategy": "Conflict strategy",
+    "keepBoth": "Keep both",
+    "appendRows": "Append rows",
+    "appendRequiresMatch": "Column names, order, and types must match.",
+    "skipExisting": "Skip existing",
+    "targetName": "Target dataset name",
+    "targetRequired": "Target names cannot be empty.",
+    "duplicateTarget": "Target names must be unique.",
+    "targetExists": "A selected target name already exists.",
+    "selectedCount": "{{count}} tables selected",
+    "importing": "Importing...",
+    "importSelected": "Import selected"
+  },
   "folder": {
     "defaultName": "New Folder",
     "newSubfolder": "New Subfolder",
