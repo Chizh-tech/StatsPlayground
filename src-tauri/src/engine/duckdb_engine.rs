@@ -3,7 +3,7 @@ use std::mem;
 use std::time::Instant;
 
 use duckdb::types::{OrderedMap, TimeUnit, Value};
-use duckdb::{params, params_from_iter, Config, Connection};
+use duckdb::{appender_params_from_iter, params, params_from_iter, Config, Connection};
 
 use crate::engine::sql_query::{normalize_identifier, validate_read_only_query};
 use crate::error::AppError;
@@ -2991,25 +2991,29 @@ impl DuckDbEngine {
     }
 
     /// Import all tables from a SQLite database as datasets
-    pub fn import_sqlite<F>(
+    pub fn import_sqlite<F, C>(
         &self,
         file_path: &str,
         on_progress: &F,
+        is_cancelled: &C,
     ) -> Result<Vec<(String, DatasetMeta)>, AppError>
     where
         F: Fn(&str, usize, usize, usize, usize),
+        C: Fn() -> bool,
     {
-        self.import_selected_sqlite(file_path, &[], on_progress)
+        self.import_selected_sqlite(file_path, &[], on_progress, is_cancelled)
     }
 
-    pub fn import_selected_sqlite<F>(
+    pub fn import_selected_sqlite<F, C>(
         &self,
         file_path: &str,
         selections: &[(String, String, bool)],
         on_progress: &F,
+        is_cancelled: &C,
     ) -> Result<Vec<(String, DatasetMeta)>, AppError>
     where
         F: Fn(&str, usize, usize, usize, usize),
+        C: Fn() -> bool,
     {
         use rusqlite::types::ValueRef;
 
@@ -3096,12 +3100,16 @@ impl DuckDbEngine {
         }
 
         let table_total = plans.len();
+        self.conn.execute_batch("BEGIN TRANSACTION")?;
+        let import_result = (|| -> Result<Vec<(String, DatasetMeta)>, AppError> {
+            let mut results = Vec::new();
 
-        let mut results = Vec::new();
-
-        for (table_index, (src_table, target_name, columns, append_target_id)) in
-            plans.iter().enumerate()
-        {
+            for (table_index, (src_table, target_name, columns, append_target_id)) in
+                plans.iter().enumerate()
+            {
+                if is_cancelled() {
+                    return Err(AppError::Cancelled("SQLite import cancelled".to_string()));
+                }
             let id = append_target_id
                 .clone()
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -3137,93 +3145,90 @@ impl DuckDbEngine {
                 .map(|(_, t)| Self::map_sqlite_type(t))
                 .collect();
 
-            // Read ALL data from SQLite into memory first, then batch-insert into DuckDB.
-            // This avoids holding the DuckDB mutex while doing slow SQLite I/O.
             let col_count = columns.len();
-            on_progress(src_table, table_index, table_total, 0, 0); // signal: reading started
-            let all_rows: Vec<Vec<String>> = {
-                let col_names_sql = columns
-                    .iter()
-                    .map(|(n, _)| format!("\"{}\"", n))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let select_sql = format!("SELECT {} FROM \"{}\"", col_names_sql, src_table);
-                let mut data_stmt = sqlite_conn.prepare(&select_sql)?;
-                let mut rows = data_stmt.query([])?;
-                let mut collected = Vec::new();
-
-                while let Some(row) = rows.next()? {
-                    let mut row_vals = Vec::with_capacity(col_count);
-                    for i in 0..col_count {
-                        let val_ref = row.get_ref(i)?;
-                        let s = match val_ref {
-                            ValueRef::Null => "\0NULL\0".to_string(),
-                            ValueRef::Integer(v) => v.to_string(),
-                            ValueRef::Real(v) => v.to_string(),
-                            ValueRef::Text(t) => String::from_utf8_lossy(t).to_string(),
-                            ValueRef::Blob(_) => "\0NULL\0".to_string(),
-                        };
-                        row_vals.push(s);
-                    }
-                    collected.push(row_vals);
-                }
-                collected
-            };
-
-            // Batch INSERT using VALUES lists (1000 rows per batch for speed)
             const BATCH_SIZE: usize = 1000;
-            let total_rows = all_rows.len();
+            let quoted_source = Self::quote_identifier(src_table);
+            let total_rows_i64: i64 = sqlite_conn.query_row(
+                &format!("SELECT COUNT(*) FROM {quoted_source}"),
+                [],
+                |row| row.get(0),
+            )?;
+            let total_rows = usize::try_from(total_rows_i64).map_err(|_| {
+                AppError::InvalidParam(format!("SQLite row count is invalid: {total_rows_i64}"))
+            })?;
             let mut rows_done: usize = 0;
             on_progress(src_table, table_index, table_total, 0, total_rows);
-            self.conn.execute_batch("BEGIN TRANSACTION")?;
-
-            for chunk in all_rows.chunks(BATCH_SIZE) {
-                let mut values_parts: Vec<String> = Vec::with_capacity(chunk.len());
-                for (batch_idx, row_vals) in chunk.iter().enumerate() {
-                    let row_id = values_parts.len(); // placeholder, will compute below
-                    let _ = row_id; // suppress warning
-                    let mut col_parts: Vec<String> = Vec::with_capacity(col_count + 1);
-                    // _row_id will be added via a subquery
-                    for (ci, val) in row_vals.iter().enumerate() {
-                        if val == "\0NULL\0" {
-                            col_parts.push("NULL".to_string());
-                        } else {
-                            match col_types[ci] {
-                                "BIGINT" => match val.parse::<i64>() {
-                                    Ok(v) => col_parts.push(v.to_string()),
-                                    Err(_) => col_parts.push("NULL".to_string()),
-                                },
-                                "DOUBLE" => match val.parse::<f64>() {
-                                    Ok(_) => col_parts.push(val.clone()),
-                                    Err(_) => col_parts.push("NULL".to_string()),
-                                },
-                                _ => {
-                                    // VARCHAR
-                                    col_parts.push(format!("'{}'", val.replace('\'', "''")));
-                                }
-                            }
-                        }
+            let starting_row_id: i64 = self.conn.query_row(
+                &format!(
+                    "SELECT COALESCE(MAX(\"_row_id\"), 0) FROM {}",
+                    Self::quote_identifier(&table_name)
+                ),
+                [],
+                |row| row.get(0),
+            )?;
+            let col_names_sql = columns
+                .iter()
+                .map(|(name, _)| Self::quote_identifier(name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let select_sql = format!("SELECT {col_names_sql} FROM {quoted_source}");
+            let mut data_stmt = sqlite_conn.prepare(&select_sql)?;
+            let mut source_rows = data_stmt.query([])?;
+            {
+                let mut appender = self.conn.appender(&table_name)?;
+                while let Some(row) = source_rows.next()? {
+                    if is_cancelled() {
+                        return Err(AppError::Cancelled("SQLite import cancelled".to_string()));
                     }
-                    let _ = batch_idx;
-                    values_parts.push(format!("({})", col_parts.join(", ")));
+                    let row_id = starting_row_id
+                        + i64::try_from(rows_done).map_err(|_| {
+                            AppError::InvalidParam("SQLite row index overflow".to_string())
+                        })?
+                        + 1;
+                    let mut values = Vec::with_capacity(col_count + 1);
+                    values.push(Value::BigInt(row_id));
+                    for (column_index, target_type) in col_types.iter().enumerate() {
+                        let value = match (target_type.to_owned(), row.get_ref(column_index)?) {
+                            (_, ValueRef::Null | ValueRef::Blob(_)) => Value::Null,
+                            ("BIGINT", ValueRef::Integer(value)) => Value::BigInt(value),
+                            ("BIGINT", ValueRef::Real(value)) => value
+                                .to_string()
+                                .parse::<i64>()
+                                .map(Value::BigInt)
+                                .unwrap_or(Value::Null),
+                            ("BIGINT", ValueRef::Text(value)) => String::from_utf8_lossy(value)
+                                .parse::<i64>()
+                                .map(Value::BigInt)
+                                .unwrap_or(Value::Null),
+                            ("DOUBLE", ValueRef::Integer(value)) => Value::Double(value as f64),
+                            ("DOUBLE", ValueRef::Real(value)) => Value::Double(value),
+                            ("DOUBLE", ValueRef::Text(value)) => String::from_utf8_lossy(value)
+                                .parse::<f64>()
+                                .map(Value::Double)
+                                .unwrap_or(Value::Null),
+                            (_, ValueRef::Integer(value)) => Value::Text(value.to_string()),
+                            (_, ValueRef::Real(value)) => Value::Text(value.to_string()),
+                            (_, ValueRef::Text(value)) => {
+                                Value::Text(String::from_utf8_lossy(value).to_string())
+                            }
+                        };
+                        values.push(value);
+                    }
+                    appender.append_row(appender_params_from_iter(values))?;
+                    rows_done += 1;
+                    if rows_done % BATCH_SIZE == 0 || rows_done == total_rows {
+                        appender.flush()?;
+                        on_progress(
+                            src_table,
+                            table_index,
+                            table_total,
+                            rows_done,
+                            total_rows,
+                        );
+                    }
                 }
-
-                // Use INSERT with row_number() to generate _row_id
-                let col_aliases = columns
-                    .iter()
-                    .map(|(n, _)| format!("\"{}\"", n))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let insert_sql = format!(
-                    "INSERT INTO \"{}\" SELECT row_number() OVER () + (SELECT COALESCE(MAX(\"_row_id\"), 0) FROM \"{}\"), {} FROM (VALUES {}) AS t({})",
-                    table_name, table_name, col_aliases, values_parts.join(", "), col_aliases
-                );
-                self.conn.execute_batch(&insert_sql)?;
-                rows_done += chunk.len();
-                on_progress(src_table, table_index, table_total, rows_done, total_rows);
+                appender.flush()?;
             }
-
-            self.conn.execute_batch("COMMIT")?;
 
             // Get row count
             let row_count: i64 = self.conn.query_row(
@@ -3255,9 +3260,29 @@ impl DuckDbEngine {
 
             let meta = self.get_dataset_meta(&id)?;
             results.push((src_table.clone(), meta));
-        }
+            }
 
-        Ok(results)
+            Ok(results)
+        })();
+
+        match import_result {
+            Ok(results) => {
+                if let Err(error) = self.conn.execute_batch("COMMIT") {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    return Err(error.into());
+                }
+                Ok(results)
+            }
+            Err(error) => {
+                let rollback_result = self.conn.execute_batch("ROLLBACK");
+                if let Err(rollback_error) = rollback_result {
+                    return Err(AppError::Database(format!(
+                        "{error}; rollback failed: {rollback_error}"
+                    )));
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Map SQLite column type to DuckDB type, keeping date/time types as VARCHAR
@@ -7284,6 +7309,7 @@ mod tests {
                 path.to_str().expect("fixture path"),
                 &[("people".to_string(), "People".to_string(), false)],
                 &|_, _, _, _, _| {},
+                &|| false,
             )
             .expect("import selected table");
 
@@ -7300,6 +7326,7 @@ mod tests {
                 path.to_str().expect("fixture path"),
                 &[("people".to_string(), "People".to_string(), true)],
                 &|_, _, _, _, _| {},
+                &|| false,
             )
             .expect("append compatible table");
 
@@ -7317,6 +7344,7 @@ mod tests {
                 path.to_str().expect("fixture path"),
                 &[("ignored".to_string(), "People".to_string(), true)],
                 &|_, _, _, _, _| {},
+                &|| false,
             )
             .expect_err("reject incompatible append");
         assert!(error.to_string().contains("column names, order, and types must match"));
@@ -7325,6 +7353,185 @@ mod tests {
                 .expect("read unchanged dataset")
                 .row_count,
             2
+        );
+
+        std::fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn streams_sqlite_rows_in_bounded_batches() {
+        use std::cell::RefCell;
+
+        let path = std::env::temp_dir().join(format!(
+            "datalink-streaming-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let mut sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
+        sqlite
+            .execute(
+                "CREATE TABLE samples (id INTEGER, label TEXT, payload BLOB)",
+                [],
+            )
+            .expect("create source table");
+        let transaction = sqlite.transaction().expect("start fixture transaction");
+        for index in 0..2_001 {
+            let label = if index == 0 {
+                Some("O'Reilly".to_string())
+            } else if index == 1 {
+                None
+            } else {
+                Some(format!("row-{index}"))
+            };
+            transaction
+                .execute(
+                    "INSERT INTO samples VALUES (?1, ?2, ?3)",
+                    rusqlite::params![index, label, vec![1_u8, 2, 3]],
+                )
+                .expect("insert source row");
+        }
+        transaction.commit().expect("commit fixture rows");
+        drop(sqlite);
+
+        let progress = RefCell::new(Vec::new());
+        let db = DuckDbEngine::new_in_memory().expect("create in-memory project");
+        let imported = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[("samples".to_string(), "Samples".to_string(), false)],
+                &|_, _, _, rows_done, rows_total| {
+                    if rows_done > 0 {
+                        progress.borrow_mut().push((rows_done, rows_total));
+                    }
+                },
+                &|| false,
+            )
+            .expect("stream source table");
+
+        assert_eq!(imported[0].1.row_count, 2_001);
+        assert_eq!(*progress.borrow(), vec![(1_000, 2_001), (2_000, 2_001), (2_001, 2_001)]);
+        let table_name = format!("dataset_{}", imported[0].1.id.replace('-', "_"));
+        let first_label: String = db
+            .conn()
+            .query_row(
+                &format!("SELECT label FROM {} WHERE _row_id = 1", DuckDbEngine::quote_identifier(&table_name)),
+                [],
+                |row| row.get(0),
+            )
+            .expect("read quoted text");
+        let second_label: Option<String> = db
+            .conn()
+            .query_row(
+                &format!("SELECT label FROM {} WHERE _row_id = 2", DuckDbEngine::quote_identifier(&table_name)),
+                [],
+                |row| row.get(0),
+            )
+            .expect("read null text");
+        let first_payload: Option<String> = db
+            .conn()
+            .query_row(
+                &format!("SELECT payload FROM {} WHERE _row_id = 1", DuckDbEngine::quote_identifier(&table_name)),
+                [],
+                |row| row.get(0),
+            )
+            .expect("read blob policy result");
+        assert_eq!(first_label, "O'Reilly");
+        assert_eq!(second_label, None);
+        assert_eq!(first_payload, None);
+
+        std::fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn cancelled_sqlite_import_rolls_back_create_and_append() {
+        use std::cell::Cell;
+
+        let path = std::env::temp_dir().join(format!(
+            "datalink-cancel-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let mut sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
+        sqlite
+            .execute_batch(
+                "CREATE TABLE baseline (id INTEGER, label TEXT); \
+                 INSERT INTO baseline VALUES (1, 'existing'); \
+                 CREATE TABLE samples (id INTEGER, label TEXT);",
+            )
+            .expect("create source tables");
+        let transaction = sqlite.transaction().expect("start fixture transaction");
+        for index in 0..2_001 {
+            transaction
+                .execute(
+                    "INSERT INTO samples VALUES (?1, ?2)",
+                    rusqlite::params![index, format!("row-{index}")],
+                )
+                .expect("insert source row");
+        }
+        transaction.commit().expect("commit fixture rows");
+        drop(sqlite);
+
+        let db = DuckDbEngine::new_in_memory().expect("create in-memory project");
+        let cancel_create = Cell::new(false);
+        let create_error = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[("samples".to_string(), "Samples".to_string(), false)],
+                &|_, _, _, rows_done, _| {
+                    if rows_done == 1_000 {
+                        cancel_create.set(true);
+                    }
+                },
+                &|| cancel_create.get(),
+            )
+            .expect_err("cancel create import");
+        assert!(matches!(create_error, AppError::Cancelled(_)));
+        assert!(db.list_datasets().expect("list datasets").is_empty());
+        let physical_tables: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name LIKE 'dataset_%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count physical dataset tables");
+        assert_eq!(physical_tables, 0);
+
+        let baseline = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[("baseline".to_string(), "People".to_string(), false)],
+                &|_, _, _, _, _| {},
+                &|| false,
+            )
+            .expect("import append baseline");
+        let dataset_id = &baseline[0].1.id;
+        let generation = db
+            .get_dataset_generation(dataset_id)
+            .expect("read baseline generation");
+
+        let cancel_append = Cell::new(false);
+        let append_error = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[("samples".to_string(), "People".to_string(), true)],
+                &|_, _, _, rows_done, _| {
+                    if rows_done == 1_000 {
+                        cancel_append.set(true);
+                    }
+                },
+                &|| cancel_append.get(),
+            )
+            .expect_err("cancel append import");
+        assert!(matches!(append_error, AppError::Cancelled(_)));
+        assert_eq!(
+            db.get_dataset_meta(dataset_id)
+                .expect("read unchanged dataset")
+                .row_count,
+            1
+        );
+        assert_eq!(
+            db.get_dataset_generation(dataset_id)
+                .expect("read unchanged generation"),
+            generation
         );
 
         std::fs::remove_file(path).expect("remove fixture");

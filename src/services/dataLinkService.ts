@@ -11,6 +11,9 @@ export const dataLinkService = {
   previewSqliteObject: (filePath: string, objectName: string, limit = 100) =>
     invoke<PreviewResult>("preview_sqlite_source_object", { filePath, objectName, limit }),
 
-  importSelectedSqlite: (filePath: string, selections: SqliteImportSelection[]) =>
-    invoke<DatasetMeta[]>("import_selected_sqlite", { filePath, selections }),
+  importSelectedSqlite: (filePath: string, requestId: string, selections: SqliteImportSelection[]) =>
+    invoke<DatasetMeta[]>("import_selected_sqlite", { filePath, requestId, selections }),
+
+  cancelSqliteImport: (requestId: string) =>
+    invoke<void>("cancel_sqlite_import", { requestId }),
 };

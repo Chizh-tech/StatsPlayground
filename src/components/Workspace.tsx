@@ -232,6 +232,8 @@ export function Workspace() {
     rowsDone: number;
     rowsTotal: number;
   } | null>(null);
+  const [activeImportRequestId, setActiveImportRequestId] = useState<string | null>(null);
+  const [cancellingImport, setCancellingImport] = useState(false);
   const [busyMessage, setBusyMessage] = useState<string | null>(null);
   const [busyProgress, setBusyProgress] = useState<{ rowsDone: number; rowsTotal: number } | null>(null);
   const [tableKey, setTableKey] = useState(0);
@@ -546,6 +548,8 @@ export function Workspace() {
 
   const importSelectedSqlite = async (selections: SqliteImportSelection[]) => {
     if (!sqliteDataLinkPath) return;
+    const requestId = crypto.randomUUID();
+    setActiveImportRequestId(requestId);
     const unlisten = await listen<{
       table_name: string;
       table_index: number;
@@ -563,17 +567,31 @@ export function Workspace() {
     });
     try {
       setImportProgress({ tableName: t("common.preparing"), tableIndex: 0, tableTotal: 0, rowsDone: 0, rowsTotal: 0 });
-      await dataLinkService.importSelectedSqlite(sqliteDataLinkPath, selections);
+      await dataLinkService.importSelectedSqlite(sqliteDataLinkPath, requestId, selections);
       await refreshDatasets();
       markDirty();
       const fileName = sqliteDataLinkPath.split(/[\\\\/]/).pop() ?? "SQLite";
       recordAction(t("history.importSqlite", { file: fileName }));
     } catch (e) {
+      if (String(e).includes("Cancelled: SQLite import cancelled")) return;
       alert(t("alert.importSqliteFailed") + String(e));
       throw e;
     } finally {
       unlisten();
       setImportProgress(null);
+      setActiveImportRequestId(null);
+      setCancellingImport(false);
+    }
+  };
+
+  const cancelActiveImport = async () => {
+    if (!activeImportRequestId || cancellingImport) return;
+    setCancellingImport(true);
+    try {
+      await dataLinkService.cancelSqliteImport(activeImportRequestId);
+    } catch (error) {
+      setCancellingImport(false);
+      alert(t("alert.importSqliteFailed") + String(error));
     }
   };
 
@@ -1777,6 +1795,11 @@ export function Workspace() {
                 <div className="sp-progress-fill sp-progress-indeterminate" />
               </div>
             )}
+            <div style={{ marginTop: 16, textAlign: "right" }}>
+              <button className="btn-text" onClick={cancelActiveImport} disabled={cancellingImport || !activeImportRequestId}>
+                {cancellingImport ? t("workspace.cancellingImport") : t("common.cancel")}
+              </button>
+            </div>
           </div>
         </div>
       )}

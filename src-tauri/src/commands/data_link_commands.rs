@@ -1,4 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -17,6 +19,11 @@ struct ImportProgress {
     table_total: usize,
     rows_done: usize,
     rows_total: usize,
+}
+
+fn active_imports() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    static ACTIVE_IMPORTS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+    ACTIVE_IMPORTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[tauri::command(async)]
@@ -46,6 +53,7 @@ pub fn import_selected_sqlite(
     app: AppHandle,
     state: State<'_, AppState>,
     file_path: String,
+    request_id: String,
     selections: Vec<SqliteImportSelection>,
 ) -> Result<Vec<DatasetMeta>, AppError> {
     if selections.is_empty() {
@@ -79,7 +87,23 @@ pub fn import_selected_sqlite(
         }
     }
 
+    if request_id.trim().is_empty() {
+        return Err(AppError::InvalidParam("Import request ID is required".to_string()));
+    }
     let _permit = crate::commands::io_commands::acquire_mutation_permit(state.inner())?;
+    let cancellation = Arc::new(AtomicBool::new(false));
+    {
+        let mut imports = active_imports()
+            .lock()
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        if imports.contains_key(&request_id) {
+            return Err(AppError::InvalidParam(format!(
+                "Duplicate import request ID: {request_id}"
+            )));
+        }
+        imports.insert(request_id.clone(), Arc::clone(&cancellation));
+    }
+
     let pairs = selections
         .into_iter()
         .map(|selection| {
@@ -90,7 +114,7 @@ pub fn import_selected_sqlite(
             )
         })
         .collect::<Vec<_>>();
-    IoService::new(state.inner()).import_selected_sqlite(
+    let result = IoService::new(state.inner()).import_selected_sqlite(
         &file_path,
         &pairs,
         |table_name, table_index, table_total, rows_done, rows_total| {
@@ -105,5 +129,21 @@ pub fn import_selected_sqlite(
                 },
             );
         },
-    )
+        || cancellation.load(Ordering::Relaxed),
+    );
+    if let Ok(mut imports) = active_imports().lock() {
+        imports.remove(&request_id);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn cancel_sqlite_import(request_id: String) -> Result<(), AppError> {
+    let imports = active_imports()
+        .lock()
+        .map_err(|error| AppError::Database(error.to_string()))?;
+    if let Some(cancellation) = imports.get(&request_id) {
+        cancellation.store(true, Ordering::Relaxed);
+    }
+    Ok(())
 }

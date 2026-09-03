@@ -34,25 +34,28 @@ impl<'a> IoService<'a> {
             .db
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
-        let results = db.import_sqlite(file_path, &on_progress)?;
+        let results = db.import_sqlite(file_path, &on_progress, &|| false)?;
         Ok(results.into_iter().map(|(_, meta)| meta).collect())
     }
 
-    pub fn import_selected_sqlite<F>(
+    pub fn import_selected_sqlite<F, C>(
         &self,
         file_path: &str,
         selections: &[(String, String, bool)],
         on_progress: F,
+        is_cancelled: C,
     ) -> Result<Vec<DatasetMeta>, AppError>
     where
         F: Fn(&str, usize, usize, usize, usize),
+        C: Fn() -> bool,
     {
         let db = self
             .state
             .db
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
-        let results = db.import_selected_sqlite(file_path, selections, &on_progress)?;
+        let results =
+            db.import_selected_sqlite(file_path, selections, &on_progress, &is_cancelled)?;
         Ok(results.into_iter().map(|(_, meta)| meta).collect())
     }
 

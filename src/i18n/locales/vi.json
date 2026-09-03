@@ -179,6 +179,7 @@
     "creatingSnapshot": "Đang tạo ảnh chụp…",
     "restoringSnapshot": "Đang khôi phục ảnh chụp…",
     "importingSqlite": "Đang nhập cơ sở dữ liệu SQLite…",
+    "cancellingImport": "Đang hủy…",
     "datasetNameMigrations": "Đã đổi tên {{count}} bảng có tên trùng khi mở dự án này. Hãy lưu dự án để ghi lại các tên đã cập nhật.",
     "importProgressTable": "Bảng {{i}}/{{total}}: {{name}}",
     "importProgressRows": "hàng",

@@ -179,6 +179,7 @@
     "creatingSnapshot": "正在建立快照…",
     "restoringSnapshot": "正在還原快照…",
     "importingSqlite": "正在匯入 SQLite 資料庫…",
+    "cancellingImport": "正在取消…",
     "datasetNameMigrations": "開啟專案時已重新命名 {{count}} 個重複的資料表名稱。請儲存專案以保留這些更新後的名稱。",
     "importProgressTable": "資料表 {{i}}/{{total}}：{{name}}",
     "importProgressRows": "列",

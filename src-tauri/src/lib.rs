@@ -23,6 +23,7 @@ pub fn run() {
             commands::data_link_commands::list_sqlite_source_objects,
             commands::data_link_commands::preview_sqlite_source_object,
             commands::data_link_commands::import_selected_sqlite,
+            commands::data_link_commands::cancel_sqlite_import,
             commands::data_commands::import_file,
             commands::data_commands::list_datasets,
             commands::data_commands::delete_dataset,

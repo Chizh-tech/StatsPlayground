@@ -15,7 +15,7 @@ import { modKey, shiftKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import { copyThenClear } from "@/utils/tableClipboard";
 import { TableWindowCache } from "@/utils/tableWindowCache";
-import { calculatePlaceholderRange, canMaterializeSelection, calculateTableWindow, MAX_MATERIALIZED_SELECTION_ITEMS, RequestEpoch, serializeTableWindowFilters, windowRowAt } from "@/utils/tableViewport";
+import { calculatePlaceholderRange, canMaterializeSelection, calculateTableWindow, MAX_MATERIALIZED_SELECTION_ITEMS, RequestEpoch, serializeTableWindowFilters, shouldReloadDatasetRevision, windowRowAt, type DatasetRevision } from "@/utils/tableViewport";
 import { inferFieldType, type FieldRef, type GraphData } from "@/graphCore";
 import { FilterPanel } from "@/components/filter";
 import type { FilterRuleItem } from "@/types/filter";
@@ -818,6 +818,17 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   // Excel-like formula bar state lives inside <FormulaBar /> now.
 
   const { refreshDatasets, setStatusInfo } = useDataStore();
+  const datasetRowCount = useDataStore(
+    (state) => state.datasets.find((item) => item.id === datasetId)?.rowCount ?? 0,
+  );
+  const datasetUpdatedAt = useDataStore(
+    (state) => state.datasets.find((item) => item.id === datasetId)?.updatedAt ?? "",
+  );
+  const datasetRevision = useMemo<DatasetRevision>(() => ({
+    datasetId,
+    rowCount: datasetRowCount,
+    updatedAt: datasetUpdatedAt,
+  }), [datasetId, datasetRowCount, datasetUpdatedAt]);
   const { markDirty, readOnly } = useProjectStore();
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
@@ -850,6 +861,7 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
   // Refs for tracking latest state (used by recordAction and pendingRestore)
   const dataRef = useRef<TableQueryResult | null>(null);
   const generationRef = useRef(0);
+  const datasetRevisionRef = useRef<DatasetRevision | null>(null);
   const windowStartRef = useRef(0);
   const windowCacheRef = useRef<TableWindowCache | null>(null);
   const requestEpochRef = useRef<RequestEpoch | null>(null);
@@ -1024,6 +1036,13 @@ export function DataTableView({ datasetId, onTableOp }: DataTableViewProps) {
     setTableFilters([]);
     setShowTableFilters(false);
   }, [datasetId, load]);
+
+  useEffect(() => {
+    const previous = datasetRevisionRef.current;
+    datasetRevisionRef.current = datasetRevision;
+    if (!shouldReloadDatasetRevision(previous, datasetRevision)) return;
+    void load(tableFiltersRef.current, windowStartRef.current);
+  }, [datasetRevision, load]);
 
   useEffect(() => {
     if (skipFilterReloadRef.current) {
