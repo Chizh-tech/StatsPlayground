@@ -151,6 +151,24 @@
     "sqlQueryTableCreated": "Create table \"{{name}}\" from SQL query",
     "tabulateTableCreated": "Create data table \"{{name}}\" from tabulate result"
   },
+  "workflow": {
+    "title": "Workflow",
+    "projectLineage": "Project lineage",
+    "nodeCount": "{{count}} nodes",
+    "saved": "Saved workflows",
+    "empty": "No saved workflows",
+    "revisionRuns": "Revision {{revision}} · {{count}} runs",
+    "definition": "Workflow definition",
+    "lineage": "Lineage",
+    "graphSummary": "{{nodes}} nodes · {{edges}} connections",
+    "inputs": "Workflow inputs",
+    "chooseTable": "Choose input table",
+    "checkingSchema": "Checking schema",
+    "schemaCheckFailed": "Schema check failed",
+    "schemaIncompatible": "{{missing}} missing, {{mismatch}} wrong type",
+    "schemaCompatible": "Schema compatible",
+    "noLineage": "No workflow lineage is available yet."
+  },
   "workspace": {
     "directory": "Directory",
     "datasourceLabel": "Source: {{name}}",

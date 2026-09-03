@@ -1,4 +1,10 @@
 import type { DistributionItem } from "./distribution";
+import type {
+  LogicalFolder,
+  ProjectLineageGraph,
+  WorkflowDefinition,
+  WorkflowRun,
+} from "./workflow";
 
 /** 项目元数据 */
 export interface ProjectInfo {
@@ -48,6 +54,10 @@ export interface OpenProjectResult {
   reportFolders: Record<string, string>;
   /** 项目中的报告。 */
   reports: ReportItem[];
+  workflows: WorkflowDefinition[];
+  logicalFolders: LogicalFolder[];
+  workflowRuns: WorkflowRun[];
+  lineageGraph: ProjectLineageGraph;
 }
 
 /** 导入 .sptb 的返回值。

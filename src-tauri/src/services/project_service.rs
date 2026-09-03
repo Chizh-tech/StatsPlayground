@@ -11,6 +11,9 @@ use crate::services::spprj_archive::{
     self, GraphDoc, ProjectBundle, TableColumn, TableColumnFormat, TableDoc,
 };
 use crate::services::streaming_project_writer::StreamingProjectWriter;
+use crate::services::workflow_domain::{
+    LogicalFolder, ProjectLineageGraph, WorkflowDefinition, WorkflowRun,
+};
 use crate::state::AppState;
 use duckdb::appender_params_from_iter;
 use duckdb::types::Value as DuckValue;
@@ -64,6 +67,14 @@ pub struct OpenProjectResult {
     /// `tabulateId -> folder path`.
     #[serde(default)]
     pub tabulate_folders: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub workflows: Vec<WorkflowDefinition>,
+    #[serde(default)]
+    pub logical_folders: Vec<LogicalFolder>,
+    #[serde(default)]
+    pub workflow_runs: Vec<WorkflowRun>,
+    #[serde(default)]
+    pub lineage_graph: ProjectLineageGraph,
 }
 
 const SPPRJ_VERSION: &str = "4.0.0";
@@ -233,6 +244,10 @@ impl<'a> ProjectService<'a> {
         let distribution_folders = bundle.manifest.distribution_folders.clone();
         let tabulate_folders = bundle.manifest.tabulate_folders.clone();
         let folders = bundle.manifest.folders.clone();
+        let workflows = bundle.workflows.clone();
+        let logical_folders = bundle.manifest.logical_folders.clone();
+        let workflow_runs = bundle.manifest.workflow_runs.clone();
+        let lineage_graph = bundle.manifest.lineage_graph.clone();
 
         // Re-pack graph docs into the opaque JSON shape the frontend
         // understands. The body map stored on disk no longer carries named
@@ -304,6 +319,10 @@ impl<'a> ProjectService<'a> {
             dataset_name_migrations,
             requires_migration,
             tabulate_folders,
+            workflows,
+            logical_folders,
+            workflow_runs,
+            lineage_graph,
         })
     }
 

@@ -150,6 +150,24 @@
     "autoFitColumn": "Tự động chỉnh cột",
     "sqlQueryTableCreated": "Tạo bảng \"{{name}}\" từ truy vấn SQL"
   },
+  "workflow": {
+    "title": "Quy trình",
+    "projectLineage": "Dòng dữ liệu dự án",
+    "nodeCount": "{{count}} nút",
+    "saved": "Quy trình đã lưu",
+    "empty": "Chưa có quy trình đã lưu",
+    "revisionRuns": "Bản {{revision}} · {{count}} lần chạy",
+    "definition": "Định nghĩa quy trình",
+    "lineage": "Dòng dữ liệu",
+    "graphSummary": "{{nodes}} nút · {{edges}} kết nối",
+    "inputs": "Đầu vào quy trình",
+    "chooseTable": "Chọn bảng đầu vào",
+    "checkingSchema": "Đang kiểm tra schema",
+    "schemaCheckFailed": "Kiểm tra schema thất bại",
+    "schemaIncompatible": "Thiếu {{missing}}, {{mismatch}} sai kiểu",
+    "schemaCompatible": "Schema tương thích",
+    "noLineage": "Chưa có dòng dữ liệu quy trình."
+  },
   "workspace": {
     "directory": "Thư mục",
     "datasourceLabel": "Nguồn: {{name}}",
