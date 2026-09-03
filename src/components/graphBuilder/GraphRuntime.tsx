@@ -17,11 +17,22 @@ import {
   deriveValueOrders,
   type GraphRuntimeMetadata,
 } from "./graphRuntimeModel";
-import { useGraphDataPipeline, type GraphDataPipelineResult, type GraphLoadProgress } from "./useGraphDataPipeline";
+import { resolveStableGroupKeys } from "./graphGroupOrder";
+import { resolveGroupThemeFieldName } from "./graphThemeIdentity";
+import {
+  selectGraphRuntimeDataState,
+  useGraphDataPipeline,
+  type ExternalGraphDataState,
+  type GraphDataPipelineResult,
+  type GraphLoadProgress,
+} from "./useGraphDataPipeline";
+
+export type { ExternalGraphDataState } from "./useGraphDataPipeline";
 
 export interface GraphRuntimeProps {
   item: GraphBuilderItem;
   dataset: DatasetMeta;
+  externalDataState?: ExternalGraphDataState;
   showPointBudgetAction?: boolean;
   onRequestSampleMode?: () => void;
   onPointPick?: (pick: ScatterPointPick) => void;
@@ -77,6 +88,7 @@ function snapshotChanged(previous: GraphRuntimeState | null, next: GraphRuntimeS
 export function GraphRuntime({
   item,
   dataset,
+  externalDataState,
   showPointBudgetAction = false,
   onRequestSampleMode,
   onPointPick,
@@ -179,29 +191,49 @@ export function GraphRuntime({
     [metadata],
   );
 
+  const internalDataState = useGraphDataPipeline(
+    item,
+    dataset,
+    viewport,
+    externalDataState === undefined,
+  );
   const {
     frame,
     status,
     error,
     progress,
-  } = useGraphDataPipeline(item, dataset, viewport);
+  } = selectGraphRuntimeDataState(internalDataState, externalDataState);
   const rawPointNotice = useMemo(
     () => getRawPointNotice(frame?.rawPointDisposition),
     [frame?.rawPointDisposition],
   );
+  const groupingFieldName = resolveGroupThemeFieldName(model.effectiveEncoding);
   const groupKeys = useMemo(
-    () => deriveGraphGroupKeys(model.effectiveEncoding.overlay, frame),
-    [frame, model.effectiveEncoding.overlay],
+    () => deriveGraphGroupKeys(
+      model.effectiveEncoding.overlay ?? model.effectiveEncoding.color,
+      frame,
+    ),
+    [frame, model.effectiveEncoding.color, model.effectiveEncoding.overlay],
+  );
+  const slotCandidateKeys = useMemo(
+    () => resolveStableGroupKeys(
+      groupKeys,
+      frame?.dictionaries.group ?? [],
+      undefined,
+    ),
+    [frame?.dictionaries.group, groupKeys],
   );
   const effectiveStyles = useMemo(
     () => buildEffectiveStyles(
       groupKeys,
+      item.groupThemeSlots,
+      groupingFieldName,
       model.spec.styles ?? {},
       customPalettes,
-      !!model.effectiveEncoding.overlay,
       model.spec.elements.some((element) => element.kind === "boxplot" && element.enabled !== false),
+      slotCandidateKeys,
     ),
-    [customPalettes, groupKeys, model.effectiveEncoding.overlay, model.spec.elements, model.spec.styles],
+    [customPalettes, groupKeys, groupingFieldName, item.groupThemeSlots, model.spec.elements, model.spec.styles, slotCandidateKeys],
   );
   const runtimeSpec = useMemo(
     () => ({ ...model.spec, datasetName: dataset.name, styles: effectiveStyles }),

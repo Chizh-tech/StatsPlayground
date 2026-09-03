@@ -582,7 +582,6 @@ fn execute(options: Options) -> Result<PerformanceReport, AppError> {
             (snapshot.rows.len(), 0)
         }
         Operation::Graph => unreachable!("graph operation is handled by execute_graph"),
-        Operation::Graph => unreachable!("graph is handled before this branch"),
         Operation::Save => unreachable!("save is handled before this branch"),
     };
     let operation_ms = operation_started.elapsed().as_millis();
@@ -673,13 +672,18 @@ fn execute_save(options: Options) -> Result<PerformanceReport, AppError> {
                         graph_builders,
                         fit_y_by_x: Vec::new(),
                         reports: Vec::new(),
+                        distributions: Vec::new(),
                         tabulates,
                         folders,
                         table_folders,
                         graph_folders,
                         fit_y_by_x_folders: std::collections::HashMap::new(),
                         report_folders: std::collections::HashMap::new(),
+                        distribution_folders: std::collections::HashMap::new(),
                         tabulate_folders,
+                        workflows: Vec::new(),
+                        logical_folders: Vec::new(),
+                        workflow_runs: Vec::new(),
                     },
                     None,
                 )

@@ -12,6 +12,7 @@ pub struct DatasetMeta {
     pub source_type: String,
     pub row_count: i64,
     pub col_count: i32,
+    pub generation: u64,
     pub created_at: String,
     pub updated_at: String,
 }

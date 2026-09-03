@@ -31,6 +31,7 @@ const EMBED_ICON_CLASS: Record<ReportEmbedKind, string> = {
   graph: "fa-solid fa-chart-line",
   fitYByX: "fa-solid fa-chart-column",
   tabulate: "fa-solid fa-table-cells-large",
+  distribution: "fa-solid fa-chart-bar",
 };
 
 function detectNewline(markdown: string): "\r\n" | "\n" | "\r" {

@@ -36,6 +36,7 @@ test("inserts canonical embeds from grouped menu choices", async ({ mount }) => 
   await expect(component.getByText("Graphs")).toBeVisible();
   await expect(component.getByText("Fit Y by X")).toBeVisible();
   await expect(component.getByText("Tabulate")).toBeVisible();
+  await expect(component.getByText("Distributions")).toBeVisible();
 
   await component.getByRole("menuitem", { name: "Scatter Plot" }).click();
 
@@ -48,7 +49,7 @@ test("inserts canonical embeds from grouped menu choices", async ({ mount }) => 
   await expect(component.getByTitle("Insert project document")).toBeVisible();
 });
 
-test("renders live table, graph, fit y by x, and tabulate embeds", async ({ mount }) => {
+test("renders live table, graph, fit y by x, tabulate, and distribution embeds", async ({ mount }) => {
   const component = await mount(
     <ReportViewHarness
       initialMarkdown={[
@@ -58,8 +59,11 @@ test("renders live table, graph, fit y by x, and tabulate embeds", async ({ moun
         '{{sp-embed kind="graph" id="graph-1"}}',
         '{{sp-embed kind="fitYByX" id="fit-1"}}',
         '{{sp-embed kind="tabulate" id="tab-1"}}',
+        '{{sp-embed kind="distribution" id="distribution-1"}}',
       ].join("\n")}
       graphMode="stub"
+      distributionGraphMode="stub"
+      embedMode="live"
       embedRuntime={{
         table: {
           getDatasetGeneration: async () => 7,
@@ -108,6 +112,19 @@ test("renders live table, graph, fit y by x, and tabulate embeds", async ({ moun
             limit: 10000,
           }),
         },
+        distribution: {
+          getDatasetGeneration: async () => 13,
+          compute: async () => {
+            const frame = { columns: [], rows: [], aggregatePackets: [], totalRows: 0 } as never;
+            return {
+              datasetId: "table-1",
+              generation: 13,
+              groups: [],
+              reportBlocks: [],
+              graphFrames: { overview: frame, boxPlot: frame, ecdf: frame, normalQuantile: frame },
+            };
+          },
+        },
       }}
     />,
   );
@@ -123,6 +140,11 @@ test("renders live table, graph, fit y by x, and tabulate embeds", async ({ moun
   await expect(preview.getByText("Used rows")).toBeVisible();
   await expect(preview.getByText("Grouped Summary")).toBeVisible();
   await expect(preview.getByText("4").first()).toBeVisible();
+  await expect(preview.getByText("Strength Distribution")).toBeVisible();
+  await expect(preview.getByText("Distribution graph:overview")).toBeVisible();
+  await expect(preview.getByText("Distribution graph:boxPlot")).toBeVisible();
+  await expect(preview.getByText("Distribution graph:ecdf")).toBeVisible();
+  await expect(preview.getByText("Distribution graph:normalQuantile")).toBeVisible();
   await expect(component.getByRole("button", { name: "Export table" })).toHaveCount(0);
 });
 
@@ -138,6 +160,7 @@ test("keeps neighboring markdown and embeds visible when one embed is missing or
         "After",
       ].join("\n")}
       graphMode="error"
+      embedMode="notComputable"
       embedRuntime={{
         fitYByX: {
           getDatasetGeneration: async () => 11,

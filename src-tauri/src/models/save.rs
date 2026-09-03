@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::models::project::ProjectInfo;
 use crate::models::table::{ColumnDisplayProps, DatasetMeta};
+use crate::services::workflow_domain::{LogicalFolder, WorkflowDefinition, WorkflowRun};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +16,8 @@ pub struct SaveProjectRequest {
     pub fit_y_by_x: Vec<serde_json::Value>,
     #[serde(default)]
     pub reports: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub distributions: Vec<serde_json::Value>,
     pub tabulates: Vec<serde_json::Value>,
     pub folders: Vec<String>,
     pub table_folders: HashMap<String, String>,
@@ -23,7 +26,15 @@ pub struct SaveProjectRequest {
     pub fit_y_by_x_folders: HashMap<String, String>,
     #[serde(default)]
     pub report_folders: HashMap<String, String>,
+    #[serde(default)]
+    pub distribution_folders: HashMap<String, String>,
     pub tabulate_folders: HashMap<String, String>,
+    #[serde(default)]
+    pub workflows: Vec<WorkflowDefinition>,
+    #[serde(default)]
+    pub logical_folders: Vec<LogicalFolder>,
+    #[serde(default)]
+    pub workflow_runs: Vec<WorkflowRun>,
 }
 
 #[derive(Debug, Clone)]

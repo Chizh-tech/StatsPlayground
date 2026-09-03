@@ -1,3 +1,5 @@
+import type { DistributionItem } from "./distribution";
+
 /** 项目元数据 */
 export interface ProjectInfo {
   name: string;
@@ -28,6 +30,7 @@ export interface OpenProjectResult {
   graphBuilders: unknown[];
   fitYByX: unknown[];
   tabulates: unknown[];
+  distributions: DistributionItem[];
   /** 项目内所有文件夹路径（含空文件夹），使用 "/" 分隔，根目录不出现在列表中。 */
   folders: string[];
   /** datasetId → folder path（根目录的表不在此映射中）。 */
@@ -35,6 +38,7 @@ export interface OpenProjectResult {
   /** graphId → folder path（根目录的图不在此映射中）。 */
   graphFolders: Record<string, string>;
   fitYByXFolders: Record<string, string>;
+  distributionFolders: Record<string, string>;
   documentNameMigrations: DocumentNameMigration[];
   datasetNameMigrations: DatasetNameMigration[];
   requiresMigration: boolean;

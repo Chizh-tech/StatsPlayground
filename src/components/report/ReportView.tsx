@@ -21,6 +21,7 @@ interface ReportViewProps {
   graphOptions: readonly ReportLinkOption[];
   fitYByXOptions: readonly ReportLinkOption[];
   tabulateOptions: readonly ReportLinkOption[];
+  distributionOptions: readonly ReportLinkOption[];
   onMarkdownChange: (markdown: string) => void;
   readOnly?: boolean;
   embedRuntime?: ReportEmbedRuntime;
@@ -39,6 +40,7 @@ export function ReportView({
   graphOptions,
   fitYByXOptions,
   tabulateOptions,
+  distributionOptions,
   onMarkdownChange,
   readOnly = false,
   embedRuntime,
@@ -61,7 +63,8 @@ export function ReportView({
     { kind: "graph" as const, label: t("report.group.graph", { defaultValue: "Graphs" }), items: graphOptions },
     { kind: "fitYByX" as const, label: t("report.group.fitYByX", { defaultValue: "Fit Y by X" }), items: fitYByXOptions },
     { kind: "tabulate" as const, label: t("report.group.tabulate", { defaultValue: "Tabulate" }), items: tabulateOptions },
-  ].filter((group) => group.items.length > 0), [fitYByXOptions, graphOptions, t, tableOptions, tabulateOptions]);
+    { kind: "distribution" as const, label: t("report.group.distribution", { defaultValue: "Distributions" }), items: distributionOptions },
+  ].filter((group) => group.items.length > 0), [distributionOptions, fitYByXOptions, graphOptions, t, tableOptions, tabulateOptions]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -111,7 +114,7 @@ export function ReportView({
     textarea.setSelectionRange(pendingSelection.start, pendingSelection.end);
   }, [item.markdown]);
 
-  const handleInsert = (kind: "table" | "graph" | "fitYByX" | "tabulate", documentId: string) => {
+  const handleInsert = (kind: "table" | "graph" | "fitYByX" | "tabulate" | "distribution", documentId: string) => {
     const textarea = textareaRef.current;
     if (!textarea || readOnly) {
       return;

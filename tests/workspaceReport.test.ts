@@ -63,7 +63,7 @@ assertSourceIncludes(workspaceSource, "reportFolders", "Project save/open payloa
 assertSourceIncludes(workspaceSource, "setReportFolder", "Workspace must move reports through the folder store");
 assertSourceIncludes(workspaceSource, "loadReportsFromProject((result.reports ?? [])", "Project open must load saved reports");
 assertSourceIncludes(workspaceSource, "resetReports()", "Project close/open reset must clear the report store");
-assertSourceIncludes(workspaceSource, "fsPrune(dsIds, gbIds, tabulateIds, fitYByXIds, reportIds)", "Prune must include live report ids");
+assertSourceIncludes(workspaceSource, "fsPrune(dsIds, gbIds, tabulateIds, fitYByXIds, distributionIds, reportIds)", "Prune must include live distribution and report ids");
 
 assertSourceIncludes(workspaceSource, '| { kind: "report"; id: string }', "Drag payload and context menu unions must include reports");
 assertSourceIncludes(workspaceSource, "reportsByParent", "Tree grouping must include reports by folder");

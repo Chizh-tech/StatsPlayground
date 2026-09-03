@@ -8,6 +8,7 @@ import { create } from "zustand";
 import type { GraphBuilderItem } from "@/types/graphBuilder";
 import type { GraphSampling } from "@/types/graphData";
 import { normalizeGraphBuilderItem } from "@/components/graphBuilder/graphBuilderMode";
+import { normalizeGroupThemeSlots } from "@/components/graphBuilder/graphThemeIdentity";
 import { useProjectStore } from "@/stores/useProjectStore";
 import { assertProjectMutable } from "@/utils/saveReadOnly";
 
@@ -23,6 +24,16 @@ function normalizeSampling(sampling: GraphSampling | undefined): GraphSampling {
     return FULL_SAMPLING;
   }
   return { mode: "sample", size, seed };
+}
+
+function normalizeItem(item: GraphBuilderItem): GraphBuilderItem {
+  const normalized = normalizeGraphBuilderItem(item);
+  const groupThemeSlots = normalizeGroupThemeSlots(normalized.groupThemeSlots);
+  return {
+    ...normalized,
+    sampling: normalizeSampling(normalized.sampling),
+    groupThemeSlots: Object.keys(groupThemeSlots).length > 0 ? groupThemeSlots : undefined,
+  };
 }
 
 interface GraphBuilderStore {
@@ -47,7 +58,7 @@ export const useGraphBuilderStore = create<GraphBuilderStore>((set) => ({
   counter: 0,
   addItem: (item) => {
     assertProjectMutable(useProjectStore.getState().readOnly);
-    set((s) => ({ items: [...s.items, normalizeGraphBuilderItem(item)] }));
+    set((s) => ({ items: [...s.items, normalizeItem(item)] }));
   },
   updateItem: (id, patch) =>
     {
@@ -77,7 +88,7 @@ export const useGraphBuilderStore = create<GraphBuilderStore>((set) => ({
     },
   loadFromProject: (items) =>
     set(() => {
-      const normalized = items.map((item) => normalizeGraphBuilderItem(item));
+      const normalized = items.map(normalizeItem);
       const maxNum = items.reduce((m, it) => {
         const match = it.name.match(/^图表(\d+)$/);
         return match ? Math.max(m, parseInt(match[1], 10)) : m;

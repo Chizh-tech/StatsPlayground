@@ -9,4 +9,5 @@ export {
 } from "./useFolderStore";
 export { useFitYByXStore } from "./useFitYByXStore";
 export { useReportStore } from "./useReportStore";
+export { useDistributionStore } from "./useDistributionStore";
 export { useTabulateStore } from "./useTabulateStore";

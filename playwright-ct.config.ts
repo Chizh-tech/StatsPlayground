@@ -8,7 +8,7 @@ export default defineConfig({
   fullyParallel: false,
   use: {
     ...devices["Desktop Chrome"],
-    viewport: { width: 1280, height: 820 },
+    viewport: { width: 1000, height: 700 },
     ctViteConfig: {
       resolve: {
         alias: {

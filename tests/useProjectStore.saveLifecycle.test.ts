@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ProjectInfo } from "../src/types/project";
 import type { SaveProgress, SaveProjectFolders, SaveProjectRequest } from "../src/services/projectService";
 import { createFitYByXItem } from "../src/components/fitYByX/fitYByXConfig.ts";
+import { createDistributionItem } from "../src/components/distribution/distributionConfig.ts";
 import { createProjectStore } from "../src/stores/useProjectStore.ts";
 import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
 import type { GraphBuilderItem } from "../src/types/graphBuilder.ts";
@@ -33,7 +34,25 @@ const saveFolders: SaveProjectFolders = {
   graphFolders: {},
   fitYByXFolders: { "fit-1": "Analyses" },
   tabulateFolders: {},
+  distributionFolders: { "distribution-1": "Analyses" },
 };
+
+const distribution = createDistributionItem({
+  id: "distribution-1",
+  name: "Distribution 1",
+  sourceDatasetId: "table-1",
+  responses: [continuous("height")],
+  weight: null,
+  frequency: null,
+  by: [],
+  columns: [{
+    name: "height",
+    sqlType: "DOUBLE",
+    integerCompatible: false,
+    field: continuous("height"),
+  }],
+  createdAt: new Date(0).toISOString(),
+});
 
 const request: SaveProjectRequest = {
   history: [],
@@ -41,6 +60,7 @@ const request: SaveProjectRequest = {
   graphBuilders: [],
   fitYByX: [{ id: "fit-1", sourceDatasetId: "table-1" }],
   tabulates: [],
+  distributions: [distribution],
   ...saveFolders,
 };
 
@@ -155,6 +175,8 @@ function resetGraphBuilderStore() {
   });
   assert.deepEqual(capturedSaveRequest?.fitYByX, request.fitYByX);
   assert.deepEqual(capturedSaveRequest?.fitYByXFolders, request.fitYByXFolders);
+  assert.deepEqual(capturedSaveRequest?.distributions, request.distributions);
+  assert.deepEqual(capturedSaveRequest?.distributionFolders, request.distributionFolders);
 
   const savedGraph = capturedSaveRequest?.graphBuilders[0] as GraphBuilderItem;
   assert.equal(savedGraph.mode, "multivariate");
@@ -183,6 +205,7 @@ function resetGraphBuilderStore() {
     ],
     elements: [{ kind: "correlationMatrix", enabled: true }],
     smootherLambda: 0.5,
+    groupThemeSlots: { Build: { EV: 0, EV1: 1, EV2: 2, "TC1.6": 3 } },
     createdAt: new Date(0).toISOString(),
   };
   const baseline = JSON.stringify(legacyCorrelationGraph);
@@ -226,6 +249,9 @@ function resetGraphBuilderStore() {
     chartType: "correlationMatrix",
     correlationMethod: "pearson",
   });
+  assert.deepEqual(loaded.groupThemeSlots, {
+    Build: { EV: 0, EV1: 1, EV2: 2, "TC1.6": 3 },
+  });
   for (const legacyKey of ["threeD", "encoding", "multiX", "multiY", "elements"]) {
     assert.equal(Object.hasOwn(loaded, legacyKey), false);
   }
@@ -241,6 +267,9 @@ function resetGraphBuilderStore() {
     columns: [continuous("left"), continuous("right")],
     chartType: "correlationMatrix",
     correlationMethod: "pearson",
+  });
+  assert.deepEqual(savedGraph.groupThemeSlots, {
+    Build: { EV: 0, EV1: 1, EV2: 2, "TC1.6": 3 },
   });
   for (const legacyKey of ["threeD", "encoding", "multiX", "multiY", "elements"]) {
     assert.equal(Object.hasOwn(savedGraph, legacyKey), false);

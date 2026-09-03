@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { createDistributionItem } from "../src/components/distribution/distributionConfig.ts";
 import { resolveReportDependency } from "../src/components/report/ReportEmbed.tsx";
 import { useDataStore } from "../src/stores/useDataStore.ts";
+import { useDistributionStore } from "../src/stores/useDistributionStore.ts";
 import { useFitYByXStore } from "../src/stores/useFitYByXStore.ts";
 import { useGraphBuilderStore } from "../src/stores/useGraphBuilderStore.ts";
 import { useHistoryStore } from "../src/stores/useHistoryStore.ts";
@@ -102,12 +104,28 @@ function createTabulate(overrides: Partial<TabulateItem> & Pick<TabulateItem, "i
   };
 }
 
+function createDistribution(id: string, name: string, sourceDatasetId: string) {
+  const response = { name: "strength", type: "continuous" as const };
+  return createDistributionItem({
+    id,
+    name,
+    sourceDatasetId,
+    responses: [response],
+    weight: null,
+    frequency: null,
+    by: [],
+    columns: [{ name: response.name, sqlType: "DOUBLE", integerCompatible: false, field: response }],
+    createdAt: "2026-09-02T00:00:00.000Z",
+  });
+}
+
 function resetStores(): void {
   useProjectStore.setState({ readOnly: false });
   useDataStore.setState({ activeDatasetId: null, datasets: [], statusInfo: null });
   useGraphBuilderStore.getState().reset();
   useFitYByXStore.getState().reset();
   useTabulateStore.getState().reset();
+  useDistributionStore.getState().reset();
 }
 
 function assertResolved(
@@ -134,11 +152,15 @@ useFitYByXStore.getState().loadFromProject([
 useTabulateStore.getState().loadFromProject([
   createTabulate({ id: "tab-1", name: "Grouped Summary", sourceDatasetId: dataset.id }),
 ]);
+useDistributionStore.getState().loadFromProject([
+  createDistribution("distribution-1", "Strength Distribution", dataset.id),
+]);
 
 assertResolved({ kind: "table", documentId: "table-1" }, "Incoming Data", "Incoming Data");
 assertResolved({ kind: "graph", documentId: "graph-1" }, "Scatter Plot", "Incoming Data");
 assertResolved({ kind: "fitYByX", documentId: "fit-1" }, "Strength vs Time", "Incoming Data");
 assertResolved({ kind: "tabulate", documentId: "tab-1" }, "Grouped Summary", "Incoming Data");
+assertResolved({ kind: "distribution", documentId: "distribution-1" }, "Strength Distribution", "Incoming Data");
 
 useDataStore.setState({
   activeDatasetId: null,
@@ -153,6 +175,7 @@ assertResolved({ kind: "table", documentId: "table-1" }, "Incoming Data Renamed"
 assertResolved({ kind: "graph", documentId: "graph-1" }, "Scatter Plot Renamed", "Incoming Data Renamed");
 assertResolved({ kind: "fitYByX", documentId: "fit-1" }, "Strength vs Time Renamed", "Incoming Data Renamed");
 assertResolved({ kind: "tabulate", documentId: "tab-1" }, "Grouped Summary Renamed", "Incoming Data Renamed");
+assertResolved({ kind: "distribution", documentId: "distribution-1" }, "Strength Distribution", "Incoming Data Renamed");
 
 assert.deepEqual(resolveReportDependency({ kind: "graph", documentId: "missing-graph" }), {
   status: "missing",

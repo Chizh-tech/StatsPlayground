@@ -1,31 +1,62 @@
-import { Component, type ReactNode } from "react";
+import { Component, lazy, Suspense, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { FitYByXReportDependencies } from "@/components/fitYByX/useFitYByXReport";
 import { useDataStore } from "@/stores/useDataStore";
+import { useDistributionStore } from "@/stores/useDistributionStore";
 import { useFitYByXStore } from "@/stores/useFitYByXStore";
 import { useGraphBuilderStore } from "@/stores/useGraphBuilderStore";
 import { useHistoryStore } from "@/stores/useHistoryStore";
 import { useTabulateStore } from "@/stores/useTabulateStore";
 import type { DatasetMeta } from "@/types/data";
+import type { DistributionItem } from "@/types/distribution";
 import type { FitYByXItem } from "@/types/fitYByX";
 import type { GraphBuilderItem } from "@/types/graphBuilder";
 import type { ReportDependency } from "@/types/report";
 import type { TabulateItem } from "@/types/tabulate";
 
-import { FitYByXReportEmbed, type FitYByXReportEmbedRuntime } from "./FitYByXReportEmbed";
-import { GraphReportEmbed, type GraphReportEmbedRuntime } from "./GraphReportEmbed";
-import { TableReportEmbed, type TableReportEmbedRuntime } from "./TableReportEmbed";
-import { TabulateReportEmbed, type TabulateReportEmbedRuntime } from "./TabulateReportEmbed";
+import type { DistributionReportEmbedRuntime } from "./DistributionReportEmbed";
+import type { FitYByXReportEmbedRuntime } from "./FitYByXReportEmbed";
+import type { GraphReportEmbedRuntime } from "./GraphReportEmbed";
+import type { TableReportEmbedRuntime } from "./TableReportEmbed";
+import type { TabulateReportEmbedRuntime } from "./TabulateReportEmbed";
 
-type ReportResolvedItem = DatasetMeta | GraphBuilderItem | FitYByXItem | TabulateItem;
+const DistributionReportEmbed = lazy(async () => ({
+  default: (await import("./DistributionReportEmbed")).DistributionReportEmbed,
+}));
+const FitYByXReportEmbed = lazy(async () => ({
+  default: (await import("./FitYByXReportEmbed")).FitYByXReportEmbed,
+}));
+const GraphReportEmbed = lazy(async () => ({
+  default: (await import("./GraphReportEmbed")).GraphReportEmbed,
+}));
+const TableReportEmbed = lazy(async () => ({
+  default: (await import("./TableReportEmbed")).TableReportEmbed,
+}));
+const TabulateReportEmbed = lazy(async () => ({
+  default: (await import("./TabulateReportEmbed")).TabulateReportEmbed,
+}));
 
-export interface ReportResolvedSource {
-  kind: ReportDependency["kind"];
-  name: string;
-  item: ReportResolvedItem;
-  dataset: DatasetMeta;
+function renderLazyEmbed(children: ReactNode): ReactNode {
+  return <Suspense fallback={<div className="sp-report-embed-loading">Loading...</div>}>{children}</Suspense>;
 }
+
+type ReportResolvedItemByKind = {
+  table: DatasetMeta;
+  graph: GraphBuilderItem;
+  fitYByX: FitYByXItem;
+  tabulate: TabulateItem;
+  distribution: DistributionItem;
+};
+
+export type ReportResolvedSource = {
+  [Kind in keyof ReportResolvedItemByKind]: {
+    kind: Kind;
+    name: string;
+    item: ReportResolvedItemByKind[Kind];
+    dataset: DatasetMeta;
+  };
+}[keyof ReportResolvedItemByKind];
 
 export type ReportDependencyResolution =
   | {
@@ -47,6 +78,7 @@ export interface ReportEmbedRuntime {
   graph?: GraphReportEmbedRuntime;
   fitYByX?: FitYByXReportEmbedRuntime & Partial<FitYByXReportDependencies>;
   tabulate?: TabulateReportEmbedRuntime;
+  distribution?: DistributionReportEmbedRuntime;
 }
 
 interface ReportDependencySnapshot {
@@ -54,6 +86,7 @@ interface ReportDependencySnapshot {
   graphs: readonly GraphBuilderItem[];
   fitYByX: readonly FitYByXItem[];
   tabulates: readonly TabulateItem[];
+  distributions: readonly DistributionItem[];
 }
 
 function findDataset(datasetId: string, datasets: readonly DatasetMeta[]): DatasetMeta | undefined {
@@ -68,6 +101,7 @@ export function resolveReportDependency(
   const graphs = snapshot?.graphs ?? useGraphBuilderStore.getState().items;
   const fitYByX = snapshot?.fitYByX ?? useFitYByXStore.getState().items;
   const tabulates = snapshot?.tabulates ?? useTabulateStore.getState().items;
+  const distributions = snapshot?.distributions ?? useDistributionStore.getState().items;
 
   if (dependency.kind === "table") {
     const dataset = findDataset(dependency.documentId, datasets);
@@ -116,6 +150,22 @@ export function resolveReportDependency(
       : { status: "missing", dependency };
   }
 
+  if (dependency.kind === "distribution") {
+    const item = distributions.find((candidate) => candidate.id === dependency.documentId);
+    const dataset = item ? findDataset(item.sourceDatasetId, datasets) : undefined;
+    return item && dataset
+      ? {
+          status: "resolved",
+          source: {
+            kind: "distribution",
+            name: item.name,
+            item,
+            dataset,
+          },
+        }
+      : { status: "missing", dependency };
+  }
+
   const item = tabulates.find((candidate) => candidate.id === dependency.documentId);
   const dataset = item ? findDataset(item.sourceDatasetId, datasets) : undefined;
   return item && dataset
@@ -136,12 +186,14 @@ function useReportDependencyResolution(dependency: ReportDependency): ReportDepe
   const graphs = useGraphBuilderStore((state) => state.items);
   const fitYByX = useFitYByXStore((state) => state.items);
   const tabulates = useTabulateStore((state) => state.items);
+  const distributions = useDistributionStore((state) => state.items);
 
   return resolveReportDependency(dependency, {
     datasets,
     graphs,
     fitYByX,
     tabulates,
+    distributions,
   });
 }
 
@@ -199,15 +251,18 @@ class ReportEmbedBoundary extends Component<{
 
 function renderResolvedEmbed(source: ReportResolvedSource, runtime: ReportEmbedRuntime | undefined): ReactNode {
   if (source.kind === "table") {
-    return <TableReportEmbed source={source} runtime={runtime?.table} />;
+    return renderLazyEmbed(<TableReportEmbed source={source} runtime={runtime?.table} />);
   }
   if (source.kind === "graph") {
-    return <GraphReportEmbed source={source} runtime={runtime?.graph} />;
+    return renderLazyEmbed(<GraphReportEmbed source={source} runtime={runtime?.graph} />);
   }
   if (source.kind === "fitYByX") {
-    return <FitYByXReportEmbed source={source} runtime={runtime?.fitYByX} />;
+    return renderLazyEmbed(<FitYByXReportEmbed source={source} runtime={runtime?.fitYByX} />);
   }
-  return <TabulateReportEmbed source={source} runtime={runtime?.tabulate} />;
+  if (source.kind === "distribution") {
+    return renderLazyEmbed(<DistributionReportEmbed source={source} runtime={runtime?.distribution} />);
+  }
+  return renderLazyEmbed(<TabulateReportEmbed source={source} runtime={runtime?.tabulate} />);
 }
 
 export function ReportEmbed({ dependency, runtime }: ReportEmbedProps) {
