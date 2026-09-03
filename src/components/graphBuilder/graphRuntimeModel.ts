@@ -123,7 +123,10 @@ function deriveSpecByColumn(metadata: GraphRuntimeMetadata): Record<string, { ls
   return specByColumn;
 }
 
-export function deriveValueOrders(metadata: GraphRuntimeMetadata): Record<string, string[]> {
+export function deriveValueOrders(
+  metadata: GraphRuntimeMetadata,
+  meltInfo?: GraphRuntimeMeltInfo | null,
+): Record<string, string[]> {
   const valueOrders: Record<string, string[]> = {};
   for (const displayProps of metadata.displayProps) {
     const columnName = metadata.columns[displayProps.colIndex]?.colName;
@@ -133,6 +136,9 @@ export function deriveValueOrders(metadata: GraphRuntimeMetadata): Record<string
     if (Array.isArray(values) && values.length > 0) {
       valueOrders[columnName] = values.map((value) => String(value));
     }
+  }
+  if (meltInfo) {
+    valueOrders[MELT_VAR] = meltInfo.cols.map((column) => column.name);
   }
   return valueOrders;
 }

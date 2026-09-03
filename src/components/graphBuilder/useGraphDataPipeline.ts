@@ -660,7 +660,28 @@ export function canExecuteGraphRequest(
     if (continuousField && fields.some((field) => field.column === continuousField.name)) return true;
   }
   const multiXCount = fields.filter((field) => /^multiX\d+$/.test(field.role)).length;
-  return (hasX && hasY) || multiXCount >= 2;
+  const multiYCount = fields.filter((field) => /^multiY\d+$/.test(field.role)).length;
+  return (hasX && hasY) || multiXCount >= 2 || multiYCount >= 2;
+}
+
+interface GraphRequestPlan {
+  fields: GraphFieldBinding[];
+  filters: TableWindowFilter[];
+  elements: GraphElementRequest[];
+  sampling: GraphSampling;
+  executable: boolean;
+}
+
+function deriveGraphRequestPlan(item: GraphBuilderItem): GraphRequestPlan {
+  const parts = deriveGraphRequestParts(item);
+  return {
+    ...parts,
+    executable: canExecuteGraphRequest(item, parts.fields, parts.elements),
+  };
+}
+
+export function deriveGraphRequestIdentity(item: GraphBuilderItem): string {
+  return JSON.stringify(deriveGraphRequestPlan(item));
 }
 
 function hasEnabledElementKinds(elements: readonly GraphElementRequest[]): Set<string> {
@@ -907,26 +928,27 @@ export function useGraphDataPipeline(
     };
   }, [viewport.height, viewport.width]);
 
+  const requestIdentity = deriveGraphRequestIdentity(item);
+  const requestPlan = useMemo(
+    () => JSON.parse(requestIdentity) as GraphRequestPlan,
+    [requestIdentity],
+  );
   const requestSkeleton = useMemo(() => {
     if (!enabled) return null;
-    const { fields, filters, elements, sampling } = deriveGraphRequestParts(item);
 
     return {
       datasetId: dataset.id,
-      fields,
-      filters,
-      elements,
-      sampling,
+      ...requestPlan,
       viewport: debouncedViewport,
     };
-  }, [dataset.id, item, debouncedViewport, enabled]);
+  }, [dataset.generation, dataset.id, requestPlan, debouncedViewport, enabled]);
 
   useEffect(() => {
     if (!enabled || !requestSkeleton) {
       setState(createInitialGraphStreamState());
       return;
     }
-    if (!canExecuteGraphRequest(item, requestSkeleton.fields, requestSkeleton.elements)) {
+    if (!requestSkeleton.executable) {
       setState((previous) => ({
         ...previous,
         pending: null,
@@ -1024,7 +1046,7 @@ export function useGraphDataPipeline(
       disposed = true;
       cancellationCoordinator.cancelActive();
     };
-  }, [dataset.id, enabled, item, requestSkeleton]);
+  }, [dataset.id, enabled, requestSkeleton]);
 
   return {
     frame: state.committed,

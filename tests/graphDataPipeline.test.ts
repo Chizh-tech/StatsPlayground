@@ -10,6 +10,7 @@ import {
   createStreamStartCancellationCoordinator,
   deriveElements,
   deriveFields,
+  deriveGraphRequestIdentity,
   deriveGraphRequestParts,
   reduceGraphStream,
   type GraphLoadProgress,
@@ -689,6 +690,27 @@ assert.equal(isGraphAggregatePacket({
   ],
 }), true);
 
+assert.equal(isGraphAggregatePacket({
+  kind: "boxPlot",
+  yColumn: "cost",
+  entries: [
+    {
+      group: "DV",
+      category: "203-A6",
+      sourceColumn: "203-A6",
+      count: 4,
+      min: 4.3,
+      q1: 4.35,
+      median: 4.4,
+      q3: 4.45,
+      max: 4.5,
+      whiskerLow: 4.3,
+      whiskerHigh: 4.5,
+      outliers: [],
+    },
+  ],
+}), true);
+
 const validCorrelationPacket = {
   kind: "correlationMatrix" as const,
   method: "pearson",
@@ -1081,6 +1103,48 @@ function makeLegacyGraphBuilderItem(overrides: Record<string, unknown> = {}): Gr
   };
 
   return makeGraphBuilderItem(raw);
+}
+
+{
+  const base = makeLegacyGraphBuilderItem({
+    encoding: {
+      x: { name: "category", type: "nominal" },
+      y: { name: "measurement", type: "continuous" },
+      overlay: { name: "build", type: "nominal" },
+    },
+    elements: [{ kind: "boxplot", enabled: true }],
+    hiddenGroups: [],
+  });
+  const visualOnlyChange = makeLegacyGraphBuilderItem({
+    encoding: {
+      x: { name: "category", type: "nominal" },
+      y: { name: "measurement", type: "continuous" },
+      overlay: { name: "build", type: "nominal" },
+    },
+    elements: [{ kind: "boxplot", enabled: true }],
+    hiddenGroups: ["EV2"],
+    groupStyles: {
+      "TC1.6": { fill: { color: "#ff0000" } },
+    },
+  });
+  const dataChange: GraphBuilderItem = {
+    ...base,
+    filters: [{
+      op: "AND",
+      rule: { kind: "categorical", field: "build", selected: ["EV2"] },
+    }],
+  };
+
+  assert.equal(
+    deriveGraphRequestIdentity(visualOnlyChange),
+    deriveGraphRequestIdentity(base),
+    "legend visibility and color edits must not restart the graph data stream",
+  );
+  assert.notEqual(
+    deriveGraphRequestIdentity(dataChange),
+    deriveGraphRequestIdentity(base),
+    "filter edits must still restart the graph data stream",
+  );
 }
 
 {
@@ -2405,6 +2469,18 @@ function makeProgressedChunk(
   assert.deepEqual(roleColumns(activeMultiY, "y"), ["y_stale"]);
   assert.deepEqual(roleColumns(activeMultiY, "multiY0"), ["my0"]);
   assert.deepEqual(roleColumns(activeMultiY, "multiY1"), ["my1"]);
+  const multiYOnlyItem = makeLegacyGraphBuilderItem({
+    encoding: {},
+    multiY: [
+      { name: "my0", type: "continuous" },
+      { name: "my1", type: "continuous" },
+    ],
+  });
+  const multiYOnlyParts = deriveGraphRequestParts(multiYOnlyItem);
+  assert.equal(
+    canExecuteGraphRequest(multiYOnlyItem, multiYOnlyParts.fields, multiYOnlyParts.elements),
+    true,
+  );
 
   const activeMultiBoth = deriveFields(
     makeLegacyGraphBuilderItem({

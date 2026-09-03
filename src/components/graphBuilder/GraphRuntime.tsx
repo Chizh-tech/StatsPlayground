@@ -187,8 +187,8 @@ export function GraphRuntime({
     [metadata.columns, model.meltInfo],
   );
   const valueOrders = useMemo(
-    () => deriveValueOrders(metadata),
-    [metadata],
+    () => deriveValueOrders(metadata, model.meltInfo),
+    [metadata, model.meltInfo],
   );
 
   const internalDataState = useGraphDataPipeline(
