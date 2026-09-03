@@ -107,7 +107,19 @@
     "targetExists": "A selected target name already exists.",
     "selectedCount": "{{count}} tables selected",
     "importing": "Importing...",
-    "importSelected": "Import selected"
+    "importSelected": "Import selected",
+    "summary": {
+      "completed": "Import completed",
+      "failed": "Import failed and was rolled back",
+      "cancelled": "Import cancelled and was rolled back",
+      "counts": "{{imported}} imported, {{skipped}} skipped, {{rows}} rows written",
+      "failedTable": "Stopped at table: {{table}}",
+      "create": "Created",
+      "append": "Appended",
+      "skip": "Skipped existing",
+      "rows": "rows",
+      "close": "Close"
+    }
   },
   "folder": {
     "defaultName": "New Folder",

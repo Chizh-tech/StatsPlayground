@@ -107,7 +107,19 @@
     "targetExists": "选中的目标名称已经存在。",
     "selectedCount": "已选择 {{count}} 张表",
     "importing": "正在导入...",
-    "importSelected": "导入所选表"
+    "importSelected": "导入所选表",
+    "summary": {
+      "completed": "导入完成",
+      "failed": "导入失败，所有改动已回滚",
+      "cancelled": "导入已取消，所有改动已回滚",
+      "counts": "成功 {{imported}} 张，跳过 {{skipped}} 张，写入 {{rows}} 行",
+      "failedTable": "停止于数据表：{{table}}",
+      "create": "已创建",
+      "append": "已追加",
+      "skip": "已跳过现有数据集",
+      "rows": "行",
+      "close": "关闭"
+    }
   },
   "folder": {
     "defaultName": "新建文件夹",

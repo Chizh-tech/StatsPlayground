@@ -1,10 +1,57 @@
 use crate::error::AppError;
+use crate::models::data_link::{ImportSummary, ImportTableSummary, SqliteImportSelection};
 use crate::models::table::DatasetMeta;
 use crate::state::AppState;
 use std::collections::HashMap;
 
 pub struct IoService<'a> {
     state: &'a AppState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skip_only_sqlite_import_does_not_trigger_legacy_import_all() {
+        let path = std::env::temp_dir().join(format!(
+            "datalink-skip-only-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
+        sqlite
+            .execute_batch("CREATE TABLE existing_values (id INTEGER); INSERT INTO existing_values VALUES (1);")
+            .expect("populate SQLite fixture");
+        drop(sqlite);
+
+        let state = AppState::new().expect("create app state");
+        let summary = IoService::new(&state)
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[SqliteImportSelection {
+                    source_name: "existing_values".to_string(),
+                    target_name: "existing_values".to_string(),
+                    action: "skip".to_string(),
+                }],
+                |_, _, _, _, _| {},
+                || false,
+            )
+            .expect("summarize skipped import");
+
+        assert_eq!(summary.status, "completed");
+        assert!(summary.imported.is_empty());
+        assert_eq!(summary.skipped.len(), 1);
+        assert_eq!(summary.total_rows_written, 0);
+        assert!(state
+            .db
+            .lock()
+            .expect("lock database")
+            .list_datasets()
+            .expect("list datasets")
+            .is_empty());
+
+        std::fs::remove_file(path).expect("remove fixture");
+    }
 }
 
 impl<'a> IoService<'a> {
@@ -35,16 +82,16 @@ impl<'a> IoService<'a> {
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
         let results = db.import_sqlite(file_path, &on_progress, &|| false)?;
-        Ok(results.into_iter().map(|(_, meta)| meta).collect())
+        Ok(results.into_iter().map(|(_, meta, _)| meta).collect())
     }
 
     pub fn import_selected_sqlite<F, C>(
         &self,
         file_path: &str,
-        selections: &[(String, String, bool)],
+        selections: &[SqliteImportSelection],
         on_progress: F,
         is_cancelled: C,
-    ) -> Result<Vec<DatasetMeta>, AppError>
+    ) -> Result<ImportSummary, AppError>
     where
         F: Fn(&str, usize, usize, usize, usize),
         C: Fn() -> bool,
@@ -54,9 +101,60 @@ impl<'a> IoService<'a> {
             .db
             .lock()
             .map_err(|e| AppError::Database(e.to_string()))?;
+        let skipped = selections
+            .iter()
+            .filter(|selection| selection.action == "skip")
+            .map(|selection| ImportTableSummary {
+                source_name: selection.source_name.clone(),
+                target_name: selection.target_name.clone(),
+                action: selection.action.clone(),
+                rows_written: 0,
+            })
+            .collect::<Vec<_>>();
+        let import_pairs = selections
+            .iter()
+            .filter(|selection| selection.action != "skip")
+            .map(|selection| {
+                (
+                    selection.source_name.clone(),
+                    selection.target_name.clone(),
+                    selection.action == "append",
+                )
+            })
+            .collect::<Vec<_>>();
+        if import_pairs.is_empty() {
+            return Ok(ImportSummary {
+                status: "completed".to_string(),
+                imported: Vec::new(),
+                skipped,
+                failed_table: None,
+                error: None,
+                total_rows_written: 0,
+            });
+        }
         let results =
-            db.import_selected_sqlite(file_path, selections, &on_progress, &is_cancelled)?;
-        Ok(results.into_iter().map(|(_, meta)| meta).collect())
+            db.import_selected_sqlite(file_path, &import_pairs, &on_progress, &is_cancelled)?;
+        let imported = results
+            .into_iter()
+            .zip(import_pairs)
+            .map(
+                |((source_name, _, rows_written), (_, target_name, append))| ImportTableSummary {
+                    source_name,
+                    target_name,
+                    action: if append { "append" } else { "create" }.to_string(),
+                    rows_written,
+                },
+            )
+            .collect::<Vec<_>>();
+        let total_rows_written = imported.iter().map(|table| table.rows_written).sum();
+        Ok(ImportSummary {
+            status: "completed".to_string(),
+            imported,
+            skipped,
+            failed_table: None,
+            error: None,
+            total_rows_written,
+        })
     }
 
     /// Export every dataset into a single SQLite database.

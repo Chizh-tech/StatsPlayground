@@ -10,7 +10,7 @@ import {
   folderParent,
   validateFolderOrFileName,
 } from "@/stores/useFolderStore";
-import { dataLinkService } from "@/services/dataLinkService";
+import { useDataLinkStore } from "@/stores/useDataLinkStore";
 import { dataService } from "@/services/dataService";
 import { ioService } from "@/services/ioService";
 import { projectService } from "@/services/projectService";
@@ -33,7 +33,7 @@ import { listen } from "@tauri-apps/api/event";
 import { modKey } from "@/utils/platform";
 import { ctxMenuRef } from "@/utils/ctxMenu";
 import type { NamedSnapshot } from "@/types/history";
-import type { SqliteImportSelection } from "@/types/dataLink";
+import type { ImportSummary, SqliteImportSelection } from "@/types/dataLink";
 
 function formatStat(n: number): string {
   if (Number.isInteger(n) && Math.abs(n) < 1e15) return n.toString();
@@ -180,7 +180,14 @@ export function Workspace() {
   const [renameValue, setRenameValue] = useState("");
   const [showPrefs, setShowPrefs] = useState(false);
   const [showSqlQuery, setShowSqlQuery] = useState(false);
-  const [sqliteDataLinkPath, setSqliteDataLinkPath] = useState<string | null>(null);
+  const sqliteDataLinkPath = useDataLinkStore((state) => state.filePath);
+  const openDataLink = useDataLinkStore((state) => state.open);
+  const closeDataLink = useDataLinkStore((state) => state.close);
+  const importDataLinkSelection = useDataLinkStore((state) => state.importSelected);
+  const importProgress = useDataLinkStore((state) => state.progress);
+  const activeImportRequestId = useDataLinkStore((state) => state.requestId);
+  const cancellingImport = useDataLinkStore((state) => state.cancelling);
+  const cancelActiveImport = useDataLinkStore((state) => state.cancelImport);
   const [helpDialog, setHelpDialog] = useState<"about" | "license" | null>(null);
   const [tableOp, setTableOp] = useState<TableOpType | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -225,15 +232,6 @@ export function Workspace() {
   const [snapMenu, setSnapMenu] = useState<SnapshotMenuData | null>(null);
   const [confirmDeleteSnapId, setConfirmDeleteSnapId] = useState<string | null>(null);
   const snapRenameRef = useRef<((id: string) => void) | null>(null);
-  const [importProgress, setImportProgress] = useState<{
-    tableName: string;
-    tableIndex: number;
-    tableTotal: number;
-    rowsDone: number;
-    rowsTotal: number;
-  } | null>(null);
-  const [activeImportRequestId, setActiveImportRequestId] = useState<string | null>(null);
-  const [cancellingImport, setCancellingImport] = useState(false);
   const [busyMessage, setBusyMessage] = useState<string | null>(null);
   const [busyProgress, setBusyProgress] = useState<{ rowsDone: number; rowsTotal: number } | null>(null);
   const [tableKey, setTableKey] = useState(0);
@@ -542,57 +540,19 @@ export function Workspace() {
       multiple: false,
     });
     if (selected) {
-      setSqliteDataLinkPath(selected as string);
+      openDataLink(selected as string);
     }
   };
 
-  const importSelectedSqlite = async (selections: SqliteImportSelection[]) => {
-    if (!sqliteDataLinkPath) return;
-    const requestId = crypto.randomUUID();
-    setActiveImportRequestId(requestId);
-    const unlisten = await listen<{
-      table_name: string;
-      table_index: number;
-      table_total: number;
-      rows_done: number;
-      rows_total: number;
-    }>("import-progress", (event) => {
-      setImportProgress({
-        tableName: event.payload.table_name,
-        tableIndex: event.payload.table_index,
-        tableTotal: event.payload.table_total,
-        rowsDone: event.payload.rows_done,
-        rowsTotal: event.payload.rows_total,
-      });
-    });
-    try {
-      setImportProgress({ tableName: t("common.preparing"), tableIndex: 0, tableTotal: 0, rowsDone: 0, rowsTotal: 0 });
-      await dataLinkService.importSelectedSqlite(sqliteDataLinkPath, requestId, selections);
+  const importSelectedSqlite = async (selections: SqliteImportSelection[]): Promise<ImportSummary> => {
+    const summary = await importDataLinkSelection(selections);
+    if (summary.status === "completed" && summary.imported.length > 0) {
       await refreshDatasets();
       markDirty();
-      const fileName = sqliteDataLinkPath.split(/[\\\\/]/).pop() ?? "SQLite";
+      const fileName = sqliteDataLinkPath?.split(/[\\/]/).pop() ?? "SQLite";
       recordAction(t("history.importSqlite", { file: fileName }));
-    } catch (e) {
-      if (String(e).includes("Cancelled: SQLite import cancelled")) return;
-      alert(t("alert.importSqliteFailed") + String(e));
-      throw e;
-    } finally {
-      unlisten();
-      setImportProgress(null);
-      setActiveImportRequestId(null);
-      setCancellingImport(false);
     }
-  };
-
-  const cancelActiveImport = async () => {
-    if (!activeImportRequestId || cancellingImport) return;
-    setCancellingImport(true);
-    try {
-      await dataLinkService.cancelSqliteImport(activeImportRequestId);
-    } catch (error) {
-      setCancellingImport(false);
-      alert(t("alert.importSqliteFailed") + String(error));
-    }
+    return summary;
   };
 
   const handleExportSqlite = async () => {
@@ -1726,7 +1686,7 @@ export function Workspace() {
         <SqliteDataLinkDialog
           filePath={sqliteDataLinkPath}
           existingDatasetNames={datasets.map((dataset) => dataset.name)}
-          onClose={() => setSqliteDataLinkPath(null)}
+          onClose={closeDataLink}
           onImport={importSelectedSqlite}
         />
       )}

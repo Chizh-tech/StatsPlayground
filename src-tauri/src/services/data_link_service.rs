@@ -81,4 +81,17 @@ mod tests {
         assert_eq!(preview.rows[0][1], "<BLOB: 3 bytes>");
         std::fs::remove_file(path).expect("remove fixture");
     }
+
+    #[test]
+    fn empty_database_has_no_source_objects() {
+        let path = fixture_path();
+        let sqlite = rusqlite::Connection::open(&path).expect("create empty SQLite fixture");
+        drop(sqlite);
+
+        let objects = DataLinkService::list_sqlite_objects(path.to_str().expect("fixture path"))
+            .expect("list empty database");
+
+        assert!(objects.is_empty());
+        std::fs::remove_file(path).expect("remove fixture");
+    }
 }

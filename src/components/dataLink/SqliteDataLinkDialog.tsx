@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
-import { dataLinkService } from "@/services/dataLinkService";
-import type { PreviewResult, SourceObject, SqliteImportSelection } from "@/types/dataLink";
+import { useDataLinkStore } from "@/stores/useDataLinkStore";
+import type { ImportSummary, SqliteImportSelection } from "@/types/dataLink";
 
 import "./dataLink.css";
 
@@ -10,22 +10,13 @@ interface SqliteDataLinkDialogProps {
   filePath: string;
   existingDatasetNames: string[];
   onClose: () => void;
-  onImport: (selections: SqliteImportSelection[]) => Promise<void>;
+  onImport: (selections: SqliteImportSelection[]) => Promise<ImportSummary>;
 }
-
-type ConflictStrategy = "rename" | "append" | "skip";
 
 function displayValue(value: unknown): string {
   if (value === null) return "NULL";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
-}
-
-function uniqueTargetName(sourceName: string, reservedNames: Set<string>): string {
-  if (!reservedNames.has(sourceName.toLowerCase())) return sourceName;
-  let suffix = 2;
-  while (reservedNames.has(`${sourceName} (${suffix})`.toLowerCase())) suffix += 1;
-  return `${sourceName} (${suffix})`;
 }
 
 export function SqliteDataLinkDialog({
@@ -35,71 +26,33 @@ export function SqliteDataLinkDialog({
     onImport,
   }: SqliteDataLinkDialogProps) {
   const { t } = useTranslation();
-  const [objects, setObjects] = useState<SourceObject[]>([]);
-  const [selectedName, setSelectedName] = useState<string | null>(null);
-  const [preview, setPreview] = useState<PreviewResult | null>(null);
-  const [loadingObjects, setLoadingObjects] = useState(true);
-  const [loadingPreview, setLoadingPreview] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [conflictStrategy, setConflictStrategy] = useState<ConflictStrategy>("rename");
-  const [selectedTables, setSelectedTables] = useState<Set<string>>(new Set());
-  const [targetNames, setTargetNames] = useState<Record<string, string>>({});
+  const {
+    objects,
+    selectedName,
+    preview,
+    selectedTables,
+    targetNames,
+    conflictStrategy,
+    loadingObjects,
+    loadingPreview,
+    importing,
+    summary,
+    error,
+    loadObjects,
+    selectObject,
+    applyConflictStrategy,
+    toggleTable,
+    setTargetName,
+    setError,
+  } = useDataLinkStore();
   const fileName = filePath.split(/[\\/]/).pop() ?? "SQLite";
   const existingNames = new Set(existingDatasetNames.map((name) => name.toLowerCase()));
   const tableObjects = objects.filter((object) => object.objectType === "table");
   const conflictCount = tableObjects.filter((object) => existingNames.has(object.name.toLowerCase())).length;
 
-  const applyConflictStrategy = (strategy: ConflictStrategy, nextObjects = objects) => {
-    const tables = nextObjects.filter((object) => object.objectType === "table");
-    const reserved = new Set(existingNames);
-    const nextSelected = new Set<string>();
-    const nextTargets: Record<string, string> = {};
-    for (const table of tables) {
-      const conflicts = existingNames.has(table.name.toLowerCase());
-      if (strategy === "skip" && conflicts) continue;
-      const targetName = strategy === "rename"
-        ? uniqueTargetName(table.name, reserved)
-        : table.name;
-      nextSelected.add(table.name);
-      nextTargets[table.name] = targetName;
-      reserved.add(targetName.toLowerCase());
-    }
-    setConflictStrategy(strategy);
-    setSelectedTables(nextSelected);
-    setTargetNames(nextTargets);
-  };
-
   useEffect(() => {
-    let active = true;
-    setLoadingObjects(true);
-    dataLinkService.listSqliteObjects(filePath)
-      .then((nextObjects) => {
-        if (!active) return;
-        setObjects(nextObjects);
-        setSelectedName(nextObjects[0]?.name ?? null);
-        applyConflictStrategy("rename", nextObjects);
-      })
-      .catch((cause) => active && setError(String(cause)))
-      .finally(() => active && setLoadingObjects(false));
-    return () => { active = false; };
+    void loadObjects(existingDatasetNames);
   }, [filePath]);
-
-  useEffect(() => {
-    if (!selectedName) {
-      setPreview(null);
-      return;
-    }
-    let active = true;
-    setLoadingPreview(true);
-    setPreview(null);
-    setError(null);
-    dataLinkService.previewSqliteObject(filePath, selectedName)
-      .then((result) => active && setPreview(result))
-      .catch((cause) => active && setError(String(cause)))
-      .finally(() => active && setLoadingPreview(false));
-    return () => { active = false; };
-  }, [filePath, selectedName]);
 
   const handleImport = async () => {
     const selections = tableObjects
@@ -111,6 +64,15 @@ export function SqliteDataLinkDialog({
           ? "append" as const
           : "create" as const,
       }));
+    if (conflictStrategy === "skip") {
+      selections.push(...tableObjects
+        .filter((object) => existingNames.has(object.name.toLowerCase()))
+        .map((object) => ({
+          sourceName: object.name,
+          targetName: object.name,
+          action: "skip" as const,
+        })));
+    }
     const createdTargets = selections
       .filter((selection) => selection.action === "create")
       .map((selection) => selection.targetName.toLowerCase());
@@ -126,15 +88,10 @@ export function SqliteDataLinkDialog({
       setError(t("dataLink.targetExists", { defaultValue: "A selected target name already exists." }));
       return;
     }
-    setImporting(true);
     setError(null);
     try {
       await onImport(selections);
-      onClose();
-    } catch (cause) {
-      setError(String(cause));
-      setImporting(false);
-    }
+    } catch { /* The store owns and displays command errors. */ }
   };
 
   return (
@@ -172,23 +129,11 @@ export function SqliteDataLinkDialog({
                     <input
                       type="checkbox"
                       checked={selected}
-                      onChange={(event) => {
-                        const next = new Set(selectedTables);
-                        if (event.target.checked) {
-                          next.add(object.name);
-                          if (!targetNames[object.name]) {
-                            const reserved = new Set([...existingNames, ...Object.values(targetNames).map((name) => name.toLowerCase())]);
-                            setTargetNames({ ...targetNames, [object.name]: uniqueTargetName(object.name, reserved) });
-                          }
-                        } else {
-                          next.delete(object.name);
-                        }
-                        setSelectedTables(next);
-                      }}
+                      onChange={(event) => toggleTable(object.name, event.target.checked, existingDatasetNames)}
                       aria-label={t("dataLink.selectTable", { name: object.name, defaultValue: "Select {{name}}" })}
                     />
                   ) : <i className="fa-solid fa-eye" aria-hidden="true" />}
-                  <button className="datalink-object-preview" onClick={() => setSelectedName(object.name)}>
+                  <button className="datalink-object-preview" onClick={() => void selectObject(object.name)}>
                     <span>{object.name}{conflicts && <em>{t("dataLink.exists", { defaultValue: "Exists" })}</em>}</span>
                     <small>{object.columns.length}</small>
                   </button>
@@ -199,23 +144,57 @@ export function SqliteDataLinkDialog({
 
           <main className="datalink-preview">
             {error && <div className="datalink-error">{error}</div>}
-            {conflictCount > 0 && (
+            {summary && (
+              <div className={`datalink-summary is-${summary.status}`}>
+                <i
+                  className={`fa-solid ${summary.status === "completed" ? "fa-circle-check" : summary.status === "cancelled" ? "fa-circle-minus" : "fa-circle-xmark"}`}
+                  aria-hidden="true"
+                />
+                <div>
+                  <h3>{t(`dataLink.summary.${summary.status}`)}</h3>
+                  <p>{t("dataLink.summary.counts", {
+                    imported: summary.imported.length,
+                    skipped: summary.skipped.length,
+                    rows: summary.totalRowsWritten.toLocaleString(),
+                  })}</p>
+                  {summary.failedTable && <p>{t("dataLink.summary.failedTable", { table: summary.failedTable })}</p>}
+                  {summary.error && <pre>{summary.error}</pre>}
+                  {[...summary.imported, ...summary.skipped].length > 0 && (
+                    <ul>
+                      {summary.imported.map((table) => (
+                        <li key={`${table.action}:${table.sourceName}`}>
+                          <strong>{table.targetName}</strong>
+                          <span>{t(`dataLink.summary.${table.action}`)} · {table.rowsWritten.toLocaleString()} {t("dataLink.summary.rows")}</span>
+                        </li>
+                      ))}
+                      {summary.skipped.map((table) => (
+                        <li key={`skip:${table.sourceName}`}>
+                          <strong>{table.sourceName}</strong>
+                          <span>{t("dataLink.summary.skip")}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
+            {!summary && conflictCount > 0 && (
               <div className="datalink-conflicts">
                 <strong>{t("dataLink.conflictsFound", { count: conflictCount, defaultValue: "{{count}} name conflicts" })}</strong>
                 <div className="datalink-strategy" role="group" aria-label={t("dataLink.conflictStrategy", { defaultValue: "Conflict strategy" })}>
-                  <button className={conflictStrategy === "rename" ? "active" : ""} onClick={() => applyConflictStrategy("rename")}>
+                  <button className={conflictStrategy === "rename" ? "active" : ""} onClick={() => applyConflictStrategy("rename", existingDatasetNames)}>
                     {t("dataLink.keepBoth", { defaultValue: "Keep both" })}
                   </button>
-                  <button className={conflictStrategy === "append" ? "active" : ""} onClick={() => applyConflictStrategy("append")}>
+                  <button className={conflictStrategy === "append" ? "active" : ""} onClick={() => applyConflictStrategy("append", existingDatasetNames)}>
                     {t("dataLink.appendRows", { defaultValue: "Append rows" })}
                   </button>
-                  <button className={conflictStrategy === "skip" ? "active" : ""} onClick={() => applyConflictStrategy("skip")}>
+                  <button className={conflictStrategy === "skip" ? "active" : ""} onClick={() => applyConflictStrategy("skip", existingDatasetNames)}>
                     {t("dataLink.skipExisting", { defaultValue: "Skip existing" })}
                   </button>
                 </div>
               </div>
             )}
-            {loadingPreview ? (
+            {!summary && (loadingPreview ? (
               <div className="datalink-state">{t("dataLink.loadingPreview", { defaultValue: "Loading preview..." })}</div>
             ) : preview ? (
               <>
@@ -235,7 +214,7 @@ export function SqliteDataLinkDialog({
                     <span>{t("dataLink.targetName", { defaultValue: "Target dataset name" })}</span>
                     <input
                       value={targetNames[preview.objectName] ?? ""}
-                      onChange={(event) => setTargetNames({ ...targetNames, [preview.objectName]: event.target.value })}
+                      onChange={(event) => setTargetName(preview.objectName, event.target.value)}
                       disabled={importing || (conflictStrategy === "append" && existingNames.has(preview.objectName.toLowerCase()))}
                     />
                     {conflictStrategy === "append" && existingNames.has(preview.objectName.toLowerCase()) && (
@@ -266,18 +245,31 @@ export function SqliteDataLinkDialog({
                   </table>
                 </div>
               </>
-            ) : !loadingObjects && <div className="datalink-state">{t("dataLink.selectObject", { defaultValue: "Select an object to preview" })}</div>}
+            ) : !loadingObjects && <div className="datalink-state">{t("dataLink.selectObject", { defaultValue: "Select an object to preview" })}</div>)}
           </main>
         </div>
 
         <footer className="datalink-actions">
-          <span>{t("dataLink.selectedCount", { count: selectedTables.size, defaultValue: "{{count}} tables selected" })}</span>
-          <button className="btn-text" onClick={onClose} disabled={importing}>{t("common.cancel")}</button>
-          <button className="btn-primary" onClick={handleImport} disabled={loadingObjects || selectedTables.size === 0 || importing}>
-            {importing
-              ? t("dataLink.importing", { defaultValue: "Importing..." })
-              : t("dataLink.importSelected", { defaultValue: "Import selected" })}
-          </button>
+          {summary ? (
+            <button className="btn-primary" onClick={onClose}>{t("dataLink.summary.close")}</button>
+          ) : (
+            <>
+              <span>{t("dataLink.selectedCount", {
+                count: selectedTables.size + (conflictStrategy === "skip" ? conflictCount : 0),
+                defaultValue: "{{count}} tables selected",
+              })}</span>
+              <button className="btn-text" onClick={onClose} disabled={importing}>{t("common.cancel")}</button>
+              <button
+                className="btn-primary"
+                onClick={handleImport}
+                disabled={loadingObjects || (selectedTables.size === 0 && !(conflictStrategy === "skip" && conflictCount > 0)) || importing}
+              >
+                {importing
+                  ? t("dataLink.importing", { defaultValue: "Importing..." })
+                  : t("dataLink.importSelected", { defaultValue: "Import selected" })}
+              </button>
+            </>
+          )}
         </footer>
       </div>
     </div>

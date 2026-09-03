@@ -519,6 +519,11 @@ DuckDB engine 负责目标表、Appender 写入、事务、取消和 metadata。
 导入采用有上限批次和任务级原子事务；取消或任一表转换失败时，不保留物理表、
 metadata 或部分追加行。
 
+前端由 `useDataLinkStore` 统一维护向导、预览、选择、进度、错误和任务结果。
+`ImportSummary` 区分 `completed`、`failed` 和 `cancelled`，列出成功与跳过的表及
+实际写入行数。当前不支持 partial success；失败或取消时整次事务回滚，摘要中的
+提交写入行数为 0。
+
 ### 9.2 描述性统计 (Stats.Descriptive)
 
 | 功能 | 描述 |

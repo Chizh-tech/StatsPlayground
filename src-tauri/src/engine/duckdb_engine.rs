@@ -2997,7 +2997,7 @@ impl DuckDbEngine {
         file_path: &str,
         on_progress: &F,
         is_cancelled: &C,
-    ) -> Result<Vec<(String, DatasetMeta)>, AppError>
+    ) -> Result<Vec<(String, DatasetMeta, usize)>, AppError>
     where
         F: Fn(&str, usize, usize, usize, usize),
         C: Fn() -> bool,
@@ -3011,7 +3011,7 @@ impl DuckDbEngine {
         selections: &[(String, String, bool)],
         on_progress: &F,
         is_cancelled: &C,
-    ) -> Result<Vec<(String, DatasetMeta)>, AppError>
+    ) -> Result<Vec<(String, DatasetMeta, usize)>, AppError>
     where
         F: Fn(&str, usize, usize, usize, usize),
         C: Fn() -> bool,
@@ -3098,7 +3098,7 @@ impl DuckDbEngine {
 
         let table_total = plans.len();
         self.conn.execute_batch("BEGIN TRANSACTION")?;
-        let import_result = (|| -> Result<Vec<(String, DatasetMeta)>, AppError> {
+        let import_result = (|| -> Result<Vec<(String, DatasetMeta, usize)>, AppError> {
             let mut results = Vec::new();
 
             for (table_index, (src_table, target_name, columns, append_target_id)) in
@@ -3225,7 +3225,7 @@ impl DuckDbEngine {
             }
 
             let meta = self.get_dataset_meta(&id)?;
-            results.push((src_table.clone(), meta));
+            results.push((src_table.clone(), meta, rows_done));
             }
 
             Ok(results)
@@ -7535,6 +7535,72 @@ mod tests {
             )
             .expect("count invalid physical tables");
         assert_eq!(physical_invalid_tables, 0);
+
+        std::fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn imports_empty_table_and_rolls_back_when_second_table_fails() {
+        let path = std::env::temp_dir().join(format!(
+            "datalink-atomic-multi-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
+        sqlite
+            .execute_batch(
+                "CREATE TABLE empty_values (id INTEGER, label TEXT); \
+                 CREATE TABLE valid_values (id INTEGER); \
+                 INSERT INTO valid_values VALUES (1); \
+                 CREATE TABLE invalid_values (amount INTEGER); \
+                 INSERT INTO invalid_values VALUES ('not-a-number');",
+            )
+            .expect("populate SQLite fixture");
+        drop(sqlite);
+
+        let db = DuckDbEngine::new_in_memory().expect("create in-memory project");
+        let empty = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[(
+                    "empty_values".to_string(),
+                    "Empty Values".to_string(),
+                    false,
+                )],
+                &|_, _, _, _, _| {},
+                &|| false,
+            )
+            .expect("import empty table");
+        assert_eq!(empty.len(), 1);
+        assert_eq!(empty[0].1.row_count, 0);
+        assert_eq!(empty[0].2, 0);
+
+        let error = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[
+                    (
+                        "valid_values".to_string(),
+                        "Valid Values".to_string(),
+                        false,
+                    ),
+                    (
+                        "invalid_values".to_string(),
+                        "Invalid Values".to_string(),
+                        false,
+                    ),
+                ],
+                &|_, _, _, _, _| {},
+                &|| false,
+            )
+            .expect_err("roll back when second table fails");
+        assert!(error
+            .to_string()
+            .contains("Cannot convert value 'not-a-number'"));
+
+        let datasets = db.list_datasets().expect("list datasets after rollback");
+        assert_eq!(datasets.len(), 1);
+        assert_eq!(datasets[0].name, "Empty Values");
+        assert_eq!(datasets[0].row_count, 0);
 
         std::fs::remove_file(path).expect("remove fixture");
     }

@@ -107,7 +107,19 @@
     "targetExists": "選取的目標名稱已存在。",
     "selectedCount": "已選擇 {{count}} 張資料表",
     "importing": "正在匯入...",
-    "importSelected": "匯入所選資料表"
+    "importSelected": "匯入所選資料表",
+    "summary": {
+      "completed": "匯入完成",
+      "failed": "匯入失敗，所有變更已回復",
+      "cancelled": "匯入已取消，所有變更已回復",
+      "counts": "成功 {{imported}} 張，略過 {{skipped}} 張，寫入 {{rows}} 列",
+      "failedTable": "停止於資料表：{{table}}",
+      "create": "已建立",
+      "append": "已附加",
+      "skip": "已略過現有資料集",
+      "rows": "列",
+      "close": "關閉"
+    }
   },
   "folder": {
     "defaultName": "新增資料夾",

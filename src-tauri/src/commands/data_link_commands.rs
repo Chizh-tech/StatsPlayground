@@ -6,8 +6,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
-use crate::models::data_link::{PreviewResult, SourceObject, SqliteImportSelection};
-use crate::models::table::DatasetMeta;
+use crate::models::data_link::{
+    ImportSummary, ImportTableSummary, PreviewResult, SourceObject, SqliteImportSelection,
+};
 use crate::services::data_link_service::DataLinkService;
 use crate::services::io_service::IoService;
 use crate::state::AppState;
@@ -27,9 +28,7 @@ fn active_imports() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
 }
 
 #[tauri::command(async)]
-pub async fn list_sqlite_source_objects(
-    file_path: String,
-) -> Result<Vec<SourceObject>, AppError> {
+pub async fn list_sqlite_source_objects(file_path: String) -> Result<Vec<SourceObject>, AppError> {
     tokio::task::spawn_blocking(move || DataLinkService::list_sqlite_objects(&file_path))
         .await
         .map_err(|error| AppError::Database(format!("DataLink worker failed: {error}")))?
@@ -55,7 +54,7 @@ pub fn import_selected_sqlite(
     file_path: String,
     request_id: String,
     selections: Vec<SqliteImportSelection>,
-) -> Result<Vec<DatasetMeta>, AppError> {
+) -> Result<ImportSummary, AppError> {
     if selections.is_empty() {
         return Err(AppError::InvalidParam(
             "Select at least one SQLite table".to_string(),
@@ -65,7 +64,10 @@ pub fn import_selected_sqlite(
     let mut source_names = HashSet::new();
     let mut target_names = HashSet::new();
     for selection in &selections {
-        if selection.action != "create" && selection.action != "append" {
+        if selection.action != "create"
+            && selection.action != "append"
+            && selection.action != "skip"
+        {
             return Err(AppError::InvalidParam(format!(
                 "Unsupported SQLite import action: {}",
                 selection.action
@@ -88,7 +90,9 @@ pub fn import_selected_sqlite(
     }
 
     if request_id.trim().is_empty() {
-        return Err(AppError::InvalidParam("Import request ID is required".to_string()));
+        return Err(AppError::InvalidParam(
+            "Import request ID is required".to_string(),
+        ));
     }
     let _permit = crate::commands::io_commands::acquire_mutation_permit(state.inner())?;
     let cancellation = Arc::new(AtomicBool::new(false));
@@ -104,20 +108,25 @@ pub fn import_selected_sqlite(
         imports.insert(request_id.clone(), Arc::clone(&cancellation));
     }
 
-    let pairs = selections
-        .into_iter()
-        .map(|selection| {
-            (
-                selection.source_name,
-                selection.target_name,
-                selection.action == "append",
-            )
+    let failed_table = Arc::new(Mutex::new(None::<String>));
+    let progress_table = Arc::clone(&failed_table);
+    let skipped = selections
+        .iter()
+        .filter(|selection| selection.action == "skip")
+        .map(|selection| ImportTableSummary {
+            source_name: selection.source_name.clone(),
+            target_name: selection.target_name.clone(),
+            action: selection.action.clone(),
+            rows_written: 0,
         })
         .collect::<Vec<_>>();
     let result = IoService::new(state.inner()).import_selected_sqlite(
         &file_path,
-        &pairs,
+        &selections,
         |table_name, table_index, table_total, rows_done, rows_total| {
+            if let Ok(mut current_table) = progress_table.lock() {
+                *current_table = Some(table_name.to_string());
+            }
             let _ = app.emit(
                 "import-progress",
                 ImportProgress {
@@ -134,7 +143,25 @@ pub fn import_selected_sqlite(
     if let Ok(mut imports) = active_imports().lock() {
         imports.remove(&request_id);
     }
-    result
+    match result {
+        Ok(summary) => Ok(summary),
+        Err(AppError::Cancelled(error)) => Ok(ImportSummary {
+            status: "cancelled".to_string(),
+            imported: Vec::new(),
+            skipped: skipped.clone(),
+            failed_table: failed_table.lock().ok().and_then(|table| table.clone()),
+            error: Some(error),
+            total_rows_written: 0,
+        }),
+        Err(error) => Ok(ImportSummary {
+            status: "failed".to_string(),
+            imported: Vec::new(),
+            skipped,
+            failed_table: failed_table.lock().ok().and_then(|table| table.clone()),
+            error: Some(error.to_string()),
+            total_rows_written: 0,
+        }),
+    }
 }
 
 #[tauri::command]

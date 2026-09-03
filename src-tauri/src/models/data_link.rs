@@ -33,3 +33,23 @@ pub struct SqliteImportSelection {
     pub target_name: String,
     pub action: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportTableSummary {
+    pub source_name: String,
+    pub target_name: String,
+    pub action: String,
+    pub rows_written: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSummary {
+    pub status: String,
+    pub imported: Vec<ImportTableSummary>,
+    pub skipped: Vec<ImportTableSummary>,
+    pub failed_table: Option<String>,
+    pub error: Option<String>,
+    pub total_rows_written: usize,
+}

@@ -107,7 +107,19 @@
     "targetExists": "Tên đích đã tồn tại.",
     "selectedCount": "Đã chọn {{count}} bảng",
     "importing": "Đang nhập...",
-    "importSelected": "Nhập các bảng đã chọn"
+    "importSelected": "Nhập các bảng đã chọn",
+    "summary": {
+      "completed": "Nhập hoàn tất",
+      "failed": "Nhập thất bại và mọi thay đổi đã được hoàn tác",
+      "cancelled": "Đã hủy nhập và mọi thay đổi đã được hoàn tác",
+      "counts": "Đã nhập {{imported}}, bỏ qua {{skipped}}, ghi {{rows}} hàng",
+      "failedTable": "Dừng tại bảng: {{table}}",
+      "create": "Đã tạo",
+      "append": "Đã nối thêm",
+      "skip": "Đã bỏ qua dữ liệu hiện có",
+      "rows": "hàng",
+      "close": "Đóng"
+    }
   },
   "folder": {
     "defaultName": "Thư mục mới",
