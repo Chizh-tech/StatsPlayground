@@ -46,6 +46,19 @@ function parseStructuredMessage(message: unknown): Record<string, unknown> | nul
   return toRecord(message);
 }
 
+function toPayloadBuffer(message: unknown): ArrayBuffer | null {
+  if (message instanceof ArrayBuffer) {
+    return message;
+  }
+  if (ArrayBuffer.isView(message)) {
+    return message.buffer.slice(
+      message.byteOffset,
+      message.byteOffset + message.byteLength,
+    ) as ArrayBuffer;
+  }
+  return null;
+}
+
 function isMessageType(record: Record<string, unknown>, expected: string): boolean {
   const value = record.messageType;
   return value === undefined || value === expected;
@@ -127,7 +140,8 @@ export function createGraphStreamTransport(
         return;
       }
 
-      if (message instanceof ArrayBuffer) {
+      const payload = toPayloadBuffer(message);
+      if (payload) {
         if (!pendingHeader) {
           fail("graph payload arrived before header");
           return;
@@ -136,7 +150,7 @@ export function createGraphStreamTransport(
         const header = pendingHeader;
         pendingHeader = null;
         handlers.onHeader(header);
-        handlers.onPayload(message);
+        handlers.onPayload(payload);
         if (header.finalChunk) {
           sawFinalChunkPayload = true;
         }

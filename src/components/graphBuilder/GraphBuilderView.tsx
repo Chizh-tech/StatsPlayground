@@ -55,6 +55,7 @@ interface ChartTypeDef {
 
 const CHART_TYPE_DEFS: ChartTypeDef[] = [
   { kind: "points", icon: "●" },
+  { kind: "bar", icon: "▮" },
   { kind: "line", icon: "╱" },
   { kind: "smoother", icon: "∿" },
   { kind: "fitline", icon: "ƒ" },

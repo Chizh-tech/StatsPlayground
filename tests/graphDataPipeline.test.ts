@@ -135,6 +135,11 @@ assert.equal(makeGraphRows(10).length, 10);
     false,
     "GraphBuilderView production graph path must not do frontend melt expansion with newRows.push([...row, ...])",
   );
+  assert.match(
+    graphBuilderViewSource,
+    /CHART_TYPE_DEFS[\s\S]*?kind:\s*["']bar["']/,
+    "Graph Builder must expose the supported Bar layer in its add-layer menu",
+  );
   assert.equal(
     referencesIdentifier(graphBuilderViewAst, "loadGraphTableData"),
     false,
@@ -1113,6 +1118,42 @@ function makeProgressedChunk(
   assert.equal(transportError, null);
   assert.deepEqual(events, ["header", "payload", "complete"]);
   assert.equal(completionCalls, 1);
+}
+
+{
+  const events: string[] = [];
+  let transportError: string | null = null;
+  const request = makeRequest("req-typed-array-payload", 27);
+  const transport = createGraphStreamTransport(request, {
+    onHeader: () => {
+      events.push("header");
+    },
+    onPayload: (receivedPayload) => {
+      events.push("payload");
+      assert.equal(receivedPayload.byteLength, makePayload(0).byteLength);
+    },
+    onAggregate: () => {},
+    onComplete: () => {
+      events.push("complete");
+    },
+    onError: (message) => {
+      transportError = message;
+    },
+  });
+
+  transport.onChannelMessage({
+    messageType: "header",
+    ...makeHeader("req-typed-array-payload", 27, 0, true),
+  });
+  transport.onChannelMessage(new Uint8Array(makePayload(0)));
+  transport.onChannelMessage({
+    messageType: "complete",
+    ...makeCompletion("req-typed-array-payload", 27),
+    chunksSent: 1,
+  });
+
+  assert.equal(transportError, null);
+  assert.deepEqual(events, ["header", "payload", "complete"]);
 }
 
 {
