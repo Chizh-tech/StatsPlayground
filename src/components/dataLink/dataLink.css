@@ -386,6 +386,119 @@
   font-size: 12px;
 }
 
+.postgres-datalink-dialog {
+  height: min(790px, calc(100vh - 32px));
+}
+
+.postgres-datalink-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.postgres-connection-panel {
+  border-bottom: 1px solid var(--border-main);
+  background: var(--bg-main);
+}
+
+.postgres-connection-panel .datalink-section-title {
+  padding-bottom: 6px;
+}
+
+.postgres-connection-panel .datalink-section-title span {
+  color: var(--fg-muted);
+  text-transform: none;
+}
+
+.postgres-connection-panel .datalink-section-title span.is-connected {
+  color: var(--fg-success, #4f9d69);
+}
+
+.postgres-connection-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.4fr) minmax(90px, .6fr) minmax(150px, 1.2fr) minmax(150px, 1fr);
+  gap: 10px;
+  padding: 0 14px 12px;
+}
+
+.postgres-connection-grid label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.postgres-connection-grid input,
+.postgres-connection-grid select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+}
+
+.postgres-connection-grid input:focus,
+.postgres-connection-grid select:focus {
+  border-color: var(--border-input-focus);
+  outline: none;
+}
+
+.postgres-password-field {
+  grid-column: span 2;
+}
+
+.postgres-connection-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 14px 12px;
+}
+
+.postgres-connection-actions > span {
+  margin-right: auto;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.postgres-browser {
+  flex: 1;
+}
+
+.postgres-error {
+  display: flex;
+  gap: 10px;
+  margin: 10px 14px 0;
+  padding: 9px 10px;
+}
+
+.postgres-error strong {
+  text-transform: capitalize;
+}
+
+.postgres-object {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.postgres-object > i {
+  text-align: center;
+}
+
+@media (max-width: 850px) {
+  .postgres-connection-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .postgres-password-field {
+    grid-column: auto;
+  }
+}
+
 @media (max-width: 700px) {
   .datalink-dialog {
     width: calc(100vw - 20px);

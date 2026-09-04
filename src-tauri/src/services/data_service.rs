@@ -142,7 +142,11 @@ impl<'a> DataService<'a> {
         page: usize,
         page_size: usize,
     ) -> Result<SqlQueryResult, AppError> {
-        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         db.execute_sql_query(sql, page, page_size)
     }
 
@@ -161,8 +165,16 @@ impl<'a> DataService<'a> {
         db.create_empty_table(&id, name, column_names, column_types)
     }
 
-    pub fn create_table_from_sql_query(&self, sql: &str, name: &str) -> Result<DatasetMeta, AppError> {
-        let db = self.state.db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+    pub fn create_table_from_sql_query(
+        &self,
+        sql: &str,
+        name: &str,
+    ) -> Result<DatasetMeta, AppError> {
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
         db.create_table_from_sql_query(&id, name, sql)
     }
@@ -188,7 +200,10 @@ impl<'a> DataService<'a> {
             .map_err(|e| AppError::Database(e.to_string()))?;
         let row_ids = db.add_rows(dataset_id, count)?;
         let generation = db.get_dataset_generation(dataset_id)?;
-        Ok(crate::models::table::AddedRowsResult { row_ids, generation })
+        Ok(crate::models::table::AddedRowsResult {
+            row_ids,
+            generation,
+        })
     }
 
     pub fn apply_added_rows(
@@ -397,12 +412,7 @@ impl<'a> DataService<'a> {
             .iter()
             .map(|column| (column.name.clone(), column.column_type.clone()))
             .collect::<Vec<_>>();
-        db.add_columns_with_change_set(
-            dataset_id,
-            &engine_columns,
-            at_index,
-            expected_generation,
-        )
+        db.add_columns_with_change_set(dataset_id, &engine_columns, at_index, expected_generation)
     }
 
     /// Insert a column at a specific visible index and shift any stored display
@@ -482,12 +492,7 @@ impl<'a> DataService<'a> {
                 .map_err(|_| AppError::InvalidParam("source column index is too large".into()))?;
             let to_index = i32::try_from(to)
                 .map_err(|_| AppError::InvalidParam("target column index is too large".into()))?;
-            db.reorder_column_if_generation(
-                dataset_id,
-                from_index,
-                to_index,
-                expected_generation,
-            )?
+            db.reorder_column_if_generation(dataset_id, from_index, to_index, expected_generation)?
         };
         let mut display = self
             .state

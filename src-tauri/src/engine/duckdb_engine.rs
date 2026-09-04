@@ -5,9 +5,10 @@ use std::time::Instant;
 use duckdb::types::{OrderedMap, TimeUnit, Value};
 use duckdb::{appender_params_from_iter, params, params_from_iter, Config, Connection};
 
-use crate::connectors::{ConnectorValue, DataConnector, SqliteConnector};
+use crate::connectors::{ConnectorValue, DataConnector, PostgresConnector, SqliteConnector};
 use crate::engine::sql_query::{normalize_identifier, validate_read_only_query};
 use crate::error::AppError;
+use crate::models::data_link::SourceObjectRef;
 use crate::models::graph_data::{
     BoxPlotEntry, BoxPlotOutlier, BoxPlotPacket, GraphAggregatePacket, GraphDataRequest,
     GraphSampling, HeatmapCell, HeatmapPacket, HistogramBin, HistogramPacket, SummaryEntry,
@@ -3111,125 +3112,121 @@ impl DuckDbEngine {
                 if is_cancelled() {
                     return Err(AppError::Cancelled("SQLite import cancelled".to_string()));
                 }
-            let id = append_target_id
-                .clone()
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            let table_name = format!("dataset_{}", id.replace('-', "_"));
+                let id = append_target_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let table_name = format!("dataset_{}", id.replace('-', "_"));
 
-            if columns.is_empty() {
-                continue;
-            }
+                if columns.is_empty() {
+                    continue;
+                }
 
-            // Map SQLite types to DuckDB types (date/time types -> VARCHAR)
-            let col_defs: Vec<String> = columns
-                .iter()
-                .map(|(name, sqlite_type)| {
-                    let duckdb_type = Self::map_sqlite_type(sqlite_type);
-                    format!("\"{}\" {}", name, duckdb_type)
-                })
-                .collect();
+                // Map SQLite types to DuckDB types (date/time types -> VARCHAR)
+                let col_defs: Vec<String> = columns
+                    .iter()
+                    .map(|(name, sqlite_type)| {
+                        let duckdb_type = Self::map_sqlite_type(sqlite_type);
+                        format!("\"{}\" {}", name, duckdb_type)
+                    })
+                    .collect();
 
-            if append_target_id.is_none() {
-                self.conn.execute(
+                if append_target_id.is_none() {
+                    self.conn.execute(
+                        &format!(
+                            "CREATE TABLE \"{}\" (\"_row_id\" BIGINT, {})",
+                            table_name,
+                            col_defs.join(", ")
+                        ),
+                        [],
+                    )?;
+                }
+
+                // Determine target types for value conversion
+                let col_types: Vec<&str> = columns
+                    .iter()
+                    .map(|(_, t)| Self::map_sqlite_type(t))
+                    .collect();
+
+                let col_count = columns.len();
+                const BATCH_SIZE: usize = 1000;
+                let total_rows = connector.row_count(src_table)?;
+                let mut rows_done: usize = 0;
+                on_progress(src_table, table_index, table_total, 0, total_rows);
+                let starting_row_id: i64 = self.conn.query_row(
                     &format!(
-                        "CREATE TABLE \"{}\" (\"_row_id\" BIGINT, {})",
-                        table_name,
-                        col_defs.join(", ")
+                        "SELECT COALESCE(MAX(\"_row_id\"), 0) FROM {}",
+                        Self::quote_identifier(&table_name)
                     ),
                     [],
+                    |row| row.get(0),
                 )?;
-            }
-
-            // Determine target types for value conversion
-            let col_types: Vec<&str> = columns
-                .iter()
-                .map(|(_, t)| Self::map_sqlite_type(t))
-                .collect();
-
-            let col_count = columns.len();
-            const BATCH_SIZE: usize = 1000;
-            let total_rows = connector.row_count(src_table)?;
-            let mut rows_done: usize = 0;
-            on_progress(src_table, table_index, table_total, 0, total_rows);
-            let starting_row_id: i64 = self.conn.query_row(
-                &format!(
-                    "SELECT COALESCE(MAX(\"_row_id\"), 0) FROM {}",
-                    Self::quote_identifier(&table_name)
-                ),
-                [],
-                |row| row.get(0),
-            )?;
-            {
-                let mut appender = self.conn.appender(&table_name)?;
-                connector.read_batches(src_table, BATCH_SIZE, &mut |batch| {
-                    for row in batch.rows {
-                        if is_cancelled() {
-                            return Err(AppError::Cancelled("SQLite import cancelled".to_string()));
+                {
+                    let mut appender = self.conn.appender(&table_name)?;
+                    connector.read_batches(src_table, BATCH_SIZE, &mut |batch| {
+                        for row in batch.rows {
+                            if is_cancelled() {
+                                return Err(AppError::Cancelled(
+                                    "SQLite import cancelled".to_string(),
+                                ));
+                            }
+                            let row_id = starting_row_id
+                                + i64::try_from(row.source_index).map_err(|_| {
+                                    AppError::InvalidParam("SQLite row index overflow".to_string())
+                                })?;
+                            let mut values = Vec::with_capacity(col_count + 1);
+                            values.push(Value::BigInt(row_id));
+                            for (column_index, (target_type, source_value)) in
+                                col_types.iter().zip(row.values).enumerate()
+                            {
+                                let value = Self::convert_sqlite_value(
+                                    source_value,
+                                    target_type,
+                                    src_table,
+                                    &columns[column_index].0,
+                                    row.source_index,
+                                )?;
+                                values.push(value);
+                            }
+                            appender.append_row(appender_params_from_iter(values))?;
+                            rows_done += 1;
                         }
-                        let row_id = starting_row_id
-                            + i64::try_from(row.source_index).map_err(|_| {
-                                AppError::InvalidParam("SQLite row index overflow".to_string())
-                            })?;
-                        let mut values = Vec::with_capacity(col_count + 1);
-                        values.push(Value::BigInt(row_id));
-                        for (column_index, (target_type, source_value)) in
-                            col_types.iter().zip(row.values).enumerate()
-                        {
-                            let value = Self::convert_sqlite_value(
-                                source_value,
-                                target_type,
-                                src_table,
-                                &columns[column_index].0,
-                                row.source_index,
-                            )?;
-                            values.push(value);
-                        }
-                        appender.append_row(appender_params_from_iter(values))?;
-                        rows_done += 1;
-                    }
+                        appender.flush()?;
+                        on_progress(src_table, table_index, table_total, rows_done, total_rows);
+                        Ok(())
+                    })?;
                     appender.flush()?;
-                    on_progress(
-                        src_table,
-                        table_index,
-                        table_total,
-                        rows_done,
-                        total_rows,
-                    );
-                    Ok(())
-                })?;
-                appender.flush()?;
-            }
+                }
 
-            // Get row count
-            let row_count: i64 = self.conn.query_row(
-                &format!("SELECT COUNT(*) FROM \"{}\"", table_name),
-                [],
-                |row| row.get(0),
-            )?;
+                // Get row count
+                let row_count: i64 = self.conn.query_row(
+                    &format!("SELECT COUNT(*) FROM \"{}\"", table_name),
+                    [],
+                    |row| row.get(0),
+                )?;
 
-            if append_target_id.is_some() {
-                self.conn.execute(
+                if append_target_id.is_some() {
+                    self.conn.execute(
                     "UPDATE _meta_datasets SET row_count = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
                     params![row_count, id],
                 )?;
-                self.bump_dataset_generation(&id)?;
-            } else {
-                let col_count_i32 = columns.len() as i32;
-                for (col_index, (col_name, sqlite_type)) in columns.iter().enumerate() {
-                    let duckdb_type = Self::map_sqlite_type(sqlite_type);
-                    self.conn.execute(
+                    self.bump_dataset_generation(&id)?;
+                } else {
+                    let col_count_i32 = columns.len() as i32;
+                    for (col_index, (col_name, sqlite_type)) in columns.iter().enumerate() {
+                        let duckdb_type = Self::map_sqlite_type(sqlite_type);
+                        self.conn.execute(
                         "INSERT INTO _meta_columns (dataset_id, col_index, col_name, col_type) VALUES ($1, $2, $3, $4)",
                         params![id, col_index as i32, col_name, duckdb_type],
                     )?;
-                }
-                self.conn.execute(
+                    }
+                    self.conn.execute(
                     "INSERT INTO _meta_datasets (id, name, source_path, source_type, row_count, col_count) VALUES ($1, $2, $3, 'sqlite', $4, $5)",
                     params![id, target_name, source_description, row_count, col_count_i32],
                 )?;
-            }
+                }
 
-            let meta = self.get_dataset_meta(&id)?;
-            results.push((src_table.clone(), meta, rows_done));
+                let meta = self.get_dataset_meta(&id)?;
+                results.push((src_table.clone(), meta, rows_done));
             }
 
             Ok(results)
@@ -3253,6 +3250,204 @@ impl DuckDbEngine {
                 Err(error)
             }
         }
+    }
+
+    pub fn import_postgres_snapshot<F, C>(
+        &self,
+        connector: &PostgresConnector,
+        object: &SourceObjectRef,
+        target_name: &str,
+        source_description: &str,
+        on_progress: &F,
+        is_cancelled: &C,
+    ) -> Result<(DatasetMeta, usize), AppError>
+    where
+        F: Fn(usize, usize),
+        C: Fn() -> bool,
+    {
+        self.validate_dataset_name(target_name, None)?;
+        let columns = connector
+            .schema(object)
+            .map_err(|error| AppError::Database(error.message))?;
+        if columns.is_empty() {
+            return Err(AppError::InvalidParam(
+                "PostgreSQL object must contain at least one column".to_string(),
+            ));
+        }
+        let total_rows = connector
+            .row_count(object)
+            .map_err(|error| AppError::Database(error.message))?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let table_name = format!("dataset_{}", id.replace('-', "_"));
+        let column_types = columns
+            .iter()
+            .map(|column| Self::map_postgres_type(&column.source_type))
+            .collect::<Vec<_>>();
+        let column_definitions = columns
+            .iter()
+            .zip(&column_types)
+            .map(|(column, target_type)| {
+                format!("{} {target_type}", Self::quote_identifier(&column.name))
+            })
+            .collect::<Vec<_>>();
+
+        self.conn.execute_batch("BEGIN TRANSACTION")?;
+        let import_result = (|| -> Result<(DatasetMeta, usize), AppError> {
+            self.conn.execute(
+                &format!(
+                    "CREATE TABLE {} (\"_row_id\" BIGINT, {})",
+                    Self::quote_identifier(&table_name),
+                    column_definitions.join(", ")
+                ),
+                [],
+            )?;
+            let mut rows_done = 0_usize;
+            on_progress(0, total_rows);
+            {
+                let mut appender = self.conn.appender(&table_name)?;
+                connector.read_batches(object, 1000, &mut |batch| {
+                    for row in batch.rows {
+                        if is_cancelled() {
+                            return Err(AppError::Cancelled(
+                                "PostgreSQL import cancelled".to_string(),
+                            ));
+                        }
+                        let row_id = i64::try_from(row.source_index).map_err(|_| {
+                            AppError::InvalidParam(
+                                "PostgreSQL row index is out of range".to_string(),
+                            )
+                        })?;
+                        let mut values = Vec::with_capacity(columns.len() + 1);
+                        values.push(Value::BigInt(row_id));
+                        for (column_index, (target_type, source_value)) in
+                            column_types.iter().zip(row.values).enumerate()
+                        {
+                            values.push(Self::convert_postgres_value(
+                                source_value,
+                                target_type,
+                                &object.name,
+                                &columns[column_index].name,
+                                row.source_index,
+                            )?);
+                        }
+                        appender.append_row(appender_params_from_iter(values))?;
+                        rows_done += 1;
+                    }
+                    appender.flush()?;
+                    on_progress(rows_done, total_rows);
+                    Ok(())
+                })?;
+                appender.flush()?;
+            }
+
+            let row_count = i64::try_from(rows_done).map_err(|_| {
+                AppError::InvalidParam("PostgreSQL row count is out of range".to_string())
+            })?;
+            for (column_index, (column, target_type)) in
+                columns.iter().zip(&column_types).enumerate()
+            {
+                let column_index = i32::try_from(column_index).map_err(|_| {
+                    AppError::InvalidParam("PostgreSQL column count is out of range".to_string())
+                })?;
+                self.conn.execute(
+                    "INSERT INTO _meta_columns (dataset_id, col_index, col_name, col_type) VALUES ($1, $2, $3, $4)",
+                    params![id, column_index, column.name, target_type],
+                )?;
+            }
+            let column_count = i32::try_from(columns.len()).map_err(|_| {
+                AppError::InvalidParam("PostgreSQL column count is out of range".to_string())
+            })?;
+            self.conn.execute(
+                "INSERT INTO _meta_datasets (id, name, source_path, source_type, row_count, col_count) VALUES ($1, $2, $3, 'postgresql', $4, $5)",
+                params![id, target_name, source_description, row_count, column_count],
+            )?;
+            Ok((self.get_dataset_meta(&id)?, rows_done))
+        })();
+
+        match import_result {
+            Ok(result) => {
+                if let Err(error) = self.conn.execute_batch("COMMIT") {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    return Err(error.into());
+                }
+                Ok(result)
+            }
+            Err(error) => {
+                let rollback_result = self.conn.execute_batch("ROLLBACK");
+                if let Err(rollback_error) = rollback_result {
+                    return Err(AppError::Database(format!(
+                        "{error}; rollback failed: {rollback_error}"
+                    )));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn map_postgres_type(source_type: &str) -> &'static str {
+        match source_type.to_ascii_lowercase().as_str() {
+            "smallint" | "integer" | "bigint" | "smallserial" | "serial" | "bigserial"
+            | "boolean" => "BIGINT",
+            "real" | "double precision" | "numeric" | "decimal" | "money" => "DOUBLE",
+            "bytea" => "BLOB",
+            _ => "VARCHAR",
+        }
+    }
+
+    fn convert_postgres_value(
+        value: ConnectorValue,
+        target_type: &str,
+        source_object: &str,
+        source_column: &str,
+        source_row: usize,
+    ) -> Result<Value, AppError> {
+        let conversion_error = |value: &str| {
+            AppError::InvalidParam(format!(
+                "Cannot convert value '{value}' in PostgreSQL object '{source_object}', column '{source_column}', row {source_row} to {target_type}"
+            ))
+        };
+        match (target_type, value) {
+            (_, ConnectorValue::Null) => Ok(Value::Null),
+            ("BIGINT", ConnectorValue::Integer(value)) => Ok(Value::BigInt(value)),
+            ("BIGINT", ConnectorValue::Real(value))
+                if value.is_finite() && value.fract() == 0.0 =>
+            {
+                Ok(Value::BigInt(value as i64))
+            }
+            ("BIGINT", ConnectorValue::Text(value)) => value
+                .parse::<i64>()
+                .map(Value::BigInt)
+                .map_err(|_| conversion_error(&value)),
+            ("DOUBLE", ConnectorValue::Integer(value)) => Ok(Value::Double(value as f64)),
+            ("DOUBLE", ConnectorValue::Real(value)) if value.is_finite() => {
+                Ok(Value::Double(value))
+            }
+            ("DOUBLE", ConnectorValue::Text(value)) => value
+                .parse::<f64>()
+                .ok()
+                .filter(|parsed| parsed.is_finite())
+                .map(Value::Double)
+                .ok_or_else(|| conversion_error(&value)),
+            ("BLOB", ConnectorValue::Blob(value)) => Ok(Value::Blob(value)),
+            ("BLOB", ConnectorValue::Text(value)) => Self::decode_postgres_bytea(&value)
+                .map(Value::Blob)
+                .ok_or_else(|| conversion_error("<BYTEA>")),
+            (_, ConnectorValue::Integer(value)) => Ok(Value::Text(value.to_string())),
+            (_, ConnectorValue::Real(value)) => Ok(Value::Text(value.to_string())),
+            (_, ConnectorValue::Text(value)) => Ok(Value::Text(value)),
+            (_, ConnectorValue::Blob(value)) => Ok(Value::Blob(value)),
+        }
+    }
+
+    fn decode_postgres_bytea(value: &str) -> Option<Vec<u8>> {
+        let hex = value.strip_prefix("\\x")?;
+        if hex.len() % 2 != 0 {
+            return None;
+        }
+        (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).ok())
+            .collect()
     }
 
     /// Map SQLite column type to DuckDB type, keeping date/time types as VARCHAR
@@ -3289,19 +3484,16 @@ impl DuckDbEngine {
         match (target_type, value) {
             (_, ConnectorValue::Null) => Ok(Value::Null),
             ("BLOB", ConnectorValue::Blob(value)) => Ok(Value::Blob(value)),
-            ("BLOB", ConnectorValue::Text(value)) => {
-                Ok(Value::Blob(value.into_bytes()))
-            }
+            ("BLOB", ConnectorValue::Text(value)) => Ok(Value::Blob(value.into_bytes())),
             ("BLOB", ConnectorValue::Integer(value)) => {
                 Ok(Value::Blob(value.to_string().into_bytes()))
             }
             ("BLOB", ConnectorValue::Real(value)) => {
                 Ok(Value::Blob(value.to_string().into_bytes()))
             }
-            (_, ConnectorValue::Blob(value)) => Err(conversion_error(&format!(
-                "<BLOB: {} bytes>",
-                value.len()
-            ))),
+            (_, ConnectorValue::Blob(value)) => {
+                Err(conversion_error(&format!("<BLOB: {} bytes>", value.len())))
+            }
             ("BIGINT", ConnectorValue::Integer(value)) => Ok(Value::BigInt(value)),
             ("BIGINT", ConnectorValue::Real(value))
                 if value.is_finite()
@@ -3312,23 +3504,23 @@ impl DuckDbEngine {
                 Ok(Value::BigInt(value as i64))
             }
             ("BIGINT", ConnectorValue::Real(value)) => Err(conversion_error(&value.to_string())),
-            ("BIGINT", ConnectorValue::Text(value)) => {
-                value.trim()
-                    .parse::<i64>()
-                    .map(Value::BigInt)
-                    .map_err(|_| conversion_error(&value))
-            }
+            ("BIGINT", ConnectorValue::Text(value)) => value
+                .trim()
+                .parse::<i64>()
+                .map(Value::BigInt)
+                .map_err(|_| conversion_error(&value)),
             ("DOUBLE", ConnectorValue::Integer(value)) => Ok(Value::Double(value as f64)),
-            ("DOUBLE", ConnectorValue::Real(value)) if value.is_finite() => Ok(Value::Double(value)),
-            ("DOUBLE", ConnectorValue::Real(value)) => Err(conversion_error(&value.to_string())),
-            ("DOUBLE", ConnectorValue::Text(value)) => {
-                value.trim()
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|parsed| parsed.is_finite())
-                    .map(Value::Double)
-                    .ok_or_else(|| conversion_error(&value))
+            ("DOUBLE", ConnectorValue::Real(value)) if value.is_finite() => {
+                Ok(Value::Double(value))
             }
+            ("DOUBLE", ConnectorValue::Real(value)) => Err(conversion_error(&value.to_string())),
+            ("DOUBLE", ConnectorValue::Text(value)) => value
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|parsed| parsed.is_finite())
+                .map(Value::Double)
+                .ok_or_else(|| conversion_error(&value)),
             (_, ConnectorValue::Integer(value)) => Ok(Value::Text(value.to_string())),
             (_, ConnectorValue::Real(value)) => Ok(Value::Text(value.to_string())),
             (_, ConnectorValue::Text(value)) => Ok(Value::Text(value)),
@@ -6733,8 +6925,7 @@ impl DuckDbEngine {
             }
             let _ = row_id;
 
-            let row_releasable_bytes =
-                row_bytes.saturating_sub(mem::size_of::<ArchiveBatchRow>());
+            let row_releasable_bytes = row_bytes.saturating_sub(mem::size_of::<ArchiveBatchRow>());
             rows.reserve(1);
             let projected_retained_bytes = rows
                 .capacity()
@@ -6823,14 +7014,12 @@ fn estimate_retained_value_bytes(value: &Value) -> usize {
         Value::Date32(_) => base.saturating_add(mem::size_of::<i32>()),
         Value::Time64(_, _) => base.saturating_add(mem::size_of::<i64>()),
         Value::Interval { .. } => base.saturating_add(mem::size_of::<i64>() * 3),
-        Value::Text(text) | Value::Enum(text) => {
-            base.saturating_add(mem::size_of::<String>())
-                .saturating_add(text.capacity())
-        }
-        Value::Blob(bytes) | Value::Geometry(bytes) => {
-            base.saturating_add(mem::size_of::<Vec<u8>>())
-                .saturating_add(bytes.capacity())
-        }
+        Value::Text(text) | Value::Enum(text) => base
+            .saturating_add(mem::size_of::<String>())
+            .saturating_add(text.capacity()),
+        Value::Blob(bytes) | Value::Geometry(bytes) => base
+            .saturating_add(mem::size_of::<Vec<u8>>())
+            .saturating_add(bytes.capacity()),
         Value::List(items) | Value::Array(items) => {
             let mut total = base
                 .saturating_add(mem::size_of::<Vec<Value>>())
@@ -7311,20 +7500,18 @@ mod tests {
     use crate::models::graph_data::{
         GraphDataRequest, GraphElementRequest, GraphFieldBinding, GraphSampling, GraphViewport,
     };
-    use crate::services::archive_cell::{
-        archive_cell_to_json_call_count, reset_archive_cell_to_json_call_count,
-    };
     use crate::models::table::{
         TableWindowFilter, TableWindowFilterRule, TableWindowRequest, TableWindowSort,
+    };
+    use crate::services::archive_cell::{
+        archive_cell_to_json_call_count, reset_archive_cell_to_json_call_count,
     };
     use duckdb::types::Decimal;
 
     #[test]
     fn imports_selected_sqlite_table_and_appends_compatible_rows() {
-        let path = std::env::temp_dir().join(format!(
-            "datalink-selected-{}.sqlite",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("datalink-selected-{}.sqlite", uuid::Uuid::new_v4()));
         let sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
         sqlite
             .execute_batch(
@@ -7380,7 +7567,9 @@ mod tests {
                 &|| false,
             )
             .expect_err("reject incompatible append");
-        assert!(error.to_string().contains("column names, order, and types must match"));
+        assert!(error
+            .to_string()
+            .contains("column names, order, and types must match"));
         assert_eq!(
             db.get_dataset_meta(&imported[0].1.id)
                 .expect("read unchanged dataset")
@@ -7449,12 +7638,18 @@ mod tests {
             imported[0].1.source_path.as_deref(),
             path.file_name().and_then(|name| name.to_str())
         );
-        assert_eq!(*progress.borrow(), vec![(1_000, 2_001), (2_000, 2_001), (2_001, 2_001)]);
+        assert_eq!(
+            *progress.borrow(),
+            vec![(1_000, 2_001), (2_000, 2_001), (2_001, 2_001)]
+        );
         let table_name = format!("dataset_{}", imported[0].1.id.replace('-', "_"));
         let first_label: String = db
             .conn()
             .query_row(
-                &format!("SELECT label FROM {} WHERE _row_id = 1", DuckDbEngine::quote_identifier(&table_name)),
+                &format!(
+                    "SELECT label FROM {} WHERE _row_id = 1",
+                    DuckDbEngine::quote_identifier(&table_name)
+                ),
                 [],
                 |row| row.get(0),
             )
@@ -7462,7 +7657,10 @@ mod tests {
         let second_label: Option<String> = db
             .conn()
             .query_row(
-                &format!("SELECT label FROM {} WHERE _row_id = 2", DuckDbEngine::quote_identifier(&table_name)),
+                &format!(
+                    "SELECT label FROM {} WHERE _row_id = 2",
+                    DuckDbEngine::quote_identifier(&table_name)
+                ),
                 [],
                 |row| row.get(0),
             )
@@ -7470,7 +7668,10 @@ mod tests {
         let first_payload: Vec<u8> = db
             .conn()
             .query_row(
-                &format!("SELECT payload FROM {} WHERE _row_id = 1", DuckDbEngine::quote_identifier(&table_name)),
+                &format!(
+                    "SELECT payload FROM {} WHERE _row_id = 1",
+                    DuckDbEngine::quote_identifier(&table_name)
+                ),
                 [],
                 |row| row.get(0),
             )
@@ -7497,10 +7698,8 @@ mod tests {
 
     #[test]
     fn preserves_sqlite_dates_as_text_and_rolls_back_invalid_numeric_values() {
-        let path = std::env::temp_dir().join(format!(
-            "datalink-types-{}.sqlite",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("datalink-types-{}.sqlite", uuid::Uuid::new_v4()));
         let sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
         sqlite
             .execute_batch(
@@ -7549,7 +7748,9 @@ mod tests {
                 &|| false,
             )
             .expect_err("reject invalid numeric value");
-        assert!(error.to_string().contains("Cannot convert value 'not-a-number'"));
+        assert!(error
+            .to_string()
+            .contains("Cannot convert value 'not-a-number'"));
         assert_eq!(db.list_datasets().expect("list datasets").len(), 1);
         let physical_invalid_tables: i64 = db
             .conn()
@@ -7576,7 +7777,10 @@ mod tests {
             .execute("CREATE TABLE extremes (value INTEGER)", [])
             .expect("create integer table");
         sqlite
-            .execute("INSERT INTO extremes VALUES (?1), (?2)", rusqlite::params![i64::MIN, i64::MAX])
+            .execute(
+                "INSERT INTO extremes VALUES (?1), (?2)",
+                rusqlite::params![i64::MIN, i64::MAX],
+            )
             .expect("insert integer extremes");
         sqlite
             .execute("CREATE TABLE invalid_reals (value REAL)", [])
@@ -7621,7 +7825,9 @@ mod tests {
                 &|| false,
             )
             .expect_err("reject infinity");
-        assert!(infinity_error.to_string().contains("Cannot convert value 'inf'"));
+        assert!(infinity_error
+            .to_string()
+            .contains("Cannot convert value 'inf'"));
         assert_eq!(db.list_datasets().expect("list datasets").len(), 1);
 
         for value in [f64::NAN, f64::NEG_INFINITY] {
@@ -7709,10 +7915,8 @@ mod tests {
     fn cancelled_sqlite_import_rolls_back_create_and_append() {
         use std::cell::Cell;
 
-        let path = std::env::temp_dir().join(format!(
-            "datalink-cancel-{}.sqlite",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("datalink-cancel-{}.sqlite", uuid::Uuid::new_v4()));
         let mut sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
         sqlite
             .execute_batch(

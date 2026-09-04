@@ -21,6 +21,11 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
+            commands::data_link_commands::test_postgres_connection,
+            commands::data_link_commands::list_postgres_source_objects,
+            commands::data_link_commands::get_postgres_source_schema,
+            commands::data_link_commands::preview_postgres_source_object,
+            commands::data_link_commands::import_postgres_snapshot,
             commands::data_link_commands::list_sqlite_source_objects,
             commands::data_link_commands::preview_sqlite_source_object,
             commands::data_link_commands::import_selected_sqlite,

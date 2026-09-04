@@ -1,10 +1,44 @@
-use crate::connectors::{DataConnector, SqliteConnector};
+use crate::connectors::{DataConnector, PostgresConnector, SqliteConnector};
 use crate::error::AppError;
-use crate::models::data_link::{PreviewResult, SourceObject};
+use crate::models::data_link::{
+    ConnectionCredentials, ConnectionDefinition, DataLinkError, PreviewResult, SourceColumn,
+    SourceObject, SourceObjectRef,
+};
 
 pub struct DataLinkService;
 
 impl DataLinkService {
+    pub fn test_postgres_connection(
+        definition: ConnectionDefinition,
+        credentials: ConnectionCredentials,
+    ) -> Result<(), DataLinkError> {
+        PostgresConnector::new(definition, credentials)?.test_connection()
+    }
+
+    pub fn list_postgres_objects(
+        definition: ConnectionDefinition,
+        credentials: ConnectionCredentials,
+    ) -> Result<Vec<SourceObjectRef>, DataLinkError> {
+        PostgresConnector::new(definition, credentials)?.list_objects()
+    }
+
+    pub fn get_postgres_schema(
+        definition: ConnectionDefinition,
+        credentials: ConnectionCredentials,
+        object: SourceObjectRef,
+    ) -> Result<Vec<SourceColumn>, DataLinkError> {
+        PostgresConnector::new(definition, credentials)?.schema(&object)
+    }
+
+    pub fn preview_postgres_object(
+        definition: ConnectionDefinition,
+        credentials: ConnectionCredentials,
+        object: SourceObjectRef,
+        limit: usize,
+    ) -> Result<PreviewResult, DataLinkError> {
+        PostgresConnector::new(definition, credentials)?.preview(&object, limit)
+    }
+
     pub fn list_sqlite_objects(file_path: &str) -> Result<Vec<SourceObject>, AppError> {
         let connector = SqliteConnector::new(file_path);
         connector.test_connection()?;

@@ -3057,6 +3057,8 @@ dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
  "postgres-protocol",
+ "serde_core",
+ "serde_json",
 ]
 
 [[package]]
@@ -4014,6 +4016,7 @@ name = "stats-playground"
 version = "0.1.0"
 dependencies = [
  "duckdb",
+ "fallible-iterator 0.2.0",
  "postgres",
  "rusqlite",
  "serde",

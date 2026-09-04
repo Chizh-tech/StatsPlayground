@@ -19,7 +19,9 @@ impl<'a> SqliteConnector<'a> {
 
     fn open(&self) -> Result<rusqlite::Connection, AppError> {
         if self.file_path.trim().is_empty() {
-            return Err(AppError::InvalidParam("SQLite path is required".to_string()));
+            return Err(AppError::InvalidParam(
+                "SQLite path is required".to_string(),
+            ));
         }
         let path = Path::new(self.file_path);
         let canonical_path = path.canonicalize().map_err(|_| {
@@ -133,7 +135,10 @@ impl DataConnector for SqliteConnector<'_> {
 
         let columns = Self::read_columns(&connection, object_name)?;
         let preview_limit = limit.clamp(1, MAX_PREVIEW_ROWS);
-        let query = format!("SELECT * FROM {} LIMIT ?1", Self::quote_identifier(object_name));
+        let query = format!(
+            "SELECT * FROM {} LIMIT ?1",
+            Self::quote_identifier(object_name)
+        );
         let mut statement = connection.prepare(&query)?;
         let column_count = statement.column_count();
         let mut rows = statement.query([preview_limit + 1])?;
@@ -164,7 +169,10 @@ impl DataConnector for SqliteConnector<'_> {
             )));
         }
         let count: i64 = connection.query_row(
-            &format!("SELECT COUNT(*) FROM {}", Self::quote_identifier(object_name)),
+            &format!(
+                "SELECT COUNT(*) FROM {}",
+                Self::quote_identifier(object_name)
+            ),
             [],
             |row| row.get(0),
         )?;
@@ -221,10 +229,8 @@ mod tests {
 
     #[test]
     fn rejects_missing_and_directory_paths() {
-        let missing = std::env::temp_dir().join(format!(
-            "datalink-missing-{}.sqlite",
-            uuid::Uuid::new_v4()
-        ));
+        let missing =
+            std::env::temp_dir().join(format!("datalink-missing-{}.sqlite", uuid::Uuid::new_v4()));
         let missing_error = SqliteConnector::new(missing.to_str().expect("missing path"))
             .test_connection()
             .expect_err("reject missing path");
@@ -239,10 +245,8 @@ mod tests {
 
     #[test]
     fn opens_canonical_sqlite_path_read_only() {
-        let path = std::env::temp_dir().join(format!(
-            "datalink-readonly-{}.sqlite",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("datalink-readonly-{}.sqlite", uuid::Uuid::new_v4()));
         let sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
         sqlite
             .execute("CREATE TABLE samples (id INTEGER)", [])

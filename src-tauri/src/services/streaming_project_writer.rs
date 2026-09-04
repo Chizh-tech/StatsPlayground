@@ -372,8 +372,7 @@ impl<'state, 'guard> StreamingProjectWriter<'state, 'guard> {
                 overall_progress: Some(0.0),
             });
 
-            let (temp_archive, temp_file) =
-                create_unique_temp_archive(&snapshot.destination_path)?;
+            let (temp_archive, temp_file) = create_unique_temp_archive(&snapshot.destination_path)?;
             let temp_path = temp_archive.path();
             if let Err(error) = self.write_temp_archive(
                 snapshot,
@@ -1407,7 +1406,9 @@ mod tests {
 
         let events = events.lock().unwrap();
         assert!(events.len() >= 3);
-        assert!(events.iter().all(|event| event.phase == SavePhase::Metadata));
+        assert!(events
+            .iter()
+            .all(|event| event.phase == SavePhase::Metadata));
     }
 
     #[test]

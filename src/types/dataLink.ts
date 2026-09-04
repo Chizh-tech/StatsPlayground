@@ -54,6 +54,11 @@ export type DataLinkErrorCategory =
   | "storage"
   | "cancelled";
 
+export interface DataLinkError {
+  category: DataLinkErrorCategory;
+  message: string;
+}
+
 export interface SourceObject {
   name: string;
   objectType: "table" | "view";

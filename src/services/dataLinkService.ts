@@ -1,8 +1,57 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { ImportSummary, PreviewResult, SourceObject, SqliteImportSelection } from "@/types/dataLink";
+import type {
+  ConnectionCredentials,
+  ConnectionDefinition,
+  ImportSummary,
+  PreviewResult,
+  SourceColumn,
+  SourceObject,
+  SourceObjectRef,
+  SqliteImportSelection,
+} from "@/types/dataLink";
 
 export const dataLinkService = {
+  testPostgresConnection: (
+    definition: ConnectionDefinition,
+    credentials: ConnectionCredentials,
+  ) => invoke<void>("test_postgres_connection", { definition, credentials }),
+
+  listPostgresObjects: (
+    definition: ConnectionDefinition,
+    credentials: ConnectionCredentials,
+  ) => invoke<SourceObjectRef[]>("list_postgres_source_objects", { definition, credentials }),
+
+  getPostgresSchema: (
+    definition: ConnectionDefinition,
+    credentials: ConnectionCredentials,
+    object: SourceObjectRef,
+  ) => invoke<SourceColumn[]>("get_postgres_source_schema", { definition, credentials, object }),
+
+  previewPostgresObject: (
+    definition: ConnectionDefinition,
+    credentials: ConnectionCredentials,
+    object: SourceObjectRef,
+    limit = 100,
+  ) => invoke<PreviewResult>("preview_postgres_source_object", {
+    definition,
+    credentials,
+    object,
+    limit,
+  }),
+
+  importPostgresSnapshot: (
+    definition: ConnectionDefinition,
+    credentials: ConnectionCredentials,
+    object: SourceObjectRef,
+    targetName: string,
+  ) => invoke<ImportSummary>("import_postgres_snapshot", {
+    definition,
+    credentials,
+    object,
+    targetName,
+  }),
+
   listSqliteObjects: (filePath: string) =>
     invoke<SourceObject[]>("list_sqlite_source_objects", { filePath }),
 

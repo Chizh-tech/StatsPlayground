@@ -2,8 +2,8 @@ use tauri::State;
 
 use crate::error::AppError;
 use crate::models::table::{
-    CellPosition, CellUpdate, ColumnDisplayProps, DatasetMeta, TableQueryResult, TableWindowRequest,
-    TableWindowResult,
+    CellPosition, CellUpdate, ColumnDisplayProps, DatasetMeta, TableQueryResult,
+    TableWindowRequest, TableWindowResult,
 };
 use crate::services::data_service::DataService;
 use crate::state::AppState;
@@ -345,12 +345,7 @@ pub fn add_columns_with_change_set(
 ) -> Result<String, AppError> {
     let _permit = acquire_mutation_permit(state.inner())?;
     let service = DataService::new(&state);
-    service.add_columns_with_change_set(
-        &dataset_id,
-        &columns,
-        at_index,
-        expected_generation,
-    )
+    service.add_columns_with_change_set(&dataset_id, &columns, at_index, expected_generation)
 }
 
 #[tauri::command]

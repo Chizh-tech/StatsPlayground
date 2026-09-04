@@ -1,5 +1,9 @@
+use crate::connectors::PostgresConnector;
 use crate::error::AppError;
-use crate::models::data_link::{ImportSummary, ImportTableSummary, SqliteImportSelection};
+use crate::models::data_link::{
+    ConnectionCredentials, ConnectionDefinition, ImportSummary, ImportTableSummary,
+    SourceObjectRef, SqliteImportSelection,
+};
 use crate::models::table::DatasetMeta;
 use crate::state::AppState;
 use std::collections::HashMap;
@@ -11,6 +15,7 @@ pub struct IoService<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::data_link::{AuthenticationType, ConnectorKind, SourceObjectType, TlsMode};
 
     #[test]
     fn skip_only_sqlite_import_does_not_trigger_legacy_import_all() {
@@ -51,6 +56,108 @@ mod tests {
             .is_empty());
 
         std::fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    #[ignore = "requires the local PostgreSQL fixture and STATSPG_TEST_POSTGRES_PASSWORD"]
+    fn imports_postgres_snapshot_into_managed_dataset() {
+        let password = std::env::var("STATSPG_TEST_POSTGRES_PASSWORD")
+            .expect("STATSPG_TEST_POSTGRES_PASSWORD must be set");
+        let definition = ConnectionDefinition {
+            connector: ConnectorKind::PostgreSql,
+            host: "127.0.0.1".to_string(),
+            port: 55432,
+            database: "statsplayground_test".to_string(),
+            authentication_type: AuthenticationType::UsernamePassword,
+            tls_mode: TlsMode::Disabled,
+            connect_timeout_seconds: 5,
+        };
+        let credentials = ConnectionCredentials {
+            username: "stats_reader".to_string(),
+            password,
+        };
+        let object = SourceObjectRef {
+            catalog: Some("statsplayground_test".to_string()),
+            schema: Some("datalink".to_string()),
+            name: "customers".to_string(),
+            object_type: SourceObjectType::Table,
+        };
+        let state = AppState::new().expect("create app state");
+
+        let summary = IoService::new(&state)
+            .import_postgres_snapshot(
+                definition,
+                credentials,
+                object,
+                "postgres_customers",
+                |_, _| {},
+                || false,
+            )
+            .expect("import PostgreSQL snapshot");
+
+        assert_eq!(summary.status, "completed");
+        assert_eq!(summary.total_rows_written, 3);
+        let datasets = state
+            .db
+            .lock()
+            .expect("lock database")
+            .list_datasets()
+            .expect("list datasets");
+        assert_eq!(datasets.len(), 1);
+        assert_eq!(datasets[0].name, "postgres_customers");
+        assert_eq!(datasets[0].source_type, "postgresql");
+        assert_eq!(datasets[0].row_count, 3);
+    }
+
+    #[test]
+    #[ignore = "requires the local PostgreSQL fixture and STATSPG_TEST_POSTGRES_PASSWORD"]
+    fn imports_large_postgres_snapshot_in_batches() {
+        let password = std::env::var("STATSPG_TEST_POSTGRES_PASSWORD")
+            .expect("STATSPG_TEST_POSTGRES_PASSWORD must be set");
+        let definition = ConnectionDefinition {
+            connector: ConnectorKind::PostgreSql,
+            host: "127.0.0.1".to_string(),
+            port: 55432,
+            database: "statsplayground_test".to_string(),
+            authentication_type: AuthenticationType::UsernamePassword,
+            tls_mode: TlsMode::Disabled,
+            connect_timeout_seconds: 5,
+        };
+        let credentials = ConnectionCredentials {
+            username: "stats_reader".to_string(),
+            password,
+        };
+        let object = SourceObjectRef {
+            catalog: Some("statsplayground_test".to_string()),
+            schema: Some("datalink".to_string()),
+            name: "measurements".to_string(),
+            object_type: SourceObjectType::Table,
+        };
+        let state = AppState::new().expect("create app state");
+        let final_progress = std::cell::Cell::new((0, 0));
+
+        let summary = IoService::new(&state)
+            .import_postgres_snapshot(
+                definition,
+                credentials,
+                object,
+                "postgres_measurements",
+                |rows_done, rows_total| final_progress.set((rows_done, rows_total)),
+                || false,
+            )
+            .expect("import large PostgreSQL snapshot");
+
+        assert_eq!(summary.total_rows_written, 100_000);
+        assert_eq!(final_progress.get(), (100_000, 100_000));
+        let datasets = state
+            .db
+            .lock()
+            .expect("lock database")
+            .list_datasets()
+            .expect("list datasets");
+        assert_eq!(datasets.len(), 1);
+        assert_eq!(datasets[0].name, "postgres_measurements");
+        assert_eq!(datasets[0].row_count, 100_000);
     }
 }
 
@@ -154,6 +261,55 @@ impl<'a> IoService<'a> {
             failed_table: None,
             error: None,
             total_rows_written,
+        })
+    }
+
+    pub fn import_postgres_snapshot<F, C>(
+        &self,
+        definition: ConnectionDefinition,
+        credentials: ConnectionCredentials,
+        object: SourceObjectRef,
+        target_name: &str,
+        on_progress: F,
+        is_cancelled: C,
+    ) -> Result<ImportSummary, AppError>
+    where
+        F: Fn(usize, usize),
+        C: Fn() -> bool,
+    {
+        let source_name = object
+            .schema
+            .as_deref()
+            .map(|schema| format!("{schema}.{}", object.name))
+            .unwrap_or_else(|| object.name.clone());
+        let source_description = format!("{}.{}", definition.database, source_name);
+        let connector = PostgresConnector::new(definition, credentials)
+            .map_err(|error| AppError::Database(error.message))?;
+        let db = self
+            .state
+            .db
+            .lock()
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        let (_, rows_written) = db.import_postgres_snapshot(
+            &connector,
+            &object,
+            target_name,
+            &source_description,
+            &on_progress,
+            &is_cancelled,
+        )?;
+        Ok(ImportSummary {
+            status: "completed".to_string(),
+            imported: vec![ImportTableSummary {
+                source_name,
+                target_name: target_name.to_string(),
+                action: "create".to_string(),
+                rows_written,
+            }],
+            skipped: Vec::new(),
+            failed_table: None,
+            error: None,
+            total_rows_written: rows_written,
         })
     }
 

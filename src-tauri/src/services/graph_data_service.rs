@@ -479,9 +479,9 @@ impl<'a> GraphDataService<'a> {
         }
 
         let result = (|| -> Result<GraphDataCompletion, AppError> {
-                // Streamed raw chunks always carry row-aligned row ids so every mode
-                // (line/points/3D) preserves source-row provenance and interaction identity.
-                let include_row_id = true;
+            // Streamed raw chunks always carry row-aligned row ids so every mode
+            // (line/points/3D) preserves source-row provenance and interaction identity.
+            let include_row_id = true;
             let db = self
                 .state
                 .db
@@ -3216,33 +3216,33 @@ mod tests {
         assert_eq!(all_ids.len(), 300_000);
     }
 
-        #[test]
-        fn collect_for_test_line_only_request_emits_row_ids_for_every_row() {
-            let state = AppState::new().expect("state");
-            seed_dataset(&state, "line-row-ids", 12);
+    #[test]
+    fn collect_for_test_line_only_request_emits_row_ids_for_every_row() {
+        let state = AppState::new().expect("state");
+        seed_dataset(&state, "line-row-ids", 12);
 
-            let service = GraphDataService::new(&state);
-            let mut request = build_request("line-row-ids", 0);
-            request.elements = vec![GraphElementRequest {
-                kind: "line".to_string(),
-                summary_stat: "none".to_string(),
-            }];
+        let service = GraphDataService::new(&state);
+        let mut request = build_request("line-row-ids", 0);
+        request.elements = vec![GraphElementRequest {
+            kind: "line".to_string(),
+            summary_stat: "none".to_string(),
+        }];
 
-            let chunks = service.collect_for_test(&request).expect("chunks");
-            let mut all_ids = HashSet::new();
-            let mut total_rows = 0usize;
-            for chunk in &chunks {
-                let row_ids = extract_i64_slice(chunk, &chunk.header.row_ids);
-                assert_eq!(row_ids.len(), chunk.header.row_count);
-                total_rows += chunk.header.row_count;
-                for row_id in row_ids {
-                    assert!(all_ids.insert(row_id));
-                }
+        let chunks = service.collect_for_test(&request).expect("chunks");
+        let mut all_ids = HashSet::new();
+        let mut total_rows = 0usize;
+        for chunk in &chunks {
+            let row_ids = extract_i64_slice(chunk, &chunk.header.row_ids);
+            assert_eq!(row_ids.len(), chunk.header.row_count);
+            total_rows += chunk.header.row_count;
+            for row_id in row_ids {
+                assert!(all_ids.insert(row_id));
             }
-
-            assert_eq!(total_rows, 12);
-            assert_eq!(all_ids.len(), 12);
         }
+
+        assert_eq!(total_rows, 12);
+        assert_eq!(all_ids.len(), 12);
+    }
 
     #[test]
     fn collect_for_test_applies_filters_before_encoding() {

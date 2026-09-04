@@ -86,6 +86,23 @@ pub enum DataLinkErrorCategory {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+#[serde(rename_all = "camelCase")]
+pub struct DataLinkError {
+    pub category: DataLinkErrorCategory,
+    pub message: String,
+}
+
+impl DataLinkError {
+    pub fn new(category: DataLinkErrorCategory, message: impl Into<String>) -> Self {
+        Self {
+            category,
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceColumn {
@@ -163,5 +180,17 @@ mod tests {
         assert_eq!(value["authenticationType"], "usernamePassword");
         assert_eq!(value["connectTimeoutSeconds"], 10);
         assert!(value.get("password").is_none());
+    }
+
+    #[test]
+    fn data_link_error_serializes_as_a_structured_response() {
+        let error = DataLinkError::new(
+            DataLinkErrorCategory::Authentication,
+            "PostgreSQL authentication failed",
+        );
+
+        let value = serde_json::to_value(error).expect("serialize DataLink error");
+        assert_eq!(value["category"], "authentication");
+        assert_eq!(value["message"], "PostgreSQL authentication failed");
     }
 }

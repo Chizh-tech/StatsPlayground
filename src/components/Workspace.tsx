@@ -19,6 +19,7 @@ import { HistoryPanel, type SnapshotMenuData } from "./HistoryPanel";
 import { PreferencesDialog } from "./PreferencesDialog";
 import { SqlQueryDialog } from "./SqlQueryDialog";
 import { HelpDialog } from "./HelpDialog";
+import { PostgresDataLinkDialog } from "./dataLink/PostgresDataLinkDialog";
 import { SqliteDataLinkDialog } from "./dataLink/SqliteDataLinkDialog";
 import { TableOpsDialog, type TableOpType } from "./TableOpsDialog";
 import { GraphBuilderView } from "./graphBuilder";
@@ -180,6 +181,7 @@ export function Workspace() {
   const [renameValue, setRenameValue] = useState("");
   const [showPrefs, setShowPrefs] = useState(false);
   const [showSqlQuery, setShowSqlQuery] = useState(false);
+  const [showPostgresDataLink, setShowPostgresDataLink] = useState(false);
   const sqliteDataLinkPath = useDataLinkStore((state) => state.filePath);
   const openDataLink = useDataLinkStore((state) => state.open);
   const closeDataLink = useDataLinkStore((state) => state.close);
@@ -1454,6 +1456,7 @@ export function Workspace() {
               <div className="menu-sep" />
               <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : handleImportCsv}>{t("menu.importCsv")}</div>
               <div className={`menu-item${readOnly ? " menu-item-disabled" : ""}`} onClick={readOnly ? undefined : handleImportSqlite}>{t("menu.importSqlite")}</div>
+              <div className="menu-item" onClick={() => setShowPostgresDataLink(true)}>{t("menu.connectPostgres")}</div>
               <div className="menu-sep" />
               <div className="menu-item" onClick={handleExportSqlite}>{t("menu.exportSqlite")}</div>
               <div className="menu-item" onClick={handleExportCsvZip}>{t("menu.exportCsv")}</div>
@@ -1681,6 +1684,21 @@ export function Workspace() {
       </div>
 
       {showPrefs && <PreferencesDialog onClose={() => setShowPrefs(false)} />}
+
+      {showPostgresDataLink && (
+        <PostgresDataLinkDialog
+          onClose={() => setShowPostgresDataLink(false)}
+          onImported={async (targetName) => {
+            await refreshDatasets();
+            const imported = useDataStore
+              .getState()
+              .datasets.find((dataset) => dataset.name.toLowerCase() === targetName.toLowerCase());
+            if (imported) setActiveDataset(imported.id);
+            markDirty();
+            recordAction(t("history.importPostgres", { name: targetName }));
+          }}
+        />
+      )}
 
       {sqliteDataLinkPath && (
         <SqliteDataLinkDialog

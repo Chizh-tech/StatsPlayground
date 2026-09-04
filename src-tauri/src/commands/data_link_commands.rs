@@ -3,11 +3,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppError;
 use crate::models::data_link::{
-    ImportSummary, ImportTableSummary, PreviewResult, SourceObject, SqliteImportSelection,
+    ConnectionCredentials, ConnectionDefinition, DataLinkError, DataLinkErrorCategory,
+    ImportSummary, ImportTableSummary, PreviewResult, SourceColumn, SourceObject, SourceObjectRef,
+    SqliteImportSelection,
 };
 use crate::services::data_link_service::DataLinkService;
 use crate::services::io_service::IoService;
@@ -62,6 +64,93 @@ fn validate_selections(selections: &[SqliteImportSelection]) -> Result<(), AppEr
         }
     }
     Ok(())
+}
+
+#[tauri::command(async)]
+pub async fn test_postgres_connection(
+    definition: ConnectionDefinition,
+    credentials: ConnectionCredentials,
+) -> Result<(), DataLinkError> {
+    tokio::task::spawn_blocking(move || {
+        DataLinkService::test_postgres_connection(definition, credentials)
+    })
+    .await
+    .map_err(|_| postgres_worker_error())?
+}
+
+#[tauri::command(async)]
+pub async fn list_postgres_source_objects(
+    definition: ConnectionDefinition,
+    credentials: ConnectionCredentials,
+) -> Result<Vec<SourceObjectRef>, DataLinkError> {
+    tokio::task::spawn_blocking(move || {
+        DataLinkService::list_postgres_objects(definition, credentials)
+    })
+    .await
+    .map_err(|_| postgres_worker_error())?
+}
+
+#[tauri::command(async)]
+pub async fn get_postgres_source_schema(
+    definition: ConnectionDefinition,
+    credentials: ConnectionCredentials,
+    object: SourceObjectRef,
+) -> Result<Vec<SourceColumn>, DataLinkError> {
+    tokio::task::spawn_blocking(move || {
+        DataLinkService::get_postgres_schema(definition, credentials, object)
+    })
+    .await
+    .map_err(|_| postgres_worker_error())?
+}
+
+#[tauri::command(async)]
+pub async fn preview_postgres_source_object(
+    definition: ConnectionDefinition,
+    credentials: ConnectionCredentials,
+    object: SourceObjectRef,
+    limit: usize,
+) -> Result<PreviewResult, DataLinkError> {
+    tokio::task::spawn_blocking(move || {
+        DataLinkService::preview_postgres_object(definition, credentials, object, limit)
+    })
+    .await
+    .map_err(|_| postgres_worker_error())?
+}
+
+#[tauri::command(async)]
+pub async fn import_postgres_snapshot(
+    app: AppHandle,
+    definition: ConnectionDefinition,
+    credentials: ConnectionCredentials,
+    object: SourceObjectRef,
+    target_name: String,
+) -> Result<ImportSummary, AppError> {
+    if target_name.trim().is_empty() {
+        return Err(AppError::InvalidParam(
+            "PostgreSQL target dataset name is required".to_string(),
+        ));
+    }
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _permit = crate::commands::io_commands::acquire_mutation_permit(state.inner())?;
+        IoService::new(state.inner()).import_postgres_snapshot(
+            definition,
+            credentials,
+            object,
+            target_name.trim(),
+            |_, _| {},
+            || false,
+        )
+    })
+    .await
+    .map_err(|_| AppError::Database("PostgreSQL import worker failed".to_string()))?
+}
+
+fn postgres_worker_error() -> DataLinkError {
+    DataLinkError::new(
+        DataLinkErrorCategory::Query,
+        "PostgreSQL operation could not be completed",
+    )
 }
 
 #[tauri::command(async)]
@@ -199,13 +288,17 @@ mod tests {
             selection("people", "People 2"),
         ])
         .expect_err("reject duplicate source");
-        assert!(duplicate_source.to_string().contains("selected more than once"));
+        assert!(duplicate_source
+            .to_string()
+            .contains("selected more than once"));
 
         let duplicate_target = validate_selections(&[
             selection("People", "Imported"),
             selection("Orders", "imported"),
         ])
         .expect_err("reject duplicate target");
-        assert!(duplicate_target.to_string().contains("Duplicate target dataset name"));
+        assert!(duplicate_target
+            .to_string()
+            .contains("Duplicate target dataset name"));
     }
 }

@@ -515,9 +515,9 @@ impl<'a> ProjectService<'a> {
 
         let mut row_ids = std::collections::HashSet::with_capacity(doc.rows.len());
         for row in &doc.rows {
-            let row_id = row[0].as_i64().ok_or_else(|| {
-                AppError::InvalidParam("table row IDs must be integers".into())
-            })?;
+            let row_id = row[0]
+                .as_i64()
+                .ok_or_else(|| AppError::InvalidParam("table row IDs must be integers".into()))?;
             if row_id <= 0 {
                 return Err(AppError::InvalidParam(
                     "table row IDs must be positive".into(),
@@ -1335,7 +1335,10 @@ mod tests {
 
         let bundle = spprj_archive::read_project_file(destination.to_str().unwrap()).unwrap();
         assert_eq!(bundle.manifest.name, "Quarterly");
-        assert_eq!(state.project.read().unwrap().as_ref().unwrap().name, "Quarterly");
+        assert_eq!(
+            state.project.read().unwrap().as_ref().unwrap().name,
+            "Quarterly"
+        );
 
         let _ = std::fs::remove_file(destination);
     }
