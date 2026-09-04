@@ -3,7 +3,56 @@ export interface SourceColumn {
   sourceType: string;
   nullable: boolean;
   primaryKey: boolean;
+  precision: number | null;
+  scale: number | null;
 }
+
+export type ConnectorKind = "sqlite" | "postgresql" | "mysql" | "sqlServer" | "odbc";
+
+export type AuthenticationType = "usernamePassword" | "windows" | "entraId";
+
+export type TlsMode = "disabled" | "required" | "verifyCa" | "verifyFull";
+
+export interface ConnectionDefinition {
+  connector: ConnectorKind;
+  host: string;
+  port: number;
+  database: string;
+  authenticationType: AuthenticationType;
+  tlsMode: TlsMode;
+  connectTimeoutSeconds: number;
+}
+
+export interface ConnectionCredentials {
+  username: string;
+  password: string;
+}
+
+export type SourceObjectType = "table" | "view";
+
+export interface SourceObjectRef {
+  catalog: string | null;
+  schema: string | null;
+  name: string;
+  objectType: SourceObjectType;
+}
+
+export interface ConnectorCapabilities {
+  supportsViews: boolean;
+  supportsPrimaryKeys: boolean;
+  supportsCustomQuery: boolean;
+  supportsCancellation: boolean;
+}
+
+export type DataLinkErrorCategory =
+  | "network"
+  | "authentication"
+  | "tls"
+  | "permission"
+  | "query"
+  | "conversion"
+  | "storage"
+  | "cancelled";
 
 export interface SourceObject {
   name: string;

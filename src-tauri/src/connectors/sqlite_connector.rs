@@ -22,11 +22,16 @@ impl<'a> SqliteConnector<'a> {
             return Err(AppError::InvalidParam("SQLite path is required".to_string()));
         }
         let path = Path::new(self.file_path);
-        if !path.is_file() {
-            return Err(AppError::FileIO("Selected SQLite file does not exist".to_string()));
+        let canonical_path = path.canonicalize().map_err(|_| {
+            AppError::FileIO("Selected SQLite file does not exist or is not readable".to_string())
+        })?;
+        if !canonical_path.is_file() {
+            return Err(AppError::FileIO(
+                "Selected SQLite path is not a file".to_string(),
+            ));
         }
         Ok(rusqlite::Connection::open_with_flags(
-            path,
+            canonical_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?)
     }
@@ -44,6 +49,8 @@ impl<'a> SqliteConnector<'a> {
                     source_type: row.get(2)?,
                     nullable: row.get::<_, i32>(3)? == 0,
                     primary_key: row.get::<_, i32>(5)? > 0,
+                    precision: None,
+                    scale: None,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -205,5 +212,51 @@ impl DataConnector for SqliteConnector<'_> {
             visitor(row_index, values)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_missing_and_directory_paths() {
+        let missing = std::env::temp_dir().join(format!(
+            "datalink-missing-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let missing_error = SqliteConnector::new(missing.to_str().expect("missing path"))
+            .test_connection()
+            .expect_err("reject missing path");
+        assert!(matches!(missing_error, AppError::FileIO(_)));
+
+        let directory = std::env::temp_dir();
+        let directory_error = SqliteConnector::new(directory.to_str().expect("temp path"))
+            .test_connection()
+            .expect_err("reject directory path");
+        assert!(matches!(directory_error, AppError::FileIO(_)));
+    }
+
+    #[test]
+    fn opens_canonical_sqlite_path_read_only() {
+        let path = std::env::temp_dir().join(format!(
+            "datalink-readonly-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
+        sqlite
+            .execute("CREATE TABLE samples (id INTEGER)", [])
+            .expect("create source table");
+        drop(sqlite);
+
+        let connector = SqliteConnector::new(path.to_str().expect("fixture path"));
+        let read_only = connector.open().expect("open read-only connection");
+        let write_error = read_only
+            .execute("INSERT INTO samples VALUES (1)", [])
+            .expect_err("read-only connection must reject writes");
+        assert!(write_error.to_string().contains("readonly"));
+
+        drop(read_only);
+        std::fs::remove_file(path).expect("remove fixture");
     }
 }

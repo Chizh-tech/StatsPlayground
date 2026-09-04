@@ -3018,6 +3018,10 @@ impl DuckDbEngine {
     {
         let connector = SqliteConnector::new(file_path);
         connector.test_connection()?;
+        let source_description = std::path::Path::new(file_path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .ok_or_else(|| AppError::InvalidParam("SQLite file name is required".to_string()))?;
         let source_objects = connector.list_objects()?;
         let table_names = source_objects
             .iter()
@@ -3157,40 +3161,40 @@ impl DuckDbEngine {
             )?;
             {
                 let mut appender = self.conn.appender(&table_name)?;
-                connector.read_rows(src_table, &mut |source_row, source_values| {
-                    if is_cancelled() {
-                        return Err(AppError::Cancelled("SQLite import cancelled".to_string()));
+                connector.read_batches(src_table, BATCH_SIZE, &mut |batch| {
+                    for row in batch.rows {
+                        if is_cancelled() {
+                            return Err(AppError::Cancelled("SQLite import cancelled".to_string()));
+                        }
+                        let row_id = starting_row_id
+                            + i64::try_from(row.source_index).map_err(|_| {
+                                AppError::InvalidParam("SQLite row index overflow".to_string())
+                            })?;
+                        let mut values = Vec::with_capacity(col_count + 1);
+                        values.push(Value::BigInt(row_id));
+                        for (column_index, (target_type, source_value)) in
+                            col_types.iter().zip(row.values).enumerate()
+                        {
+                            let value = Self::convert_sqlite_value(
+                                source_value,
+                                target_type,
+                                src_table,
+                                &columns[column_index].0,
+                                row.source_index,
+                            )?;
+                            values.push(value);
+                        }
+                        appender.append_row(appender_params_from_iter(values))?;
+                        rows_done += 1;
                     }
-                    let row_id = starting_row_id
-                        + i64::try_from(source_row).map_err(|_| {
-                            AppError::InvalidParam("SQLite row index overflow".to_string())
-                        })?;
-                    let mut values = Vec::with_capacity(col_count + 1);
-                    values.push(Value::BigInt(row_id));
-                    for (column_index, (target_type, source_value)) in
-                        col_types.iter().zip(source_values).enumerate()
-                    {
-                        let value = Self::convert_sqlite_value(
-                            source_value,
-                            target_type,
-                            src_table,
-                            &columns[column_index].0,
-                            source_row,
-                        )?;
-                        values.push(value);
-                    }
-                    appender.append_row(appender_params_from_iter(values))?;
-                    rows_done += 1;
-                    if rows_done % BATCH_SIZE == 0 || rows_done == total_rows {
-                        appender.flush()?;
-                        on_progress(
-                            src_table,
-                            table_index,
-                            table_total,
-                            rows_done,
-                            total_rows,
-                        );
-                    }
+                    appender.flush()?;
+                    on_progress(
+                        src_table,
+                        table_index,
+                        table_total,
+                        rows_done,
+                        total_rows,
+                    );
                     Ok(())
                 })?;
                 appender.flush()?;
@@ -3220,7 +3224,7 @@ impl DuckDbEngine {
                 }
                 self.conn.execute(
                     "INSERT INTO _meta_datasets (id, name, source_path, source_type, row_count, col_count) VALUES ($1, $2, $3, 'sqlite', $4, $5)",
-                    params![id, target_name, file_path, row_count, col_count_i32],
+                    params![id, target_name, source_description, row_count, col_count_i32],
                 )?;
             }
 
@@ -7408,6 +7412,10 @@ mod tests {
                 Some("O'Reilly".to_string())
             } else if index == 1 {
                 None
+            } else if index == 2 {
+                Some("Unicode 数据 café".to_string())
+            } else if index == 3 {
+                Some("x".repeat(100_000))
             } else {
                 Some(format!("row-{index}"))
             };
@@ -7437,6 +7445,10 @@ mod tests {
             .expect("stream source table");
 
         assert_eq!(imported[0].1.row_count, 2_001);
+        assert_eq!(
+            imported[0].1.source_path.as_deref(),
+            path.file_name().and_then(|name| name.to_str())
+        );
         assert_eq!(*progress.borrow(), vec![(1_000, 2_001), (2_000, 2_001), (2_001, 2_001)]);
         let table_name = format!("dataset_{}", imported[0].1.id.replace('-', "_"));
         let first_label: String = db
@@ -7466,6 +7478,19 @@ mod tests {
         assert_eq!(first_label, "O'Reilly");
         assert_eq!(second_label, None);
         assert_eq!(first_payload, vec![1_u8, 2, 3]);
+        let text_values: (String, usize) = db
+            .conn()
+            .query_row(
+                &format!(
+                    "SELECT MAX(CASE WHEN _row_id = 3 THEN label END), \
+                     MAX(CASE WHEN _row_id = 4 THEN LENGTH(label) END) FROM {}",
+                    DuckDbEngine::quote_identifier(&table_name)
+                ),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read Unicode and long text");
+        assert_eq!(text_values, ("Unicode 数据 café".to_string(), 100_000));
 
         std::fs::remove_file(path).expect("remove fixture");
     }
@@ -7479,8 +7504,8 @@ mod tests {
         let sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
         sqlite
             .execute_batch(
-                "CREATE TABLE dated (occurred_on DATE, recorded_at DATETIME); \
-                 INSERT INTO dated VALUES ('2026-09-03', '2026-09-03T14:30:15+08:00'); \
+                "CREATE TABLE dated (occurred_on DATE, recorded_at DATETIME, amount DECIMAL(12,2)); \
+                 INSERT INTO dated VALUES ('2026-09-03', '2026-09-03T14:30:15+08:00', 12.34); \
                  CREATE TABLE invalid_numbers (amount INTEGER); \
                  INSERT INTO invalid_numbers VALUES ('not-a-number');",
             )
@@ -7497,19 +7522,20 @@ mod tests {
             )
             .expect("import date values");
         let table_name = format!("dataset_{}", imported[0].1.id.replace('-', "_"));
-        let values: (String, String) = db
+        let values: (String, String, f64) = db
             .conn()
             .query_row(
                 &format!(
-                    "SELECT occurred_on, recorded_at FROM {}",
+                    "SELECT occurred_on, recorded_at, amount FROM {}",
                     DuckDbEngine::quote_identifier(&table_name)
                 ),
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .expect("read preserved dates");
         assert_eq!(values.0, "2026-09-03");
         assert_eq!(values.1, "2026-09-03T14:30:15+08:00");
+        assert!((values.2 - 12.34).abs() < f64::EPSILON);
 
         let error = db
             .import_selected_sqlite(
@@ -7535,6 +7561,80 @@ mod tests {
             )
             .expect("count invalid physical tables");
         assert_eq!(physical_invalid_tables, 0);
+
+        std::fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn preserves_sqlite_integer_extremes_and_rejects_non_finite_reals() {
+        let path = std::env::temp_dir().join(format!(
+            "datalink-numeric-extremes-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let sqlite = rusqlite::Connection::open(&path).expect("create SQLite fixture");
+        sqlite
+            .execute("CREATE TABLE extremes (value INTEGER)", [])
+            .expect("create integer table");
+        sqlite
+            .execute("INSERT INTO extremes VALUES (?1), (?2)", rusqlite::params![i64::MIN, i64::MAX])
+            .expect("insert integer extremes");
+        sqlite
+            .execute("CREATE TABLE invalid_reals (value REAL)", [])
+            .expect("create real table");
+        sqlite
+            .execute("INSERT INTO invalid_reals VALUES (?1)", [f64::INFINITY])
+            .expect("insert infinity");
+        drop(sqlite);
+
+        let db = DuckDbEngine::new_in_memory().expect("create in-memory project");
+        let imported = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[("extremes".to_string(), "Extremes".to_string(), false)],
+                &|_, _, _, _, _| {},
+                &|| false,
+            )
+            .expect("import integer extremes");
+        let table_name = format!("dataset_{}", imported[0].1.id.replace('-', "_"));
+        let values: (i64, i64) = db
+            .conn()
+            .query_row(
+                &format!(
+                    "SELECT MIN(value), MAX(value) FROM {}",
+                    DuckDbEngine::quote_identifier(&table_name)
+                ),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read integer extremes");
+        assert_eq!(values, (i64::MIN, i64::MAX));
+
+        let infinity_error = db
+            .import_selected_sqlite(
+                path.to_str().expect("fixture path"),
+                &[(
+                    "invalid_reals".to_string(),
+                    "Invalid Reals".to_string(),
+                    false,
+                )],
+                &|_, _, _, _, _| {},
+                &|| false,
+            )
+            .expect_err("reject infinity");
+        assert!(infinity_error.to_string().contains("Cannot convert value 'inf'"));
+        assert_eq!(db.list_datasets().expect("list datasets").len(), 1);
+
+        for value in [f64::NAN, f64::NEG_INFINITY] {
+            let error = DuckDbEngine::convert_sqlite_value(
+                ConnectorValue::Real(value),
+                "DOUBLE",
+                "invalid_reals",
+                "value",
+                1,
+            )
+            .expect_err("reject non-finite real");
+            assert!(error.to_string().contains("Cannot convert value"));
+        }
 
         std::fs::remove_file(path).expect("remove fixture");
     }

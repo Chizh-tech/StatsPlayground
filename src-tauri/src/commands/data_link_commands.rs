@@ -27,6 +27,43 @@ fn active_imports() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
     ACTIVE_IMPORTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn validate_selections(selections: &[SqliteImportSelection]) -> Result<(), AppError> {
+    if selections.is_empty() {
+        return Err(AppError::InvalidParam(
+            "Select at least one SQLite table".to_string(),
+        ));
+    }
+
+    let mut source_names = HashSet::new();
+    let mut target_names = HashSet::new();
+    for selection in selections {
+        if selection.action != "create"
+            && selection.action != "append"
+            && selection.action != "skip"
+        {
+            return Err(AppError::InvalidParam(format!(
+                "Unsupported SQLite import action: {}",
+                selection.action
+            )));
+        }
+        if !source_names.insert(selection.source_name.to_lowercase()) {
+            return Err(AppError::InvalidParam(format!(
+                "SQLite table selected more than once: {}",
+                selection.source_name
+            )));
+        }
+        if selection.action == "create"
+            && !target_names.insert(selection.target_name.to_lowercase())
+        {
+            return Err(AppError::InvalidParam(format!(
+                "Duplicate target dataset name: {}",
+                selection.target_name
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub async fn list_sqlite_source_objects(file_path: String) -> Result<Vec<SourceObject>, AppError> {
     tokio::task::spawn_blocking(move || DataLinkService::list_sqlite_objects(&file_path))
@@ -55,39 +92,7 @@ pub fn import_selected_sqlite(
     request_id: String,
     selections: Vec<SqliteImportSelection>,
 ) -> Result<ImportSummary, AppError> {
-    if selections.is_empty() {
-        return Err(AppError::InvalidParam(
-            "Select at least one SQLite table".to_string(),
-        ));
-    }
-
-    let mut source_names = HashSet::new();
-    let mut target_names = HashSet::new();
-    for selection in &selections {
-        if selection.action != "create"
-            && selection.action != "append"
-            && selection.action != "skip"
-        {
-            return Err(AppError::InvalidParam(format!(
-                "Unsupported SQLite import action: {}",
-                selection.action
-            )));
-        }
-        if !source_names.insert(selection.source_name.to_lowercase()) {
-            return Err(AppError::InvalidParam(format!(
-                "SQLite table selected more than once: {}",
-                selection.source_name
-            )));
-        }
-        if selection.action == "create"
-            && !target_names.insert(selection.target_name.to_lowercase())
-        {
-            return Err(AppError::InvalidParam(format!(
-                "Duplicate target dataset name: {}",
-                selection.target_name
-            )));
-        }
-    }
+    validate_selections(&selections)?;
 
     if request_id.trim().is_empty() {
         return Err(AppError::InvalidParam(
@@ -173,4 +178,34 @@ pub fn cancel_sqlite_import(request_id: String) -> Result<(), AppError> {
         cancellation.store(true, Ordering::Relaxed);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selection(source_name: &str, target_name: &str) -> SqliteImportSelection {
+        SqliteImportSelection {
+            source_name: source_name.to_string(),
+            target_name: target_name.to_string(),
+            action: "create".to_string(),
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_source_and_target_names_case_insensitively() {
+        let duplicate_source = validate_selections(&[
+            selection("People", "People 1"),
+            selection("people", "People 2"),
+        ])
+        .expect_err("reject duplicate source");
+        assert!(duplicate_source.to_string().contains("selected more than once"));
+
+        let duplicate_target = validate_selections(&[
+            selection("People", "Imported"),
+            selection("Orders", "imported"),
+        ])
+        .expect_err("reject duplicate target");
+        assert!(duplicate_target.to_string().contains("Duplicate target dataset name"));
+    }
 }
